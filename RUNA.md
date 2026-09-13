@@ -9,10 +9,10 @@ breaking it isn't a style nit, it's a `TypeError` at runtime.
 14 primitives:
 
 1. [Agent](#1-agent) 2. [Tool](#2-tool) 3. [Guardrail](#3-guardrail)
-4. [Approval](#4-approval) 5. [Subagent](#5-subagent-handoffdelegate)
+4. [Approval](#4-human-approval) 5. [Subagent](#5-subagent-handoffdelegate)
 6. [Session](#6-session) 7. [Memory](#7-memory) 8. [Knowledge](#8-knowledge)
 9. [MCP Server](#9-mcp-server) 10. [Model](#10-model) 11. [Hooks](#11-hooks)
-12. [Test](#12-test) 13. [Eval](#13-eval-caseDataset) 14. [Tracing](#14-tracing)
+12. [Test](#12-test) 13. [Eval](#13-eval-casedataset) 14. [Tracing](#14-tracing)
 
 ## 1. Agent
 

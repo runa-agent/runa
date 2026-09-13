@@ -14,7 +14,7 @@ tracing built in rather than bolted on.
 ## Agent layer
 
 The _**Agent layer**_ is where your application decides what to do. An
-[Agent](https://benybrahim.github.io/runa/agents/) is an LLM equipped with
+[Agent](https://runa-agent.github.io/runa/agents/) is an LLM equipped with
 instructions and tools, always defined as a subclass, never instantiated
 directly:
 
@@ -26,22 +26,22 @@ class SupportAgent(Agent):
     tools = [...]
 ```
 
-[Tools](https://benybrahim.github.io/runa/tools/) let an agent take action in
+[Tools](https://runa-agent.github.io/runa/tools/) let an agent take action in
 the world, always a plain function wrapped in `@tool`.
-[Guardrails](https://benybrahim.github.io/runa/guardrails/) validate what
+[Guardrails](https://runa-agent.github.io/runa/guardrails/) validate what
 goes in and what comes out, tripping in list order so the first failure
-stops the rest. [Human Approval](https://benybrahim.github.io/runa/approval/)
+stops the rest. [Human Approval](https://runa-agent.github.io/runa/approval/)
 pauses a run before a sensitive tool call executes, until a person signs
-off. [Subagents](https://benybrahim.github.io/runa/subagents/) let one agent
+off. [Subagents](https://runa-agent.github.io/runa/subagents/) let one agent
 delegate or hand off work to another.
 
 ## Context layer
 
 The _**Context layer**_ is what an agent remembers between and within runs.
-[Sessions](https://benybrahim.github.io/runa/sessions/) hold the
+[Sessions](https://runa-agent.github.io/runa/sessions/) hold the
 conversation for a single run.
-[Memory](https://benybrahim.github.io/runa/memory/) carries facts forward
-across runs. [Knowledge](https://benybrahim.github.io/runa/knowledge/) gives
+[Memory](https://runa-agent.github.io/runa/memory/) carries facts forward
+across runs. [Knowledge](https://runa-agent.github.io/runa/knowledge/) gives
 an agent access to your domain's documents, retrieved rather than pasted
 into the prompt.
 
@@ -49,9 +49,9 @@ into the prompt.
 
 The _**Infrastructure layer**_ is responsible for connecting an agent to the
 outside world and to the model that powers it.
-[MCP Servers](https://benybrahim.github.io/runa/mcp/) expose external tools
+[MCP Servers](https://runa-agent.github.io/runa/mcp/) expose external tools
 and resources over the Model Context Protocol.
-[Models](https://benybrahim.github.io/runa/models/) are configured per
+[Models](https://runa-agent.github.io/runa/models/) are configured per
 agent, not globally, so different agents can run on different providers.
 Hooks let you observe or intercept a run at well-defined points without
 subclassing.
@@ -59,9 +59,9 @@ subclassing.
 ## Built in, not bolted on
 
 Every run is traced automatically as a span tree
-([Tracing](https://benybrahim.github.io/runa/tracing/)), so you can see
+([Tracing](https://runa-agent.github.io/runa/tracing/)), so you can see
 exactly what an agent did and why. Evaluation
-([Eval](https://benybrahim.github.io/runa/evaluation/)) grades correctness
+([Eval](https://runa-agent.github.io/runa/evaluation/)) grades correctness
 with plain assertions or judged, dataset-driven scoring.
 
 ## Getting Started
@@ -97,9 +97,9 @@ with plain assertions or judged, dataset-driven scoring.
 
 5. Follow the guides to keep building your application. You may find the
    following resources handy:
-   * [Getting Started with Runa](https://benybrahim.github.io/runa/getting_started/)
-   * [Runa Guides](https://benybrahim.github.io/runa/guides/)
-   * [CLI Reference](https://benybrahim.github.io/runa/cli/)
+   * [Getting Started with Runa](https://runa-agent.github.io/runa/getting_started/)
+   * [Runa Guides](https://runa-agent.github.io/runa/guides/)
+   * [CLI Reference](https://runa-agent.github.io/runa/cli/)
 
 ## Read the Zen of Runa
 
