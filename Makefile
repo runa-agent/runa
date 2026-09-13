@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test check docs hello tour examples clean
+.PHONY: install format lint typecheck test check docs hello tour examples clean changelog
 
 install:
 	uv sync
@@ -26,6 +26,9 @@ check:
 
 docs:
 	uv run zensical build --strict
+
+changelog:
+	uv tool run git-cliff -o CHANGELOG.md
 
 hello:
 	uv run python examples/hello.py
