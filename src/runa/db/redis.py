@@ -12,6 +12,7 @@ JSON-serializable values are cacheable. Unlike the other two backends, expiry is
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -26,12 +27,21 @@ class RedisCache:
     def __init__(self, url: str = DEFAULT_REDIS_URL) -> None:
         """Store which Redis instance this cache's entries live in; connected lazily."""
         self.url = url
-        self._client: redis.Redis | None = None
+        self._client: tuple[asyncio.AbstractEventLoop, redis.Redis] | None = None
 
     def _connect(self) -> redis.Redis:
-        if self._client is None:
-            self._client = redis.from_url(self.url)
-        return self._client
+        """Return this cache's client on the *current* event loop, (re)creating it if stale.
+
+        A `redis.asyncio.Redis`'s connections belong to the loop running when it first
+        connects, so a client left over from a now-closed loop (e.g. a second `asyncio.run()`
+        call reusing this same `RedisCache`, as `Runner.run_sync` makes easy to hit) would
+        crash with "Event loop is closed" instead of reconnecting; same fix as
+        `ModelProvider`'s HTTP clients and `db/postgres.py`'s pools.
+        """
+        loop = asyncio.get_running_loop()
+        if self._client is None or self._client[0] is not loop:
+            self._client = (loop, redis.from_url(self.url))
+        return self._client[1]
 
     async def get(self, key: str) -> Any:
         """Return the value stored for `key`, or `None` if it's missing or expired."""
