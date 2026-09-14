@@ -22,8 +22,10 @@ def _fmt_duration(seconds: float | None) -> str:
     return f"{seconds:.2f}s"
 
 
-def _fmt_tokens(attributes: dict[str, Any]) -> str | None:
-    usage = attributes.get("usage")
+def _fmt_tokens(output: Any) -> str | None:
+    if not isinstance(output, dict):
+        return None
+    usage = output.get("usage")
     if not isinstance(usage, dict):
         return None
     total = usage.get("total_tokens")
@@ -80,7 +82,7 @@ class Trace:
         lines = [f"{label} {span.name} [{_fmt_duration(span.duration)}] {glyph}"]
         if span.status == "error" and span.error:
             lines.append(f"error: {span.error}")
-        tokens = _fmt_tokens(span.attributes) if span.type == "llm" else None
+        tokens = _fmt_tokens(span.output) if span.type == "llm" else None
         if tokens:
             lines.append(tokens)
 

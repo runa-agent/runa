@@ -12,7 +12,7 @@ from typing import Any
 from runa.cli._project import resolve_db_path
 from runa.tracing import Trace, get_errors, get_trace, list_traces
 from runa.tracing.spans import Span
-from runa.tracing.traces import _TYPE_LABELS, _fmt_duration
+from runa.tracing.traces import _TYPE_LABELS, _fmt_duration, _fmt_tokens
 from runa.web._html import back_link, chip, empty, escape, page, pre
 
 __all__ = ["TraceNotFound", "render_detail", "render_list"]
@@ -70,11 +70,14 @@ def _span_details(span: Span) -> str:
 def _render_span(span: Span, children: dict[str | None, list[Span]]) -> str:
     dot = "ok" if span.status == "ok" else "error"
     label = _TYPE_LABELS.get(span.type, span.type)
+    tokens = _fmt_tokens(span.output) if span.type == "llm" else None
+    tokens_html = f'<span class="span-tokens">{escape(tokens)}</span>' if tokens else ""
     row = (
         f'<div class="span-row"><span class="dot {dot}"></span>'
         f'<span class="span-type">{escape(label)}</span>'
         f'<span class="span-name">{escape(span.name)}</span>'
-        f'<span class="span-duration">{escape(_fmt_duration(span.duration))}</span></div>'
+        f'<span class="span-duration">{escape(_fmt_duration(span.duration))}</span>'
+        f"{tokens_html}</div>"
     )
     error = f'<div class="error-text">{escape(span.error)}</div>' if span.error else ""
     kids = children.get(span.id, [])

@@ -91,6 +91,7 @@ details summary:hover { color: var(--text); }
 .span-name { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
 .span-duration { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.span-tokens { color: var(--muted); font-size: 12px; font-family: var(--mono); }
 .span-body { padding-left: 78px; }
 .error-text { color: var(--error); font-family: var(--mono); font-size: 12.5px; margin: 4px 0
   0 78px; }
