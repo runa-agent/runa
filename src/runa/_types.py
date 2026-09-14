@@ -8,6 +8,7 @@ and from whatever shape its own provider's wire format actually wants.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -20,6 +21,17 @@ once appended to history, so this one shape serves both directions.
 TResponseOutputItem = TResponseInputItem
 """What a model call produces, before it's appended to history, the same shape as
 `TResponseInputItem`; see that alias for why one shape covers both.
+"""
+
+MessageContent = str | Sequence[str | dict[str, Any]]
+"""One user message's `content`: plain text, or a list for a multimodal message. Each list item
+is either a bare string (auto-detected as text or an image by `runa.content.parts`) or an
+already-built content part dict (`runa.content.text`/`.image`, an escape hatch for a string the
+heuristic can't classify). `runa._models.openai_chatcompletions` passes the resulting parts
+straight through; `runa._models.anthropic` translates them into Claude's own content blocks.
+
+`Sequence`, not `list`, so a `list[dict[str, Any]]` of already-built parts type-checks too --
+`list` is invariant, `Sequence` is covariant.
 """
 
 TResponseStreamEvent = dict[str, Any]
@@ -153,6 +165,7 @@ class RunContextWrapper[TContext]:
 
 __all__ = [
     "InputTokensDetails",
+    "MessageContent",
     "ModelResponse",
     "ModelSettings",
     "OutputTokensDetails",

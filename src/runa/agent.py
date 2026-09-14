@@ -7,8 +7,9 @@ from dataclasses import MISSING, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from runa import content
 from runa._models import ModelProvider
-from runa._types import ModelSettings, RunContextWrapper, TResponseInputItem, Usage
+from runa._types import MessageContent, ModelSettings, RunContextWrapper, TResponseInputItem, Usage
 from runa.exceptions import RunaError, UserError
 from runa.guardrail import flatten_agent_guardrails
 from runa.handoff import agent_as_tool
@@ -74,6 +75,24 @@ def _adapt_instructions(instructions: Any) -> Any:
         return instructions(run_context.context)
 
     return _resolved
+
+
+def _turn_input(
+    message: MessageContent, history: list[TResponseInputItem], session: SessionABC | None
+) -> str | list[TResponseInputItem]:
+    """Build the `input` for `Runner.run`/`run_sync` from this turn's `message`.
+
+    A list `message` goes through `runa.content.parts` first, auto-detecting each bare string
+    as text or an image; a plain string is left untouched. With no `session`, the result joins
+    `history` as a new user message. With a `session`, only the new turn is ever sent (prior
+    turns come back from the session itself): a plain string passes straight through, a
+    multimodal one is wrapped in a single-item message list instead, since `Runner.run`'s
+    session path only wraps a bare string into `{"role": "user", ...}` itself.
+    """
+    resolved = message if isinstance(message, str) else content.parts(message)
+    if session is not None:
+        return resolved if isinstance(resolved, str) else [{"role": "user", "content": resolved}]
+    return [*history, {"role": "user", "content": resolved}]
 
 
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
@@ -302,7 +321,7 @@ class Agent:
 
     async def run(
         self,
-        message: str,
+        message: MessageContent,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
         session: SessionABC | None = None,
@@ -310,6 +329,11 @@ class Agent:
         _context_wrapper: RunContextWrapper[Any] | None = None,
     ) -> Run:
         """Run a turn asynchronously, appending it to the conversation history.
+
+        `message` is plain text, or a list for a multimodal message: bare strings are
+        auto-detected as text or an image by extension (`"cat.jpg"`, a URL, a `data:image/...`
+        URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
+        string doesn't have a recognizable image extension.
 
         `context` is available to a single-argument `instructions` callable (and to tools,
         guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle
@@ -332,11 +356,7 @@ class Agent:
         a forked `RunContextWrapper` with the caller instead of building a fresh one; `context`
         is ignored when it's given. Don't pass it directly.
         """
-        turn_input = (
-            message
-            if session is not None
-            else [*self.history, {"role": "user", "content": message}]
-        )
+        turn_input = _turn_input(message, self.history, session)
         run_hooks = hooks or _default_hooks()
         try:
             result = await Runner.run(
@@ -387,11 +407,16 @@ class Agent:
 
     async def run_streamed(
         self,
-        message: str,
+        message: MessageContent,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Run a turn as a stream of events, appending it to the conversation history.
+
+        `message` is plain text, or a list for a multimodal message: bare strings are
+        auto-detected as text or an image by extension (`"cat.jpg"`, a URL, a `data:image/...`
+        URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
+        string doesn't have a recognizable image extension.
 
         Yields `StreamEvent`s (`raw_response_event`, `run_item_stream_event`,
         `agent_updated_stream_event`) as they arrive. `context` and `hooks` behave as in
@@ -418,12 +443,17 @@ class Agent:
 
     def run_sync(
         self,
-        message: str,
+        message: MessageContent,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
         session: SessionABC | None = None,
     ) -> Run:
         """Run a turn synchronously, appending it to the conversation history.
+
+        `message` is plain text, or a list for a multimodal message: bare strings are
+        auto-detected as text or an image by extension (`"cat.jpg"`, a URL, a `data:image/...`
+        URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
+        string doesn't have a recognizable image extension.
 
         `context` is available to a single-argument `instructions` callable (and to tools,
         guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle
@@ -442,11 +472,7 @@ class Agent:
         Token usage for this call is recorded to `self.last_usage` and accumulated into
         `self.usage`, regardless of `session`, `hooks`, or whether the run errored.
         """
-        turn_input = (
-            message
-            if session is not None
-            else [*self.history, {"role": "user", "content": message}]
-        )
+        turn_input = _turn_input(message, self.history, session)
         run_hooks = hooks or _default_hooks()
         try:
             result = Runner.run_sync(

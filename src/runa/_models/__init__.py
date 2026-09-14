@@ -21,6 +21,8 @@ Split by concern: `interface` (the `Model` protocol, `StreamDelta`, shared wire-
 from runa._models.anthropic import AnthropicModel
 from runa._models.anthropic import _anthropic_deltas as _anthropic_deltas
 from runa._models.anthropic import _check_plain_text_output as _check_plain_text_output
+from runa._models.anthropic import _to_anthropic_content as _to_anthropic_content
+from runa._models.anthropic import _to_anthropic_image as _to_anthropic_image
 from runa._models.anthropic import _to_anthropic_messages as _to_anthropic_messages
 from runa._models.anthropic import _to_anthropic_tool as _to_anthropic_tool
 from runa._models.anthropic import _to_anthropic_tool_choice as _to_anthropic_tool_choice

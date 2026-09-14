@@ -9,12 +9,15 @@ from typing import Any
 import httpx2 as httpx
 import pytest
 
+from runa import content
 from runa._models import (
     AnthropicModel,
     ModelProvider,
     OpenAICompatibleModel,
     _anthropic_deltas,
     _check_plain_text_output,
+    _to_anthropic_content,
+    _to_anthropic_image,
     _to_anthropic_messages,
     _to_anthropic_tool,
     _to_anthropic_tool_choice,
@@ -275,6 +278,65 @@ def test_assistant_turn_carries_text_and_tool_use_blocks() -> None:
     assert turns[0]["content"] == [
         {"type": "text", "text": "Let me check."},
         {"type": "tool_use", "id": "call_1", "name": "weather", "input": {"city": "NYC"}},
+    ]
+
+
+def test_to_anthropic_content_flattens_a_plain_string() -> None:
+    """A bare string content becomes one text block; empty/`None` content becomes no blocks."""
+    assert _to_anthropic_content("hi") == [{"type": "text", "text": "hi"}]
+    assert _to_anthropic_content("") == []
+    assert _to_anthropic_content(None) == []
+
+
+def test_to_anthropic_content_translates_text_and_image_parts() -> None:
+    """A `runa.content` parts list keeps its text blocks and translates `image_url` parts."""
+    parts = [content.text("what is this?"), content.image("https://example.test/cat.png")]
+
+    assert _to_anthropic_content(parts) == [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image", "source": {"type": "url", "url": "https://example.test/cat.png"}},
+    ]
+
+
+def test_to_anthropic_image_decodes_a_data_uri_to_a_base64_source() -> None:
+    """A `data:` URI image part becomes Anthropic's base64 source, media type and data split out."""
+    block = _to_anthropic_image({"url": "data:image/png;base64,aGVsbG8="})
+
+    assert block == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="},
+    }
+
+
+def test_to_anthropic_image_keeps_a_plain_url_as_a_url_source() -> None:
+    """An `http(s)` image part becomes Anthropic's own url source, not re-encoded."""
+    block = _to_anthropic_image({"url": "https://example.test/cat.png"})
+
+    assert block == {
+        "type": "image",
+        "source": {"type": "url", "url": "https://example.test/cat.png"},
+    }
+
+
+def test_user_turn_with_an_image_survives_the_full_message_split() -> None:
+    """A user message with mixed text/image content keeps both blocks through the full pipeline."""
+    messages = [
+        {
+            "role": "user",
+            "content": [content.text("describe this"), content.image("https://example.test/x.png")],
+        }
+    ]
+
+    _, turns = _to_anthropic_messages(messages)
+
+    assert turns == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {"type": "image", "source": {"type": "url", "url": "https://example.test/x.png"}},
+            ],
+        }
     ]
 
 

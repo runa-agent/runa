@@ -649,6 +649,75 @@ def test_run_sync_returns_a_completed_run(monkeypatch: pytest.MonkeyPatch) -> No
     assert run.usage == Usage(input_tokens=1, output_tokens=2)
 
 
+def test_run_sync_passes_multimodal_message_content_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `runa.content` parts list is sent as the new user message's `content`, unchanged."""
+    from runa import content
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> _FakeResult:
+        captured["turn_input"] = turn_input
+        return _FakeResult()
+
+    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+
+    parts = [content.text("what's in this image?"), content.image("https://example.test/cat.png")]
+    Researcher().run_sync(parts)
+
+    assert captured["turn_input"] == [{"role": "user", "content": parts}]
+
+
+def test_run_sync_auto_detects_images_in_a_plain_string_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plain `list[str]` message auto-detects each item as text or an image by extension."""
+    captured: dict[str, Any] = {}
+
+    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> _FakeResult:
+        captured["turn_input"] = turn_input
+        return _FakeResult()
+
+    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+
+    Researcher().run_sync(["what's in this image?", "https://example.test/cat.jpg"])
+
+    assert captured["turn_input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what's in this image?"},
+                {"type": "image_url", "image_url": {"url": "https://example.test/cat.jpg"}},
+            ],
+        }
+    ]
+
+
+def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a `session`, a multimodal message is wrapped in a one-item message list.
+
+    Unlike a plain string (sent as-is, since `Runner.run`'s session path wraps it itself), a
+    parts list isn't a valid top-level `input` for the session path, so `Agent` must wrap it.
+    """
+    from runa import content
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> _FakeResult:
+        captured["turn_input"] = turn_input
+        return _FakeResult()
+
+    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+
+    parts = [content.image("https://example.test/cat.png")]
+    Researcher().run_sync(parts, session=cast(Any, object()))
+
+    assert captured["turn_input"] == [{"role": "user", "content": parts}]
+
+
 def test_run_sync_catches_runa_error_as_error_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `RunaError` (guardrail tripwire, `MaxTurnsExceeded`, ...) is captured, not raised.
 

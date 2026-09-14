@@ -101,7 +101,43 @@ def _to_anthropic_turn(message: Any) -> tuple[str, list[dict[str, Any]]]:
                 }
             )
         return "assistant", blocks
-    return "user", [{"type": "text", "text": _text_content(message.get("content"))}]
+    return "user", _to_anthropic_content(message.get("content"))
+
+
+def _to_anthropic_content(content: Any) -> list[dict[str, Any]]:
+    """Turn a chat-completions `content` field into Anthropic content blocks.
+
+    A plain string becomes one text block. A list of parts keeps OpenAI-shaped `text` parts as
+    text blocks and translates `image_url` parts (see `runa.content.image`) into Anthropic's own
+    `image` block, whether the URL is a `data:` URI (decoded to a base64 source) or a plain
+    `http(s)` URL (an Anthropic url source).
+    """
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}] if content else []
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and isinstance(part.get("text"), str):
+            blocks.append({"type": "text", "text": part["text"]})
+        elif part.get("type") == "image_url":
+            blocks.append(_to_anthropic_image(part["image_url"]))
+    return blocks
+
+
+def _to_anthropic_image(image_url: Any) -> dict[str, Any]:
+    """Map an OpenAI-shaped `image_url` part to Anthropic's `image` content block."""
+    url = image_url["url"] if isinstance(image_url, dict) else image_url
+    if url.startswith("data:"):
+        header, _, data = url.partition(",")
+        media_type = header.removeprefix("data:").split(";")[0]
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }
+    return {"type": "image", "source": {"type": "url", "url": url}}
 
 
 def _to_anthropic_tool(tool: dict[str, Any]) -> dict[str, Any]:
@@ -276,6 +312,8 @@ __all__ = [
     "AnthropicModel",
     "_anthropic_deltas",
     "_check_plain_text_output",
+    "_to_anthropic_content",
+    "_to_anthropic_image",
     "_to_anthropic_messages",
     "_to_anthropic_tool",
     "_to_anthropic_tool_choice",
