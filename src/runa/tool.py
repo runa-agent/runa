@@ -8,6 +8,7 @@ themselves" approach the rest of Runa follows, and the one the `pyright` overrid
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import inspect
 import json
@@ -147,7 +148,12 @@ def tool(
         async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
             args = json.loads(arguments_json) if arguments_json else {}
             kwargs = _bind_arguments(fn, args, ctx, call_id)
-            result = fn(**kwargs)
+            if inspect.iscoroutinefunction(fn):
+                result = await fn(**kwargs)
+            else:
+                # Off the event loop: a sync tool that does blocking I/O (a sync HTTP call, a
+                # blocking DB driver) would otherwise stall every other concurrent run/tool call.
+                result = await asyncio.to_thread(fn, **kwargs)
             return await result if inspect.isawaitable(result) else result
 
         return FunctionTool(

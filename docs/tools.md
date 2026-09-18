@@ -30,9 +30,10 @@ class WeatherAgent(Agent):
 
 The model decides on its own when to call a tool. You never invoke it directly.
 
-## Async Tools
+## Sync and Async Tools
 
-`@tool` works on `async def` functions the same way:
+`@tool` works on plain `def` functions the same way it works on `async def` ones. Pick whichever
+reads better for what the tool does; a sync `def` never blocks the run:
 
 ```python
 @tool
@@ -40,6 +41,12 @@ async def fetch_price(symbol: str) -> float:
     """Look up a stock's current price."""
     ...
 ```
+
+A plain `def` tool runs off the event loop, in a worker thread (`asyncio.to_thread` under the
+hood), so a sync tool that happens to do blocking I/O (a sync HTTP call, a blocking DB driver)
+never stalls other concurrent runs or tool calls. An `async def` tool is awaited directly instead,
+which avoids that thread-dispatch overhead for a tool that's already genuinely async. Neither
+choice can break the run either way; it's purely a style call.
 
 ## Reserved Parameters
 
