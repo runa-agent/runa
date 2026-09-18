@@ -92,6 +92,16 @@ finishes, and Langfuse's own SDK can only backdate an observation's end time, no
 -- it would otherwise record every span as starting at export time with an end time already in
 the past.
 
+### Example
+
+```python
+--8<--"examples/14_tracing/inspect_trace.py"
+```
+
+```python
+--8<--"examples/14_tracing/custom_exporter.py"
+```
+
 ## Hooks
 
 Tracing is unconditional. Hooks are optional lifecycle callbacks for your own logic: logging,
@@ -129,3 +139,13 @@ class SupportAgent(Agent):
 `LoggingRunHooks`/`LoggingAgentHooks` are the framework's defaults, logging each event through
 the standard `logging` module under the `"runa"` logger name. Don't subclass them to add
 behavior; subclass `RunHooks`/`AgentHooks` directly and pass your own instance instead.
+
+### Example
+
+```python
+--8<--"examples/11_hooks/run_hooks.py"
+```
+
+```python
+--8<--"examples/11_hooks/agent_hooks.py"
+```

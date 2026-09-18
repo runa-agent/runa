@@ -81,3 +81,13 @@ Knowledge = the application's own documents, not learned from conversations at a
 For a plain get/set/delete/clear cache, with no embeddings and no `user_id` scoping, see
 [Cache](cache.md) instead. For application documents searched by meaning, see
 [Knowledge](knowledge.md).
+
+## Example
+
+```python
+--8<--"examples/07_memory/auto_memory.py"
+```
+
+```python
+--8<--"examples/07_memory/llm_memory.py"
+```

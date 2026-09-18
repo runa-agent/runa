@@ -73,3 +73,13 @@ A guardrail predicate can be `async def` too. It is awaited automatically.
 Some tool calls should not run without a person saying yes. That is a different mechanism from a
 guardrail: a guardrail's predicate is the final verdict, while `needs_approval`'s predicate only
 decides whether to stop and ask a human. See [Human Approval](approval.md).
+
+## Example
+
+```python
+--8<--"examples/03_guardrail/input_output_guardrails.py"
+```
+
+```python
+--8<--"examples/03_guardrail/tool_guardrails.py"
+```

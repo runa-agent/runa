@@ -5,11 +5,12 @@
 services:
   app:
     build:
-      context: ..
-      dockerfile: examples/Dockerfile
+      context: ../..
+      dockerfile: examples/applications/Dockerfile
     # Overrides the Dockerfile's default CMD (api:app -- a `runa new` project's root-level
-    # api.py): built from this repo, where the Postgres/Redis example lives at examples/.
-    command: ["uv", "run", "uvicorn", "examples.api_postgres:app", "--host", "0.0.0.0", "--port", "8000"]
+    # api.py): built from this repo, where the Postgres/Redis example lives at
+    # examples/applications/.
+    command: ["uv", "run", "uvicorn", "examples.applications.api_postgres:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
     environment:

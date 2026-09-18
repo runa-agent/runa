@@ -8,7 +8,7 @@ workers in one.
 
 Run it:
 
-    uv run uvicorn examples.api:app --port 8000
+    uv run uvicorn examples.applications.api:app --port 8000
 
 Try it:
 

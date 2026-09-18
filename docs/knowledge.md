@@ -73,3 +73,9 @@ knowledge = Knowledge(
     store=PostgresKnowledgeStore(dsn="postgresql://runa:runa@localhost:5432/runa")
 )
 ```
+
+## Example
+
+```python
+--8<--"examples/08_knowledge/auto_knowledge.py"
+```

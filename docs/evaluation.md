@@ -65,3 +65,15 @@ Override a pass threshold globally or per metric:
 await agent.evaluate(dataset, threshold=0.8)
 await agent.evaluate(dataset, thresholds={"faithfulness": 0.9})
 ```
+
+## Example
+
+```python
+--8<--"examples/13_eval/case_dataset.py"
+```
+
+Tests are a separate, deterministic check, a bare `test_*` function with a plain `assert`:
+
+```python
+--8<--"examples/12_test/test_example.py"
+```

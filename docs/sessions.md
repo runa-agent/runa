@@ -84,3 +84,13 @@ Inspect what's stored in `runa.db` without starting a chat:
 runa chat --list             # every session
 runa chat --show SESSION_ID  # replay one session's full history
 ```
+
+## Example
+
+```python
+--8<--"examples/06_session/sqlite_session.py"
+```
+
+```python
+--8<--"examples/06_session/custom_session_store.py"
+```

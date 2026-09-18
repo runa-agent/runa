@@ -77,3 +77,13 @@ subagents = {
 Entries under `"auto"` pass through as given, whether bare (wired as both) or already
 `.handoff`/`.delegate`-bound, for mixing modes within one dict without forcing every entry the
 same way.
+
+## Example
+
+```python
+--8<--"examples/05_subagent/handoff.py"
+```
+
+```python
+--8<--"examples/05_subagent/delegate.py"
+```

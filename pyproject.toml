@@ -53,6 +53,10 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py314"
+# `ruff format` also reformats fenced ```python blocks inside Markdown files, which mangles
+# pymdownx.snippets' `--8<--` include marker (docs/*.md) into invalid syntax. Docs prose isn't
+# ruff's to format anyway, so it's excluded outright rather than worked around per line.
+extend-exclude = ["docs/**/*.md"]
 
 [tool.ruff.lint]
 select = [

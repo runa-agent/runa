@@ -31,10 +31,10 @@ changelog:
 	uv tool run git-cliff -o CHANGELOG.md
 
 hello:
-	uv run python examples/hello.py
+	uv run python examples/00_quickstart/hello.py
 
 tour:
-	uv run python examples/tour.py
+	uv run python examples/applications/tour.py
 
 clean:
 	rm -rf .pytest_cache

@@ -82,3 +82,13 @@ class SupportAgent(Agent):
     name = "support_agent"
     model = "claude-opus-5"
 ```
+
+## Example
+
+```python
+--8<--"examples/10_model/multi_provider.py"
+```
+
+```python
+--8<--"examples/10_model/model_settings.py"
+```

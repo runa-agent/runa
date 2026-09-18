@@ -121,3 +121,13 @@ as an LLM-written summary. `compact = False`, the default, turns this off.
 `agent.graph` renders the agent, its tools, and its handoffs as a Graphviz diagram: inline in
 Jupyter, or `.render(path)` to save it, or `.source` for the raw DOT text. Rendering an actual
 image needs the system `dot` binary.
+
+## Example
+
+```python
+--8<--"examples/01_agent/basic_agent.py"
+```
+
+```python
+--8<--"examples/01_agent/dynamic_instructions.py"
+```

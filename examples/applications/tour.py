@@ -8,7 +8,7 @@ visible right next to the primitive that produced it.
 
 Run it:
 
-    uv run python examples/tour.py
+    uv run python examples/applications/tour.py
 
 Uses Runa's default model (`gpt-5.4-nano`), so it runs with just `OPENAI_API_KEY` set -- change
 `model` on `SupportAgent` below to `"claude-sonnet-5"` (and set `ANTHROPIC_API_KEY`) to run it on

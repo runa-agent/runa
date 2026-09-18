@@ -100,3 +100,13 @@ Every guardrail that ran during a run, tripped or not, is recorded on
 `result.input_guardrail_results`, `.output_guardrail_results`, `.tool_input_guardrail_results`,
 and `.tool_output_guardrail_results` (and the same four on a paused `RunState`, reflecting only
 what ran before the pause), not just whichever one stopped the run.
+
+## Example
+
+```python
+--8<--"examples/04_approval/needs_approval.py"
+```
+
+```python
+--8<--"examples/04_approval/durable_resume.py"
+```

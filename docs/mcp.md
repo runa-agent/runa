@@ -25,3 +25,9 @@ not reopened every turn.
 
 MCP tools go through the same `needs_approval` gate as any other tool. See
 [Human Approval](approval.md).
+
+## Example
+
+```python
+--8<--"examples/09_mcp/stdio_server.py"
+```

@@ -17,7 +17,7 @@ Needs the `runa[postgres,redis]` extras (`uv add "runa[postgres,redis]"`) alongs
 
 Run it (see docker-compose.yml for `postgres`/`redis` alongside this app):
 
-    uv run uvicorn examples.api_postgres:app --port 8000
+    uv run uvicorn examples.applications.api_postgres:app --port 8000
 
 Try it:
 

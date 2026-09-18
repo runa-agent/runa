@@ -59,3 +59,13 @@ A tool call can be checked before it runs, or paused for a human to approve:
 
 * [Guardrails](guardrails.md): a predicate that stops the run if it trips.
 * [Human Approval](approval.md): a predicate that pauses the run for a person to decide.
+
+## Example
+
+```python
+--8<--"examples/02_tool/basic_tool.py"
+```
+
+```python
+--8<--"examples/02_tool/async_tool.py"
+```
