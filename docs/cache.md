@@ -68,3 +68,11 @@ own, so an expired key is simply gone rather than evicted on the next `get`.
 
 `Cache` is a `Protocol`. Any object with matching `get`/`set`/`delete`/`clear` methods works, no
 inheritance required. Swap in a different store if your app needs one.
+
+## Example
+
+```python
+--8<--"examples/cache/basic_cache.py"
+```
+
+More in [`examples/cache/`](https://github.com/Benybrahim/runa/tree/main/examples/cache).

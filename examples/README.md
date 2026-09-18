@@ -1,7 +1,8 @@
 # Examples
 
 Runnable code for every primitive in [RUNA.md](../RUNA.md), one folder per primitive, numbered
-to match. Every script runs standalone:
+to match, plus a couple of unnumbered folders for things documented alongside them (`cache`) or
+built on top of them (`applications`). Every script runs standalone:
 
 ```bash
 uv run python examples/<folder>/<file>.py
@@ -24,6 +25,7 @@ uv run python examples/<folder>/<file>.py
 | [12_test](12_test) | [Test](../RUNA.md#12-test) |
 | [13_eval](13_eval) | [Eval (Case/Dataset)](../RUNA.md#13-eval-casedataset) |
 | [14_tracing](14_tracing) | [Tracing](../RUNA.md#14-tracing) |
+| [cache](cache) | Cache (not a numbered primitive, see [docs/cache.md](../docs/cache.md)) |
 | [applications](applications) | Full apps, combining several primitives |
 
 Each folder has its own `README.md`. For the same examples rendered alongside the prose that
