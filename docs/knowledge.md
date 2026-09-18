@@ -79,3 +79,5 @@ knowledge = Knowledge(
 ```python
 --8<--"examples/08_knowledge/auto_knowledge.py"
 ```
+
+More in [`examples/08_knowledge/`](https://github.com/Benybrahim/runa/tree/main/examples/08_knowledge).

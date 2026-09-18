@@ -83,3 +83,5 @@ decides whether to stop and ask a human. See [Human Approval](approval.md).
 ```python
 --8<--"examples/03_guardrail/tool_guardrails.py"
 ```
+
+More in [`examples/03_guardrail/`](https://github.com/Benybrahim/runa/tree/main/examples/03_guardrail).

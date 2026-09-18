@@ -69,3 +69,5 @@ A tool call can be checked before it runs, or paused for a human to approve:
 ```python
 --8<--"examples/02_tool/async_tool.py"
 ```
+
+More in [`examples/02_tool/`](https://github.com/Benybrahim/runa/tree/main/examples/02_tool).

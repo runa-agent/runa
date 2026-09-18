@@ -87,3 +87,5 @@ same way.
 ```python
 --8<--"examples/05_subagent/delegate.py"
 ```
+
+More in [`examples/05_subagent/`](https://github.com/Benybrahim/runa/tree/main/examples/05_subagent).

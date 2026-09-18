@@ -31,3 +31,5 @@ MCP tools go through the same `needs_approval` gate as any other tool. See
 ```python
 --8<--"examples/09_mcp/stdio_server.py"
 ```
+
+More in [`examples/09_mcp/`](https://github.com/Benybrahim/runa/tree/main/examples/09_mcp).

@@ -102,6 +102,8 @@ the past.
 --8<--"examples/14_tracing/custom_exporter.py"
 ```
 
+More in [`examples/14_tracing/`](https://github.com/Benybrahim/runa/tree/main/examples/14_tracing).
+
 ## Hooks
 
 Tracing is unconditional. Hooks are optional lifecycle callbacks for your own logic: logging,
@@ -149,3 +151,5 @@ behavior; subclass `RunHooks`/`AgentHooks` directly and pass your own instance i
 ```python
 --8<--"examples/11_hooks/agent_hooks.py"
 ```
+
+More in [`examples/11_hooks/`](https://github.com/Benybrahim/runa/tree/main/examples/11_hooks).

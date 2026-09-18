@@ -110,3 +110,5 @@ what ran before the pause), not just whichever one stopped the run.
 ```python
 --8<--"examples/04_approval/durable_resume.py"
 ```
+
+More in [`examples/04_approval/`](https://github.com/Benybrahim/runa/tree/main/examples/04_approval).

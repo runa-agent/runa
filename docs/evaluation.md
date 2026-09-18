@@ -72,8 +72,12 @@ await agent.evaluate(dataset, thresholds={"faithfulness": 0.9})
 --8<--"examples/13_eval/case_dataset.py"
 ```
 
+More in [`examples/13_eval/`](https://github.com/Benybrahim/runa/tree/main/examples/13_eval).
+
 Tests are a separate, deterministic check, a bare `test_*` function with a plain `assert`:
 
 ```python
 --8<--"examples/12_test/test_example.py"
 ```
+
+More in [`examples/12_test/`](https://github.com/Benybrahim/runa/tree/main/examples/12_test).

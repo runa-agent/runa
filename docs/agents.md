@@ -131,3 +131,5 @@ image needs the system `dot` binary.
 ```python
 --8<--"examples/01_agent/dynamic_instructions.py"
 ```
+
+More in [`examples/01_agent/`](https://github.com/Benybrahim/runa/tree/main/examples/01_agent).

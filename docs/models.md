@@ -92,3 +92,5 @@ class SupportAgent(Agent):
 ```python
 --8<--"examples/10_model/model_settings.py"
 ```
+
+More in [`examples/10_model/`](https://github.com/Benybrahim/runa/tree/main/examples/10_model).

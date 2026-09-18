@@ -94,3 +94,5 @@ runa chat --show SESSION_ID  # replay one session's full history
 ```python
 --8<--"examples/06_session/custom_session_store.py"
 ```
+
+More in [`examples/06_session/`](https://github.com/Benybrahim/runa/tree/main/examples/06_session).
