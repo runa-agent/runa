@@ -40,15 +40,57 @@ dict keys to scrub) or a custom `redactor` callable, and `max_input_bytes`/`max_
 
 ### Custom Exporters
 
-By default, traces go to `runa.db` via `SQLiteExporter`. Swap or add exporters:
+By default, traces go to `runa.db` via `SQLiteExporter`. `add_exporter` adds one more exporter
+alongside whatever's active, without disabling the default:
+
+```python
+from runa import add_exporter, ConsoleExporter
+
+add_exporter(ConsoleExporter())  # runa.db still gets written to, console output is now added
+```
+
+`observe(exporter=...)` is a full override instead, since it's also how `with observe(...):`
+swaps exporters for one block's duration:
 
 ```python
 from runa import ConsoleExporter, SQLiteExporter, observe
 
-observe(exporter=[SQLiteExporter(), ConsoleExporter()])
+observe(exporter=[SQLiteExporter(), ConsoleExporter()])  # replaces the exporter list entirely
 ```
 
 Write your own by implementing `TraceExporter`'s single method, `export(self, trace: Trace) -> None`.
+
+### Langfuse
+
+Install the `runa[langfuse]` extra and set `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (a `.env`
+file works, same as `OPENAI_API_KEY` and friends), and every trace starts going to that Langfuse
+project too, `runa.db` included -- no code change:
+
+```bash
+uv add "runa-ai[langfuse]"
+echo "LANGFUSE_PUBLIC_KEY=pk-lf-..." >> .env
+echo "LANGFUSE_SECRET_KEY=sk-lf-..." >> .env
+```
+
+Set `LANGFUSE_HOST` too for a non-default Langfuse region or a self-hosted instance. Without
+`LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` set, or without the `langfuse` extra installed,
+tracing behaves exactly as if `LangfuseExporter` didn't exist -- SQLite only.
+
+To point at a Langfuse project without using the environment (e.g. a second project, or one
+picked at runtime), construct `LangfuseExporter` directly instead and add it with `add_exporter`:
+
+```python
+from runa import add_exporter
+from runa.tracing.langfuse import LangfuseExporter
+
+add_exporter(LangfuseExporter(public_key="pk-lf-...", secret_key="sk-lf-..."))
+```
+
+`LangfuseExporter` posts plain OpenTelemetry spans straight to Langfuse's OTLP endpoint rather
+than using the `langfuse` package: Runa exports a trace's whole span tree at once, after the run
+finishes, and Langfuse's own SDK can only backdate an observation's end time, not its start time
+-- it would otherwise record every span as starting at export time with an end time already in
+the past.
 
 ## Hooks
 

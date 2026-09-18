@@ -32,7 +32,15 @@ from runa.stream_events import (
     StreamEvent,
 )
 from runa.tool import tool
-from runa.tracing import ConsoleExporter, Span, SQLiteExporter, Trace, TraceExporter, observe
+from runa.tracing import (
+    ConsoleExporter,
+    Span,
+    SQLiteExporter,
+    Trace,
+    TraceExporter,
+    add_exporter,
+    observe,
+)
 
 __version__ = version("runa-ai")
 
@@ -77,6 +85,7 @@ __all__ = [
     "Trace",
     "TraceExporter",
     "__version__",
+    "add_exporter",
     "approval",
     "guardrail",
     "observe",

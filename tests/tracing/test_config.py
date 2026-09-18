@@ -4,11 +4,13 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.run_config import RunConfig
 from runa.runner import Runner
 from runa.tool import tool
-from runa.tracing import config, observe
+from runa.tracing import ConsoleExporter, config, observe
 
 
 class _TextModel:
@@ -91,6 +93,50 @@ def test_observe_context_manager_restores_the_previous_setting_on_exit() -> None
         assert config.capture_inputs() is False
 
     assert config.capture_inputs() is True
+
+
+def test_default_exporters_is_sqlite_only_without_langfuse_env_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no `LANGFUSE_*` env vars set, the default exporter list is just `SQLiteExporter`."""
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+
+    assert [type(e).__name__ for e in config._default_exporters()] == ["SQLiteExporter"]
+
+
+def test_default_exporters_adds_langfuse_once_its_env_vars_are_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setting `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` is enough on its own, no code change.
+
+    This is the whole point of checking them in `_default_exporters`: a Langfuse project should
+    start receiving traces the moment its keys are in the environment, matching how tracing
+    itself needs no separate setup step.
+    """
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-env")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-env")
+
+    names = [type(e).__name__ for e in config._default_exporters()]
+
+    assert names == ["SQLiteExporter", "LangfuseExporter"]
+
+
+def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
+    """`add_exporter` keeps whatever was active (the default `SQLiteExporter`) and adds to it.
+
+    Unlike `observe(exporter=...)`, which fully replaces the list -- the right tool for a
+    `with observe(...):` block that swaps exporters temporarily, but a footgun for the common
+    case of wanting one more exporter without silently losing the default.
+    """
+    before = list(config.exporters())
+    extra = ConsoleExporter()
+
+    config.add_exporter(extra)
+    try:
+        assert config.exporters() == [*before, extra]
+    finally:
+        observe(exporter=before)
 
 
 def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:

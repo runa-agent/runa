@@ -21,6 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+langfuse = ["opentelemetry-exporter-otlp-proto-http>=1.27.0", "opentelemetry-sdk>=1.27.0"]
 postgres = ["asyncpg>=0.30.0", "pgvector>=0.3.6"]
 redis = ["redis>=5.2.0"]
 ui = ["fastapi>=0.121.0", "uvicorn>=0.38.0"]
@@ -35,7 +36,7 @@ dev = [
     "pyright>=1.1.400",
     "python-dotenv>=1.2.3",
     "httpx>=0.28.0",
-    "runa-ai[postgres,redis,ui]",
+    "runa-ai[langfuse,postgres,redis,ui]",
     "mkdocstrings-python>=2.0.8",
 ]
 

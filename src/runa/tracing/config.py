@@ -6,6 +6,7 @@ limits truncate what's left. `RunaTraceProcessor` (`tracing/processor.py`) is th
 """
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -46,6 +47,27 @@ class ConsoleExporter:
         print(trace)  # noqa: T201 -- this exporter's entire job is printing
 
 
+def _default_exporters() -> list[TraceExporter]:
+    """`SQLiteExporter`, plus `LangfuseExporter` if its credentials are already in the env.
+
+    Checking `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` here (rather than requiring an explicit
+    `add_exporter(LangfuseExporter())` call) is what lets a Langfuse project just work the moment
+    its keys are set, no code change needed -- the same "no separate setup step" property the
+    rest of tracing already has. The `runa[langfuse]` extra not being installed is the normal
+    case for most apps even with those env vars unset; silently skipping it here, rather than
+    raising, keeps that normal.
+    """
+    exporters: list[TraceExporter] = [SQLiteExporter()]
+    if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
+        try:
+            from runa.tracing.langfuse import LangfuseExporter
+        except ImportError:
+            pass
+        else:
+            exporters.append(LangfuseExporter())
+    return exporters
+
+
 @dataclass
 class _Config:
     capture_inputs: bool = True
@@ -55,7 +77,7 @@ class _Config:
     max_input_bytes: int = 32_000
     max_output_bytes: int = 32_000
     max_tool_result_bytes: int = 32_000
-    exporters: list[TraceExporter] = field(default_factory=lambda: [SQLiteExporter()])
+    exporters: list[TraceExporter] = field(default_factory=_default_exporters)
 
 
 _config = _Config()
@@ -122,6 +144,19 @@ def tool_result_limit() -> int:
 def exporters() -> list[TraceExporter]:
     """Return the active list of `TraceExporter`s a finished trace is sent to."""
     return _config.exporters
+
+
+def add_exporter(exporter: TraceExporter) -> None:
+    """Add `exporter` alongside whatever's active, instead of replacing it.
+
+    `observe(exporter=...)` is a full override, since it's also how a bare `with observe(...)`
+    block temporarily swaps exporters for its duration. That makes it the wrong tool for adding
+    one more exporter (e.g. a second `LangfuseExporter`, pointed at a different project, or a
+    `ConsoleExporter` for local debugging) without disabling the default `SQLiteExporter` and
+    losing local trace history. `LangfuseExporter` itself doesn't need this: `_default_exporters`
+    already adds one automatically once `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are set.
+    """
+    _config.exporters = [*_config.exporters, exporter]
 
 
 class observe:

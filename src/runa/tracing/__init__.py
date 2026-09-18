@@ -6,7 +6,13 @@ builds and exports a `Trace` for every run itself, with no separate registration
 `span` and `observe` are the advanced, optional API described in the design.
 """
 
-from runa.tracing.config import ConsoleExporter, SQLiteExporter, TraceExporter, observe
+from runa.tracing.config import (
+    ConsoleExporter,
+    SQLiteExporter,
+    TraceExporter,
+    add_exporter,
+    observe,
+)
 from runa.tracing.manual import span, trace
 from runa.tracing.spans import Span, SpanStatus, SpanType
 from runa.tracing.storage import get_errors, get_recent_traces, get_trace, list_traces
@@ -20,6 +26,7 @@ __all__ = [
     "SpanType",
     "Trace",
     "TraceExporter",
+    "add_exporter",
     "get_errors",
     "get_recent_traces",
     "get_trace",
