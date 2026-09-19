@@ -2,14 +2,16 @@
 
 Deliberately restricted to the controlled vocabulary the design calls for (`SpanType`) instead of
 inventing separate classes per operation kind: an agent turn, an LLM call, a tool call, a
-retrieval, a handoff, or a guardrail check are all just a `Span` with a different `type` and
-whatever `attributes`/`input`/`output` that kind of operation actually produced.
+retrieval, a handoff, a delegate call, or a guardrail check are all just a `Span` with a different
+`type` and whatever `attributes`/`input`/`output` that kind of operation actually produced.
 """
 
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-SpanType = Literal["agent", "llm", "tool", "retrieval", "handoff", "guardrail", "custom"]
+SpanType = Literal[
+    "agent", "llm", "tool", "retrieval", "handoff", "delegate", "guardrail", "custom"
+]
 SpanStatus = Literal["ok", "error"]
 
 

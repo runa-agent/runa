@@ -6,7 +6,7 @@ All data comes from `runa.cli.agents.list_agents`; this module only turns `Agent
 from pathlib import Path
 
 from runa.cli.agents import AgentInfo, list_agents
-from runa.web._html import chip, chips, empty, escape, page
+from runa.web._html import chip, chips, empty_hint, escape, page
 
 
 def _card(info: AgentInfo) -> str:
@@ -34,8 +34,8 @@ def render(*, root: Path) -> str:
     body = (
         "".join(_card(info) for info in infos)
         if infos
-        else empty(
-            "no agents found under app/agents/ -- run `runa generate agent MyAgent --name my_agent`"
+        else empty_hint(
+            "no agents found under app/agents/, run", "runa generate agent MyAgent --model ..."
         )
     )
     return page(

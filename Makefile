@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test check docs hello tour examples clean changelog
+.PHONY: install format lint typecheck test check docs hello tour ui-demo examples clean changelog
 
 install:
 	uv sync
@@ -35,6 +35,10 @@ hello:
 
 tour:
 	uv run python examples/applications/tour.py
+
+ui-demo:
+	uv run python examples/applications/seed_ui_demo.py
+	cd ui_demo && ../.venv/bin/runa ui
 
 clean:
 	rm -rf .pytest_cache

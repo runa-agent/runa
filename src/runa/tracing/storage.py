@@ -24,8 +24,10 @@ CREATE TABLE IF NOT EXISTS {_TRACES_TABLE} (
     start_time REAL NOT NULL,
     end_time REAL,
     status TEXT NOT NULL,
+    session_id TEXT,
     metadata_json TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_{_TRACES_TABLE}_session_id ON {_TRACES_TABLE} (session_id);
 CREATE TABLE IF NOT EXISTS {_SPANS_TABLE} (
     id TEXT PRIMARY KEY,
     trace_id TEXT NOT NULL REFERENCES {_TRACES_TABLE}(id),
@@ -52,13 +54,15 @@ def save_trace(trace: Trace, *, db_path: Path = DEFAULT_DB_PATH) -> None:
     with closing(_connect(db_path)) as conn:
         conn.execute(
             f"INSERT OR REPLACE INTO {_TRACES_TABLE} "
-            "(id, name, start_time, end_time, status, metadata_json) VALUES (?, ?, ?, ?, ?, ?)",
+            "(id, name, start_time, end_time, status, session_id, metadata_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 trace.id,
                 trace.name,
                 trace.start_time,
                 trace.end_time,
                 trace.status,
+                trace.session_id,
                 json.dumps(trace.metadata, default=str),
             ),
         )
@@ -122,6 +126,7 @@ def _row_to_trace(conn: sqlite3.Connection, row: sqlite3.Row) -> Trace:
         name=row["name"],
         start_time=row["start_time"],
         end_time=row["end_time"],
+        session_id=row["session_id"],
         spans=spans,
         metadata=json.loads(row["metadata_json"]),
     )
@@ -142,11 +147,13 @@ def list_traces(
     limit: int = 50,
     agent: str | None = None,
     status: str | None = None,
+    session_id: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> list[Trace]:
-    """Return the most recent `limit` traces, newest first, optionally filtered by `agent`/`status`.
+    """Return the most recent `limit` traces, newest first, optionally filtered.
 
-    `agent` matches `Trace.name` (the workflow name `Agent.run` sets to the agent's class name).
+    `agent` matches `Trace.name` (the workflow name `Agent.run` sets to the agent's class name);
+    `session_id` matches the `SessionABC` a session-backed run was passed, when it was passed one.
     """
     clauses, params = [], []
     if agent is not None:
@@ -155,6 +162,9 @@ def list_traces(
     if status is not None:
         clauses.append("status = ?")
         params.append(status)
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(session_id)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     with closing(_connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row

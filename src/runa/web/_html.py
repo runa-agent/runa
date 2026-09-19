@@ -10,7 +10,7 @@ from __future__ import annotations
 import html
 from typing import Literal
 
-NAV_ITEMS = ("Agents", "Sessions", "Traces", "Evaluations")
+NAV_ITEMS = ("Agents", "Sessions", "Evaluations")
 
 _STYLE = """
 :root {
@@ -43,7 +43,8 @@ nav a {
   padding: 6px 12px; border-radius: 7px; color: var(--muted); font-size: 13.5px; font-weight: 500;
 }
 nav a:hover { color: var(--text); }
-nav a.active { color: var(--text); background: var(--border); }
+nav a.active { color: var(--accent); font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 main { max-width: 1040px; margin: 0 auto; padding: 32px 24px 80px; }
 h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
 .subtitle { color: var(--muted); font-size: 13.5px; margin: 0 0 24px; }
@@ -76,6 +77,8 @@ a.row:hover { background: var(--bg); }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
   font-family: var(--mono); font-size: 12.5px; overflow-x: auto; white-space: pre-wrap;
   word-break: break-word; margin: 8px 0 0; }
+code { font-family: var(--mono); font-size: 0.92em; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
 details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; user-select: none; }
 details summary:hover { color: var(--text); }
 .back { color: var(--muted); font-size: 13px; margin-bottom: 16px; display: inline-block; }
@@ -86,6 +89,11 @@ details summary:hover { color: var(--text); }
 .span-node { padding: 4px 0; }
 .span-row { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 6px; }
 .span-row:hover { background: var(--surface); }
+summary.span-row { color: var(--text); font-size: inherit; cursor: pointer; user-select: none; }
+.handoff-divider { display: flex; align-items: center; gap: 10px; color: var(--muted);
+  font-size: 11px; padding: 6px 8px; }
+.handoff-divider::before, .handoff-divider::after { content: ""; flex: 1;
+  border-top: 1px dashed var(--border); }
 .span-type { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing:
   0.03em; color: var(--muted); width: 62px; flex-shrink: 0; }
 .span-name { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
@@ -101,6 +109,12 @@ details summary:hover { color: var(--text); }
   0.04em; color: var(--accent); margin-bottom: 4px; }
 .bubble .text { white-space: pre-wrap; word-break: break-word; }
 .bubble .time { color: var(--muted); font-size: 11px; font-family: var(--mono); margin-top: 6px; }
+.trace-card { border: 1px dashed var(--border); border-radius: 10px; padding: 10px 14px;
+  margin-bottom: 10px; }
+.trace-card summary { display: flex; align-items: center; gap: 6px; font-size: 12.5px;
+  font-family: var(--mono); color: var(--muted); cursor: pointer; user-select: none; }
+.trace-card summary:hover { color: var(--text); }
+.trace-card-tree { margin-top: 12px; }
 .score-bar { height: 6px; border-radius: 999px; background: var(--border); overflow: hidden;
   width: 120px; }
 .score-bar > div { height: 100%; background: var(--ok); }
@@ -152,6 +166,11 @@ def chips(items: list[str], kind: Literal["default", "ok", "error", "accent"] = 
 def empty(message: str) -> str:
     """A centered muted placeholder for a page with nothing to show yet."""
     return f'<div class="empty">{escape(message)}</div>'
+
+
+def empty_hint(message: str, command: str) -> str:
+    """`empty`, plus a `<code>`-styled command to run next."""
+    return f'<div class="empty">{escape(message)} <code>{escape(command)}</code></div>'
 
 
 def back_link(href: str, label: str) -> str:

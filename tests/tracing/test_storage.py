@@ -6,7 +6,9 @@ from runa.tracing import Span, Trace
 from runa.tracing.storage import get_errors, get_trace, list_traces, save_trace
 
 
-def _trace(id: str, name: str, status: str, start_time: float = 0.0) -> Trace:
+def _trace(
+    id: str, name: str, status: str, start_time: float = 0.0, session_id: str | None = None
+) -> Trace:
     span = Span(
         id=f"{id}-span",
         trace_id=id,
@@ -23,6 +25,7 @@ def _trace(id: str, name: str, status: str, start_time: float = 0.0) -> Trace:
         name=name,
         start_time=start_time,
         end_time=start_time + 1.0,
+        session_id=session_id,
         spans=[span],
     )
 
@@ -71,6 +74,18 @@ def test_list_traces_filters_by_agent_and_status(tmp_path: Path) -> None:
 
     assert [t.id for t in list_traces(agent="SupportAgent", db_path=db_path)] == ["t2", "t1"]
     assert [t.id for t in list_traces(status="error", db_path=db_path)] == ["t2"]
+
+
+def test_session_id_round_trips_and_filters_list_traces(tmp_path: Path) -> None:
+    """`Trace.session_id` survives a save/get round trip and filters `list_traces`."""
+    db_path = tmp_path / "runa.db"
+    save_trace(_trace("t1", "SupportAgent", "ok", session_id="s1"), db_path=db_path)
+    save_trace(_trace("t2", "SupportAgent", "ok", start_time=1.0, session_id="s2"), db_path=db_path)
+    save_trace(_trace("t3", "SupportAgent", "ok", start_time=2.0), db_path=db_path)
+
+    assert get_trace("t1", db_path=db_path).session_id == "s1"  # type: ignore[union-attr]
+    assert get_trace("t3", db_path=db_path).session_id is None  # type: ignore[union-attr]
+    assert [t.id for t in list_traces(session_id="s1", db_path=db_path)] == ["t1"]
 
 
 def test_get_errors_returns_only_error_traces(tmp_path: Path) -> None:

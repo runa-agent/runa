@@ -42,7 +42,8 @@ async def _run_tool_call(
     context_wrapper.executed_call_ids.add(call_id)
 
     args_json = call["function"]["arguments"] or "{}"
-    span = _new_span(trace, parent_id, tool.name, "tool", input=args_json)
+    span_type = "delegate" if tool.is_delegate else "tool"
+    span = _new_span(trace, parent_id, tool.name, span_type, input=args_json)
     await hooks.on_tool_start(context_wrapper, agent, tool)
     try:
         await _run_tool_input_guardrails(tool, args_json, call_id, context_wrapper, trace, span.id)

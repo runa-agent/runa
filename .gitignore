@@ -1,6 +1,7 @@
 .idea/
 *.db
 myapp/
+ui_demo/
 db/
 */.DS_Store
 

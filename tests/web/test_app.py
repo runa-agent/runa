@@ -22,7 +22,7 @@ from runa.web.app import create_app
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
-    """A scaffolded project with one agent, one session, one trace, and one eval run."""
+    """A scaffolded project with one agent, one session, two traces, and one eval run."""
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("SupportAgent", root=project_dir)
     db_path = project_dir / "db" / "runa.db"
@@ -30,7 +30,13 @@ def project(tmp_path: Path) -> Path:
     session = SQLiteSession("support_agent-1", db_path=db_path)
     asyncio.run(session.add_items([{"role": "user", "content": "hi there"}]))
 
-    trace = Trace(id="trace_1", name="support_agent", start_time=0.0, end_time=1.0)
+    trace = Trace(
+        id="trace_1",
+        name="support_agent",
+        start_time=0.0,
+        end_time=1.0,
+        session_id="support_agent-1",
+    )
     trace.spans = [
         Span(
             id="s1",
@@ -42,9 +48,38 @@ def project(tmp_path: Path) -> Path:
             end_time=1.0,
             status="error",
             error="boom",
-        )
+        ),
+        Span(
+            id="s2",
+            trace_id="trace_1",
+            parent_id="s1",
+            name="transfer_to_billing_agent",
+            type="handoff",
+            start_time=0.0,
+            end_time=1.0,
+        ),
     ]
     save_trace(trace, db_path=db_path)
+
+    trace2 = Trace(
+        id="trace_2",
+        name="support_agent",
+        start_time=2.0,
+        end_time=2.5,
+        session_id="support_agent-1",
+    )
+    trace2.spans = [
+        Span(
+            id="s3",
+            trace_id="trace_2",
+            parent_id=None,
+            name="turn",
+            type="agent",
+            start_time=2.0,
+            end_time=2.5,
+        )
+    ]
+    save_trace(trace2, db_path=db_path)
 
     save_report(
         Report(
@@ -111,22 +146,61 @@ def test_session_detail_404s_for_an_unknown_session(client: TestClient) -> None:
     assert client.get("/sessions/nope").status_code == 404
 
 
-def test_traces_list_and_detail(client: TestClient) -> None:
-    """`/traces` lists the trace; `?status=error` filters to it; the detail shows the error."""
-    listing = client.get("/traces")
-    assert "support_agent" in listing.text
+def test_session_detail_lists_its_traces(client: TestClient) -> None:
+    """`/sessions/{id}` shows the traces produced by that session's turns, spans expanded."""
+    detail = client.get("/sessions/support_agent-1")
 
-    errors_only = client.get("/traces", params={"status": "error"})
-    assert "trace_1" in errors_only.text
+    assert detail.status_code == 200
+    assert 'class="trace-card"' in detail.text
+    assert "support_agent" in detail.text
+    assert "boom" in detail.text  # the trace's error span, shown inline with no expand click
 
+
+def test_trace_detail(client: TestClient) -> None:
+    """`/traces/{id}` is still reachable directly (no nav tab), showing the trace's spans."""
     detail = client.get("/traces/trace_1")
+
     assert detail.status_code == 200
     assert "boom" in detail.text
+    assert "support_agent-1" in detail.text
+
+
+def test_session_detail_labels_trace_cards_by_turn_not_agent_name(client: TestClient) -> None:
+    """Trace cards read "turn 1", "turn 2", ... in order, not the (redundant) agent name."""
+    detail = client.get("/sessions/support_agent-1")
+
+    turn1 = detail.text.index("turn 1")
+    turn2 = detail.text.index("turn 2")
+    assert turn1 < turn2
+
+    card_section = detail.text[detail.text.index('class="trace-card"') :]
+    assert "support_agent" not in card_section.split("</summary>")[0]
+
+
+def test_trace_detail_strips_the_handoff_tool_name_prefix(client: TestClient) -> None:
+    """A handoff span shows the target agent's name, not the full `transfer_to_...` tool name."""
+    detail = client.get("/traces/trace_1")
+
+    assert "billing_agent" in detail.text
+    assert "transfer_to_billing_agent" not in detail.text
+
+
+def test_trace_detail_shows_a_divider_after_a_handoff(client: TestClient) -> None:
+    """A `class="handoff-divider"` row marks who took over right after the handoff span."""
+    detail = client.get("/traces/trace_1")
+
+    assert 'class="handoff-divider">Handoff &middot; billing_agent<' in detail.text
 
 
 def test_trace_detail_404s_for_an_unknown_trace(client: TestClient) -> None:
     """`/traces/{id}` returns 404 for a trace id `db/runa.db` has no record of."""
     assert client.get("/traces/nope").status_code == 404
+
+
+def test_traces_has_no_nav_tab(client: TestClient) -> None:
+    """There's no standalone `/traces` list route or nav entry; sessions cover that."""
+    assert client.get("/traces").status_code == 404
+    assert "Traces" not in client.get("/agents").text
 
 
 def test_evaluations_list_and_detail(client: TestClient) -> None:

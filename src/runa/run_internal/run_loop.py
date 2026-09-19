@@ -224,7 +224,12 @@ async def _run_async(
     context_wrapper = (
         _context_wrapper if _context_wrapper is not None else RunContextWrapper(context=context)
     )
-    trace = Trace(id=gen_trace_id(), name=run_config.workflow_name, start_time=time.time())
+    trace = Trace(
+        id=gen_trace_id(),
+        name=run_config.workflow_name,
+        start_time=time.time(),
+        session_id=session.session_id if session is not None else None,
+    )
     if run_config.group_id is not None or run_config.trace_metadata is not None:
         trace.metadata = {**(run_config.trace_metadata or {}), "group_id": run_config.group_id}
 

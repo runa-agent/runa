@@ -11,6 +11,7 @@ _TYPE_LABELS: dict[str, str] = {
     "tool": "Tool",
     "retrieval": "Retrieval",
     "handoff": "Handoff",
+    "delegate": "Delegate",
     "guardrail": "Guardrail",
     "custom": "Custom",
 }
@@ -50,6 +51,7 @@ class Trace:
     name: str
     start_time: float
     end_time: float | None = None
+    session_id: str | None = None
     spans: list[Span] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 

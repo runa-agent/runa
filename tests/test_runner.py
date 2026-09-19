@@ -208,6 +208,39 @@ def test_handoff_switches_current_agent() -> None:
     assert len(handoff_spans) == 1
 
 
+def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
+    """A `.delegate`-wrapped agent call traces as `type="delegate"`, unlike a plain tool call.
+
+    Both run through the exact same tool-call plumbing (`tool_execution.py`), but a delegate call
+    secretly runs a whole nested `Agent.run()` -- its own LLM call, in its own trace -- so it gets
+    its own span type, the same way a handoff does despite also being a disguised tool call.
+    """
+    from runa.agent import Agent
+    from runa.handoff import agent_as_tool
+
+    class Researcher(Agent):
+        name = "researcher"
+        model = _ScriptedModel([_text_response("the policy is 30 days")])
+
+    delegate_tool = agent_as_tool(Researcher(), None, None)
+    caller = _agent(
+        tools=[delegate_tool],
+        model=_ScriptedModel(
+            [
+                _tool_call_response("researcher", '{"input": "what is the policy?"}'),
+                _text_response("it's 30 days"),
+            ]
+        ),
+    )
+
+    result = asyncio.run(Runner.run(caller, "what's the policy?", run_config=_run_config()))
+
+    assert result.final_output == "it's 30 days"
+    (delegate_span,) = [s for s in result.trace.spans if s.name == "researcher"]
+    assert delegate_span.type == "delegate"
+    assert not [s for s in result.trace.spans if s.type == "tool"]
+
+
 def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
     """A raw `Agent` in `.handoffs` reaches the model wrapped as a `Handoff`, not as-is.
 
@@ -886,6 +919,27 @@ def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:
 
     assert memory.search_calls == [("hi", "u1")]
     assert memory.remembered[0][1] == "u1"
+
+
+def test_trace_session_id_is_derived_from_the_session(tmp_path: Any) -> None:
+    """A session-backed run's `Trace.session_id` is that session's id, for grouping in the UI."""
+    from runa.session import SQLiteSession
+
+    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]))
+
+    result = asyncio.run(Runner.run(agent, "hi", session=session, run_config=_run_config()))
+
+    assert result.trace.session_id == "s1"
+
+
+def test_trace_session_id_is_none_without_a_session() -> None:
+    """A one-off run with no `session=` leaves `Trace.session_id` unset."""
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]))
+
+    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+
+    assert result.trace.session_id is None
 
 
 def test_memory_retrieval_failure_degrades_gracefully() -> None:

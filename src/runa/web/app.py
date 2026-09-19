@@ -1,8 +1,12 @@
-"""web/app.py: the `runa ui` FastAPI app -- Agents, Sessions, Traces, Evaluations, read-only.
+"""web/app.py: the `runa ui` FastAPI app -- Agents, Sessions, Evaluations, read-only.
 
 Every route calls straight into one `web/<page>.py`'s render function; no route does its own
 data-fetching or HTML-building. `create_app(root)` closes over the app's directory, the same way
 every `cli/*.py` command takes `root` as a parameter instead of assuming `cwd`.
+
+No standalone Traces tab: `web/sessions.py`'s merged timeline already shows a session's traces in
+context, and `/traces/{trace_id}` stays routable (unlinked from the nav) as the "open trace" target
+from a session's trace card and for a session-less trace (an eval run, a one-off `run_sync()`).
 """
 
 from pathlib import Path
@@ -45,16 +49,12 @@ def create_app(root: Path) -> FastAPI:
         except sessions_page.SessionNotFound:
             return HTMLResponse(_error_page("Sessions", "Session not found."), status_code=404)
 
-    @app.get("/traces", response_class=HTMLResponse, include_in_schema=False)
-    def traces_list(status: str | None = None) -> str:
-        return traces_page.render_list(root=root, status=status)
-
     @app.get("/traces/{trace_id}", response_class=HTMLResponse, include_in_schema=False)
     def trace_detail(trace_id: str) -> HTMLResponse:
         try:
             return HTMLResponse(traces_page.render_detail(trace_id, root=root))
         except traces_page.TraceNotFound:
-            return HTMLResponse(_error_page("Traces", "Trace not found."), status_code=404)
+            return HTMLResponse(_error_page("", "Trace not found."), status_code=404)
 
     @app.get("/evaluations", response_class=HTMLResponse, include_in_schema=False)
     def evaluations_list() -> str:

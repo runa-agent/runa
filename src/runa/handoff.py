@@ -82,6 +82,7 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
         description=resolved_description,
         params_json_schema=_DELEGATE_INPUT_SCHEMA,
         on_invoke_tool=on_invoke_tool,
+        is_delegate=True,
     )
 
 

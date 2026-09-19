@@ -4,17 +4,26 @@ Data comes from `runa.eval.storage` (`list_eval_runs`/`get_eval_run`); this modu
 `EvalRun`/`EvalCaseRow` into HTML.
 """
 
+from datetime import datetime
 from pathlib import Path
 
 from runa.cli._project import resolve_db_path
 from runa.eval.storage import EvalCaseRow, EvalRun, get_eval_run, list_eval_runs
-from runa.web._html import back_link, chip, empty, escape, page, pre
+from runa.web._html import back_link, chip, empty, empty_hint, escape, page, pre
 
 __all__ = ["EvalRunNotFound", "render_detail", "render_list"]
 
 
 class EvalRunNotFound(Exception):
     """Raised when `render_detail` names an `eval_runs.id` `db/runa.db` has no record of."""
+
+
+def _fmt_timestamp(value: str) -> str:
+    """`EvalRun.created_at`'s `datetime.isoformat()` form, trimmed to match `agent_sessions`'s."""
+    try:
+        return datetime.fromisoformat(value).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return value
 
 
 def _score_bar(pass_rate: float) -> str:
@@ -55,13 +64,13 @@ def render_list(*, root: Path) -> str:
     """Render `/evaluations`: the most recent `agent.evaluate()` runs, newest first."""
     runs = list_eval_runs(limit=100, db_path=resolve_db_path(root))
     if not runs:
-        body = empty("no evaluation runs yet -- run `runa eval`")
+        body = empty_hint("no evaluation runs yet, run", "runa eval")
     else:
         rows = "".join(
             f'<a class="row" href="/evaluations/{run.id}">'
             f'<span class="primary">{escape(run.agent_name)}</span>'
             f"{_score_bar(run.pass_rate)}"
-            f'<span class="meta">{escape(run.created_at)}</span></a>'
+            f'<span class="meta">{escape(_fmt_timestamp(run.created_at))}</span></a>'
             for run in runs
         )
         body = f'<div class="list">{rows}</div>'
@@ -79,7 +88,7 @@ def render_detail(run_id: int, *, root: Path) -> str:
         raise EvalRunNotFound(f"no eval run found with id {run_id!r}")
     header = (
         f"<h1>{escape(run.agent_name)}</h1>"
-        f'<p class="subtitle">{escape(run.created_at)} · score {run.score:.2f} · '
+        f'<p class="subtitle">{escape(_fmt_timestamp(run.created_at))} · score {run.score:.2f} · '
         f"{round(run.pass_rate * 100)}% passed</p>"
     )
     cases = "".join(_case_card(case) for case in run.cases) or empty("no cases in this run")
