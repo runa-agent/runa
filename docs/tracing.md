@@ -19,8 +19,6 @@ runa traces errors         # most recent traces that errored
 runa traces show TRACE_ID  # one trace's full span tree
 ```
 
-Or visually, with `runa ui`. See [CLI Reference](cli.md#runa-ui).
-
 ### Privacy Policy
 
 `observe()` configures what tracing captures, globally or for a block:
@@ -103,6 +101,9 @@ the past.
 ```
 
 More in [`examples/14_tracing/`](https://github.com/Benybrahim/runa/tree/main/examples/14_tracing).
+
+Every trace above -- SQLite, Langfuse, or a custom exporter -- is also browsable visually with
+`runa ui`. See [CLI Reference](cli.md#runa-ui).
 
 ## Hooks
 
