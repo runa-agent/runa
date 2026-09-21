@@ -64,9 +64,15 @@ On a tool, `.input` sees the call's parsed arguments as a `dict`. `.output` sees
 return value. A guardrail that only observes, for logging or metrics, without ever tripping just
 always returns `False`.
 
-## Async Guardrails
+## Sync and Async Guardrails
 
-A guardrail predicate can be `async def` too. It is awaited automatically.
+A guardrail predicate can be a plain `def` or `async def`. Pick whichever reads better for what
+the predicate checks; a sync `def` never blocks the run: it runs off the event loop, in a worker
+thread (`asyncio.to_thread` under the hood), so a sync predicate that happens to do blocking I/O
+(a moderation API call, ...) never stalls other concurrent runs or tool calls. An `async def`
+predicate is awaited directly instead, which avoids that thread-dispatch overhead for a predicate
+that's already genuinely async. Neither choice can break the run either way; it's purely a style
+call.
 
 ## Human Approval
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable
@@ -128,9 +129,12 @@ def _wrap(
 
     async def wrapper(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
         checked = _latest_text(value) if reduce_input else value
-        result = func(checked)
-        if inspect.isawaitable(result):
-            result = await result
+        if inspect.iscoroutinefunction(func):
+            result = await func(checked)
+        else:
+            # Off the event loop: a sync predicate that does blocking I/O (a moderation API
+            # call, ...) would otherwise stall every other concurrent run/tool call.
+            result = await asyncio.to_thread(func, checked)
         return GuardrailFunctionOutput(output_info=func.__doc__, tripwire_triggered=bool(result))
 
     return wrapper
@@ -151,9 +155,12 @@ def _wrap_tool(
 
     async def wrapper(data: Any) -> ToolGuardrailFunctionOutput:
         checked = data.output if on_output else _tool_args(data)
-        result = func(checked)
-        if inspect.isawaitable(result):
-            result = await result
+        if inspect.iscoroutinefunction(func):
+            result = await func(checked)
+        else:
+            # Off the event loop: a sync predicate that does blocking I/O (a moderation API
+            # call, ...) would otherwise stall every other concurrent run/tool call.
+            result = await asyncio.to_thread(func, checked)
         return (
             ToolGuardrailFunctionOutput.raise_exception(output_info=func.__doc__)
             if result
