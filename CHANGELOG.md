@@ -2,11 +2,37 @@
 
 All notable changes to Runa are documented here.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-21
+
+### Features
+
+- Automate changelog generation with git-cliff ([bdf2df7](https://github.com/runa-agent/runa/commit/bdf2df79e29d2a8bf0d02b6cd31e4d38fbd7829f))
+
+- Support image input in messages, auto-detected from a plain string list ([f6f50eb](https://github.com/runa-agent/runa/commit/f6f50ebd6d9019978a91a76ae7e878a2b5a82cd8))
+
+- Add langfuse integration ([9c40b32](https://github.com/runa-agent/runa/commit/9c40b3248027372519e0ec4642bba40fd0eb16ca))
+
+- Update traces in ui ([3912821](https://github.com/runa-agent/runa/commit/39128210bd354beae19b06602fa6b79ee6f97055))
+
+
+### Bug Fixes
+
+- Read llm span usage from output, not unused attributes field ([17cb27b](https://github.com/runa-agent/runa/commit/17cb27b5d9153b3cb47d9d90488aef384303d7c6))
+
+- Rebuild RedisCache's client when the event loop changes ([c5f356a](https://github.com/runa-agent/runa/commit/c5f356a30cb9a73ab2d84be1ba0aa3c891921608))
+
+- Async tool call ([63b08aa](https://github.com/runa-agent/runa/commit/63b08aadc11afee87b84c84944448982354ecc45))
+
 
 ### Documentation
 
 - Fix links ([68eed32](https://github.com/runa-agent/runa/commit/68eed32d92031bdedb90cc8489666b33198ada67))
+
+- Add examples ([e87e4fe](https://github.com/runa-agent/runa/commit/e87e4fe23e902f7a321bc297a6794813ea94e25f))
+
+- Remove redundancy ([3dae8ab](https://github.com/runa-agent/runa/commit/3dae8abb11b0c7ff7504e05912d0cbf45477f82d))
+
+- Add cache example ([ab417ab](https://github.com/runa-agent/runa/commit/ab417abc3dfac7d6d0c57960daae6cd389ae92aa))
 
 
 ## [0.1.2] - 2026-09-12
