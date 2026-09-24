@@ -423,26 +423,17 @@ runa generate evaluation greeter_agent
 ```
 
 ```
-created evals/greeter_agent_eval.py
+created evals/greeter_agent.jsonl
 
-next: point `agent` at the Agent you want to evaluate and add Case(...) entries to `dataset`, then
+next: add one case per line, e.g. {"input": "...", "expected": "..."}, then
   runa eval
 ```
 
-This scaffolds a self-contained, runnable stub against a placeholder
-agent; point it at yours and fill in the dataset:
+The filename ties the dataset to `GreeterAgent`, whose `name` is
+`greeter_agent`. Each line is one case:
 
-```python
-# evals/greeter_agent_eval.py
-from runa import Case
-
-from app.agents import GreeterAgent
-
-agent = GreeterAgent()
-
-dataset = [
-    Case(input="Hi there", expected="A warm, one-sentence greeting"),
-]
+```json
+{"input": "Hi there", "expected": "A warm, one-sentence greeting"}
 ```
 
 ```bash

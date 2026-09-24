@@ -21,6 +21,7 @@ from runa.cli.generate import (
     split_tool_name,
 )
 from runa.cli.new import scaffold_project
+from runa.eval import Dataset
 
 
 def test_generate_agent_writes_a_runa_agent_subclass(tmp_path: Path) -> None:
@@ -420,28 +421,16 @@ def test_generate_prompt_raises_outside_a_runa_project(tmp_path: Path) -> None:
         generate_prompt("MyAgent", root=tmp_path)
 
 
-def test_generate_evaluation_writes_a_module_declaring_agent_and_dataset(tmp_path: Path) -> None:
-    """`generate_evaluation` writes a placeholder Agent plus an empty `dataset` list."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-
-    eval_file = generate_evaluation("Support", root=project_dir)
-
-    assert eval_file == project_dir / "evals" / "support_eval.py"
-    content = eval_file.read_text()
-    assert "agent = _SupportPlaceholder()" in content
-    assert "dataset: list[Case] = [" in content
-
-
-def test_generate_evaluation_takes_the_agent_s_snake_case_name(tmp_path: Path) -> None:
-    """`name` is the agent's `runa chat`-style identity, e.g. `greeter_agent`, not a class name."""
+def test_generate_evaluation_writes_a_jsonl_dataset_named_after_the_agent(
+    tmp_path: Path,
+) -> None:
+    """`name` is the agent's `runa chat`-style identity, and becomes `evals/<name>.jsonl`."""
     project_dir = scaffold_project("demo", root=tmp_path)
 
     eval_file = generate_evaluation("greeter_agent", root=project_dir)
 
-    assert eval_file == project_dir / "evals" / "greeter_agent_eval.py"
-    content = eval_file.read_text()
-    assert "class _GreeterAgentPlaceholder(Agent):" in content
-    assert "agent = _GreeterAgentPlaceholder()" in content
+    assert eval_file == project_dir / "evals" / "greeter_agent.jsonl"
+    assert [case.input for case in Dataset.from_jsonl(eval_file)]
 
 
 def test_generate_evaluation_raises_if_the_file_already_exists(tmp_path: Path) -> None:

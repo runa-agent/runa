@@ -95,7 +95,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "name"
     )
     evaluation_parser = generate_subparsers.add_parser(
-        "evaluation", help="Generate a new evals/ case module"
+        "evaluation", help="Generate a new evals/<agent>.jsonl dataset"
     )
     evaluation_parser.add_argument("name", help="the agent's snake_case name, e.g. support_agent")
 
@@ -142,7 +142,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "agent_name",
         nargs="?",
         default=None,
-        help="only run this Agent's evals/ module (its declared `name`, e.g. support_agent)",
+        help="only run this Agent's evals/ dataset (its declared `name`, e.g. support_agent)",
     )
     subparsers.add_parser("test", help="Run this app's tests/ test functions")
 
@@ -286,8 +286,8 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         eval_file = generate_evaluation(args.name, root=cwd)
         print(f"created {eval_file}")
         print(
-            "\nnext: point `agent` at the Agent you want to evaluate and add "
-            "Case(...) entries to `dataset`, then\n"
+            "\nnext: add one case per line, e.g. "
+            '{"input": "...", "expected": "..."}, then\n'
             "  runa eval"
         )
         return 0

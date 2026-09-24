@@ -300,20 +300,15 @@ def test_answers_politely():
 
 ## 13. Eval (Case/Dataset)
 
-**A module under `evals/` declares exactly two module-level names,
-`agent` and `dataset`** (a list of `Case`); `runa eval` imports every such
-module and calls `agent.evaluate(dataset)` on it. There's no other
-registration mechanism: a dataset that isn't a module-level `dataset`
-next to a module-level `agent` doesn't get picked up.
+**An eval is `evals/<agent_name>.jsonl`, one `Case` per line**; the
+filename is the Agent's declared `name`, so `runa eval` resolves the agent
+from it with no registration. Reach for a Python module under `evals/`
+(module-level `agent` and `dataset`) only when cases or the agent need
+code; a `.jsonl` sharing that module's stem is its data, not a second eval.
 
-```python
-agent = SupportAgent()
-dataset = [Case(input="Where's my order #4821?", expected="Asks for or looks up the order status")]
+```json
+{"input": "Where's my order #4821?", "expected": "Asks for or looks up the order status"}
 ```
-
-Keep a few hand-written cases inline. A larger or exported dataset goes in
-a JSONL file next to the module, one `Case` per line:
-`dataset = Dataset.from_jsonl(Path(__file__).with_suffix(".jsonl"))`.
 
 Only `Case.input` is required; add `expected`/`expected_tool`/`context`
 only for the specific grading signal each enables, don't fill in fields

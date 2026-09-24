@@ -3,38 +3,27 @@
 Runa distinguishes two kinds of checks. **Tests** verify invariants with a plain `assert`.
 **Evals** grade behavior, including with a judge model, against a dataset of cases.
 
-`evals/` holds datasets of `Case`s, graded against an agent:
+An eval is one file, `evals/<agent_name>.jsonl`, with one case per line:
 
 ```bash
 runa generate evaluation support_agent
 ```
 
-```python
-# evals/support_agent_eval.py
-from runa import Case
-
-from app.agents import SupportAgent
-
-agent = SupportAgent()
-
-dataset = [
-    Case(
-        input="Where's my order #4821?",
-        expected="Asks for or looks up the order status",
-    ),
-]
+```json
+{"input": "Where's my order #4821?", "expected": "Asks for or looks up the order status"}
+{"input": "Cancel order A100", "expected_tool": "cancel_order"}
 ```
 
 ```bash
 runa eval
 ```
 
-A module must declare module-level `agent` and `dataset`. `runa eval` imports every module under
-`evals/` and calls `agent.evaluate(dataset)` on each, the same path production evaluation runs
-through.
+The filename is the Agent's declared `name`, the same one `runa chat` takes, so there is nothing
+to register. Each line's keys are `Case` fields, and a line only carries the ones it needs.
+`runa eval` calls `agent.evaluate(dataset)` for every file, the same path production evaluation
+runs through.
 
-Pass the Agent's declared `name` to run just that one's module, for example
-`runa eval support_agent`.
+Pass the Agent's `name` to run just its dataset, for example `runa eval support_agent`.
 
 ## What a `Case` Can Carry
 
@@ -50,37 +39,27 @@ Only `input` is required. Everything else is optional evidence that decides whic
 With none of them, task completion and answer relevance still run. Every case runs to completion
 even if an earlier one errors, and the finished `Report` is persisted to `runa.db`.
 
-## Loading Cases From a File
+## Building Cases in Python
 
-Write a handful of cases inline. Once a dataset grows, or is exported from real runs, keep it in a
-JSONL file next to the module, one `Case` per line:
-
-```json
-{"input": "Where's my order #4821?", "expected": "Asks for or looks up the order status"}
-{"input": "Cancel order A100", "expected_tool": "cancel_order"}
-```
+When cases need code, for example a configured agent or generated inputs, write a module instead.
+It declares module-level `agent` and `dataset`, any iterable of `Case`:
 
 ```python
 # evals/support_agent_eval.py
-from pathlib import Path
-
-from runa import Dataset
+from runa import Case
 
 from app.agents import SupportAgent
 
-agent = SupportAgent()
+agent = SupportAgent(model="gpt-5.4-nano")
 
-dataset = Dataset.from_jsonl(Path(__file__).with_suffix(".jsonl"))
+dataset = [Case(input=f"Where's my order #{n}?") for n in range(4800, 4810)]
 ```
 
-Each line's keys are `Case` fields, so a line only carries the ones it needs. Any other format
-works too, since `dataset` is just an iterable of `Case`:
+A module can still keep its cases in a file, and a `.jsonl` sharing its stem belongs to it rather
+than running on its own:
 
 ```python
-import csv
-
-with open(Path(__file__).with_suffix(".csv")) as f:
-    dataset = [Case(**row) for row in csv.DictReader(f)]
+dataset = Dataset.from_jsonl(Path(__file__).with_suffix(".jsonl"))
 ```
 
 ## Choosing a Judge

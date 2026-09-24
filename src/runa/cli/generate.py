@@ -36,27 +36,7 @@ def {func_name}(value: str) -> bool:
     raise NotImplementedError
 '''
 
-_EVALUATION_TEMPLATE = """from runa import Agent, Case
-
-# TODO: replace with the agent you actually want to evaluate, e.g.:
-# from app.agents import ExampleAgent
-# agent = ExampleAgent()
-
-
-class _{class_name}Placeholder(Agent):
-    name = "{class_name}Placeholder"
-    instructions = "TODO: replace this with the Agent {name} should evaluate."
-
-
-agent = _{class_name}Placeholder()
-
-dataset: list[Case] = [
-    # Case(
-    #     input="TODO: the input to run the agent against",
-    #     expected="TODO: what a good answer says",
-    # ),
-]
-"""
+_EVALUATION_TEMPLATE = '{"input": "Hello! What can you help me with?"}\n'
 
 
 class InvalidAgentName(Exception):
@@ -401,26 +381,20 @@ def generate_prompt(name: str, *, root: Path) -> Path:
     return prompt_file
 
 
-def _pascal_case(snake_name: str) -> str:
-    return "".join(word[:1].upper() + word[1:] for word in snake_name.split("_") if word)
-
-
 def generate_evaluation(name: str, *, root: Path) -> Path:
-    """Write a new eval dataset module into `root/evals/`.
+    """Write a new eval dataset into `root/evals/<name>.jsonl`.
 
     `name` is the agent's snake_case identity, the same one `runa chat <name>` takes (e.g.
-    `support_agent`), not the class name. Unlike `generate_agent`/`generate_tool`, it doesn't
-    become a class: `evals/` modules are plain scripts declaring module-level `agent`/`dataset`
-    (see `cli/eval.py`), so `name` only shapes the filename and the placeholder Agent's
-    docstring/class name.
+    `support_agent`), not the class name: `runa eval` resolves the Agent from the filename
+    (see `cli/eval.py`), so the file needs nothing but cases, one JSON object per line. It
+    starts with a single input-only case, graded on task completion and answer relevance.
     """
     evals_dir = _require_dir(root, "evals")
 
     file_stem = _snake_case(name)
-    eval_file = evals_dir / f"{file_stem}_eval.py"
+    eval_file = evals_dir / f"{file_stem}.jsonl"
     if eval_file.exists():
         raise EvaluationAlreadyExists(f"{eval_file} already exists")
 
-    placeholder_name = _pascal_case(file_stem)
-    eval_file.write_text(_EVALUATION_TEMPLATE.format(class_name=placeholder_name, name=name))
+    eval_file.write_text(_EVALUATION_TEMPLATE)
     return eval_file
