@@ -2,11 +2,43 @@
 
 All notable changes to Runa are documented here.
 
+## [0.4.0] - 2026-09-24
+
+### Features
+
+- Agent.run inside tracing.trace is grouped under it by group_id ([2b91683](https://github.com/runa-agent/runa/commit/2b9168307b5cad49fee20a2a1fef0121110a7e00))
+
+- Production readiness (runa serve, run budgets, shared Postgres, retention) ([4d1c670](https://github.com/runa-agent/runa/commit/4d1c67044869f1405e39643a62c25292039081d1))
+
+- Production readiness (runa serve, run budgets, shared Postgres, retention) ([a6146eb](https://github.com/runa-agent/runa/commit/a6146ebffde9f734f236c4541e928e37289eec28))
+
+
+### Bug Fixes
+
+- Skip release commits in changelog and drop duplicate entries ([c595938](https://github.com/runa-agent/runa/commit/c595938062445fd83d5af0385982915aed2debc8))
+
+- Message is one user turn, not a transcript ([7244d58](https://github.com/runa-agent/runa/commit/7244d58967bdf9935b939a511d08deefb99ead23))
+
+- Agent.graph no longer needs the Graphviz binary to build ([38f08ee](https://github.com/runa-agent/runa/commit/38f08ee33629abd239008136170cfaf15b685b28))
+
+- A missing optional extra is one clean line, not a traceback ([8305a2f](https://github.com/runa-agent/runa/commit/8305a2f7a301ca308366ba12b4f67e5bd0c81cfd))
+
+
 ## [0.3.0] - 2026-09-24
 
 ### Features
 
+- Automate changelog generation with git-cliff ([bdf2df7](https://github.com/runa-agent/runa/commit/bdf2df79e29d2a8bf0d02b6cd31e4d38fbd7829f))
+
+- Support image input in messages, auto-detected from a plain string list ([f6f50eb](https://github.com/runa-agent/runa/commit/f6f50ebd6d9019978a91a76ae7e878a2b5a82cd8))
+
+- Add langfuse integration ([9c40b32](https://github.com/runa-agent/runa/commit/9c40b3248027372519e0ec4642bba40fd0eb16ca))
+
+- Update traces in ui ([3912821](https://github.com/runa-agent/runa/commit/39128210bd354beae19b06602fa6b79ee6f97055))
+
 - Evals/<agent_name>.jsonl is a complete eval, agent resolved from filename ([b35d034](https://github.com/runa-agent/runa/commit/b35d03492f9b7b5e36cd4896badde8a0df0f0c01))
+
+- Evals/<agent_name>.jsonl is a complete eval, agent resolved from filename ([5a2b955](https://github.com/runa-agent/runa/commit/5a2b955aed48ec727b61f76fcfe0cb3a00323ab0))
 
 - Generate agent also creates its evals/<name>.jsonl ([f55955a](https://github.com/runa-agent/runa/commit/f55955a8be261c8b57961a77d9a96af737e15b0e))
 
@@ -24,6 +56,12 @@ All notable changes to Runa are documented here.
 
 
 ### Bug Fixes
+
+- Read llm span usage from output, not unused attributes field ([17cb27b](https://github.com/runa-agent/runa/commit/17cb27b5d9153b3cb47d9d90488aef384303d7c6))
+
+- Rebuild RedisCache's client when the event loop changes ([c5f356a](https://github.com/runa-agent/runa/commit/c5f356a30cb9a73ab2d84be1ba0aa3c891921608))
+
+- Async tool call ([63b08aa](https://github.com/runa-agent/runa/commit/63b08aadc11afee87b84c84944448982354ecc45))
 
 - Async guardrail call ([e2f0a60](https://github.com/runa-agent/runa/commit/e2f0a609f1c46b41369de6c3fb92f86c92e892cc))
 
@@ -47,35 +85,6 @@ All notable changes to Runa are documented here.
 
 ### Documentation
 
-- Mention runa ui at end of tracing section ([3dd8b71](https://github.com/runa-agent/runa/commit/3dd8b711b572b506ceba51278d532c4b55fea167))
-
-- Document loading eval datasets from jsonl ([7afb5c3](https://github.com/runa-agent/runa/commit/7afb5c3f1be76cfa83294770cce64592282b8e42))
-
-
-## [0.2.0] - 2026-09-21
-
-### Features
-
-- Automate changelog generation with git-cliff ([bdf2df7](https://github.com/runa-agent/runa/commit/bdf2df79e29d2a8bf0d02b6cd31e4d38fbd7829f))
-
-- Support image input in messages, auto-detected from a plain string list ([f6f50eb](https://github.com/runa-agent/runa/commit/f6f50ebd6d9019978a91a76ae7e878a2b5a82cd8))
-
-- Add langfuse integration ([9c40b32](https://github.com/runa-agent/runa/commit/9c40b3248027372519e0ec4642bba40fd0eb16ca))
-
-- Update traces in ui ([3912821](https://github.com/runa-agent/runa/commit/39128210bd354beae19b06602fa6b79ee6f97055))
-
-
-### Bug Fixes
-
-- Read llm span usage from output, not unused attributes field ([17cb27b](https://github.com/runa-agent/runa/commit/17cb27b5d9153b3cb47d9d90488aef384303d7c6))
-
-- Rebuild RedisCache's client when the event loop changes ([c5f356a](https://github.com/runa-agent/runa/commit/c5f356a30cb9a73ab2d84be1ba0aa3c891921608))
-
-- Async tool call ([63b08aa](https://github.com/runa-agent/runa/commit/63b08aadc11afee87b84c84944448982354ecc45))
-
-
-### Documentation
-
 - Fix links ([68eed32](https://github.com/runa-agent/runa/commit/68eed32d92031bdedb90cc8489666b33198ada67))
 
 - Add examples ([e87e4fe](https://github.com/runa-agent/runa/commit/e87e4fe23e902f7a321bc297a6794813ea94e25f))
@@ -83,6 +92,10 @@ All notable changes to Runa are documented here.
 - Remove redundancy ([3dae8ab](https://github.com/runa-agent/runa/commit/3dae8abb11b0c7ff7504e05912d0cbf45477f82d))
 
 - Add cache example ([ab417ab](https://github.com/runa-agent/runa/commit/ab417abc3dfac7d6d0c57960daae6cd389ae92aa))
+
+- Mention runa ui at end of tracing section ([3dd8b71](https://github.com/runa-agent/runa/commit/3dd8b711b572b506ceba51278d532c4b55fea167))
+
+- Document loading eval datasets from jsonl ([7afb5c3](https://github.com/runa-agent/runa/commit/7afb5c3f1be76cfa83294770cce64592282b8e42))
 
 
 ## [0.1.2] - 2026-09-12

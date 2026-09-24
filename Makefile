@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test coverage audit check docs hello tour ui-demo examples clean changelog
+.PHONY: install format lint typecheck test coverage audit check docs hello tour ui-demo examples clean changelog release
 
 install:
 	uv sync
@@ -37,8 +37,11 @@ check:
 docs:
 	uv run zensical build --strict
 
+# Regenerates the whole file. Pass the version being released so its section is headed with
+# that version instead of "Unreleased": the tag is created after this commit, so git-cliff
+# cannot infer it. `make changelog` alone (no VERSION) renders the pending work as Unreleased.
 changelog:
-	uv tool run git-cliff -o CHANGELOG.md
+	uv tool run git-cliff $(if $(VERSION),--tag v$(VERSION),) -o CHANGELOG.md
 
 hello:
 	uv run python examples/00_quickstart/hello.py
