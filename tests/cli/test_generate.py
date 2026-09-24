@@ -422,12 +422,23 @@ def test_generate_prompt_raises_outside_a_runa_project(tmp_path: Path) -> None:
         generate_prompt("MyAgent", root=tmp_path)
 
 
+def test_generate_agent_writes_an_eval_dataset_alongside_it(tmp_path: Path) -> None:
+    """Every generated agent gets `evals/<name>.jsonl`, so `runa eval` grades it right away."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+
+    generate_agent("SupportAgent", root=project_dir, instructions="Help.")
+
+    eval_file = project_dir / "evals" / "support_agent.jsonl"
+    assert [case.input for case in Dataset.from_jsonl(eval_file)]
+
+
 def test_generate_evaluation_writes_a_jsonl_dataset_named_after_the_agent(
     tmp_path: Path,
 ) -> None:
     """`name` is the agent's `runa chat`-style identity, and becomes `evals/<name>.jsonl`."""
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("GreeterAgent", root=project_dir, instructions="Greet.")
+    (project_dir / "evals" / "greeter_agent.jsonl").unlink()
 
     eval_file = generate_evaluation("greeter_agent", root=project_dir)
 
@@ -439,7 +450,6 @@ def test_generate_evaluation_raises_if_the_file_already_exists(tmp_path: Path) -
     """`generate_evaluation` refuses to overwrite an existing evaluation module."""
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("SupportAgent", root=project_dir, instructions="Help.")
-    generate_evaluation("support_agent", root=project_dir)
 
     with pytest.raises(EvaluationAlreadyExists):
         generate_evaluation("support_agent", root=project_dir)

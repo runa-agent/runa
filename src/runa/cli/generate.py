@@ -255,6 +255,8 @@ def generate_agent(
     Instead a stub `app/prompts/<snake_case(name)>.md` is written alongside it, the same
     file `Agent.__init__` would lazily create on first instantiation (`agent.py`'s
     `_load_prompt`). Generating it upfront means it's there to edit before the first `runa chat`.
+    Likewise `evals/<snake_case(name)>.jsonl` starts with one case, so `runa eval` grades the new
+    agent from day one (see `generate_evaluation`).
 
     Also appends `from .{file_stem} import {class_name}` to `app/agents/__init__.py`, so the
     agent is reachable as `from app.agents import {class_name}` rather than reaching into its
@@ -317,6 +319,10 @@ def generate_agent(
         prompt_file = prompts_dir / f"{file_stem}.md"
         if not prompt_file.exists():
             prompt_file.write_text(_PROMPT_TEMPLATE.format(name=file_stem))
+
+    eval_file = root / "evals" / f"{file_stem}.jsonl"
+    if eval_file.parent.is_dir() and not eval_file.exists():
+        eval_file.write_text(_EVALUATION_TEMPLATE)
 
     _export_agent(agents_dir, file_stem, class_name)
 
@@ -384,6 +390,9 @@ def generate_prompt(name: str, *, root: Path) -> Path:
 
 def generate_evaluation(name: str, *, root: Path) -> Path:
     """Write a new eval dataset into `root/evals/<name>.jsonl`.
+
+    `generate_agent` already writes this file for every agent it creates, so this is for an
+    agent written by hand, or to start over after deleting the file.
 
     `name` is the agent's snake_case identity, the same one `runa chat <name>` takes (e.g.
     `support_agent`), not the class name: `runa eval` resolves the Agent from the filename

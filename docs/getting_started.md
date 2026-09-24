@@ -126,7 +126,7 @@ runa generate agent GreeterAgent --model gpt-5.4-nano
 ```
 created app/agents/greeter_agent.py
 
-next: write app/prompts/greeter_agent.md, add tools with
+next: write app/prompts/greeter_agent.md, add eval cases to evals/greeter_agent.jsonl, add tools with
   runa generate tool <name>
 then chat with it:
   runa chat greeter_agent
@@ -416,21 +416,9 @@ only ever pass the new message.
 ## 10. Evaluating Your Agent
 
 `evals/` holds behavioral evals, grading with a judge model instead of an
-assertion:
-
-```bash
-runa generate evaluation greeter_agent
-```
-
-```
-created evals/greeter_agent.jsonl
-
-next: add one case per line, e.g. {"input": "...", "expected": "..."}, then
-  runa eval
-```
-
-The filename ties the dataset to `GreeterAgent`, whose `name` is
-`greeter_agent`. Each line is one case:
+assertion. `runa generate agent` already created `evals/greeter_agent.jsonl`
+with one starter case; the filename ties it to `GreeterAgent`, whose `name`
+is `greeter_agent`. Each line is one case:
 
 ```json
 {"input": "Hi there", "expected": "A warm, one-sentence greeting"}

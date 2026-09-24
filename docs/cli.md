@@ -13,11 +13,11 @@ instead of creating a subdirectory.
 Generate scaffolding inside an existing app:
 
 ```bash
-runa generate agent MyAgent --model gpt-5.4-nano  # app/agents/my_agent.py
+runa generate agent MyAgent --model gpt-5.4-nano  # app/agents/my_agent.py, evals/my_agent.jsonl
 runa generate tool MyTool                         # app/tools/my_tool.py
 runa generate guardrail MyCheck                   # app/guardrails/my_check.py
 runa generate prompt my_agent                     # app/prompts/my_agent.md
-runa generate evaluation my_agent                 # evals/my_agent.jsonl
+runa generate evaluation my_agent                 # evals/my_agent.jsonl, for a hand-written agent
 ```
 
 `agent`'s `NAME` must be UpperCamelCase ending in `Agent`, for example `MyAgent`. That is the one

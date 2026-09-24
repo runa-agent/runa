@@ -302,7 +302,8 @@ def test_answers_politely():
 
 **An eval is `evals/<agent_name>.jsonl`, one `Case` per line**; the
 filename is the Agent's declared `name`, so `runa eval` resolves the agent
-from it with no registration. Reach for a Python module under `evals/`
+from it with no registration. `runa generate agent` creates it alongside
+every agent. Reach for a Python module under `evals/`
 (module-level `agent` and `dataset`) only when cases or the agent need
 code; a `.jsonl` sharing that module's stem is its data, not a second eval.
 

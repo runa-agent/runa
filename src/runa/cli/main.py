@@ -237,10 +237,11 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         print(f"created {agent_file}")
         class_name = args.name
         tool_step = "add tools with\n  runa generate tool <name>\n"
+        eval_step = f"add eval cases to evals/{agent_file.stem}.jsonl, "
         prompt_step = (
-            f"write app/prompts/{agent_file.stem}.md, {tool_step}"
+            f"write app/prompts/{agent_file.stem}.md, {eval_step}{tool_step}"
             if args.instructions is None
-            else tool_step
+            else f"{eval_step}{tool_step}"
         )
         print(
             f"\nnext: {prompt_step}"

@@ -3,11 +3,9 @@
 Runa distinguishes two kinds of checks. **Tests** verify invariants with a plain `assert`.
 **Evals** grade behavior, including with a judge model, against a dataset of cases.
 
-An eval is one file, `evals/<agent_name>.jsonl`, with one case per line:
-
-```bash
-runa generate evaluation support_agent
-```
+An eval is one file, `evals/<agent_name>.jsonl`, with one case per line. `runa generate agent`
+creates it with every agent; for an agent written by hand, run
+`runa generate evaluation support_agent`.
 
 ```json
 {"input": "Where's my order #4821?", "expected": "Asks for or looks up the order status"}
