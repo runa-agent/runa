@@ -2,6 +2,58 @@
 
 All notable changes to Runa are documented here.
 
+## [0.3.0] - 2026-09-24
+
+### Features
+
+- Evals/<agent_name>.jsonl is a complete eval, agent resolved from filename ([b35d034](https://github.com/runa-agent/runa/commit/b35d03492f9b7b5e36cd4896badde8a0df0f0c01))
+
+- Evals/<agent_name>.jsonl is a complete eval, agent resolved from filename ([5a2b955](https://github.com/runa-agent/runa/commit/5a2b955aed48ec727b61f76fcfe0cb3a00323ab0))
+
+- Generate agent also creates its evals/<name>.jsonl ([f55955a](https://github.com/runa-agent/runa/commit/f55955a8be261c8b57961a77d9a96af737e15b0e))
+
+- Add traces to evals, flag regressions against the last run, bare-string cases ([dd1ddb5](https://github.com/runa-agent/runa/commit/dd1ddb5fb521d5889c28058a65ce023407b93b12))
+
+- Parallel eval cases, case-to-trace links, regressions in ui, dedupe --add ([f4df943](https://github.com/runa-agent/runa/commit/f4df943e347febce7f744a7e28797ca96d8c9560))
+
+- Run a message's tool calls concurrently, honor parallel_tool_calls=False ([cd65cfd](https://github.com/runa-agent/runa/commit/cd65cfdddb79d4174bf029f57e2c60c590569d9e))
+
+- Run_streamed pauses for approval and resumes from a RunState ([45a16da](https://github.com/runa-agent/runa/commit/45a16da51b7bb7fab210eb56320ace972d01a7dd))
+
+- Agent is the single run API: paused Runs resume, delegates pause their caller, output_type parses, model calls retry ([b1b5ca0](https://github.com/runa-agent/runa/commit/b1b5ca0e6face808783a97b2b0ff7812405c3b5b))
+
+- Run carries the guardrail audit trail for every status ([80e1892](https://github.com/runa-agent/runa/commit/80e1892d44f82467225d735d3e23b7b24e0a21e6))
+
+
+### Bug Fixes
+
+- Async guardrail call ([e2f0a60](https://github.com/runa-agent/runa/commit/e2f0a609f1c46b41369de6c3fb92f86c92e892cc))
+
+- Key eval reports by agent name, drop stale DeepEval mentions ([2d293d3](https://github.com/runa-agent/runa/commit/2d293d3d3dc2a103fe223d9b75b4d7cd61c9db10))
+
+- Feed malformed tool arguments back to the model instead of crashing ([3022059](https://github.com/runa-agent/runa/commit/3022059b3be8e05beceb8bbb181a97aeaaabbda3))
+
+- Compact on current context size, not cumulative run usage ([ef617ed](https://github.com/runa-agent/runa/commit/ef617ed27e75a309d9e89f41d4e2ae549079efd7))
+
+- Resume runs approved calls from mixed-approval turns and persists to the session ([10b2941](https://github.com/runa-agent/runa/commit/10b2941aa9d906c6e2fd40e7b9b6c17d21851d38))
+
+- Record the real cause on tool spans, close cancelled siblings, place retrieval before its message ([9528811](https://github.com/runa-agent/runa/commit/9528811fd18b20d514f06e96b8271170bb51984d))
+
+
+### Refactor
+
+- Run_streamed shares run's turn loop, gaining guardrails, tracing, sessions and memory ([3ced549](https://github.com/runa-agent/runa/commit/3ced549edce30855d451bc9254e7b68b5a05a1db))
+
+- Share run and resume finishing, report partial items on errors ([1c81564](https://github.com/runa-agent/runa/commit/1c815647c1c75a0468ff54687a5beda6c5fe9acf))
+
+
+### Documentation
+
+- Mention runa ui at end of tracing section ([3dd8b71](https://github.com/runa-agent/runa/commit/3dd8b711b572b506ceba51278d532c4b55fea167))
+
+- Document loading eval datasets from jsonl ([7afb5c3](https://github.com/runa-agent/runa/commit/7afb5c3f1be76cfa83294770cce64592282b8e42))
+
+
 ## [0.2.0] - 2026-09-21
 
 ### Features
@@ -13,6 +65,8 @@ All notable changes to Runa are documented here.
 - Add langfuse integration ([9c40b32](https://github.com/runa-agent/runa/commit/9c40b3248027372519e0ec4642bba40fd0eb16ca))
 
 - Update traces in ui ([3912821](https://github.com/runa-agent/runa/commit/39128210bd354beae19b06602fa6b79ee6f97055))
+
+- Release 0.2.0 ([8be5616](https://github.com/runa-agent/runa/commit/8be5616d1b1752f9f78190552ac439f41f84f366))
 
 
 ### Bug Fixes
