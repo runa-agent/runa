@@ -689,6 +689,50 @@ def test_tool_calls_in_one_message_run_concurrently_and_keep_call_order() -> Non
     assert [item["content"] for item in model.calls[1][2:]] == ["ping done", "pong done"]
 
 
+def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
+    """A tool guardrail trip cancels the other in-flight call; each span records its own cause."""
+    from runa.guardrail import guardrail
+
+    @guardrail
+    def always_trip(args: dict[str, Any]) -> bool:
+        """Trip on every call."""
+        return True
+
+    @tool(guardrails=[always_trip.input])
+    def blocked() -> str:
+        """Never runs."""
+        return "unreachable"
+
+    @tool
+    async def slow() -> str:
+        """Take a long time."""
+        await asyncio.sleep(10)
+        return "unreachable"
+
+    agent = _agent(
+        tools=[blocked, slow],
+        model=_ScriptedModel([_two_calls_response("slow", "blocked")]),
+    )
+
+    from runa.tracing import observe
+
+    exported: dict[str, str | None] = {}
+
+    class _Capture:
+        def export(self, trace: Any) -> None:
+            exported.update({s.name: s.error for s in trace.spans if s.type == "tool"})
+
+    with (
+        observe(exporter=[_Capture()]),
+        pytest.raises(ToolInputGuardrailTripwireTriggered),
+    ):
+        asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+
+    # As exported, not after `asyncio.run` tidied up leftover tasks.
+    assert exported["slow"] == "CancelledError"
+    assert (exported["blocked"] or "").startswith("ToolInputGuardrailTripwireTriggered")
+
+
 def test_parallel_tool_calls_false_runs_calls_one_at_a_time() -> None:
     """`parallel_tool_calls=False` is the escape hatch for tools that can't overlap."""
     log: list[str] = []
@@ -1296,6 +1340,24 @@ def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
 
     assert [conversation for conversation, _, _ in memory.remembered] == [
         "User: do it\nAssistant: all done"
+    ]
+
+
+def test_retrieved_blocks_go_right_before_the_message_they_were_retrieved_for() -> None:
+    """With an input list that doesn't end on the user's message, blocks still precede it."""
+    memory = _FakeMemory(matches=[_MemoryMatchStub("User prefers Japanese.")])
+    model = _ScriptedModel([_text_response("ok")])
+    agent = _agent(model=model, memory=memory)
+    note = {"role": "system", "content": "Answer briefly."}
+
+    asyncio.run(
+        Runner.run(agent, [{"role": "user", "content": "hi"}, note], run_config=_run_config())
+    )
+
+    assert model.calls[0] == [
+        {"role": "system", "content": "Relevant memories:\n- User prefers Japanese."},
+        {"role": "user", "content": "hi"},
+        note,
     ]
 
 

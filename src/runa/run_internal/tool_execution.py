@@ -60,8 +60,9 @@ async def _run_tool_call(
         await _run_tool_output_guardrails(
             tool, args_json, call_id, result, context_wrapper, trace, span.id
         )
-    except BaseException:
-        _close_span(span, error="tool guardrail tripwire triggered")
+    except BaseException as exc:  # a tripwire, a cancelled sibling call, ...: say which
+        detail = str(exc)
+        _close_span(span, error=f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)
         raise
     _close_span(span, error=error, output=result)
     await hooks.on_tool_end(context_wrapper, agent, tool, result)
@@ -175,6 +176,7 @@ async def _execute(
     except BaseException:
         for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)  # let their spans close
         raise
 
 

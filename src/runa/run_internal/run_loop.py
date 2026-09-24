@@ -44,12 +44,19 @@ from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 
 
+def _latest_user_index(items: list[TResponseInputItem]) -> int | None:
+    """Where the most recent plain-text user message in `items` is, if any."""
+    for index in range(len(items) - 1, -1, -1):
+        item = items[index]
+        if item.get("role") == "user" and isinstance(item.get("content"), str):
+            return index
+    return None
+
+
 def _latest_user_text(items: list[TResponseInputItem]) -> str | None:
     """The most recent plain-text user message in `items`, Memory's default search query."""
-    for item in reversed(items):
-        if item.get("role") == "user" and isinstance(item.get("content"), str):
-            return item["content"]
-    return None
+    index = _latest_user_index(items)
+    return items[index]["content"] if index is not None else None
 
 
 def _memory_block(matches: list[Any]) -> TResponseInputItem:
@@ -472,10 +479,13 @@ async def _run_async(
             if knowledge is not None
             else _no_matches(),
         )
-        if memory_matches:
-            items.insert(len(items) - 1, _memory_block(memory_matches))
+        # Right before the message they were retrieved for, wherever it sits in `items`.
+        at = _latest_user_index(items)
+        assert at is not None  # `query` came from that same message
         if knowledge_matches:
-            items.insert(len(items) - 1, _knowledge_block(knowledge_matches))
+            items.insert(at, _knowledge_block(knowledge_matches))
+        if memory_matches:
+            items.insert(at, _memory_block(memory_matches))
 
     async def turns() -> _TurnOutcome:
         await _run_input_guardrails(agent, context_wrapper, input, trace, run.span.id)
