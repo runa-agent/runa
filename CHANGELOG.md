@@ -8,8 +8,6 @@ All notable changes to Runa are documented here.
 
 - Evals/<agent_name>.jsonl is a complete eval, agent resolved from filename ([b35d034](https://github.com/runa-agent/runa/commit/b35d03492f9b7b5e36cd4896badde8a0df0f0c01))
 
-- Evals/<agent_name>.jsonl is a complete eval, agent resolved from filename ([5a2b955](https://github.com/runa-agent/runa/commit/5a2b955aed48ec727b61f76fcfe0cb3a00323ab0))
-
 - Generate agent also creates its evals/<name>.jsonl ([f55955a](https://github.com/runa-agent/runa/commit/f55955a8be261c8b57961a77d9a96af737e15b0e))
 
 - Add traces to evals, flag regressions against the last run, bare-string cases ([dd1ddb5](https://github.com/runa-agent/runa/commit/dd1ddb5fb521d5889c28058a65ce023407b93b12))
@@ -65,8 +63,6 @@ All notable changes to Runa are documented here.
 - Add langfuse integration ([9c40b32](https://github.com/runa-agent/runa/commit/9c40b3248027372519e0ec4642bba40fd0eb16ca))
 
 - Update traces in ui ([3912821](https://github.com/runa-agent/runa/commit/39128210bd354beae19b06602fa6b79ee6f97055))
-
-- Release 0.2.0 ([8be5616](https://github.com/runa-agent/runa/commit/8be5616d1b1752f9f78190552ac439f41f84f366))
 
 
 ### Bug Fixes

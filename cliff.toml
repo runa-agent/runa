@@ -37,6 +37,7 @@ require_conventional = false
 split_commits = false
 protect_breaking_commits = false
 commit_parsers = [
+    { message = "^feat: release", skip = true },
     { message = "^feat", group = "<!-- 0 -->Features" },
     { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
     { message = "^refactor", group = "<!-- 2 -->Refactor" },
