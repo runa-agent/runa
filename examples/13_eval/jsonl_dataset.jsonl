@@ -1,0 +1,2 @@
+{"input": "What's the status of order A100?", "expected": "Tells the user the order shipped and is arriving Thursday", "expected_tool": "look_up_order"}
+{"input": "Is order B200 on its way?", "expected": "Tells the user there is no order with that id", "expected_tool": "look_up_order"}

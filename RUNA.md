@@ -311,6 +311,10 @@ agent = SupportAgent()
 dataset = [Case(input="Where's my order #4821?", expected="Asks for or looks up the order status")]
 ```
 
+Keep a few hand-written cases inline. A larger or exported dataset goes in
+a JSONL file next to the module, one `Case` per line:
+`dataset = Dataset.from_jsonl(Path(__file__).with_suffix(".jsonl"))`.
+
 Only `Case.input` is required; add `expected`/`expected_tool`/`context`
 only for the specific grading signal each enables, don't fill in fields
 a case doesn't need "for completeness." The judge model defaults to the

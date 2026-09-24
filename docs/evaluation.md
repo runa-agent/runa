@@ -50,6 +50,39 @@ Only `input` is required. Everything else is optional evidence that decides whic
 With none of them, task completion and answer relevance still run. Every case runs to completion
 even if an earlier one errors, and the finished `Report` is persisted to `runa.db`.
 
+## Loading Cases From a File
+
+Write a handful of cases inline. Once a dataset grows, or is exported from real runs, keep it in a
+JSONL file next to the module, one `Case` per line:
+
+```json
+{"input": "Where's my order #4821?", "expected": "Asks for or looks up the order status"}
+{"input": "Cancel order A100", "expected_tool": "cancel_order"}
+```
+
+```python
+# evals/support_agent_eval.py
+from pathlib import Path
+
+from runa import Dataset
+
+from app.agents import SupportAgent
+
+agent = SupportAgent()
+
+dataset = Dataset.from_jsonl(Path(__file__).with_suffix(".jsonl"))
+```
+
+Each line's keys are `Case` fields, so a line only carries the ones it needs. Any other format
+works too, since `dataset` is just an iterable of `Case`:
+
+```python
+import csv
+
+with open(Path(__file__).with_suffix(".csv")) as f:
+    dataset = [Case(**row) for row in csv.DictReader(f)]
+```
+
 ## Choosing a Judge
 
 Semantic metrics (task completion, answer correctness, answer relevance, faithfulness, tool
@@ -70,6 +103,12 @@ await agent.evaluate(dataset, thresholds={"faithfulness": 0.9})
 
 ```python
 --8<--"examples/13_eval/case_dataset.py"
+```
+
+The same dataset, loaded from JSONL:
+
+```python
+--8<--"examples/13_eval/jsonl_dataset.py"
 ```
 
 More in [`examples/13_eval/`](https://github.com/Benybrahim/runa/tree/main/examples/13_eval).
