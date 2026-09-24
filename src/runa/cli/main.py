@@ -328,6 +328,7 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
             session_id=args.session,
             continue_last=args.continue_,
             resume=args.resume,
+            message=None if sys.stdin.isatty() else sys.stdin.read(),
         )
         return 0
 

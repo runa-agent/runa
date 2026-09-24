@@ -1,11 +1,29 @@
 """Tests for `runa.cli.main`: argv parsing, dispatch, and clean error reporting."""
 
+import io
 from pathlib import Path
 
 import pytest
 
 from runa.cli.main import main
 from runa.cli.new import scaffold_project
+
+
+class _Stdin(io.StringIO):
+    """A `sys.stdin` stand-in that reports whether it's a terminal."""
+
+    def __init__(self, text: str = "", *, tty: bool) -> None:
+        super().__init__(text)
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+@pytest.fixture(autouse=True)
+def _interactive_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Behave as if run from a terminal; pytest's own stdin is neither a tty nor readable."""
+    monkeypatch.setattr("sys.stdin", _Stdin(tty=True))
 
 
 def test_new_scaffolds_a_project_and_prints_next_steps(
@@ -240,6 +258,7 @@ def test_chat_dispatches_to_run_agent_repl(tmp_path: Path, monkeypatch: pytest.M
         session_id: str | None = None,
         continue_last: bool = False,
         resume: str | None = None,
+        message: str | None = None,
     ) -> None:
         calls.append((name, root, session_id, continue_last, resume))
 
@@ -265,6 +284,7 @@ def test_chat_continue_flag_dispatches_continue_last(
         session_id: str | None = None,
         continue_last: bool = False,
         resume: str | None = None,
+        message: str | None = None,
     ) -> None:
         calls.append(continue_last)
 
@@ -289,6 +309,7 @@ def test_chat_resume_flag_dispatches_the_given_or_empty_id(
         session_id: str | None = None,
         continue_last: bool = False,
         resume: str | None = None,
+        message: str | None = None,
     ) -> None:
         calls.append(resume)
 
@@ -297,6 +318,23 @@ def test_chat_resume_flag_dispatches_the_given_or_empty_id(
     assert main(["chat", "Support", "--resume", "Support-old"], cwd=project_dir) == 0
     assert main(["chat", "Support", "--resume"], cwd=project_dir) == 0
     assert calls == ["Support-old", ""]
+
+
+def test_chat_sends_piped_stdin_as_one_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`cat doc.md | runa chat Support` passes all of stdin as a single `message`."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+    monkeypatch.setattr("sys.stdin", _Stdin("line one\nline two\n", tty=False))
+    calls: list[str | None] = []
+
+    def fake_repl(name: str, *, root: Path, message: str | None = None, **kwargs: object) -> None:
+        calls.append(message)
+
+    monkeypatch.setattr("runa.cli.main.run_agent_repl", fake_repl)
+
+    assert main(["chat", "Support"], cwd=project_dir) == 0
+    assert calls == ["line one\nline two\n"]
 
 
 def test_chat_with_no_name_or_flags_reports_a_clean_error(

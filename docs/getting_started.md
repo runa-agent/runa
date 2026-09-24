@@ -364,6 +364,14 @@ As of the latest official count, Jupiter has 95 known moons (including the 2023-
 runa chat greeter_agent
 ```
 
+Each line is one turn. To send several lines as one message (a pasted
+document, a stack trace), put them between two `"""` lines. Or pipe the
+message in, which sends one turn, prints the reply, and exits:
+
+```bash
+cat error.log | runa chat greeter_agent
+```
+
 Every chat persists to `db/runa.db` under a fresh session id. Pick it back
 up later:
 

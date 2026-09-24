@@ -124,6 +124,82 @@ def test_run_agent_repl_sends_each_line_and_prints_the_reply(
     assert "doing fine" in out
 
 
+def test_run_agent_repl_sends_a_fenced_block_as_one_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lines between two triple-quote lines are joined into a single turn, not one turn per line."""
+    project_dir = _scaffold_with_agent(tmp_path)
+    _feed_input(monkeypatch, ['"""', "Traceback:", "", "  boom", '"""', "thanks"])
+    messages: list[Any] = []
+
+    def fake_run_sync(agent: Any, message: Any, **kwargs: Any) -> _FakeResult:
+        messages.append(message)
+        return _FakeResult()
+
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
+
+    run_agent_repl("Support", root=project_dir)
+
+    assert messages == ["Traceback:\n\n  boom", "thanks"]
+
+
+def test_run_agent_repl_with_a_message_sends_one_turn_and_returns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A piped `message` is one turn: its reply is printed, with no banner and no prompt loop."""
+    project_dir = _scaffold_with_agent(tmp_path)
+    _feed_input(monkeypatch, [])
+    messages: list[Any] = []
+
+    def fake_run_sync(agent: Any, message: Any, **kwargs: Any) -> _FakeResult:
+        messages.append(message)
+        return _FakeResult(output="summary")
+
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
+
+    run_agent_repl("Support", root=project_dir, message="line one\nline two\n")
+
+    assert messages == ["line one\nline two"]
+    assert capsys.readouterr().out == "summary\n"
+
+
+def test_run_agent_repl_with_a_message_rejects_approvals_once_stdin_is_used_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With stdin already consumed by the piped message, a pending tool call is rejected."""
+    project_dir = _scaffold_with_agent(tmp_path)
+    interruption = Interruption(
+        name="delete_file",
+        arguments="{}",
+        call_id="call_1",
+        tool=cast(Any, None),
+        agent=_SupportAgentStub(),
+    )
+    _feed_input(monkeypatch, [])
+    state = _FakeApprovalState()
+
+    @dataclass
+    class _InterruptedResult(_FakeResult):
+        output: Any = None
+
+        def to_state(self) -> _FakeApprovalState:
+            return state
+
+    results = iter(
+        [_InterruptedResult(interruptions=[interruption]), _InterruptedResult(output="done")]
+    )
+
+    def fake_run_sync(agent: Any, message: Any, **kwargs: Any) -> Any:
+        return next(results)
+
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
+
+    run_agent_repl("Support", root=project_dir, message="delete it")
+
+    assert state.rejected == [interruption]
+    assert state.approved == []
+
+
 def test_run_agent_repl_starts_a_new_session_each_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

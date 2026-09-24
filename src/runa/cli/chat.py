@@ -4,6 +4,9 @@ Each invocation starts a fresh `SQLiteSession` by default, so a chat doesn't
 silently keep piling onto the same conversation. `--continue`/`--resume`
 pick up a past one instead, keyed by session id over the app's `db/runa.db`
 (the same file `runa chat --list`/`--show` reads, see `cli/sessions.py`).
+
+A line is one turn; a triple-quote line opens a multi-line block that the next one closes,
+so a pasted document or stack trace is sent as one message instead of one turn per line.
 """
 
 from datetime import datetime
@@ -18,7 +21,9 @@ from runa.cli._project import (
     resolve_db_path,
 )
 from runa.cli.sessions import list_sessions_for_agent
-from runa.session import SQLiteSession
+from runa.session import SessionABC, SQLiteSession
+
+_BLOCK = '"""'
 
 
 class AgentNotFound(Exception):
@@ -92,6 +97,47 @@ def _resolve_session_id(
     return _new_session_id(agent_name)
 
 
+def _read_message() -> str:
+    """Read one turn: a single line, or every line between a pair of triple-quote lines.
+
+    Raises `EOFError` on Ctrl-D, including inside an unclosed block.
+    """
+    line = input("> ").strip()
+    if line != _BLOCK:
+        return line
+    lines: list[str] = []
+    while (line := input("... ")).strip() != _BLOCK:
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _ask(prompt: str) -> str:
+    """`input()`, but `""` once stdin is exhausted, e.g. after a piped message."""
+    try:
+        return input(prompt).strip().lower()
+    except EOFError:
+        print()
+        return ""
+
+
+def _run_turn(agent: Agent, message: str, session: SessionABC) -> None:
+    """Send `message`, prompt for any approvals it pauses on, and print the final reply."""
+    run = agent.run_sync(message, session=session)
+    while run.status == "paused":
+        state = run.to_state()
+        for item in run.interruptions:
+            answer = _ask(f"approve {item.name}({item.arguments})? [y/N/a] ")
+            if answer in {"a", "always"}:
+                state.approve(item, always=True)
+            elif answer in {"y", "yes"}:
+                state.approve(item)
+            else:
+                state.reject(item)
+        run = agent.run_sync(state, session=session)
+
+    print(run.output if run.status == "completed" else f"error: {run.error}")
+
+
 def run_agent_repl(
     agent_name: str,
     *,
@@ -99,12 +145,16 @@ def run_agent_repl(
     session_id: str | None = None,
     continue_last: bool = False,
     resume: str | None = None,
+    message: str | None = None,
 ) -> None:
     """Chat with the named Agent in a loop, over one session.
 
     The app is loaded and the Agent instantiated once for the whole session, so turns share
     the in-process object instead of round-tripping through `db/runa.db` on every call. A pending
     approval is resolved right here by prompting the operator, since there's someone to ask.
+
+    With `message` (what `runa chat` reads from piped stdin), send just that one turn and return
+    instead of looping. Approvals then get rejected, since stdin is already used up.
     """
     agents_dir = require_agents_dir(root)
     db_path = resolve_db_path(root)
@@ -121,12 +171,17 @@ def run_agent_repl(
         )
         session = SQLiteSession(resolved_session_id, db_path=db_path)
 
+        if message is not None:
+            if message.strip():
+                _run_turn(agent, message.strip(), session)
+            return
+
         print(f"chatting with {agent.name} (session {resolved_session_id!r})")
-        print("type 'exit' or Ctrl-D to quit\n")
+        print(f"type 'exit' or Ctrl-D to quit, {_BLOCK} to start and end a multi-line message\n")
 
         while True:
             try:
-                user_input = input("> ").strip()
+                user_input = _read_message()
             except EOFError, KeyboardInterrupt:
                 print()
                 return
@@ -134,20 +189,4 @@ def run_agent_repl(
                 continue
             if user_input in {"exit", "quit"}:
                 return
-
-            run = agent.run_sync(user_input, session=session)
-            while run.status == "paused":
-                state = run.to_state()
-                for item in run.interruptions:
-                    answer = (
-                        input(f"approve {item.name}({item.arguments})? [y/N/a] ").strip().lower()
-                    )
-                    if answer in {"a", "always"}:
-                        state.approve(item, always=True)
-                    elif answer in {"y", "yes"}:
-                        state.approve(item)
-                    else:
-                        state.reject(item)
-                run = agent.run_sync(state, session=session)
-
-            print(run.output if run.status == "completed" else f"error: {run.error}")
+            _run_turn(agent, user_input, session)
