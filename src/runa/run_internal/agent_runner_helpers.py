@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -58,6 +59,17 @@ def _find_tool(tools: list[Any], name: str) -> FunctionTool | None:
         if isinstance(candidate, FunctionTool) and candidate.name == name:
             return candidate
     return None
+
+
+def _parse_arguments(args_json: str) -> dict[str, Any] | str:
+    """A tool call's arguments as a dict, or an error string to feed back to the model."""
+    try:
+        args = json.loads(args_json or "{}")
+    except json.JSONDecodeError as exc:
+        return f"error: invalid JSON arguments: {exc}"
+    if not isinstance(args, dict):
+        return "error: tool arguments must be a JSON object"
+    return args
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -145,6 +157,7 @@ __all__ = [
     "_model_settings",
     "_needs_approval",
     "_normalized_handoffs",
+    "_parse_arguments",
     "_resolve_instructions",
     "_resolve_model",
 ]

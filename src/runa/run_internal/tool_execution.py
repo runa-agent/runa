@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +13,7 @@ from runa.run_internal.agent_runner_helpers import (
     _find_tool,
     _gate_tool_call,
     _normalized_handoffs,
+    _parse_arguments,
 )
 from runa.run_internal.guardrails import _run_tool_input_guardrails, _run_tool_output_guardrails
 from runa.run_internal.spans import _close_span, _new_span
@@ -71,6 +71,7 @@ class _TurnOutcome:
     interruptions: list[Interruption]
     ready_results: list[TResponseInputItem]
     current_agent: Any
+    context_tokens: int = 0
 
 
 async def _run_message_tool_calls(
@@ -117,7 +118,10 @@ async def _run_message_tool_calls(
             continue
 
         args_json = call["function"]["arguments"] or "{}"
-        args = json.loads(args_json) if args_json else {}
+        args = _parse_arguments(args_json)
+        if isinstance(args, str):
+            results.append({"role": "tool", "tool_call_id": call_id, "content": args})
+            continue
         gate = await _gate_tool_call(
             tool, args, call_id, context_wrapper, approvals, rejection_messages
         )

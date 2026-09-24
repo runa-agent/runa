@@ -6,7 +6,6 @@ The public `RunResultStreaming` wrapper around this loop lives in `runa.result`,
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -20,6 +19,7 @@ from runa.run_internal.agent_runner_helpers import (
     _gate_tool_call,
     _model_settings,
     _normalized_handoffs,
+    _parse_arguments,
     _resolve_instructions,
     _resolve_model,
 )
@@ -114,7 +114,12 @@ async def _stream_async(
                 continue
             call_id = call["id"]
             args_json = call["function"]["arguments"] or "{}"
-            args = json.loads(args_json) if args_json else {}
+            args = _parse_arguments(args_json)
+            if isinstance(args, str):
+                tool_result = {"role": "tool", "tool_call_id": call_id, "content": args}
+                items.append(tool_result)
+                yield RunItemStreamEvent(name="tool_output", item=tool_result)
+                continue
             gate = await _gate_tool_call(tool, args, call_id, context_wrapper)
             if gate.action == "interrupt":
                 raise ApprovalRequiredError(tool.name, call_id)
