@@ -191,6 +191,39 @@ def test_tool_error_is_fed_back_and_run_continues() -> None:
     assert "boom" in (tool_span.error or "")
 
 
+def test_malformed_tool_arguments_are_fed_back_and_run_continues() -> None:
+    """Invalid JSON arguments from the model become a tool error, not a run-ending crash."""
+
+    @tool
+    def lookup(city: str) -> str:
+        """Look up a city."""
+        return city
+
+    model = _ScriptedModel([_tool_call_response("lookup", "{not json"), _text_response("sorry")])
+    agent = _agent(tools=[lookup], model=model)
+
+    result = asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+
+    assert result.final_output == "sorry"
+    assert model.calls[1][-1]["content"].startswith("error: invalid JSON arguments")
+
+
+def test_non_object_tool_arguments_are_fed_back_as_an_error() -> None:
+    """Valid JSON that isn't an object (e.g. a list) is rejected the same way."""
+
+    @tool
+    def lookup(city: str) -> str:
+        """Look up a city."""
+        return city
+
+    model = _ScriptedModel([_tool_call_response("lookup", "[1]"), _text_response("sorry")])
+    agent = _agent(tools=[lookup], model=model)
+
+    asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+
+    assert model.calls[1][-1]["content"] == "error: tool arguments must be a JSON object"
+
+
 def test_handoff_switches_current_agent() -> None:
     """Calling a handoff's tool switches to the target agent for the rest of the run."""
     target = _agent(name="Target", model=_ScriptedModel([_text_response("handled by target")]))
@@ -652,6 +685,41 @@ def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
     assert tool_outputs[0].item["content"] == "done"
 
 
+def test_stream_response_feeds_back_malformed_tool_arguments() -> None:
+    """`run_streamed` turns invalid JSON arguments into a `tool_output` error too."""
+    from runa.stream_events import RunItemStreamEvent
+
+    @tool
+    def lookup(city: str) -> str:
+        """Look up a city."""
+        return city
+
+    agent = _agent(
+        tools=[lookup],
+        model=_SequentialStreamingModel(
+            [
+                [
+                    StreamDelta(tool_call_index=0, tool_call_id="call_1", tool_call_name="lookup"),
+                    StreamDelta(tool_call_index=0, tool_call_arguments="{not json"),
+                ],
+                [StreamDelta(text="sorry")],
+            ]
+        ),
+    )
+
+    result = Runner.run_streamed(agent, "go", run_config=_run_config())
+
+    async def collect() -> list[Any]:
+        return [event async for event in result]
+
+    events = asyncio.run(collect())
+
+    tool_outputs = [
+        e for e in events if isinstance(e, RunItemStreamEvent) and e.name == "tool_output"
+    ]
+    assert tool_outputs[0].item["content"].startswith("error: invalid JSON arguments")
+
+
 def test_stream_response_raises_approval_required_for_an_unresolved_needs_approval_tool() -> None:
     """`run_streamed` can't pause for approval; it raises instead of silently bypassing the gate."""
 
@@ -755,6 +823,35 @@ def test_compact_drops_history_before_the_latest_user_message_once_over_budget()
     compact_spans = [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
     assert compact_spans
     assert all(s.output == {"dropped": 2} for s in compact_spans)
+
+
+def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
+    """A long tool loop whose total usage passes 200k, but whose context never does, isn't cut."""
+
+    @tool
+    def step() -> str:
+        """Take one step."""
+        return "ok"
+
+    usage = Usage(input_tokens=150_000, output_tokens=1, total_tokens=150_001, requests=1)
+    call = _tool_call_response("step", "{}")
+    call.usage = usage
+    agent = _agent(
+        tools=[step],
+        model=_ScriptedModel([call, _text_response("done", usage=usage)]),
+        compact=True,
+    )
+    history = [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer", "tool_calls": None},
+        {"role": "user", "content": "new question"},
+    ]
+
+    result = asyncio.run(Runner.run(agent, history, run_config=_run_config()))
+
+    assert result.context_wrapper.usage.total_tokens > 200_000
+    assert result.to_input_list()[:3] == history
+    assert not [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
 
 
 def test_compact_defaults_to_off() -> None:

@@ -169,9 +169,8 @@ async def _run_turns(
         context_wrapper.usage.add(response.usage)
         _close_span(llm_span, output={"usage": response.usage.__dict__})
         await hooks.on_llm_end(context_wrapper, current_agent, response)
-        _maybe_compact(
-            current_agent, items, context_wrapper.usage.total_tokens, trace, agent_span_id
-        )
+        context_tokens = response.usage.input_tokens + response.usage.output_tokens
+        _maybe_compact(current_agent, items, context_tokens, trace, agent_span_id)
 
         if not response.output:
             raise ModelBehaviorError("model returned no output items")
@@ -182,7 +181,7 @@ async def _run_turns(
         if not message.get("tool_calls"):
             text = message.get("content") or ""
             await _run_output_guardrails(current_agent, context_wrapper, text, trace, agent_span_id)
-            return _TurnOutcome(text, generated, [], [], current_agent)
+            return _TurnOutcome(text, generated, [], [], current_agent, context_tokens)
 
         results, interruptions, switched = await _run_message_tool_calls(
             message, current_agent, context_wrapper, hooks, trace, agent_span_id, None
@@ -350,9 +349,7 @@ async def _run_async(
         to_persist = [{"role": "user", "content": input}] if isinstance(input, str) else list(input)
         new_tail = [*to_persist, *outcome.generated]
         full_history = [*history, *new_tail]
-        _maybe_compact(
-            agent, full_history, context_wrapper.usage.total_tokens, trace, agent_span.id
-        )
+        _maybe_compact(agent, full_history, outcome.context_tokens, trace, agent_span.id)
         if len(full_history) == len(history) + len(new_tail):
             await session.add_items(new_tail)
         else:
@@ -376,9 +373,7 @@ async def _run_async(
     # too, so the *next* call starts from the same cut `items` already made mid-run, not the full
     # pre-compaction history.
     if session is None:
-        _maybe_compact(
-            agent, original_input, context_wrapper.usage.total_tokens, trace, agent_span.id
-        )
+        _maybe_compact(agent, original_input, outcome.context_tokens, trace, agent_span.id)
 
     await hooks.on_agent_end(context_wrapper, outcome.current_agent, outcome.final_output)
     _export(trace)

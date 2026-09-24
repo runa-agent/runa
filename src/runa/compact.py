@@ -21,8 +21,9 @@ class Compactor(Protocol):
     """What `Agent(compact=...)` needs beyond a plain `True`/`False`.
 
     No inheritance required -- any callable with this signature works. Called after every model
-    response in a run with `items` (the conversation sent so far) and `usage_tokens`
-    (`context_wrapper.usage.total_tokens`, this run's cumulative usage so far).
+    response in a run with `items` (the conversation sent so far) and `usage_tokens` (the latest
+    response's input plus output tokens: how large the conversation is now, not this run's
+    cumulative usage, which a long tool loop inflates far past the actual context size).
     """
 
     def __call__(
