@@ -149,17 +149,28 @@ def _to_anthropic_tool(tool: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _to_anthropic_tool_choice(tool_choice: ToolChoice) -> dict[str, Any] | None:
-    """Map Runa's `ToolChoice` to Anthropic's `tool_choice` shape."""
-    if tool_choice is None:
-        return None
-    if tool_choice == "auto":
-        return {"type": "auto"}
-    if tool_choice == "required":
-        return {"type": "any"}
+def _to_anthropic_tool_choice(
+    tool_choice: ToolChoice, parallel_tool_calls: bool | None = None
+) -> dict[str, Any] | None:
+    """Map Runa's `ToolChoice` (and `parallel_tool_calls=False`) to Anthropic's `tool_choice`.
+
+    Anthropic has no top-level parallel flag: `disable_parallel_tool_use` rides on `tool_choice`,
+    defaulting it to `auto` when no choice was given.
+    """
     if tool_choice == "none":
         return {"type": "none"}
-    return {"type": "tool", "name": tool_choice}
+    choice: dict[str, Any] | None
+    if tool_choice is None:
+        choice = {"type": "auto"} if parallel_tool_calls is False else None
+    elif tool_choice == "auto":
+        choice = {"type": "auto"}
+    elif tool_choice == "required":
+        choice = {"type": "any"}
+    else:
+        choice = {"type": "tool", "name": tool_choice}
+    if choice is not None and parallel_tool_calls is False:
+        choice["disable_parallel_tool_use"] = True
+    return choice
 
 
 def _to_usage(usage: Any) -> Usage:
@@ -208,7 +219,10 @@ class AnthropicModel:
             request["system"] = system
         if wire_tools:
             request["tools"] = [_to_anthropic_tool(t) for t in wire_tools]
-        tool_choice = _to_anthropic_tool_choice(model_settings.tool_choice)
+        tool_choice = _to_anthropic_tool_choice(
+            model_settings.tool_choice,
+            model_settings.parallel_tool_calls if wire_tools else None,
+        )
         if tool_choice:
             request["tool_choice"] = tool_choice
         if model_settings.temperature is not None:

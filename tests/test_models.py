@@ -373,6 +373,23 @@ def test_to_anthropic_tool_choice(tool_choice: Any, expected: dict[str, Any] | N
     assert _to_anthropic_tool_choice(tool_choice) == expected
 
 
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        (None, {"type": "auto", "disable_parallel_tool_use": True}),
+        ("auto", {"type": "auto", "disable_parallel_tool_use": True}),
+        ("required", {"type": "any", "disable_parallel_tool_use": True}),
+        ("weather", {"type": "tool", "name": "weather", "disable_parallel_tool_use": True}),
+        ("none", {"type": "none"}),
+    ],
+)
+def test_parallel_tool_calls_false_disables_parallel_tool_use(
+    tool_choice: Any, expected: dict[str, Any]
+) -> None:
+    """`parallel_tool_calls=False` becomes `disable_parallel_tool_use` on Anthropic's choice."""
+    assert _to_anthropic_tool_choice(tool_choice, parallel_tool_calls=False) == expected
+
+
 def test_to_chat_message_collects_text_and_tool_use() -> None:
     """A Claude response's text and tool_use blocks become message content and tool_calls."""
     message = SimpleNamespace(

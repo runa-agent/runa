@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from runa._types import RunContextWrapper, TResponseInputItem
@@ -12,6 +15,7 @@ from runa.run_internal.agent_runner_helpers import (
     _agent_tools,
     _find_tool,
     _gate_tool_call,
+    _model_settings,
     _normalized_handoffs,
     _parse_arguments,
 )
@@ -87,8 +91,10 @@ async def _run_message_tool_calls(
 ) -> tuple[list[TResponseInputItem], list[Interruption], Any]:
     """Execute (or defer for approval) every tool call in `message`; returns results so far.
 
-    `ready_results` are results a paused run already computed for calls in `message`: reused
-    as is on resume, never executed a second time.
+    Calls are gated one by one, in order, then the approved ones run concurrently, unless the
+    agent's `model_settings.parallel_tool_calls` is `False`. Results keep the message's call
+    order either way. `ready_results` are results a paused run already computed for calls in
+    `message`: reused as is on resume, never executed a second time.
     """
     handoff_map = _normalized_handoffs(getattr(current_agent, "handoffs", []))
     tools = await _agent_tools(current_agent)
@@ -97,6 +103,7 @@ async def _run_message_tool_calls(
     switched_agent: Any = None
     approvals = approvals or {}
     ready = {result["tool_call_id"]: result for result in ready_results or []}
+    runs: dict[int, Callable[[], Awaitable[TResponseInputItem]]] = {}
 
     for call in message.get("tool_calls") or []:
         name = call["function"]["name"]
@@ -145,13 +152,30 @@ async def _run_message_tool_calls(
             results.append({"role": "tool", "tool_call_id": call_id, "content": gate.message})
             continue
 
-        results.append(
-            await _run_tool_call(
-                tool, call, context_wrapper, current_agent, hooks, trace, parent_id
-            )
+        runs[len(results)] = partial(
+            _run_tool_call, tool, call, context_wrapper, current_agent, hooks, trace, parent_id
         )
+        results.append({})  # filled in once the approved calls have run
 
+    parallel = _model_settings(current_agent).parallel_tool_calls is not False
+    for index, result in zip(runs, await _execute(list(runs.values()), parallel), strict=True):
+        results[index] = result
     return results, interruptions, switched_agent
+
+
+async def _execute(
+    calls: list[Callable[[], Awaitable[TResponseInputItem]]], parallel: bool
+) -> list[TResponseInputItem]:
+    """Run `calls` concurrently (or one by one), cancelling the rest if one raises."""
+    if not parallel:
+        return [await call() for call in calls]
+    tasks = [asyncio.ensure_future(call()) for call in calls]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        raise
 
 
 __all__ = ["_TurnOutcome", "_run_message_tool_calls", "_run_tool_call"]

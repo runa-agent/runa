@@ -48,6 +48,11 @@ never stalls other concurrent runs or tool calls. An `async def` tool is awaited
 which avoids that thread-dispatch overhead for a tool that's already genuinely async. Neither
 choice can break the run either way; it's purely a style call.
 
+When the model calls several tools in one message, they run concurrently, and their results go
+back in the order the model called them. For tools that must not overlap (shared state that
+isn't thread-safe, a rate-limited API), set `model_settings = ModelSettings(parallel_tool_calls=False)`:
+calls then run one at a time, and the model is asked for one call per message.
+
 ## Reserved Parameters
 
 Name a parameter `ctx` or `call_id` to receive the run's `RunContextWrapper` or the tool call's

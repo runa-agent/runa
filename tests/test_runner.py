@@ -360,6 +360,29 @@ def test_max_turns_exceeded() -> None:
         asyncio.run(Runner.run(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=3)))
 
 
+def test_a_run_error_reports_the_items_generated_before_it() -> None:
+    """`exc.run_data.new_items` holds what the run produced before failing, not an empty list."""
+
+    @tool
+    def loop_tool() -> str:
+        """Always return the same thing."""
+        return "again"
+
+    responses = [_tool_call_response("loop_tool", "{}", call_id=f"call_{i}") for i in range(2)]
+    agent = _agent(tools=[loop_tool], model=_ScriptedModel(responses))
+
+    with pytest.raises(MaxTurnsExceeded) as caught:
+        asyncio.run(Runner.run(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=2)))
+
+    assert caught.value.run_data is not None
+    assert [item["role"] for item in caught.value.run_data.new_items] == [
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+    ]
+
+
 def test_needs_approval_pauses_then_resumes_on_approve() -> None:
     """A tool requiring approval pauses the run with an `Interruption`; approving resumes it."""
 
@@ -612,6 +635,87 @@ def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
     assert items[0] == {"role": "user", "content": "go"}
     assert items[-1] == {"role": "assistant", "content": "all done", "tool_calls": None}
     assert len(items) == 5
+
+
+def _two_calls_response(first: str, second: str) -> ModelResponse:
+    """One assistant message calling `first` then `second`, both with no arguments."""
+    return ModelResponse(
+        output=[
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": first, "arguments": "{}"},
+                    },
+                    {
+                        "id": "c2",
+                        "type": "function",
+                        "function": {"name": second, "arguments": "{}"},
+                    },
+                ],
+            }
+        ],
+        usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
+    )
+
+
+def test_tool_calls_in_one_message_run_concurrently_and_keep_call_order() -> None:
+    """Two calls that each wait on the other only finish if they run at the same time."""
+    ping_seen, pong_seen = asyncio.Event(), asyncio.Event()
+
+    @tool
+    async def ping() -> str:
+        """Wait for pong."""
+        ping_seen.set()
+        await asyncio.wait_for(pong_seen.wait(), timeout=1)
+        return "ping done"
+
+    @tool
+    async def pong() -> str:
+        """Wait for ping."""
+        pong_seen.set()
+        await asyncio.wait_for(ping_seen.wait(), timeout=1)
+        return "pong done"
+
+    model = _ScriptedModel([_two_calls_response("ping", "pong"), _text_response("both done")])
+    agent = _agent(tools=[ping, pong], model=model)
+
+    result = asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+
+    assert result.final_output == "both done"
+    assert [item["content"] for item in model.calls[1][2:]] == ["ping done", "pong done"]
+
+
+def test_parallel_tool_calls_false_runs_calls_one_at_a_time() -> None:
+    """`parallel_tool_calls=False` is the escape hatch for tools that can't overlap."""
+    log: list[str] = []
+
+    @tool
+    async def first() -> str:
+        """Run first."""
+        log.append("first start")
+        await asyncio.sleep(0.01)
+        log.append("first end")
+        return "first done"
+
+    @tool
+    async def second() -> str:
+        """Run second."""
+        log.append("second start")
+        return "second done"
+
+    agent = _agent(
+        tools=[first, second],
+        model=_ScriptedModel([_two_calls_response("first", "second"), _text_response("done")]),
+        model_settings=ModelSettings(parallel_tool_calls=False),
+    )
+
+    asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+
+    assert log == ["first start", "first end", "second start"]
 
 
 def test_resuming_the_same_state_twice_raises_duplicate_call_id_error() -> None:
@@ -1166,6 +1270,33 @@ def test_memory_is_searched_before_the_turn_and_injected_as_a_labeled_block() ->
     assert retrieval_span.parent_id == agent_span.id
     assert retrieval_span.status == "ok"
     assert retrieval_span.output == {"count": 1}
+
+
+def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
+    """Memory extraction runs once the paused turn completes, with the user's original message."""
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Needs approval."""
+        return "done"
+
+    memory = _FakeMemory()
+    agent = _agent(
+        tools=[dangerous],
+        memory=memory,
+        model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
+    )
+
+    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    assert memory.remembered == []
+
+    state = result.to_state()
+    state.approve(result.interruptions[0])
+    asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+
+    assert [conversation for conversation, _, _ in memory.remembered] == [
+        "User: do it\nAssistant: all done"
+    ]
 
 
 def test_memory_with_no_matches_injects_nothing() -> None:
