@@ -307,7 +307,7 @@ class Agent:
 
     @property
     def graph(self) -> Source:
-        """Render this agent, and its tools/handoffs, as a Graphviz diagram.
+        """Render this agent, and its tools/subagents, as a Graphviz diagram.
 
         Displays inline in Jupyter; call `.render(filename)` to save it, or `.source` for the
         raw DOT text. Actually rendering an image needs the system Graphviz `dot` binary.

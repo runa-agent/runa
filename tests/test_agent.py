@@ -10,8 +10,10 @@ from types import ModuleType
 from typing import Any, cast
 
 import pytest
+from graphviz import Digraph
 
 from runa import Agent, tracing
+from runa._graph import _add_agent
 from runa._models import StreamDelta
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Subagent
@@ -61,6 +63,23 @@ def _import_module_from_file(module_name: str, path: Path) -> ModuleType:
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_graph_draws_delegates_and_handoffs_as_agents() -> None:
+    """A delegate is an agent node with a dotted edge, a handoff one with a dashed edge."""
+
+    class Lead(Agent):
+        name = "Lead"
+        instructions = "Lead."
+        subagents = [Researcher.delegate, Translator.handoff]
+
+    dot = Digraph()
+    _add_agent(dot, Lead(), set())
+    source = dot.source
+
+    assert "label=Researcher" in source and "label=Translator" in source
+    assert "style=dotted" in source and "style=dashed" in source
+    assert "lightyellow" not in source  # no plain tool box for the delegate
 
 
 def test_agent_cannot_be_instantiated_directly() -> None:

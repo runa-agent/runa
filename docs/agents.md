@@ -153,9 +153,10 @@ as an LLM-written summary. `compact = False`, the default, turns this off.
 
 ## Visualizing an Agent
 
-`agent.graph` renders the agent, its tools, and its handoffs as a Graphviz diagram: inline in
-Jupyter, or `.render(path)` to save it, or `.source` for the raw DOT text. Rendering an actual
-image needs the system `dot` binary.
+`agent.graph` renders the agent, its tools, and its subagents as a Graphviz diagram: inline in
+Jupyter, or `.render(path)` to save it, or `.source` for the raw DOT text. A delegate is drawn
+with a dotted edge, a handoff with a dashed one. Rendering an actual image needs the system `dot`
+binary.
 
 ## Example
 
