@@ -417,6 +417,7 @@ class Agent:
         message: MessageContent,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
+        session: SessionABC | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Run a turn as a stream of events, appending it to the conversation history.
 
@@ -426,27 +427,28 @@ class Agent:
         string doesn't have a recognizable image extension.
 
         Yields `StreamEvent`s (`raw_response_event`, `run_item_stream_event`,
-        `agent_updated_stream_event`) as they arrive. `context` and `hooks` behave as in
-        `run`/`run_sync`. The conversation history is updated only once the stream is fully
+        `agent_updated_stream_event`) as they arrive. `context`, `hooks` and `session` behave as
+        in `run`/`run_sync`. The conversation history is updated only once the stream is fully
         consumed, so a caller that stops iterating early leaves `self.history` unchanged.
 
         Token usage for this call is recorded to `self.last_usage` and accumulated into
         `self.usage` once the stream is fully consumed; a caller that stops iterating early
         leaves both unchanged, same as `self.history`.
         """
-        turn_input = [*self.history, {"role": "user", "content": message}]
         result = Runner.run_streamed(
             self,
-            turn_input,
+            _turn_input(message, self.history, session),
             context=context,
             hooks=hooks or _default_hooks(),
-            run_config=self._run_config(None),
+            run_config=self._run_config(session),
+            session=session,
         )
         async for event in result:
             yield event
         self.last_usage = result.context_wrapper.usage
         self.usage.add(self.last_usage)
-        self.history = result.to_input_list()
+        if session is None:
+            self.history = result.to_input_list()
 
     def run_sync(
         self,

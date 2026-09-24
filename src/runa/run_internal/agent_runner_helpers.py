@@ -104,9 +104,7 @@ async def _gate_tool_call(
 
     Consults `context_wrapper.approval_ledger` first -- the sticky "always approve"/"always
     reject" decisions set via `RunState.approve`/`.reject(..., always=True)` -- before falling
-    back to `_needs_approval` and the per-call-id `approvals` dict. Shared by `tool_execution.py`
-    (turn-based runs) and `streaming.py` (`run_streamed`), so there's exactly one sanctioned
-    approval-gating path rather than two that could drift apart.
+    back to `_needs_approval` and the per-call-id `approvals` dict.
     """
     sticky = context_wrapper.approval_ledger.get(tool.name)
     if sticky is True:

@@ -89,7 +89,9 @@ as `status="error"` instead of being raised. `agent.history` is left unchanged, 
 never completed.
 
 `run_streamed` instead yields `StreamEvent`s as the model responds, and updates `agent.history`
-only once the stream is fully consumed.
+only once the stream is fully consumed. It is the same run as `run`: guardrails, hooks, tracing,
+memory and `session=` all apply. Unlike `run`, an error is raised from the stream rather than
+reported as `status="error"`.
 
 ## Usage
 

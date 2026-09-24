@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from runa._types import RunContextWrapper, TResponseInputItem
-from runa.lifecycle import RunHooks
-from runa.run_config import RunConfig
 from runa.run_state import Interruption, RunState
 from runa.stream_events import StreamEvent
 from runa.tracing.traces import Trace
@@ -43,33 +42,46 @@ class RunResult:
 class RunResultStreaming:
     """What `Runner.run_streamed` returns: an async iterator of `StreamEvent`s.
 
-    `context_wrapper`/`to_input_list()` reflect the run's final state once the iterator has been
-    fully consumed. Both read the same `items` list and `RunContextWrapper` the streaming loop
-    mutates in place as it goes, so there's no separate "final result" object to reconcile with.
+    Iterating runs the same turn loop as `Runner.run`, so guardrails, tracing, hooks and sessions
+    behave identically. Once the iterator is fully consumed, `result` holds the finished
+    `RunResult`; an error raised by the run is re-raised from the iterator.
     """
 
     def __init__(
         self,
-        agent: Any,
-        items: list[TResponseInputItem],
+        run: Callable[[Callable[[StreamEvent], None]], Awaitable[RunResult]],
         context_wrapper: RunContextWrapper,
-        run_config: RunConfig,
-        hooks: RunHooks[Any],
     ) -> None:
-        """Store the shared, mutable `items`/`context_wrapper` the streaming loop will update."""
-        from runa.run_internal.streaming import _stream_async
-
-        self._items = items
+        """Store `run` (the turn loop, given an `emit` callback) to start on first iteration."""
         self.context_wrapper = context_wrapper
-        self._events = _stream_async(agent, items, context_wrapper, run_config, hooks)
+        self.result: RunResult | None = None
+        self._events = self._stream(run)
 
-    def __aiter__(self) -> AsyncIterator[StreamEvent]:
+    async def _stream(
+        self, run: Callable[[Callable[[StreamEvent], None]], Awaitable[RunResult]]
+    ) -> AsyncGenerator[StreamEvent]:
+        queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+        task = asyncio.ensure_future(run(queue.put_nowait))
+        task.add_done_callback(lambda _: queue.put_nowait(None))
+        try:
+            while (event := await queue.get()) is not None:
+                yield event
+            self.result = task.result()
+        finally:
+            task.cancel()
+
+    def __aiter__(self) -> AsyncGenerator[StreamEvent]:
         """Iterate the `StreamEvent`s this run produces."""
         return self._events
 
+    @property
+    def final_output(self) -> Any:
+        """The run's final output, once the stream is fully consumed (else `None`)."""
+        return self.result.final_output if self.result is not None else None
+
     def to_input_list(self) -> list[TResponseInputItem]:
-        """Return the full item list so far: original input plus everything generated."""
-        return list(self._items)
+        """Return the full history after this run, once the stream is fully consumed."""
+        return self.result.to_input_list() if self.result is not None else []
 
 
 __all__ = ["RunResult", "RunResultStreaming"]

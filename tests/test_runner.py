@@ -554,6 +554,7 @@ def test_resume_runs_the_approved_call_and_reuses_the_ready_result_from_the_same
     assert [item["role"] for item in model.calls[1]] == ["user", "assistant", "tool", "tool"]
     assert [item["content"] for item in model.calls[1][2:]] == ["safe done", "gated done"]
     assert resumed.to_input_list() == [
+        {"role": "user", "content": "go"},
         _safe_and_gated_calls_response().output[0],
         {"role": "tool", "tool_call_id": "c1", "content": "safe done"},
         {"role": "tool", "tool_call_id": "c2", "content": "gated done"},
@@ -891,6 +892,85 @@ def test_stream_response_raises_duplicate_call_id_error_on_a_replayed_call_id() 
 
     with pytest.raises(DuplicateToolCallError):
         asyncio.run(collect())
+
+
+def _consume(result: Any) -> list[Any]:
+    async def collect() -> list[Any]:
+        return [event async for event in result]
+
+    return asyncio.run(collect())
+
+
+def test_stream_runs_input_guardrails() -> None:
+    """`run_streamed` shares `run`'s loop, so a tripped input guardrail halts it too."""
+
+    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
+        return GuardrailFunctionOutput(output_info="blocked", tripwire_triggered=True)
+
+    agent = _agent(
+        input_guardrails=[InputGuardrail(guardrail_function=_trip, name="block_all")],
+        model=_ScriptedStreamingModel([StreamDelta(text="should not be reached")]),
+    )
+
+    with pytest.raises(InputGuardrailTripwireTriggered):
+        _consume(Runner.run_streamed(agent, "hi", run_config=_run_config()))
+
+
+def test_stream_exposes_the_finished_result_with_a_trace() -> None:
+    """Once consumed, a stream carries `final_output`, the full history, and a traced run."""
+    agent = _agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
+
+    streamed = Runner.run_streamed(agent, "hello", run_config=_run_config())
+    _consume(streamed)
+
+    assert streamed.final_output == "Hi"
+    assert streamed.to_input_list() == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Hi", "tool_calls": None},
+    ]
+    assert streamed.result is not None
+    assert {span.type for span in streamed.result.trace.spans} >= {"agent", "llm"}
+
+
+def test_stream_persists_the_turn_to_the_session(tmp_path: Any) -> None:
+    """`run_streamed(session=...)` saves the turn like `run` does."""
+    from runa.session import SQLiteSession
+
+    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    agent = _agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
+
+    _consume(Runner.run_streamed(agent, "hello", session=session, run_config=_run_config()))
+
+    assert asyncio.run(session.get_items()) == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "Hi", "tool_calls": None},
+    ]
+
+
+def test_stopping_a_stream_early_cancels_the_run() -> None:
+    """Breaking out of the iterator cancels the underlying run instead of leaving it running."""
+    cancelled = asyncio.Event()
+
+    class _SlowModel:
+        async def stream_response(self, *args: Any, **kwargs: Any):  # noqa: ANN002, ANN003
+            yield StreamDelta(text="first")
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            yield StreamDelta(text="never")
+
+    agent = _agent(model=_SlowModel())
+
+    async def first_event_then_stop() -> None:
+        stream = Runner.run_streamed(agent, "hi", run_config=_run_config())
+        events = aiter(stream)
+        await anext(events)
+        await events.aclose()
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    asyncio.run(first_event_then_stop())
 
 
 def test_gen_trace_id_returns_a_fresh_id_each_time() -> None:

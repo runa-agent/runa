@@ -13,7 +13,12 @@ from typing import Any
 
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.compact import Compactor, default_compactor
-from runa.exceptions import MaxTurnsExceeded, ModelBehaviorError, RunaError
+from runa.exceptions import (
+    ApprovalRequiredError,
+    MaxTurnsExceeded,
+    ModelBehaviorError,
+    RunaError,
+)
 from runa.lifecycle import RunHooks, logger
 from runa.result import RunResult
 from runa.run_config import RunConfig
@@ -26,9 +31,11 @@ from runa.run_internal.agent_runner_helpers import (
 )
 from runa.run_internal.guardrails import _run_input_guardrails, _run_output_guardrails
 from runa.run_internal.spans import _close_span, _export, _new_span
+from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutcome
 from runa.run_state import RunState
 from runa.session import SessionABC
+from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 
@@ -136,6 +143,10 @@ async def _save_to_session(
         await session.set_items(full_history)
 
 
+def _ignore(_event: Any) -> None:
+    """The `emit` of a non-streamed run: events go nowhere."""
+
+
 async def _run_turns(
     current_agent: Any,
     items: list[TResponseInputItem],
@@ -150,7 +161,15 @@ async def _run_turns(
         TResponseInputItem, dict[str, bool], dict[str, str], list[TResponseInputItem]
     ]
     | None = None,
+    emit: Emit | None = None,
 ) -> _TurnOutcome:
+    """Call the model and run its tool calls until it answers, pauses, or runs out of turns.
+
+    With `emit` (a streamed run), the model is streamed and every step is emitted as a
+    `StreamEvent`; a call needing approval raises `ApprovalRequiredError`, since a stream
+    can't pause.
+    """
+    notify = emit or _ignore
     generated: list[TResponseInputItem] = []
 
     if pending_resume is not None:
@@ -180,7 +199,7 @@ async def _run_turns(
         )
         system_instructions = await _resolve_instructions(current_agent, context_wrapper)
         await hooks.on_llm_start(context_wrapper, current_agent, system_instructions, items)
-        response = await model.get_response(
+        request = (
             system_instructions,
             items,
             _model_settings(current_agent),
@@ -188,6 +207,10 @@ async def _run_turns(
             getattr(current_agent, "output_type", None),
             list(_normalized_handoffs(getattr(current_agent, "handoffs", [])).values()),
         )
+        if emit is None:
+            response = await model.get_response(*request)
+        else:
+            response = await _stream_response(model, request, emit)
         context_wrapper.usage.add(response.usage)
         _close_span(llm_span, output={"usage": response.usage.__dict__})
         await hooks.on_llm_end(context_wrapper, current_agent, response)
@@ -199,22 +222,30 @@ async def _run_turns(
         message = response.output[0]
         items.append(message)
         generated.append(message)
+        notify(RunItemStreamEvent(name="message_output_created", item=message))
 
         if not message.get("tool_calls"):
             text = message.get("content") or ""
             await _run_output_guardrails(current_agent, context_wrapper, text, trace, agent_span_id)
             return _TurnOutcome(text, generated, [], [], current_agent, context_tokens)
 
+        for call in message["tool_calls"]:
+            notify(RunItemStreamEvent(name="tool_called", item=call))
         results, interruptions, switched = await _run_message_tool_calls(
             message, current_agent, context_wrapper, hooks, trace, agent_span_id, None
         )
+        if interruptions and emit is not None:
+            raise ApprovalRequiredError(interruptions[0].tool.name, interruptions[0].call_id)
         if interruptions:
             return _TurnOutcome(None, generated, interruptions, results, current_agent)
 
         items.extend(results)
         generated.extend(results)
+        for result in results:
+            notify(RunItemStreamEvent(name="tool_output", item=result))
         if switched is not None:
             current_agent = switched
+            notify(AgentUpdatedStreamEvent(new_agent=current_agent))
             await hooks.on_agent_start(context_wrapper, current_agent)
 
     raise MaxTurnsExceeded(f"max turns ({max_turns}) exceeded")
@@ -235,6 +266,7 @@ async def _run_async(
     run_config: RunConfig | None = None,
     session: SessionABC | None = None,
     _context_wrapper: RunContextWrapper[Any] | None = None,
+    emit: Emit | None = None,
 ) -> RunResult:
     run_config = run_config or RunConfig()
     hooks = hooks or _default_hooks()
@@ -260,7 +292,7 @@ async def _run_async(
         original_input: list[TResponseInputItem] = []
     else:
         items = list(turn_input)
-        original_input = list(items) if not isinstance(input, str) else []
+        original_input = list(items)
 
     memory = getattr(agent, "memory", None)
     knowledge = getattr(agent, "knowledge", None)
@@ -310,6 +342,7 @@ async def _run_async(
             trace,
             agent_span.id,
             max_turns=run_config.max_turns,
+            emit=emit,
         )
     except RunaError as exc:
         _close_span(agent_span, error=str(exc))

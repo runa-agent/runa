@@ -891,6 +891,44 @@ def test_run_streamed_yields_events_and_updates_history(monkeypatch: pytest.Monk
     assert agent.usage == Usage(input_tokens=3, output_tokens=4)
 
 
+def test_run_streamed_with_a_session_sends_only_the_new_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a `session`, `run_streamed` passes it through and leaves `self.history` alone."""
+    captured: dict[str, Any] = {}
+
+    class _FakeStreaming:
+        context_wrapper = RunContextWrapper(context=None)
+
+        def __aiter__(self) -> AsyncIterator[Any]:
+            async def _events() -> AsyncIterator[Any]:
+                yield "event"
+
+            return _events()
+
+        def to_input_list(self) -> list[Any]:
+            return [{"role": "user", "content": "hi"}]
+
+    def fake_run_streamed(*args: Any, session: Any, **kwargs: Any) -> _FakeStreaming:
+        captured["input"] = args[1]
+        captured["session"] = session
+        return _FakeStreaming()
+
+    monkeypatch.setattr("runa.agent.Runner.run_streamed", staticmethod(fake_run_streamed))
+    agent = Researcher()
+    agent.history = [{"role": "user", "content": "earlier"}]
+    session = object()
+
+    async def _consume() -> None:
+        async for _ in agent.run_streamed("hi", session=session):  # type: ignore[arg-type]
+            pass
+
+    asyncio.run(_consume())
+
+    assert captured == {"input": "hi", "session": session}
+    assert agent.history == [{"role": "user", "content": "earlier"}]
+
+
 def test_run_streamed_defaults_to_logging_run_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
     """`run_streamed` defaults to a `LoggingRunHooks` when none is given."""
     captured: dict[str, Any] = {}

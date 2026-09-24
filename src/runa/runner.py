@@ -9,7 +9,7 @@ from runa._types import RunContextWrapper, TResponseInputItem
 from runa.lifecycle import RunHooks
 from runa.result import RunResult, RunResultStreaming
 from runa.run_config import RunConfig
-from runa.run_internal.run_loop import _default_hooks, _run_async
+from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.session import SessionABC
 
@@ -69,15 +69,25 @@ class Runner:
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
         run_config: RunConfig | None = None,
+        session: SessionABC | None = None,
     ) -> RunResultStreaming:
-        """Run `agent` on `input`, returning a `RunResultStreaming` of `StreamEvent`s."""
-        items = [{"role": "user", "content": input}] if isinstance(input, str) else list(input)
+        """Run `agent` on `input`, returning a `RunResultStreaming` of `StreamEvent`s.
+
+        The same run as `run`, streamed; a tool call needing approval raises
+        `ApprovalRequiredError`, since a stream can't pause for it.
+        """
+        context_wrapper = RunContextWrapper(context=context)
         return RunResultStreaming(
-            agent,
-            items,
-            RunContextWrapper(context=context),
-            run_config or RunConfig(),
-            hooks or _default_hooks(),
+            lambda emit: _run_async(
+                agent,
+                input,
+                hooks=hooks,
+                run_config=run_config,
+                session=session,
+                _context_wrapper=context_wrapper,
+                emit=emit,
+            ),
+            context_wrapper,
         )
 
 
