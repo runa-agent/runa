@@ -1,20 +1,28 @@
 """tracing/manual.py: `trace`/`span`, the manual/advanced tracing API.
 
 Standalone from `run_internal`'s automatic per-`Agent.run()` tracing: these build and export their
-own `Trace`, for instrumenting code that isn't itself an agent run. They don't nest around an
-`Agent.run()` call to group it with other spans: each `Agent.run()` always produces its own,
-independent `Trace` (see `runa.runner`); use these to group other work of your own instead.
+own `Trace`, for instrumenting code that isn't itself an agent run. An `Agent.run()` inside a
+`trace` block still produces its own `Trace`, stamped with the enclosing one's id as `group_id`,
+so a code-driven workflow's runs are grouped without passing anything to `run`.
 """
 
 from __future__ import annotations
 
 import time
 import uuid
+from contextvars import ContextVar
 from typing import Any
 
 from runa.tracing.config import exporters
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
+
+_current: ContextVar[Trace | None] = ContextVar("runa_current_trace", default=None)
+
+
+def current_trace() -> Trace | None:
+    """The innermost open `trace` block's `Trace`, or `None` outside one."""
+    return _current.get()
 
 
 def _export(finished: Trace) -> None:
@@ -50,10 +58,12 @@ class trace:
 
     def __enter__(self) -> Trace:
         """Return the `Trace` to pass as `span()`'s `trace` argument."""
+        self._token = _current.set(self._trace)
         return self._trace
 
     def __exit__(self, *exc_info: object) -> None:
         """Close and export the `Trace`, regardless of whether the block raised."""
+        _current.reset(self._token)
         self._trace.end_time = time.time()
         _export(self._trace)
 

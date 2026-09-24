@@ -19,6 +19,21 @@ runa traces errors         # most recent traces that errored
 runa traces show TRACE_ID  # one trace's full span tree
 ```
 
+### Grouping Runs
+
+Every `Agent.run()` inside a `tracing.trace` block gets the block's trace id as its `group_id`,
+including runs started with `asyncio.gather`. Each run still has its own trace:
+
+```python
+from runa import tracing
+
+with tracing.trace("nightly-batch"):
+    for ticket in tickets:
+        SupportAgent().run_sync(ticket)
+```
+
+Outside a block, a session-backed run is grouped by its session id.
+
 ### Privacy Policy
 
 `observe()` configures what tracing captures, globally or for a block:

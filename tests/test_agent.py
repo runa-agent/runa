@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import pytest
 
-from runa import Agent
+from runa import Agent, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Subagent
@@ -20,6 +20,7 @@ from runa.guardrail import guardrail
 from runa.knowledge import Knowledge
 from runa.lifecycle import LoggingRunHooks
 from runa.memory import Memory
+from runa.run import Run
 from runa.run_state import RunState
 from runa.tool import FunctionTool, tool
 
@@ -834,6 +835,30 @@ class _ScriptedStreamModel:
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
         yield StreamDelta(text=self._text)
         yield StreamDelta(usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1))
+
+
+def test_runs_inside_a_trace_block_are_grouped_under_it() -> None:
+    """Each `Agent.run()` in a `tracing.trace` block keeps its own trace, grouped by its id."""
+
+    class StepAgent(Agent):
+        name = "StepAgent"
+        instructions = "Answer."
+        model = _ScriptedModel([_final_message("a"), _final_message("b"), _final_message("c")])
+
+    agent = StepAgent()
+
+    async def workflow() -> list[Run]:
+        first = await agent.run("one")
+        return [first, *await asyncio.gather(agent.run("two"), agent.run("three"))]
+
+    with tracing.trace("workflow") as outer:
+        runs = asyncio.run(workflow())
+    alone = StepAgent(model=_ScriptedModel([_final_message("d")])).run_sync("four")
+
+    assert all(run.trace is not None for run in runs)
+    assert {run.trace.metadata["group_id"] for run in runs if run.trace} == {outer.id}
+    assert len({run.trace.id for run in runs if run.trace}) == 3
+    assert alone.trace is not None and "group_id" not in alone.trace.metadata
 
 
 def test_run_sync_trace_has_agent_and_tool_spans() -> None:

@@ -159,6 +159,21 @@ tool the delegate calls. A delegate that pauses for approval pauses its caller t
 delegate's calls appear in the caller's `run.interruptions`, and resuming the caller resumes the
 delegate where it stopped (also across `to_json`/`from_json`).
 
+**Subagents are for when the model picks the order.** When your code picks it (always A, then
+B and C together), write a plain `async` function. Don't build a workflow class:
+
+```python
+async def onboard(ticket: str) -> Run:
+    triage = await TriageAgent().run(ticket)
+    billing, docs = await asyncio.gather(
+        BillingAgent().run(triage.output), DocsAgent().run(triage.output)
+    )
+    return await SummaryAgent().run(f"{billing.output}\n{docs.output}")
+```
+
+Parallelism the model asks for is already handled: delegates are tools, and tool calls from
+one model message run concurrently unless `ModelSettings(parallel_tool_calls=False)`.
+
 
 ## 6. Session
 
@@ -339,10 +354,10 @@ different model should grade instead of the agent's own.
 
 **Never configured, never opted into: every `Agent.run`/`run_sync` is
 traced automatically**, and `Run.trace` is always populated. Reach for
-manual `trace`/`span` (`runa.tracing`) only to group work that *isn't*
-itself an `Agent.run()` call (a batch job, a pre/post-processing step).
-Never use it to wrap an `Agent.run()` call, which already produces its own
-independent `Trace` on its own.
+manual `trace`/`span` (`runa.tracing`) only to group work: a workflow, a
+batch job, a pre/post-processing step. An `Agent.run()` inside a `trace`
+block still produces its own `Trace`, stamped with the block's id as
+`group_id`. There is no `group_id=` argument on `run`.
 
 ```python
 with tracing.trace("nightly-batch") as t:

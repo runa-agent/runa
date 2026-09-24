@@ -25,6 +25,7 @@ from runa.runner import Runner
 from runa.session import SessionABC
 from runa.stream_events import StreamEvent
 from runa.tool import FunctionTool
+from runa.tracing.manual import current_trace
 
 if TYPE_CHECKING:
     from graphviz import Source
@@ -316,10 +317,12 @@ class Agent:
         return draw_graph(self)
 
     def _run_config(self, session: SessionABC | None) -> RunConfig:
+        """Group this run under an enclosing `tracing.trace` block, else under its session."""
+        outer = current_trace()
         return RunConfig(
             model_provider=_MODEL_PROVIDER,
             workflow_name=type(self).__name__,
-            group_id=getattr(session, "session_id", None),
+            group_id=outer.id if outer else getattr(session, "session_id", None),
             max_turns=self.max_turns,
         )
 

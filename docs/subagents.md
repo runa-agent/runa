@@ -52,6 +52,12 @@ calls. A delegate that pauses on an approval pauses its caller too: the delegate
 appear in the caller's `run.interruptions`, and resuming the caller's `RunState` resumes the
 delegate where it stopped, even after a `to_json`/`from_json` round trip.
 
+## Parallel Delegates
+
+Delegates are tools, so when the model calls several in one message, they run concurrently.
+Set `model_settings = ModelSettings(parallel_tool_calls=False)` on the calling agent to run them
+one by one instead.
+
 ## Naming a Delegate's Tool
 
 A delegated agent is exposed as a tool named after it by default. Override the name or
@@ -76,6 +82,32 @@ subagents = {
 Entries under `"auto"` pass through as given, whether bare (wired as both) or already
 `.handoff`/`.delegate`-bound, for mixing modes within one dict without forcing every entry the
 same way.
+
+## Workflows in Code
+
+Subagents are for when the model picks the order. When your code picks it, write a plain
+`async` function. Wrap it in `tracing.trace` so its runs are grouped:
+
+```python
+import asyncio
+
+from runa import tracing
+
+
+async def onboard(ticket: str) -> str:
+    triage = await TriageAgent().run(ticket)
+    billing, docs = await asyncio.gather(
+        BillingAgent().run(triage.output), DocsAgent().run(triage.output)
+    )
+    summary = await SummaryAgent().run(f"{billing.output}\n{docs.output}")
+    return summary.output
+
+
+with tracing.trace("onboard"):
+    asyncio.run(onboard("..."))
+```
+
+Each run keeps its own trace, with the block's trace id as its `group_id`.
 
 ## Example
 
