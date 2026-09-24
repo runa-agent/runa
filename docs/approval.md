@@ -75,10 +75,19 @@ carry a custom `rejection_message`, fed back to the model instead of the default
 A `call_id` that already ran once cannot be submitted again. Resuming the same `RunState` twice
 raises `DuplicateToolCallError` rather than silently re-running the tool.
 
-`run_streamed` has no pause/resume machinery. A tool that actually needs approval, with no sticky
-decision already covering it, raises `ApprovalRequiredError` instead of silently running or
-silently blocking. Use `Runner.run`/`run_sync` for approval-gated tools, or pre-approve them with
-`always=True` before streaming.
+`Runner.run_streamed` pauses the same way. The stream ends normally with `interruptions` set;
+resolve them on `to_state()` and pass the state back to continue, streaming again:
+
+```python
+stream = Runner.run_streamed(agent, "issue a $75 refund")
+async for event in stream:
+    ...
+state = stream.to_state()
+for item in stream.interruptions:
+    state.approve(item)
+async for event in Runner.run_streamed(agent, state):
+    ...
+```
 
 ## Durability
 

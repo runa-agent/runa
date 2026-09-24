@@ -42,9 +42,11 @@ class RunResult:
 class RunResultStreaming:
     """What `Runner.run_streamed` returns: an async iterator of `StreamEvent`s.
 
-    Iterating runs the same turn loop as `Runner.run`, so guardrails, tracing, hooks and sessions
-    behave identically. Once the iterator is fully consumed, `result` holds the finished
-    `RunResult`; an error raised by the run is re-raised from the iterator.
+    Iterating runs the same turn loop as `Runner.run`, so guardrails, tracing, hooks, sessions
+    and approvals behave identically. Once the iterator is fully consumed, `result` holds the
+    finished `RunResult`; an error raised by the run is re-raised from the iterator. A stream
+    that paused for approval ends with `interruptions` set: resolve them on `to_state()` and
+    pass that state back to `Runner.run_streamed` (or `run`) to continue.
     """
 
     def __init__(
@@ -78,6 +80,16 @@ class RunResultStreaming:
     def final_output(self) -> Any:
         """The run's final output, once the stream is fully consumed (else `None`)."""
         return self.result.final_output if self.result is not None else None
+
+    @property
+    def interruptions(self) -> list[Interruption]:
+        """Tool calls the run paused on, once the stream is fully consumed."""
+        return self.result.interruptions if self.result is not None else []
+
+    def to_state(self) -> RunState:
+        """Return the `RunState` to resolve `interruptions` against and resume with."""
+        assert self.result is not None, "to_state() needs a fully consumed stream"
+        return self.result.to_state()
 
     def to_input_list(self) -> list[TResponseInputItem]:
         """Return the full history after this run, once the stream is fully consumed."""

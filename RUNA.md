@@ -113,10 +113,8 @@ a custom `rejection_message`, fed back to the model instead of the default text;
 already executed once can't be submitted again: resuming the same `RunState` twice raises
 `DuplicateToolCallError` rather than silently re-running the tool.
 
-`run_streamed` has no pause/resume machinery: a tool that actually needs approval (i.e. no
-sticky decision already covers it) raises `ApprovalRequiredError` instead of silently running
-or silently blocking. Use `Runner.run`/`run_sync` for approval-gated tools, or pre-approve them
-with `always=True` before streaming.
+`Runner.run_streamed` pauses the same way: the stream ends with `interruptions` set, resolved on
+`result.to_state()` and resumed with `Runner.run_streamed(agent, state)` (or `Runner.run`).
 
 **Durability.** `RunState` survives a process restart: `state.to_json()`/`.to_string()`
 serialize it (as a plain dict, or a JSON string); `RunState.from_json(agent, blob)`/

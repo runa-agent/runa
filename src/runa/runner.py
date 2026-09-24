@@ -64,19 +64,23 @@ class Runner:
     @staticmethod
     def run_streamed(
         agent: Any,
-        input: str | list[TResponseInputItem],
+        input: str | list[TResponseInputItem] | RunState,
         *,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
         run_config: RunConfig | None = None,
         session: SessionABC | None = None,
     ) -> RunResultStreaming:
-        """Run `agent` on `input`, returning a `RunResultStreaming` of `StreamEvent`s.
+        """Run `agent` on `input` (or resume a paused `RunState`), streaming `StreamEvent`s.
 
-        The same run as `run`, streamed; a tool call needing approval raises
-        `ApprovalRequiredError`, since a stream can't pause for it.
+        The same run as `run`: a tool call needing approval ends the stream with
+        `interruptions`, resumed by passing the resolved `to_state()` back in.
         """
-        context_wrapper = RunContextWrapper(context=context)
+        context_wrapper = (
+            input.context_wrapper
+            if isinstance(input, RunState)
+            else RunContextWrapper(context=context)
+        )
         return RunResultStreaming(
             lambda emit: _run_async(
                 agent,

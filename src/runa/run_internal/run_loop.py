@@ -16,7 +16,6 @@ from typing import Any, TypedDict
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import (
-    ApprovalRequiredError,
     MaxTurnsExceeded,
     ModelBehaviorError,
     RunaError,
@@ -178,8 +177,7 @@ async def _run_turns(
     """Call the model and run its tool calls until it answers, pauses, or runs out of turns.
 
     With `emit` (a streamed run), the model is streamed and every step is emitted as a
-    `StreamEvent`; a call needing approval raises `ApprovalRequiredError`, since a stream
-    can't pause. Every generated item is appended to `generated`, owned by the caller so a
+    `StreamEvent`. Every generated item is appended to `generated`, owned by the caller so a
     run that errors can still report what it produced.
     """
     notify = emit or _ignore
@@ -201,8 +199,11 @@ async def _run_turns(
             return _TurnOutcome(None, generated, interruptions, results, current_agent)
         items.extend(results)
         generated.extend(results)
+        for result in results:
+            notify(RunItemStreamEvent(name="tool_output", item=result))
         if switched is not None:
             current_agent = switched
+            notify(AgentUpdatedStreamEvent(new_agent=current_agent))
 
     for _turn in range(max_turns):
         model = _resolve_model(current_agent, run_config.model_provider)
@@ -246,8 +247,6 @@ async def _run_turns(
         results, interruptions, switched = await _run_message_tool_calls(
             message, current_agent, context_wrapper, hooks, trace, agent_span_id, None
         )
-        if interruptions and emit is not None:
-            raise ApprovalRequiredError(interruptions[0].tool.name, interruptions[0].call_id)
         if interruptions:
             return _TurnOutcome(None, generated, interruptions, results, current_agent)
 
@@ -422,7 +421,7 @@ async def _run_async(
     hooks = hooks or _default_hooks()
 
     if isinstance(input, RunState):
-        return await _resume(input, hooks, run_config, session)
+        return await _resume(input, hooks, run_config, session, emit)
 
     context_wrapper = (
         _context_wrapper if _context_wrapper is not None else RunContextWrapper(context=context)
@@ -508,7 +507,11 @@ async def _run_async(
 
 
 async def _resume(
-    state: RunState, hooks: RunHooks[Any], run_config: RunConfig, session: SessionABC | None
+    state: RunState,
+    hooks: RunHooks[Any],
+    run_config: RunConfig,
+    session: SessionABC | None,
+    emit: Emit | None = None,
 ) -> RunResult:
     """Continue a paused run once its interruptions are resolved."""
     run = _Run(
@@ -533,6 +536,7 @@ async def _resume(
         run.span.id,
         max_turns=run_config.max_turns,
         generated=run.generated,
+        emit=emit,
         pending_resume=(
             state.generated_items[-1],
             state.approvals,

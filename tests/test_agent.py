@@ -859,6 +859,7 @@ def test_run_streamed_yields_events_and_updates_history(monkeypatch: pytest.Monk
         context_wrapper = RunContextWrapper(
             context=None, usage=Usage(input_tokens=3, output_tokens=4)
         )
+        interruptions: list[Any] = []
 
         def __aiter__(self) -> AsyncIterator[Any]:
             async def _events() -> AsyncIterator[Any]:
@@ -899,6 +900,7 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
 
     class _FakeStreaming:
         context_wrapper = RunContextWrapper(context=None)
+        interruptions: list[Any] = []
 
         def __aiter__(self) -> AsyncIterator[Any]:
             async def _events() -> AsyncIterator[Any]:
@@ -935,6 +937,7 @@ def test_run_streamed_defaults_to_logging_run_hooks(monkeypatch: pytest.MonkeyPa
 
     class _FakeStreaming:
         context_wrapper = RunContextWrapper(context=None)
+        interruptions: list[Any] = []
 
         def __aiter__(self) -> AsyncIterator[Any]:
             async def _events() -> AsyncIterator[Any]:

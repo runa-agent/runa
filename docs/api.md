@@ -151,5 +151,3 @@ signature-level reference.
 ::: runa.exceptions.ToolOutputGuardrailTripwireTriggered
 
 ::: runa.exceptions.DuplicateToolCallError
-
-::: runa.exceptions.ApprovalRequiredError

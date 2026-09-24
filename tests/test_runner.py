@@ -9,7 +9,6 @@ import pytest
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.exceptions import (
-    ApprovalRequiredError,
     DuplicateToolCallError,
     InputGuardrailTripwireTriggered,
     MaxTurnsExceeded,
@@ -985,12 +984,16 @@ def test_stream_response_feeds_back_malformed_tool_arguments() -> None:
     assert tool_outputs[0].item["content"].startswith("error: invalid JSON arguments")
 
 
-def test_stream_response_raises_approval_required_for_an_unresolved_needs_approval_tool() -> None:
-    """`run_streamed` can't pause for approval; it raises instead of silently bypassing the gate."""
+def test_stream_pauses_for_approval_and_resumes_streaming() -> None:
+    """A gated call ends the stream with `interruptions`; the resolved state streams onward."""
+    from runa.stream_events import RunItemStreamEvent
+
+    ran: list[str] = []
 
     @tool(needs_approval=True)
     def dangerous() -> str:
         """Needs approval."""
+        ran.append("dangerous")
         return "done"
 
     agent = _agent(
@@ -1002,18 +1005,28 @@ def test_stream_response_raises_approval_required_for_an_unresolved_needs_approv
                         tool_call_index=0, tool_call_id="call_1", tool_call_name="dangerous"
                     ),
                     StreamDelta(tool_call_index=0, tool_call_arguments="{}"),
-                ]
+                ],
+                [StreamDelta(text="all done")],
             ]
         ),
     )
 
-    async def collect() -> list[Any]:
-        return [
-            event async for event in Runner.run_streamed(agent, "do it", run_config=_run_config())
-        ]
+    paused = Runner.run_streamed(agent, "do it", run_config=_run_config())
+    _consume(paused)
 
-    with pytest.raises(ApprovalRequiredError):
-        asyncio.run(collect())
+    assert ran == []
+    assert paused.final_output is None
+    assert [item.name for item in paused.interruptions] == ["dangerous"]
+
+    state = paused.to_state()
+    state.approve(paused.interruptions[0])
+    resumed = Runner.run_streamed(agent, state, run_config=_run_config())
+    events = _consume(resumed)
+
+    assert ran == ["dangerous"]
+    assert resumed.final_output == "all done"
+    items = [(e.name, e.item.get("content")) for e in events if isinstance(e, RunItemStreamEvent)]
+    assert items == [("tool_output", "done"), ("message_output_created", "all done")]
 
 
 def test_stream_response_raises_duplicate_call_id_error_on_a_replayed_call_id() -> None:

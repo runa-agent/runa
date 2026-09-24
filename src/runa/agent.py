@@ -447,7 +447,7 @@ class Agent:
             yield event
         self.last_usage = result.context_wrapper.usage
         self.usage.add(self.last_usage)
-        if session is None:
+        if session is None and not result.interruptions:
             self.history = result.to_input_list()
 
     def run_sync(
