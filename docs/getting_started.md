@@ -429,7 +429,7 @@ runa eval
 ```
 
 ```
-GreeterAgent Evaluation
+greeter_agent Evaluation
 ────────────────────────────────
 
 Task completion      100%

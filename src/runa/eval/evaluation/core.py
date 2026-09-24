@@ -1,6 +1,6 @@
 """eval/evaluation/core.py: `Status` and `EvaluationResult`, the shape every check returns.
 
-Deterministic checks (`eval/evaluation/deterministic.py`) and DeepEval-backed
+Deterministic checks (`eval/evaluation/deterministic.py`) and judge-graded
 semantic metrics (`eval/evaluation/semantic.py`) return unrelated native
 shapes; every caller past this module deals only in `EvaluationResult`, so a
 `Report` can aggregate them without caring which kind produced them.

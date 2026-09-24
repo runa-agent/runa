@@ -86,9 +86,8 @@ async def evaluate_agent(
         *(_bounded(index, case) for index, case in enumerate(dataset))
     )
 
-    agent_name = type(agent).__name__
     report = Report(
-        agent_name=agent_name, cases=list(case_reports), baseline=load_baseline(agent_name)
+        agent_name=agent.name, cases=list(case_reports), baseline=load_baseline(agent.name)
     )
     save_report(report)
     return report

@@ -118,7 +118,7 @@ def test_run_project_evals_resolves_a_jsonl_dataset_s_agent_from_its_filename(
 
     reports = run_project_evals(project_dir, "support_agent")
 
-    assert [report.agent_name for report in reports] == ["SupportAgent"]
+    assert [report.agent_name for report in reports] == ["support_agent"]
     assert [case.case.input for case in reports[0].cases] == ["hi", "yo"]
 
 

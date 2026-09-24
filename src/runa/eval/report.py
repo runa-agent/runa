@@ -50,7 +50,7 @@ class CaseReport:
 
 @dataclass
 class Report:
-    """The aggregated result of `agent.evaluate(dataset)`."""
+    """The aggregated result of `agent.evaluate(dataset)`, under the agent's declared `name`."""
 
     agent_name: str
     cases: list[CaseReport]

@@ -395,7 +395,7 @@ class Agent:
     ) -> "Report":  # noqa: UP037 -- Report is TYPE_CHECKING-only, must stay quoted
         """Run every case in `dataset` through this agent and grade it: see `runa.eval`.
 
-        Deterministic checks and DeepEval-backed semantic metrics (task completion, answer
+        Deterministic checks and judge-graded semantic metrics (task completion, answer
         correctness/relevance, faithfulness, tool correctness) are chosen automatically per case
         based on what evidence it supplies; no metric configuration is required. `judge` overrides
         the model semantic metrics grade with, defaulting to this agent's own `model`. Up to
