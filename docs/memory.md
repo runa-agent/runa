@@ -59,7 +59,7 @@ instead, so restating the same fact across conversations doesn't pile up duplica
 
 `store=` swaps the default `SQLiteMemoryStore` for a custom one, without touching how embeddings
 work. For a deployment where multiple processes need to share one store, use
-`PostgresMemoryStore` (the `runa[postgres]` extra):
+`PostgresMemoryStore` (the `runa-ai[postgres]` extra):
 
 ```python
 from runa import Memory

@@ -9,6 +9,8 @@ A line is one turn; a triple-quote line opens a multi-line block that the next o
 so a pasted document or stack trace is sent as one message instead of one turn per line.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -182,7 +184,7 @@ def run_agent_repl(
         while True:
             try:
                 user_input = _read_message()
-            except EOFError, KeyboardInterrupt:
+            except (EOFError, KeyboardInterrupt):
                 print()
                 return
             if not user_input:

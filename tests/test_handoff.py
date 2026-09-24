@@ -1,7 +1,8 @@
 """Tests for `agent_as_tool`'s context-forking: sticky approvals, usage, and `context` sharing."""
 
-import asyncio
 from typing import Any
+
+from helpers import run as run_awaitable
 
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Agent
@@ -61,7 +62,7 @@ def test_agent_as_tool_forks_context_so_sticky_approvals_apply_to_the_delegate()
     ctx = RunContextWrapper(context=None)
     ctx.approval_ledger["dangerous"] = True
 
-    result = asyncio.run(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
+    result = run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
 
     assert result == "delegate done"
 
@@ -77,7 +78,7 @@ def test_agent_as_tool_merges_the_delegates_usage_into_the_callers_context() -> 
     ctx = RunContextWrapper(context=None)
     assert ctx.usage.total_tokens == 0
 
-    asyncio.run(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
+    run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
 
     assert ctx.usage.total_tokens == 2
 
@@ -103,6 +104,6 @@ def test_agent_as_tool_shares_the_same_context_object_with_the_delegate() -> Non
     tool_fn = agent_as_tool(Delegate(), None, None)
     ctx = RunContextWrapper(context=marker)
 
-    asyncio.run(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
+    run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
 
     assert seen == [marker]

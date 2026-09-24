@@ -7,8 +7,7 @@ Run it:
     uv run python examples/10_model/model_settings.py
 """
 
-from runa import Agent
-from runa._types import ModelSettings
+from runa import Agent, ModelSettings
 
 
 class SupportAgent(Agent):

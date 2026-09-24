@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from runa.eval.case import Case
@@ -27,7 +28,7 @@ def test_save_report_persists_a_run_and_its_cases(tmp_path: Path) -> None:
 
     run_id = save_report(report, db_path=db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         run_row = conn.execute(
             "SELECT agent_name, score, pass_rate FROM eval_runs WHERE id = ?", (run_id,)
         ).fetchone()
@@ -50,7 +51,7 @@ def test_save_report_handles_an_empty_dataset(tmp_path: Path) -> None:
 
     run_id = save_report(report, db_path=db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM eval_cases WHERE run_id = ?", (run_id,)
         ).fetchone()[0]
@@ -140,7 +141,7 @@ def test_save_report_links_each_case_to_its_run_s_trace(tmp_path: Path) -> None:
 def test_storage_adds_trace_id_to_an_older_runa_db(tmp_path: Path) -> None:
     """A `runa.db` whose `eval_cases` predates `trace_id` gets the column on next connect."""
     db_path = tmp_path / "runa.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             "CREATE TABLE eval_cases (run_id INTEGER NOT NULL, case_index INTEGER NOT NULL, "
             "input TEXT NOT NULL, output TEXT, passed INTEGER NOT NULL, "

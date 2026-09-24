@@ -53,7 +53,7 @@ lists, strings, numbers, booleans, `None`) can be cached.
 ## `RedisCache`: shared across processes
 
 For a deployment where multiple processes need to share one cache, use `RedisCache` (the
-`runa[redis]` extra):
+`runa-ai[redis]` extra):
 
 ```python
 from runa.db.redis import RedisCache

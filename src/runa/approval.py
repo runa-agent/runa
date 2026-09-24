@@ -1,5 +1,7 @@
 """`@approval` decorator that turns a plain predicate into a `needs_approval` callable."""
 
+from __future__ import annotations
+
 import inspect
 from collections.abc import Awaitable, Callable
 from typing import Any

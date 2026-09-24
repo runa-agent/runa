@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from helpers import run as run_awaitable
 
 from runa import memory as memory_module
 from runa._types import RunContextWrapper
@@ -201,7 +202,7 @@ def test_as_tool_with_no_matches_says_so(tmp_path: Path) -> None:
     mem = _memory(tmp_path)
     search_tool = mem._as_tool()
 
-    result = asyncio.run(
+    result = run_awaitable(
         search_tool.on_invoke_tool(
             RunContextWrapper(context=None), '{"query": "anything"}', "call_1"
         )

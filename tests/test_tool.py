@@ -1,10 +1,10 @@
 """Tests for the `@tool` decorator's `guardrails=` wiring."""
 
-import asyncio
 from collections.abc import Awaitable
 from typing import Any, cast
 
 import pytest
+from helpers import run as run_awaitable
 
 from runa import guardrail, tool
 from runa.guardrail import ToolGuardrailFunctionOutput, ToolInputGuardrail, ToolOutputGuardrail
@@ -16,7 +16,7 @@ def _run(
 ) -> ToolGuardrailFunctionOutput:
     """Call a wrapped tool guardrail's function directly, awaiting its always-async wrapper."""
     coro = cast(Awaitable[ToolGuardrailFunctionOutput], g.guardrail_function(data))
-    return asyncio.run(coro)
+    return run_awaitable(coro)
 
 
 def _tripped(output: ToolGuardrailFunctionOutput) -> bool:

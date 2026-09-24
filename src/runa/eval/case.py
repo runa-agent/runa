@@ -6,6 +6,8 @@ metrics apply. Adding `expected`, `expected_tool`, or `context` never
 requires touching an existing `Case`.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 

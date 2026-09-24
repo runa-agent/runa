@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from collections.abc import Coroutine
 from typing import Any
 
 import asyncpg
@@ -27,6 +29,38 @@ from runa.memory import MemoryMatch
 from runa.session import SessionABC
 
 DEFAULT_POSTGRES_DSN = "postgresql://runa:runa@localhost:5432/runa"
+
+_loop: asyncio.AbstractEventLoop | None = None
+_loop_lock = threading.Lock()
+
+
+def _background_loop() -> asyncio.AbstractEventLoop:
+    """A daemon event loop for the synchronous callers that still need `asyncpg`.
+
+    `TraceExporter.export` and the whole `runa traces`/`runa ui` read path are synchronous, and
+    a trace is exported from inside a finishing run, so `asyncio.run()` (which demands there be
+    no running loop) is not available. One long-lived loop on its own thread serves them all,
+    and `_get_pool`'s per-loop keying gives it its own pool, as it would any other loop.
+    """
+    global _loop
+    if _loop is not None and not _loop.is_closed():
+        return _loop
+    with _loop_lock:
+        if _loop is None or _loop.is_closed():
+            _loop = asyncio.new_event_loop()
+            threading.Thread(target=_loop.run_forever, name="runa-postgres", daemon=True).start()
+    return _loop
+
+
+def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
+    """Run `coro` on the background loop and wait for it, for a synchronous caller.
+
+    Safe to call from inside a running event loop (which `asyncio.run` is not): the work happens
+    on a different loop entirely, so it never tries to re-enter the caller's.
+    """
+    future = asyncio.run_coroutine_threadsafe(coro, _background_loop())
+    return future.result(timeout)
+
 
 _SESSIONS_TABLE = "agent_sessions"
 _MESSAGES_TABLE = "agent_messages"

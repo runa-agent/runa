@@ -71,7 +71,7 @@ custom store subclasses `SessionABC`'s four abstract methods (`get_items`, `add_
 `pop_item`, `clear_session`), nothing less.
 
 For a deployment where multiple processes need to share one store, use `PostgresSession` (the
-`runa[postgres]` extra):
+`runa-ai[postgres]` extra):
 
 ```python
 from runa.db.postgres import PostgresSession

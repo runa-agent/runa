@@ -65,10 +65,41 @@ runa traces errors         # most recent traces that errored
 runa traces show TRACE_ID  # one trace's full span tree
 ```
 
+## `runa serve`
+
+Serve this app's agents over HTTP. See [Deployment](deployment.md). Needs the `serve` extra
+(`uv add "runa-ai[serve]"`), not installed by a plain `runa-ai` install.
+
+```bash
+runa serve                              # http://127.0.0.1:8000, bearer auth
+runa serve --host 0.0.0.0 --port 8000   # reachable from outside a container
+runa serve --no-auth                    # local use, no token required
+runa serve --workers 4                  # uvicorn worker processes
+```
+
+Requires `RUNA_API_KEY` and refuses to start without it, unless `--no-auth` is passed. Routes:
+`GET /health` (unauthenticated), `GET /agents`, `POST /agents/{name}/runs` and
+`POST /agents/{name}/runs/stream`.
+
+## `runa prune`
+
+Delete traces, sessions and eval runs this app has outgrown. Everything Runa persists is
+append-only, so without this the database grows without bound. See
+[Deployment](deployment.md#retention).
+
+```bash
+runa prune                                # older than 30 days (the default)
+runa prune --older-than 90                # older than 90 days
+runa prune --older-than 30 --dry-run      # report what would go, delete nothing
+runa prune --older-than 30 --only traces  # one kind; repeatable
+```
+
+Prunes the shared Postgres when `RUNA_POSTGRES_DSN` is set, the local `db/runa.db` otherwise.
+
 ## `runa ui`
 
 Serve a local, read-only dashboard over `runa.db`: Agents, Sessions, Traces, and Evaluations.
-Needs the `ui` extra (`uv add "runa[ui]"`), not installed by a plain `runa` install.
+Needs the `ui` extra (`uv add "runa-ai[ui]"`), not installed by a plain `runa` install.
 
 ```bash
 runa ui                    # http://127.0.0.1:8765

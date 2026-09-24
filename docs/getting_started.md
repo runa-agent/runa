@@ -482,3 +482,61 @@ Trace GreeterAgent [4.53s] ✓
    ├─ Tool current_time [0.00s] ✓
    └─ LLM gpt-5.4-nano [1.50s] ✓
 ```
+## 12. Deploying to Production
+
+Your agent works. Putting it in front of users is one command: `runa serve` turns every agent
+under `app/agents/` into an HTTP endpoint.
+
+```bash
+uv add "runa-ai[serve]"
+export RUNA_API_KEY=$(openssl rand -hex 32)
+runa serve
+```
+
+```
+runa serve running at http://127.0.0.1:8000 (bearer auth)
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/agents/greeter_agent/runs \
+  -H "Authorization: Bearer $RUNA_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hi there"}'
+```
+
+```json
+{
+  "agent": "greeter_agent",
+  "status": "completed",
+  "output": "Hello, welcome!",
+  "error": null,
+  "trace_id": "2ebeef9a3d224da3bd3bb55eb0af747a",
+  "usage": {"input_tokens": 24, "output_tokens": 7, "total_tokens": 31, "requests": 1},
+  "interruptions": []
+}
+```
+
+Pass a `"session_id"` in the body to continue a conversation across requests, and
+`POST /agents/greeter_agent/runs/stream` for the same turn as server-sent events.
+
+The `Dockerfile` that `runa new` already created runs exactly this:
+
+```dockerfile
+CMD ["uv", "run", "runa", "serve", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Four things separate this from a real deployment, and each is one line:
+
+```python
+class GreeterAgent(Agent):
+    max_tokens = 50_000  # cap what one run may spend
+    timeout = 30.0       # cap how long one run may take
+```
+
+```bash
+export RUNA_POSTGRES_DSN=postgresql://...  # share state across replicas
+runa prune --older-than 30                 # on a schedule, so the database stays bounded
+```
+
+[Deployment](deployment.md) covers all of it, plus authentication, the one-agent-per-conversation
+rule, and keeping user content out of your logs.

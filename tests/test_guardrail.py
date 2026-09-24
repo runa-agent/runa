@@ -1,10 +1,10 @@
 """Tests for the `@guardrail` predicate wiring in `Agent`."""
 
-import asyncio
 from collections.abc import Awaitable
 from typing import Any, cast
 
 import pytest
+from helpers import run as run_awaitable
 
 from runa import Agent, guardrail
 from runa.guardrail import GuardrailFunctionOutput, InputGuardrail, OutputGuardrail
@@ -16,7 +16,7 @@ _AGENT = cast(Any, None)
 def _run(g: InputGuardrail[Any] | OutputGuardrail[Any], value: Any) -> GuardrailFunctionOutput:
     """Call a wrapped guardrail's function directly, awaiting its always-async wrapper."""
     coro = cast(Awaitable[GuardrailFunctionOutput], g.guardrail_function(_CTX, _AGENT, value))
-    return asyncio.run(coro)
+    return run_awaitable(coro)
 
 
 @guardrail

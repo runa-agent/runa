@@ -181,14 +181,21 @@ def _to_usage(usage: Any) -> Usage:
 class AnthropicModel:
     """Talks to Claude directly through the `anthropic` SDK's Messages API.
 
-    Retries (connection errors, 408/409/429/5xx, with backoff) are the SDK's own; a request that
-    still fails raises `ModelBehaviorError`, like the chat-completions backend.
+    Retries (connection errors, 408/409/429/5xx, with backoff) are the SDK's own, capped at
+    `ModelSettings.max_retries` so both backends take the same knob; a request that still fails
+    raises `ModelBehaviorError`, like the chat-completions backend.
     """
 
     def __init__(self, model: str, client: AsyncAnthropic) -> None:
         """Store the model name and the shared Anthropic client to call it through."""
         self.model = model
         self._client = client
+
+    def _messages(self, model_settings: ModelSettings) -> Any:
+        """The client's `messages` resource, with `ModelSettings.max_retries` applied if set."""
+        if model_settings.max_retries is None:
+            return self._client.messages
+        return self._client.with_options(max_retries=max(0, model_settings.max_retries)).messages
 
     def _request(
         self,
@@ -244,7 +251,7 @@ class AnthropicModel:
             system_instructions, input, model_settings, tools, output_schema, handoffs
         )
         try:
-            response = await self._client.messages.create(**request)
+            response = await self._messages(model_settings).create(**request)
         except APIError as exc:
             raise ModelBehaviorError(f"model request failed: {exc}") from exc
 
@@ -266,7 +273,7 @@ class AnthropicModel:
             system_instructions, input, model_settings, tools, output_schema, handoffs
         )
         try:
-            raw_stream = await self._client.messages.create(stream=True, **request)
+            raw_stream = await self._messages(model_settings).create(stream=True, **request)
             async for delta in _anthropic_deltas(raw_stream):
                 yield delta
         except APIError as exc:

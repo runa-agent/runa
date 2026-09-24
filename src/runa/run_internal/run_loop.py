@@ -13,13 +13,15 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Any
 
-from runa._types import RunContextWrapper, TResponseInputItem
+from runa._types import RunContextWrapper, TResponseInputItem, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import (
+    MaxTokensExceeded,
     MaxTurnsExceeded,
     ModelBehaviorError,
     RunaError,
     RunErrorDetails,
+    RunTimeout,
 )
 from runa.guardrail import guardrail_results
 from runa.lifecycle import LoggingRunHooks, RunHooks, logger
@@ -159,6 +161,23 @@ def _ignore(_event: Any) -> None:
     """The `emit` of a non-streamed run: events go nowhere."""
 
 
+def _spent(usage: Usage) -> int:
+    """Total tokens `usage` represents, falling back to input+output if `total_tokens` is unset.
+
+    Not every provider reports a total; the two components are always there.
+    """
+    return usage.total_tokens or (usage.input_tokens + usage.output_tokens)
+
+
+def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
+    """Raise `MaxTokensExceeded` once this run has spent more than `max_tokens`."""
+    if max_tokens is None:
+        return
+    spent = _spent(usage)
+    if spent > max_tokens:
+        raise MaxTokensExceeded(f"max tokens ({max_tokens}) exceeded: {spent} used")
+
+
 async def _run_turns(
     current_agent: Any,
     items: list[TResponseInputItem],
@@ -227,6 +246,7 @@ async def _run_turns(
         else:
             response = await _stream_response(model, request, emit)
         context_wrapper.usage.add(response.usage)
+        _check_token_budget(context_wrapper.usage, run_config.max_tokens)
         _close_span(llm_span, output={"usage": response.usage.__dict__})
         await hooks.on_llm_end(context_wrapper, current_agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
@@ -281,10 +301,26 @@ class _Run:
     generated: list[TResponseInputItem]
 
 
-async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
-    """Await `turns`; on a `RunaError`, close the trace and attach what the run had so far."""
+async def _guarded(
+    run: _Run, turns: Awaitable[_TurnOutcome], timeout: float | None = None
+) -> _TurnOutcome:
+    """Await `turns`; on a `RunaError`, close the trace and attach what the run had so far.
+
+    `timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding it is
+    translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
+    span, exports its partial trace, and comes back as `Run(status="error")` rather than leaving
+    a half-finished trace behind. `asyncio.CancelledError` is deliberately not caught: a caller
+    that cancels a run (a dropped HTTP connection, a shutting-down worker) wants it to stop, not
+    to be turned into an error result.
+    """
     try:
-        return await turns
+        if timeout is None:
+            return await turns
+        try:
+            async with asyncio.timeout(timeout):
+                return await turns
+        except TimeoutError as exc:
+            raise RunTimeout(f"run timed out after {timeout}s") from exc
     except RunaError as exc:
         _close_span(run.span, error=str(exc))
         run.trace.end_time = time.time()
@@ -484,7 +520,7 @@ async def _run_async(
         )
 
     await hooks.on_agent_start(context_wrapper, agent)
-    outcome = await _guarded(run, turns())
+    outcome = await _guarded(run, turns(), run_config.timeout)
     return await _finish(run, outcome, hooks, run_config)
 
 
@@ -526,7 +562,7 @@ async def _resume(
             state.ready_results,
         ),
     )
-    outcome = await _guarded(run, turns)
+    outcome = await _guarded(run, turns, run_config.timeout)
     return await _finish(run, outcome, hooks, run_config)
 
 

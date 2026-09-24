@@ -13,8 +13,7 @@ Run it:
 
 import asyncio
 
-from runa import Agent
-from runa._types import TResponseInputItem
+from runa import Agent, TResponseInputItem
 from runa.session import SessionABC
 
 

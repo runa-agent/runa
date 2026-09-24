@@ -2,6 +2,12 @@
 
 For a structured, persisted, queryable record of a run instead, see `runa.tracing`. That runs
 unconditionally regardless of `hooks`; this module is just console/log lines while a run happens.
+
+These hooks are the default, so they log to whatever handler the application configured. At INFO
+they name what happened and never carry content: an agent's answer and a tool's result are user
+data, and a production app running at INFO should not be writing them to stdout. Content is logged
+at DEBUG only, and even there it goes through `runa.tracing`'s redact/truncate policy, so
+`observe(redact=[...])` and `observe(capture_outputs=False)` govern these lines too.
 """
 
 from __future__ import annotations
@@ -20,6 +26,37 @@ __all__ = [
     "LoggingRunHooks",
     "RunHooks",
 ]
+
+
+def _content(value: Any, *, limit: int | None = None) -> str:
+    """Render `value` for a DEBUG log line under `runa.tracing`'s active privacy policy.
+
+    Imported lazily: `runa.tracing.manual` reaches back into this module for `logger`, so a
+    top-level import here would close the cycle.
+    """
+    from runa.tracing.config import apply_policy, output_limit
+
+    return repr(apply_policy(value, max_bytes=limit if limit is not None else output_limit()))
+
+
+def _log_output(label: str, name: str, value: Any) -> None:
+    """Log one completed step: its name at INFO, its output at DEBUG if the policy allows."""
+    from runa.tracing.config import capture_outputs, output_limit
+
+    logger.info("%s end: %s", label, name)
+    if capture_outputs() and logger.isEnabledFor(logging.DEBUG):
+        logger.debug("%s output: %s -> %s", label, name, _content(value, limit=output_limit()))
+
+
+def _log_tool_output(agent_name: str, tool_name: str, result: object) -> None:
+    """Log a finished tool call: names at INFO, the result at DEBUG if the policy allows."""
+    from runa.tracing.config import capture_outputs, tool_result_limit
+
+    logger.info("tool end: %s (%s)", tool_name, agent_name)
+    if capture_outputs() and logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "tool output: %s -> %s", tool_name, _content(result, limit=tool_result_limit())
+        )
 
 
 class RunHooks[TContext]:
@@ -122,8 +159,8 @@ class LoggingRunHooks(RunHooks[Any]):
         logger.info("agent start: %s", agent.name)
 
     async def on_agent_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
-        """Log the final output `agent` produced."""
-        logger.info("agent end: %s -> %r", agent.name, output)
+        """Log that `agent` finished; its output only at DEBUG, under the tracing policy."""
+        _log_output("agent", agent.name, output)
 
     async def on_handoff(
         self, context: RunContextWrapper[Any], from_agent: Any, to_agent: Any
@@ -140,8 +177,8 @@ class LoggingRunHooks(RunHooks[Any]):
     async def on_tool_end(
         self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool, result: object
     ) -> None:
-        """Log the result `tool` returned."""
-        logger.info("tool end: %s -> %r", tool.name, result)
+        """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
+        _log_tool_output(agent.name, tool.name, result)
 
     async def on_llm_start(
         self,
@@ -170,8 +207,8 @@ class LoggingAgentHooks(AgentHooks[Any]):
         logger.info("agent start: %s", agent.name)
 
     async def on_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
-        """Log the final output `agent` produced."""
-        logger.info("agent end: %s -> %r", agent.name, output)
+        """Log that `agent` finished; its output only at DEBUG, under the tracing policy."""
+        _log_output("agent", agent.name, output)
 
     async def on_handoff(self, context: RunContextWrapper[Any], agent: Any, source: Any) -> None:
         """Log that `source` handed off to `agent`."""
@@ -186,8 +223,8 @@ class LoggingAgentHooks(AgentHooks[Any]):
     async def on_tool_end(
         self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool, result: object
     ) -> None:
-        """Log the result `tool` returned."""
-        logger.info("tool end: %s -> %r", tool.name, result)
+        """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
+        _log_tool_output(agent.name, tool.name, result)
 
     async def on_llm_start(
         self,

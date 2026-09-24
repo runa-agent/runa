@@ -29,17 +29,28 @@ backend. Anthropic's Messages API is shaped differently and gets its own.
 
 ## Model Settings
 
-Tune sampling per agent with `model_settings`. `ModelSettings` currently lives at
-`runa._types`, not yet re-exported from `runa` itself:
+Tune sampling per agent with `model_settings`:
 
 ```python
-from runa import Agent
-from runa._types import ModelSettings
+from runa import Agent, ModelSettings
 
 
 class SupportAgent(Agent):
     name = "support_agent"
     model_settings = ModelSettings(temperature=0.2, max_tokens=500)
+```
+
+`max_tokens` here caps the length of one response. To cap what a whole run may spend, use
+`Agent.max_tokens`; see [Bounding a run](agents.md#bounding-a-run).
+
+## Retries
+
+Both backends retry connection errors and `408`/`409`/`429`/`5xx` twice, with jittered backoff
+and honoring a `retry-after` header. Tune it per agent, or turn it off:
+
+```python
+class SupportAgent(Agent):
+    model_settings = ModelSettings(max_retries=5)  # 0 disables retrying outright
 ```
 
 ## Images

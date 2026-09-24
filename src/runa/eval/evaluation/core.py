@@ -6,6 +6,8 @@ shapes; every caller past this module deals only in `EvaluationResult`, so a
 `Report` can aggregate them without caring which kind produced them.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import StrEnum
 

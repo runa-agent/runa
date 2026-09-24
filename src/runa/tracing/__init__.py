@@ -6,6 +6,8 @@ builds and exports a `Trace` for every run itself, with no separate registration
 `span` and `observe` are the advanced, optional API described in the design.
 """
 
+from __future__ import annotations
+
 from runa.tracing.config import (
     ConsoleExporter,
     SQLiteExporter,

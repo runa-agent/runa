@@ -5,6 +5,8 @@ via `agent.evaluate(dataset, threshold=...)` (applies to every metric) or
 `thresholds={...}` (applies to just the named ones).
 """
 
+from __future__ import annotations
+
 DEFAULT_THRESHOLDS: dict[str, float] = {
     "task_completion": 0.90,
     "answer_correctness": 0.85,

@@ -5,6 +5,8 @@ whether input/output are kept at all; `redact`/`redactor` scrub what's kept; the
 limits truncate what's left. `RunaTraceProcessor` (`tracing/processor.py`) is the only caller.
 """
 
+from __future__ import annotations
+
 import json
 import os
 from collections.abc import Callable
@@ -48,7 +50,11 @@ class ConsoleExporter:
 
 
 def _default_exporters() -> list[TraceExporter]:
-    """`SQLiteExporter`, plus `LangfuseExporter` if its credentials are already in the env.
+    """The local store, plus `LangfuseExporter` if its credentials are already in the env.
+
+    The local store is `PostgresExporter` when `RUNA_POSTGRES_DSN` is set and `SQLiteExporter`
+    otherwise. Naming the exporter that is actually in use, rather than letting `SQLiteExporter`
+    quietly write somewhere that is not SQLite, keeps `observe()` honest about where traces go.
 
     Checking `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` here (rather than requiring an explicit
     `add_exporter(LangfuseExporter())` call) is what lets a Langfuse project just work the moment
@@ -57,7 +63,7 @@ def _default_exporters() -> list[TraceExporter]:
     case for most apps even with those env vars unset; silently skipping it here, rather than
     raising, keeps that normal.
     """
-    exporters: list[TraceExporter] = [SQLiteExporter()]
+    exporters: list[TraceExporter] = [_local_exporter()]
     if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
         try:
             from runa.tracing.langfuse import LangfuseExporter
@@ -66,6 +72,25 @@ def _default_exporters() -> list[TraceExporter]:
         else:
             exporters.append(LangfuseExporter())
     return exporters
+
+
+def _local_exporter() -> TraceExporter:
+    """`PostgresExporter` when this deployment shares a database, `SQLiteExporter` otherwise.
+
+    Falls back to SQLite if the `postgres` extra isn't installed: a missing optional dependency
+    should not cost an app its trace history, and the import error would surface on the very
+    next session/memory call anyway.
+    """
+    from runa.db import shared_dsn
+
+    dsn = shared_dsn()
+    if dsn is None:
+        return SQLiteExporter()
+    try:
+        from runa.tracing.postgres import PostgresExporter
+    except ImportError:
+        return SQLiteExporter()
+    return PostgresExporter(dsn)
 
 
 @dataclass
@@ -109,7 +134,7 @@ def apply_policy(value: Any, *, max_bytes: int) -> Any:
     if isinstance(value, dict | list):
         try:
             value = json.loads(_truncate(json.dumps(value, default=str), max_bytes))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             value = _truncate(str(value), max_bytes)
     elif isinstance(value, str):
         value = _truncate(value, max_bytes)

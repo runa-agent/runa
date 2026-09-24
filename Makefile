@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test check docs hello tour ui-demo examples clean changelog
+.PHONY: install format lint typecheck test coverage audit check docs hello tour ui-demo examples clean changelog
 
 install:
 	uv sync
@@ -17,6 +17,16 @@ typecheck:
 
 test:
 	uv run pytest
+
+coverage:
+	uv run pytest --cov=runa --cov-report=term-missing
+
+# Audits the resolved lockfile rather than the declared ranges, so it reports what a user
+# actually installs. CI runs pypa/gh-action-pip-audit over the same export; this target is the
+# local equivalent, and needs a working `ensurepip` since pip-audit builds its own environment.
+audit:
+	uv export --format requirements-txt --no-emit-project --all-extras --quiet \
+		| uv tool run pip-audit -r /dev/stdin
 
 check:
 	$(MAKE) format

@@ -29,11 +29,67 @@ class SupportAgent(Agent):
 | `knowledge` | `None` | Retrieval from application documents. See [Knowledge](knowledge.md). |
 | `output_type` | `None` | A dataclass, Pydantic model or `TypedDict` the final output is parsed into. |
 | `max_turns` | `10` | How many model calls one run may make before it errors. |
+| `max_tokens` | `None` | Total tokens one run may spend. See [Bounding a run](#bounding-a-run). |
+| `timeout` | `None` | Wall-clock seconds one run may take. See [Bounding a run](#bounding-a-run). |
 | `hooks` | `None` | An `AgentHooks` instance scoped to this agent. See [Tracing and Hooks](tracing.md). |
 | `compact` | `False` | Keep long-running history from growing without bound. See below. |
 
 `name` is the only required attribute. Everything else has a sane default, in the spirit of
 convention over configuration.
+
+## Bounding a Run
+
+Three independent ceilings, each optional, each ending the run as `Run(status="error")` rather
+than raising:
+
+```python
+class SupportAgent(Agent):
+    max_turns = 10       # model calls
+    max_tokens = 50_000  # total tokens this run may spend
+    timeout = 30.0       # wall-clock seconds
+```
+
+`max_turns` bounds how often a run calls the model. `max_tokens` bounds what those calls cost,
+which a turn limit alone cannot: ten calls over a long conversation can cost far more than ten
+over a short one. `timeout` bounds elapsed time, which neither of the others can, and is the only
+one that helps when a tool or a provider hangs.
+
+`max_tokens` here is the run's whole budget, and is a different knob from
+`ModelSettings(max_tokens=...)`, which caps the length of a single response:
+
+```python
+class SupportAgent(Agent):
+    max_tokens = 50_000                            # the run may spend this many, in total
+    model_settings = ModelSettings(max_tokens=512)  # any one reply is at most this long
+```
+
+Cancelling a run propagates `CancelledError` rather than becoming an error result: a caller that
+cancels (a dropped HTTP connection, a worker shutting down) wants the run to stop, not to be
+handed a verdict.
+
+## One Agent, One Conversation at a Time
+
+An `Agent` instance holds the conversation it is running, in `self.history`. Two overlapping runs
+on one instance would read the same history and race to write it back, so Runa refuses instead of
+losing one conversation into the other:
+
+```python
+agent = SupportAgent()
+await asyncio.gather(agent.run("one"), agent.run("two"))  # UserError
+```
+
+Give each run its own `session`, or its own `Agent`:
+
+```python
+await asyncio.gather(
+    agent.run("one", session=SQLiteSession("conv-a")),
+    agent.run("two", session=SQLiteSession("conv-b")),
+)
+```
+
+Sequential runs on one instance are the normal conversational loop and are unaffected. Under a
+web server, build the agent inside the request handler; [`runa serve`](deployment.md) already
+does. See [Deployment](deployment.md#one-agent-instance-one-conversation).
 
 ## Instructions as a Function
 

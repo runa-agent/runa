@@ -6,6 +6,8 @@ requiring a separate client or API key. `extract_json()` pulls a JSON object out
 reply, tolerating the odd trailing comma a model sometimes emits.
 """
 
+from __future__ import annotations
+
 import json
 import re
 from dataclasses import dataclass

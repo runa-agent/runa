@@ -36,6 +36,13 @@ they come back as `status="error"`. Two more class attributes cover what a run n
 * `output_type`: a dataclass, Pydantic model or `TypedDict` the final answer is parsed into.
   The model is asked for that JSON schema (on every provider) and a mismatch is an error `Run`.
 * `max_turns` (default 10): how many model calls one run may make.
+* `max_tokens` (default `None`): how many tokens those calls may spend, in total. Not the same
+  knob as `ModelSettings(max_tokens=...)`, which caps one response's length.
+* `timeout` (default `None`): how many wall-clock seconds one run may take.
+
+**One instance runs one conversation at a time.** An `Agent` holds `self.history`, so two
+overlapping session-less runs on the same instance raise `UserError` rather than interleaving.
+Pass a `session` per run, or use an `Agent` per run. Enforced in code.
 
 ## 2. Tool
 

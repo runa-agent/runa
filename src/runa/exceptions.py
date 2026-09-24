@@ -58,6 +58,35 @@ class MaxTurnsExceeded(RunaError):
         super().__init__(message)
 
 
+class MaxTokensExceeded(RunaError):
+    """Raised when a run's accumulated token usage passes `Agent.max_tokens`.
+
+    The spend ceiling to `MaxTurnsExceeded`'s call ceiling: `max_turns` bounds how many times a
+    run may call the model, this bounds how much those calls may cost. Checked after each model
+    call, so the run stops at the first call that crosses the line rather than before it.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Store `message` as both the exception's args and its `.message`."""
+        self.message = message
+        super().__init__(message)
+
+
+class RunTimeout(RunaError):
+    """Raised when a run passes `Agent.timeout` seconds without finishing.
+
+    The wall-clock ceiling `max_turns`/`max_tokens` can't give: a single tool call or model
+    response that hangs would otherwise stall a run indefinitely. Like every `RunaError` this
+    comes back as `Run(status="error")` rather than propagating, and the partial trace is still
+    exported, so a timed-out run is as inspectable as a failed one.
+    """
+
+    def __init__(self, message: str) -> None:
+        """Store `message` as both the exception's args and its `.message`."""
+        self.message = message
+        super().__init__(message)
+
+
 class ModelBehaviorError(RunaError):
     """Raised when the model does something a `Model` implementation can't make sense of.
 
@@ -138,10 +167,12 @@ class DuplicateToolCallError(RunaError):
 __all__ = [
     "DuplicateToolCallError",
     "InputGuardrailTripwireTriggered",
+    "MaxTokensExceeded",
     "MaxTurnsExceeded",
     "ModelBehaviorError",
     "OutputGuardrailTripwireTriggered",
     "RunErrorDetails",
+    "RunTimeout",
     "RunaError",
     "ToolInputGuardrailTripwireTriggered",
     "ToolOutputGuardrailTripwireTriggered",

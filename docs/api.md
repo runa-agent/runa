@@ -70,11 +70,41 @@ signature-level reference.
 
 ::: runa.RunStream
 
-::: runa._types.ModelSettings
+::: runa.ModelSettings
+
+::: runa.Reasoning
+
+::: runa.Usage
 
 ::: runa.RunState
 
 ::: runa.Interruption
+
+## Exceptions
+
+::: runa.exceptions.RunaError
+
+::: runa.exceptions.MaxTurnsExceeded
+
+::: runa.exceptions.MaxTokensExceeded
+
+::: runa.exceptions.RunTimeout
+
+::: runa.exceptions.ModelBehaviorError
+
+::: runa.exceptions.UserError
+
+## Serving
+
+::: runa.serve.create_app
+
+::: runa.serve.RunRequest
+
+## Retention
+
+::: runa.db.prune.prune
+
+::: runa.db.prune.Pruned
 
 ## Hooks
 

@@ -8,6 +8,8 @@ thread-local connections, WAL mode, and cross-process file locking a multi-proce
 store would need.
 """
 
+from __future__ import annotations
+
 import json
 import sqlite3
 from abc import ABC, abstractmethod

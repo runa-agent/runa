@@ -75,7 +75,7 @@ Write your own by implementing `TraceExporter`'s single method, `export(self, tr
 
 ### Langfuse
 
-Install the `runa[langfuse]` extra and set `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (a `.env`
+Install the `runa-ai[langfuse]` extra and set `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (a `.env`
 file works, same as `OPENAI_API_KEY` and friends), and every trace starts going to that Langfuse
 project too, `runa.db` included -- no code change:
 
@@ -119,6 +119,45 @@ More in [`examples/14_tracing/`](https://github.com/Benybrahim/runa/tree/main/ex
 
 Every trace above -- SQLite, Langfuse, or a custom exporter -- is also browsable visually with
 `runa ui`. See [CLI Reference](cli.md#runa-ui).
+
+## Traces Across Replicas
+
+The default exporter writes to this process's `db/runa.db`, which is per-process by design. Three
+replicas keep three disjoint histories and a dashboard that shows one of them. Set one variable
+and traces (along with sessions, memory, knowledge and eval history) go to a shared Postgres:
+
+```bash
+uv add "runa-ai[postgres]"
+export RUNA_POSTGRES_DSN=postgresql://user:password@host:5432/runa
+```
+
+No code changes: `list_traces(...)`, `runa traces`, `runa ui` and the exporter all follow that
+variable, so a trace written by one replica is readable from any of them.
+
+## Retention
+
+Traces and spans are append-only, so a long-lived deployment's database grows until the disk
+does. `runa prune` is the retention pass:
+
+```bash
+runa prune --older-than 30 --dry-run   # what would go
+runa prune --older-than 30             # traces, sessions and eval runs older than 30 days
+```
+
+There is no background thread doing this on its own, on purpose: when to delete your data is your
+decision, not the framework's. See [Deployment](deployment.md#retention).
+
+## Logs and the Privacy Policy
+
+The privacy policy above governs the default log output too, not just spans. `LoggingRunHooks`
+(the default `hooks`) logs at INFO without ever carrying content: an agent's answer and a tool's
+result are user data, and a production app running at INFO should not be writing them to stdout.
+Content is logged at DEBUG only, and passes through the same `redact`/`redactor`/`capture_outputs`
+settings on its way:
+
+```python
+observe(capture_outputs=False)  # no outputs in traces, and none in the DEBUG log lines either
+```
 
 ## Hooks
 

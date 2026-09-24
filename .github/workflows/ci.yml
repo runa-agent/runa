@@ -11,8 +11,15 @@ permissions:
 
 jobs:
   check:
-    name: Check
+    name: Check (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Runa supports 3.12+. The floor and the ceiling both run: the floor is where an
+        # eagerly-evaluated annotation breaks, the ceiling is where most contributors develop.
+        python-version: ["3.12", "3.13", "3.14"]
 
     # test_postgres.py/test_redis.py skip themselves if these aren't reachable, but CI always
     # has them, so those suites run for real instead of just against SQLite's sqlite-vec.
@@ -48,9 +55,36 @@ jobs:
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: make install
 
       - name: Run checks
         run: make check
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Audits the resolved lockfile rather than the declared ranges, so it reports what a user
+      # actually installs, transitive dependencies included.
+      - name: Export the resolved lockfile
+        run: uv export --format requirements-txt --no-emit-project --all-extras -o requirements.txt
+
+      # Advisory-only: a fresh CVE in a transitive dependency should surface on the PR, not block
+      # an unrelated change from merging.
+      - name: Audit dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        continue-on-error: true
+        with:
+          inputs: requirements.txt

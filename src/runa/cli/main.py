@@ -7,6 +7,8 @@ touch it, but only by calling existing library functions
 the app in `cwd`; no logic lives here that doesn't already exist elsewhere.
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -37,6 +39,8 @@ from runa.cli.generate import (
     split_tool_name,
 )
 from runa.cli.new import ProjectAlreadyExists, scaffold_project
+from runa.cli.prune import prune_cli
+from runa.cli.serve import MissingAPIKey, serve_agents
 from runa.cli.sessions import SessionNotFound, list_sessions, show_session
 from runa.cli.test import run_project_tests
 from runa.cli.traces import TraceNotFound, list_errors_cli, list_traces_cli, show_trace
@@ -50,7 +54,7 @@ def _split_names(value: str | None) -> list[str]:
 
 def _runa_version() -> str:
     try:
-        return version("runa")
+        return version("runa-ai")
     except PackageNotFoundError:
         return "unknown"
 
@@ -172,6 +176,43 @@ def _build_parser() -> argparse.ArgumentParser:
     traces_show_parser = traces_subparsers.add_parser("show", help="Show a trace's span tree")
     traces_show_parser.add_argument("trace_id")
 
+    prune_parser = subparsers.add_parser(
+        "prune", help="Delete traces, sessions and eval runs this app has outgrown"
+    )
+    prune_parser.add_argument(
+        "--older-than",
+        type=int,
+        default=30,
+        metavar="DAYS",
+        help="delete anything older than this many days (default: 30)",
+    )
+    prune_parser.add_argument(
+        "--only",
+        choices=["traces", "sessions", "evals"],
+        action="append",
+        default=None,
+        help="limit to one kind; repeatable. Default: all three",
+    )
+    prune_parser.add_argument(
+        "--dry-run", action="store_true", help="report what would go, without deleting it"
+    )
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="Serve this app's agents over HTTP (needs the `serve` extra)"
+    )
+    serve_parser.add_argument(
+        "--host", default="127.0.0.1", help="use 0.0.0.0 in a container (default: 127.0.0.1)"
+    )
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--no-auth",
+        action="store_true",
+        help="serve without a bearer token; otherwise RUNA_API_KEY is required",
+    )
+    serve_parser.add_argument(
+        "--workers", type=int, default=1, help="uvicorn worker processes (default: 1)"
+    )
+
     ui_parser = subparsers.add_parser(
         "ui", help="Serve a local dashboard over this app's db/runa.db (needs the `ui` extra)"
     )
@@ -216,6 +257,7 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
         CaseAlreadyInEvals,
         TraceHasNoInput,
         TraceNotFound,
+        MissingAPIKey,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -360,6 +402,27 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         failed = sum(1 for result in results if not result.passed)
         print(f"\n{len(results) - failed}/{len(results)} passed")
         return 1 if failed else 0
+
+    if args.command == "prune":
+        print(
+            prune_cli(
+                root=cwd,
+                older_than_days=args.older_than,
+                kinds=tuple(args.only) if args.only else ("traces", "sessions", "evals"),
+                dry_run=args.dry_run,
+            )
+        )
+        return 0
+
+    if args.command == "serve":
+        serve_agents(
+            cwd,
+            host=args.host,
+            port=args.port,
+            no_auth=args.no_auth,
+            workers=args.workers,
+        )
+        return 0
 
     if args.command == "ui":
         serve_ui(cwd, host=args.host, port=args.port)

@@ -4,6 +4,8 @@ Run before any semantic metric (see `eval/evaluate.py`): cheaper, and a
 model call can't answer these more reliably than plain code can.
 """
 
+from __future__ import annotations
+
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.tracing.adapter import AgentRun

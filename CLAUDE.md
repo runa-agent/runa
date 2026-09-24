@@ -22,7 +22,7 @@ Conventions: [Runa.md](./RUNA.md)
 - Let types speak for themselves.
 - Let docstrings explain what types cannot.
 - Code that does not pass Test is not done.
-- Python 3.14, managed with `uv`.
+- Python 3.12+ (3.12/3.13/3.14 in CI), managed with `uv`.
 - Give oneliner commit message: `feat`, `fix`, `docs`, `refactor`, `test`
 - Lint rules: `E`, `F`, `I`, `B`, `SIM`, `UP`, `D`
 

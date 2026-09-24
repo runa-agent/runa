@@ -18,6 +18,8 @@ Split by concern: `interface` (the `Model` protocol, `StreamDelta`, shared wire-
 `multi_provider` (`ModelProvider`, routing a model name to one of the two).
 """
 
+from __future__ import annotations
+
 from runa._models.anthropic import AnthropicModel
 from runa._models.anthropic import _anthropic_deltas as _anthropic_deltas
 from runa._models.anthropic import _to_anthropic_content as _to_anthropic_content

@@ -5,6 +5,8 @@ storage are all implementation details behind `evaluate_agent()`; see
 `eval/evaluation/`, `eval/judge.py`, and `eval/storage.py`.
 """
 
+from __future__ import annotations
+
 from runa.eval.case import Case
 from runa.eval.dataset import Dataset
 from runa.eval.evaluate import evaluate_agent

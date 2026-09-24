@@ -5,6 +5,8 @@ Data comes from `runa.cli.sessions` (`session_rows`/`session_messages`) and `run
 showing messages and traces as two separate lists a reader has to cross-reference by hand.
 """
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from pathlib import Path
 

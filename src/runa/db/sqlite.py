@@ -6,6 +6,8 @@ parent `db/`, which `sqlite3.connect` won't create on its own) gets created lazi
 which module writes to it first.
 """
 
+from __future__ import annotations
+
 import sqlite3
 import struct
 from pathlib import Path

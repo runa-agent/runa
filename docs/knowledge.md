@@ -62,7 +62,7 @@ leaves stale chunks behind.
 ## A Different Store
 
 `store=` swaps the default `SQLiteKnowledgeStore` for a custom one. For a deployment where
-multiple processes need to share one store, use `PostgresKnowledgeStore` (the `runa[postgres]`
+multiple processes need to share one store, use `PostgresKnowledgeStore` (the `runa-ai[postgres]`
 extra):
 
 ```python

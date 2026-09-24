@@ -3,6 +3,8 @@
 All data comes from `runa.cli.agents.list_agents`; this module only turns `AgentInfo`s into HTML.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from runa.cli.agents import AgentInfo, list_agents

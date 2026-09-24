@@ -6,6 +6,8 @@ retrieval, a handoff, a delegate call, or a guardrail check are all just a `Span
 `type` and whatever `attributes`/`input`/`output` that kind of operation actually produced.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Literal
 

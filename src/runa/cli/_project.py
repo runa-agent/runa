@@ -6,6 +6,8 @@ would) before they can do anything; factored out so no command duplicates
 the sys.path / sys.modules bookkeeping.
 """
 
+from __future__ import annotations
+
 import importlib
 import inspect
 import sys

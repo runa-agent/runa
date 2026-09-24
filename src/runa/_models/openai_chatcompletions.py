@@ -25,7 +25,7 @@ from runa._types import (
 from runa.exceptions import ModelBehaviorError
 
 _CHAT_COMPLETIONS_PATH = "chat/completions"
-_MAX_RETRIES = 2  # the same default as the `anthropic` SDK's, so both backends behave alike
+DEFAULT_MAX_RETRIES = 2  # the same default as the `anthropic` SDK's, so both backends agree
 _MAX_BACKOFF = 8.0
 
 
@@ -43,14 +43,18 @@ def _backoff(attempt: int, retry_after: str | None = None) -> float:
     return min(0.5 * 2**attempt, _MAX_BACKOFF) * random.uniform(0.75, 1.0)
 
 
-async def _with_retries(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+async def _with_retries(
+    send: Callable[[], Awaitable[httpx.Response]], max_retries: int | None = None
+) -> httpx.Response:
     """`send()` until it succeeds, retrying connection errors and 408/409/429/5xx with backoff.
 
-    Whatever still fails after `_MAX_RETRIES` raises `ModelBehaviorError`.
+    `max_retries` is `ModelSettings.max_retries`: `None` means `DEFAULT_MAX_RETRIES`, and `0`
+    disables retrying. Whatever still fails after the last attempt raises `ModelBehaviorError`.
     """
+    retries = DEFAULT_MAX_RETRIES if max_retries is None else max(0, max_retries)
     attempt = 0
     while True:
-        last = attempt == _MAX_RETRIES
+        last = attempt == retries
         try:
             response = await send()
         except httpx.TransportError as exc:
@@ -179,7 +183,8 @@ class OpenAICompatibleModel:
             system_instructions, input, model_settings, tools, output_schema, handoffs
         )
         response = await _with_retries(
-            lambda: self._client.post(_CHAT_COMPLETIONS_PATH, json=request)
+            lambda: self._client.post(_CHAT_COMPLETIONS_PATH, json=request),
+            model_settings.max_retries,
         )
         _raise_for_status(response.status_code, response.text)
         data = response.json()
@@ -210,7 +215,9 @@ class OpenAICompatibleModel:
             "stream_options": {"include_usage": True},
         }
         http_request = self._client.build_request("POST", _CHAT_COMPLETIONS_PATH, json=request)
-        response = await _with_retries(lambda: self._client.send(http_request, stream=True))
+        response = await _with_retries(
+            lambda: self._client.send(http_request, stream=True), model_settings.max_retries
+        )
         try:
             if response.status_code >= 400:
                 body = await response.aread()

@@ -72,10 +72,13 @@ nav:
   - Evaluation:
       - Evaluation: evaluation.md
   - Observability: tracing.md
+  - Deployment:
+      - Deployment: deployment.md
   - Reference:
       - Model Providers: models.md
       - CLI Reference: cli.md
       - API Reference: api.md
+      - Versioning and Stability: versioning.md
 
 markdown_extensions:
   - toc:

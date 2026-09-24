@@ -4,6 +4,8 @@ Thin formatting over `runa.tracing.storage`'s query API, no separate query logic
 matching how `cli/runs.py` only formats what `runa.eval`/session storage already expose.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 from runa.cli._project import resolve_db_path

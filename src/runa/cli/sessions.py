@@ -4,6 +4,8 @@ Session history (`agent_sessions`/`agent_messages`, written by `SQLiteSession`, 
 `cli/chat.py`) lives in `db/runa.db`; this module only reads it.
 """
 
+from __future__ import annotations
+
 import json
 import sqlite3
 from contextlib import closing

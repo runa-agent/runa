@@ -9,6 +9,7 @@ from runa import Agent, LoggingAgentHooks, LoggingRunHooks
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.lifecycle import AgentHooks, RunHooks
 from runa.tool import tool as tool_decorator
+from runa.tracing import observe
 
 
 class Researcher(Agent):
@@ -65,37 +66,78 @@ async def _run_all_agent_hooks(hooks: AgentHooks[None]) -> None:
 
 
 def test_run_hooks_log_every_callback(caplog: pytest.LogCaptureFixture) -> None:
-    """Each `LoggingRunHooks` callback logs a message naming the agent(s) and payload involved."""
+    """Each `LoggingRunHooks` callback logs a message naming the agent(s) involved."""
     with caplog.at_level(logging.DEBUG, logger="runa"):
         asyncio.run(_run_all_run_hooks(LoggingRunHooks()))
 
     messages = [r.getMessage() for r in caplog.records]
     assert messages == [
         "agent start: Researcher",
-        "agent end: Researcher -> 'final output'",
+        "agent end: Researcher",
+        "agent output: Researcher -> 'final output'",
         "handoff: Researcher -> Translator",
         "tool start: search (Researcher)",
-        "tool end: search -> 'tool result'",
+        "tool end: search (Researcher)",
+        "tool output: search -> 'tool result'",
         "llm start: Researcher",
         "llm end: Researcher",
     ]
 
 
 def test_agent_hooks_log_every_callback(caplog: pytest.LogCaptureFixture) -> None:
-    """Each `LoggingAgentHooks` callback logs a message naming the agent(s) and payload involved."""
+    """Each `LoggingAgentHooks` callback logs a message naming the agent(s) involved."""
     with caplog.at_level(logging.DEBUG, logger="runa"):
         asyncio.run(_run_all_agent_hooks(LoggingAgentHooks()))
 
     messages = [r.getMessage() for r in caplog.records]
     assert messages == [
         "agent start: Researcher",
-        "agent end: Researcher -> 'final output'",
+        "agent end: Researcher",
+        "agent output: Researcher -> 'final output'",
         "handoff: Translator -> Researcher",
         "tool start: search (Researcher)",
-        "tool end: search -> 'tool result'",
+        "tool end: search (Researcher)",
+        "tool output: search -> 'tool result'",
         "llm start: Researcher",
         "llm end: Researcher",
     ]
+
+
+def test_info_level_logging_carries_no_content(caplog: pytest.LogCaptureFixture) -> None:
+    """At INFO the hooks name what happened and never log the agent's or a tool's output.
+
+    The default hooks run in every production app, so INFO is the level that decides whether
+    user data lands in stdout. Content belongs at DEBUG, behind the tracing policy.
+    """
+    with caplog.at_level(logging.INFO, logger="runa"):
+        asyncio.run(_run_all_run_hooks(LoggingRunHooks()))
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert not any("final output" in m or "tool result" in m for m in messages)
+    assert "agent end: Researcher" in messages
+    assert "tool end: search (Researcher)" in messages
+
+
+def test_debug_content_obeys_the_tracing_policy(caplog: pytest.LogCaptureFixture) -> None:
+    """`observe(capture_outputs=False)` silences the DEBUG content lines too, not just spans."""
+    with observe(capture_outputs=False), caplog.at_level(logging.DEBUG, logger="runa"):
+        asyncio.run(_run_all_run_hooks(LoggingRunHooks()))
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert not any("final output" in m or "tool result" in m for m in messages)
+
+
+def test_debug_content_is_redacted(caplog: pytest.LogCaptureFixture) -> None:
+    """A `redactor` registered with `observe` scrubs the DEBUG content lines."""
+    with (
+        observe(redactor=lambda value: "[scrubbed]"),
+        caplog.at_level(logging.DEBUG, logger="runa"),
+    ):
+        asyncio.run(_run_all_run_hooks(LoggingRunHooks()))
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert "agent output: Researcher -> '[scrubbed]'" in messages
+    assert not any("final output" in m for m in messages)
 
 
 def test_agent_hooks_can_be_set_on_an_agent_class() -> None:

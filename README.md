@@ -63,13 +63,17 @@ Every run is traced automatically as a span tree
 exactly what an agent did and why. Evaluation
 ([Eval](https://runa-agent.github.io/runa/evaluation/)) grades correctness
 with plain assertions or judged, dataset-driven scoring.
+[Deployment](https://runa-agent.github.io/runa/deployment/) is the same
+story: `runa serve` puts your agents behind an HTTP API, and one environment
+variable moves sessions, traces and eval history to a shared database when
+one replica is no longer enough.
 
 ## Getting Started
 
 1. Install [uv](https://docs.astral.sh/uv/), then Runa:
 
    ```bash
-   uv venv --python 3.14
+   uv venv --python 3.12  # 3.12, 3.13 and 3.14 are all supported
    source .venv/bin/activate
    uv add runa-ai
    ```
@@ -95,11 +99,24 @@ with plain assertions or judged, dataset-driven scoring.
 4. Fill in the API key for whichever model you use in `.env`, and you're
    running.
 
-5. Follow the guides to keep building your application. You may find the
+5. Put it in front of users:
+
+   ```bash
+   uv add "runa-ai[serve]"
+   export RUNA_API_KEY=$(openssl rand -hex 32)
+   runa serve
+   ```
+
+   Every agent under `app/agents/` is now an endpoint:
+   `POST /agents/<name>/runs`. See
+   [Deployment](https://runa-agent.github.io/runa/deployment/).
+
+6. Follow the guides to keep building your application. You may find the
    following resources handy:
    * [Getting Started with Runa](https://runa-agent.github.io/runa/getting_started/)
    * [Runa Guides](https://runa-agent.github.io/runa/guides/)
    * [CLI Reference](https://runa-agent.github.io/runa/cli/)
+   * [Deployment](https://runa-agent.github.io/runa/deployment/)
 
 ## Read the Zen of Runa
 

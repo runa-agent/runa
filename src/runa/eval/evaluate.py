@@ -5,6 +5,8 @@ actually completed, so a case that errors doesn't also burn a judge-model call. 
 `eval/evaluation/deterministic.py` and `eval/evaluation/semantic.py` for what each layer covers.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Iterable
 

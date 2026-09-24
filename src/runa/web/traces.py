@@ -6,6 +6,8 @@ page: `web/sessions.py`'s merged timeline is the primary way to reach a trace; t
 "open trace"/direct-by-id destination (see `web/app.py`'s module docstring).
 """
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from typing import Any

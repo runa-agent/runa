@@ -5,6 +5,8 @@ Reads class attributes only (`name`, `model`, `tools`, `guardrails`, `subagents`
 knowledge setup, prompt-file creation, or any API call.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 

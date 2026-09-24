@@ -1,5 +1,7 @@
 """The Zen of Runa."""
 
+from __future__ import annotations
+
 s = """The Zen of Runa, by Brahim Benyous et al.
 
 When one is enough, many are useless.

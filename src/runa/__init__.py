@@ -1,7 +1,10 @@
 """Runa: an opinionated framework for agentic AI."""
 
+from __future__ import annotations
+
 from importlib.metadata import version
 
+from runa._types import ModelSettings, Reasoning, TResponseInputItem, Usage
 from runa.agent import Agent
 from runa.approval import approval
 from runa.cache import Cache, MemoryCache, SQLiteCache
@@ -61,7 +64,9 @@ __all__ = [
     "Memory",
     "MemoryCache",
     "MemoryMatch",
+    "ModelSettings",
     "RawResponsesStreamEvent",
+    "Reasoning",
     "Report",
     "Run",
     "RunStream",
@@ -74,7 +79,9 @@ __all__ = [
     "Span",
     "Status",
     "StreamEvent",
+    "TResponseInputItem",
     "Trace",
+    "Usage",
     "TraceExporter",
     "__version__",
     "add_exporter",

@@ -8,7 +8,7 @@ description = "The application framework for agentic AI."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.75.0",
     "graphviz>=0.21",
@@ -24,6 +24,10 @@ dependencies = [
 langfuse = ["opentelemetry-exporter-otlp-proto-http>=1.27.0", "opentelemetry-sdk>=1.27.0"]
 postgres = ["asyncpg>=0.30.0", "pgvector>=0.3.6"]
 redis = ["redis>=5.2.0"]
+# `serve` (the production HTTP API) and `ui` (the local dashboard) need the same two packages but
+# are named separately: an app deploying `runa serve` should not have to install something called
+# "ui" to do it, and either can grow its own dependencies later without dragging in the other's.
+serve = ["fastapi>=0.121.0", "uvicorn>=0.38.0"]
 ui = ["fastapi>=0.121.0", "uvicorn>=0.38.0"]
 
 [project.scripts]
@@ -36,8 +40,9 @@ dev = [
     "pyright>=1.1.400",
     "python-dotenv>=1.2.3",
     "httpx>=0.28.0",
-    "runa-ai[langfuse,postgres,redis,ui]",
+    "runa-ai[langfuse,postgres,redis,serve,ui]",
     "mkdocstrings-python>=2.0.8",
+    "pytest-cov>=7.1.0",
 ]
 
 [build-system]
@@ -49,10 +54,27 @@ module-name = "runa"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Coverage runs on every `make test`, so a change that adds untested code fails here rather than
+# in review. The floor sits just under where the suite actually is: it is a ratchet against
+# regression, not a target to code toward.
+addopts = "--cov=runa --cov-report=term:skip-covered --cov-fail-under=90"
+
+[tool.coverage.run]
+# The optional-extra backends need a live Postgres or Redis, which CI provisions and a laptop
+# usually does not. Their suites run and assert in CI either way; what is omitted is only the
+# line counting, so `make check` means the same thing with or without those services and a
+# developer is never asked to install Postgres to see a green run.
+omit = [
+    "*/runa/db/postgres.py",
+    "*/runa/db/prune_postgres.py",
+    "*/runa/db/redis.py",
+    "*/runa/tracing/postgres.py",
+    "*/runa/eval/postgres.py",
+]
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py312"
 # `ruff format` also reformats fenced ```python blocks inside Markdown files, which mangles
 # pymdownx.snippets' `--8<--` include marker (docs/*.md) into invalid syntax. Docs prose isn't
 # ruff's to format anyway, so it's excluded outright rather than worked around per line.
@@ -71,11 +93,24 @@ select = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+# Runa supports 3.12+, where an annotation is evaluated eagerly; 3.14 (PEP 649) defers it and
+# silently forgives a self-reference like `def __enter__(self) -> observe:`. Requiring the future
+# import everywhere makes every supported version behave like the newest one, so a 3.14 developer
+# cannot write an annotation that only explodes on someone else's 3.12.
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["I002"]  # test modules are never imported by the library
+"examples/**" = ["I002"]  # examples read better without the ceremony
+".claude/**" = ["I002"]  # editor/harness scripts, not part of the package
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
 
 [tool.pyright]
+pythonVersion = "3.12"
 include = ["src", "tests", "examples"]
 reportIncompatibleMethodOverride = false

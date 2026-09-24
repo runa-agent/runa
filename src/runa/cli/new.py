@@ -6,6 +6,8 @@ SQLite database, and developer docs (at the project root) without any configurat
 `name`, scaffolds into `root/name`; without one, scaffolds `root` itself in place.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 _APP_SUBDIRS = ("agents", "guardrails", "prompts", "tools")
@@ -25,8 +27,11 @@ _TOP_LEVEL_ENTRIES = (
 _PYPROJECT_TEMPLATE = """[project]
 name = "{name}"
 version = "0.1.0"
-requires-python = ">=3.14"
-dependencies = ["runa", "python-dotenv"]
+requires-python = ">=3.12"
+dependencies = ["runa-ai", "python-dotenv"]
+
+[project.optional-dependencies]
+serve = ["runa-ai[serve]"]
 """
 
 _MAIN_TEMPLATE = '''"""main.py: the application entry point.
@@ -56,6 +61,14 @@ _ENV_TEMPLATE = """# Loaded by main.py via load_dotenv(). Fill in the API key fo
 # OPENAI_API_KEY (gpt-*) / ANTHROPIC_API_KEY (claude-*) / GEMINI_API_KEY (gemini-*)
 # LLAMA_API_KEY (llama-*) / DEEPSEEK_API_KEY (deepseek-*) / DASHSCOPE_API_KEY (qwen-*)
 OPENAI_API_KEY=
+
+# The token clients must send to `runa serve` as `Authorization: Bearer <token>`. Required in
+# production; `runa serve --no-auth` is the local escape hatch.
+RUNA_API_KEY=
+
+# Uncomment to share sessions, traces and eval history across replicas instead of keeping them
+# in this process's db/runa.db. Needed for any deployment running more than one instance.
+# RUNA_POSTGRES_DSN=postgresql://user:password@host:5432/runa
 """
 
 _GITIGNORE_TEMPLATE = """__pycache__/
@@ -64,14 +77,20 @@ db/runa.db
 .env
 """
 
-_DOCKERFILE_TEMPLATE = """FROM python:3.14-slim
+_DOCKERFILE_TEMPLATE = """FROM python:3.13-slim
 
 WORKDIR /app
 COPY . .
 
-RUN pip install --no-cache-dir uv && uv sync --frozen
+RUN pip install --no-cache-dir uv && uv sync --frozen --extra serve
 
-CMD ["uv", "run", "python", "main.py"]
+EXPOSE 8000
+
+# `runa serve` puts this app's agents behind an HTTP API: POST /agents/<name>/runs, plus
+# /runs/stream and an unauthenticated /health for the load balancer. It needs RUNA_API_KEY set
+# (clients send it as `Authorization: Bearer <token>`) and refuses to start without one; pass
+# --no-auth if something in front of this container is already doing authentication.
+CMD ["uv", "run", "runa", "serve", "--host", "0.0.0.0", "--port", "8000"]
 """
 
 

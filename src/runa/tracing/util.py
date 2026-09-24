@@ -1,5 +1,7 @@
 """tracing/util.py: fresh, opaque ids for a `Trace`/`Span`."""
 
+from __future__ import annotations
+
 import uuid
 
 

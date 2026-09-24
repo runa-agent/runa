@@ -5,6 +5,8 @@ A plain `list[Case]` already satisfies everything `evaluate_agent()` needs
 can't do: load itself from a JSONL file.
 """
 
+from __future__ import annotations
+
 import json
 from collections.abc import Iterable, Iterator
 from pathlib import Path

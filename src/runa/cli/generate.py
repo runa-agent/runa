@@ -12,6 +12,8 @@ inert stub Agent/tool) the same way they do against an empty
 the TODOs.
 """
 
+from __future__ import annotations
+
 import re
 from collections.abc import Callable, Sequence
 from pathlib import Path

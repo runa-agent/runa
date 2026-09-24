@@ -56,9 +56,12 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
 
     The nested run shares the caller's `context` (so tools/guardrails/`instructions` see the same
     object) but not its conversation history: the calling agent generates fresh input for it, the
-    same way any other tool call's arguments are generated. A nested run that errors surfaces its
-    error message as the tool's return value instead of raising, so the calling agent's turn can
-    still continue and decide how to respond.
+    same way any other tool call's arguments are generated. Each invocation runs on a `_fresh()`
+    copy of `agent`, which makes that true in fact and not just in intent: a `Subagent` is built
+    once and reused, so on the shared instance one delegation's history would leak into the next,
+    and two delegations in a single message (tool calls run concurrently) would overwrite each
+    other's. A nested run that errors surfaces its error message as the tool's return value
+    instead of raising, so the calling agent's turn can still continue and decide how to respond.
 
     The delegate's context is `ctx.fork()`ed, not just `ctx.context` unwrapped: this shares the
     sticky approval ledger, the call-id replay guard, and the guardrail-result audit trail with
@@ -79,7 +82,7 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
         else:
             args = json.loads(arguments_json) if arguments_json else {}
             forked = ctx.fork()
-            run = await agent.run(args.get("input", ""), _context_wrapper=forked)
+            run = await agent._fresh().run(args.get("input", ""), _context_wrapper=forked)
         ctx.usage.add(forked.usage)
         if run.status == "paused":
             forked.usage = Usage()  # already merged into the caller's

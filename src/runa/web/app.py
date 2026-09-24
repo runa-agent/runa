@@ -11,6 +11,8 @@ context, and `/traces/{trace_id}` stays routable (unlinked from the nav) as the 
 from a session's trace card and for a session-less trace (an eval run, a one-off `run_sync()`).
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 
@@ -71,7 +73,7 @@ def create_app(root: Path) -> FastAPI:
             add_trace_to_evals(trace_id, root=root, expected=expected)
         except CaseAlreadyInEvals:
             pass  # e.g. a double submit: the trace page already shows where the case is
-        except TraceNotFound, TraceHasNoInput:
+        except (TraceNotFound, TraceHasNoInput):
             return HTMLResponse(_error_page("", "Trace has no input to add."), status_code=404)
         return RedirectResponse(f"/traces/{quote(trace_id)}", status_code=303)
 

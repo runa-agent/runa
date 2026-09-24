@@ -5,6 +5,8 @@ module only turns `EvalRun`/`EvalCaseRow` into HTML. A case links to the trace o
 that passed in the agent's previous run but failed here is marked regressed.
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote

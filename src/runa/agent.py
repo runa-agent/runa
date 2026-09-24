@@ -1,9 +1,13 @@
 """Class-based Agent, built on Runa's own runtime (`runa.runner`/`runa.run_internal`)."""
 
+from __future__ import annotations
+
 import asyncio
+import copy
 import inspect
 import re
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import MISSING, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -46,6 +50,8 @@ _AGENT_FIELDS = (
     "knowledge",
     "compact",
     "max_turns",
+    "max_tokens",
+    "timeout",
 )
 
 _MODEL_PROVIDER = ModelProvider()
@@ -202,6 +208,15 @@ class Agent:
     `usage` accumulates token usage across every `run`/`run_sync`/`run_streamed` call made on
     this instance; `last_usage` holds just the most recent call's usage. Both are read from
     `RunContextWrapper.usage`, which `Runner` populates regardless of `hooks`.
+
+    One run is bounded three ways, each `None`/unset meaning "no ceiling of that kind":
+    `max_turns` (model calls, default 10), `max_tokens` (total tokens the run may spend), and
+    `timeout` (wall-clock seconds). Hitting any of them ends the run as `Run(status="error")`,
+    the same as every other `RunaError`. `max_tokens` is the run's whole budget and is not the
+    same knob as `ModelSettings(max_tokens=...)`, which caps one response's length.
+
+    An instance carries per-run state (`history`, `usage`), so it is not safe to share across
+    concurrent runs; see `run` for the rule and the two ways to satisfy it.
     """
 
     handoff = _Mode("handoff")
@@ -210,6 +225,8 @@ class Agent:
     d = delegate
     model = DEFAULT_MODEL
     max_turns = DEFAULT_MAX_TURNS
+    max_tokens: int | None = None
+    timeout: float | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         """Build config from class attributes and wire up any subagents and guardrails.
@@ -244,7 +261,10 @@ class Agent:
             your own strategy -- a different threshold, an LLM summary, whatever you return.
           - `False` (the default): off.
 
-        `max_turns` caps how many model calls one run may make before `MaxTurnsExceeded`.
+        `max_turns` caps how many model calls one run may make before `MaxTurnsExceeded`;
+        `max_tokens` caps the tokens they may spend before `MaxTokensExceeded`; `timeout` caps
+        the run's wall-clock seconds before `RunTimeout`. All three are optional ceilings, and
+        all three end the run as `Run(status="error")`.
         """
         if type(self) is Agent:
             raise TypeError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
@@ -296,10 +316,13 @@ class Agent:
         self.hooks = kwargs.get("hooks")
         self.compact: bool = kwargs.get("compact", False)
         self.max_turns: int = kwargs["max_turns"]
+        self.max_tokens: int | None = kwargs.get("max_tokens")
+        self.timeout: float | None = kwargs.get("timeout")
 
         self.history: list[TResponseInputItem] = []
         self.usage = Usage()
         self.last_usage = Usage()
+        self._in_flight = 0
 
     def as_tool(self, tool_name: str | None, tool_description: str | None) -> FunctionTool:
         """Wrap this agent as a tool another agent can call; see `runa.handoff.agent_as_tool`."""
@@ -324,6 +347,8 @@ class Agent:
             workflow_name=type(self).__name__,
             group_id=outer.id if outer else getattr(session, "session_id", None),
             max_turns=self.max_turns,
+            max_tokens=self.max_tokens,
+            timeout=self.timeout,
         )
 
     def _completed(self, result: RunResult, session: SessionABC | None) -> Run:
@@ -358,6 +383,45 @@ class Agent:
             error=str(exc),
             **guardrail_results(context_wrapper),
         )
+
+    def _fresh(self) -> Agent:
+        """A copy of this agent with empty per-run state, sharing its config.
+
+        What `agent_as_tool` runs a delegate on. The delegate's documented contract is that a
+        nested run does not inherit the caller's conversation, and a `Subagent` is built once and
+        reused, so running the shared instance directly would both accumulate history across
+        unrelated delegations and corrupt it when the model delegates twice in one message.
+        """
+        clone = copy.copy(self)
+        clone.history = []
+        clone.usage = Usage()
+        clone.last_usage = Usage()
+        clone._in_flight = 0
+        return clone
+
+    @contextmanager
+    def _exclusive(self, session: SessionABC | None) -> Iterator[None]:
+        """Hold this instance for one run, refusing a second concurrent run over `self.history`.
+
+        Concurrent runs on one instance are safe exactly when their history lives somewhere
+        else: each run reads `self.history` at the start and writes it back at the end, so two
+        overlapping session-less runs silently lose one conversation into the other. That is a
+        data leak between users in a server, not a crash, so it is refused rather than allowed to
+        happen quietly. Pass a `session` per run (each one's history is its own), or build an
+        `Agent` per run; both are cheap.
+        """
+        exclusive = session is None
+        if exclusive and self._in_flight:
+            raise UserError(
+                f"{type(self).__name__} is already running: one Agent instance cannot run "
+                "concurrently without a session, because both runs would share (and overwrite) "
+                "`self.history`. Pass a `session=` to each run, or use one Agent per run."
+            )
+        self._in_flight += 1
+        try:
+            yield
+        finally:
+            self._in_flight -= 1
 
     async def run(
         self,
@@ -398,23 +462,30 @@ class Agent:
         Token usage for this call is recorded to `self.last_usage` and accumulated into
         `self.usage`, regardless of `session`, `hooks`, or whether the run errored.
 
+        An `Agent` instance holds the state of the conversation it is running, so **one instance
+        runs one conversation at a time**. Two overlapping session-less runs on the same instance
+        raise `UserError` rather than quietly interleaving their histories; give each run its own
+        `session`, or its own `Agent`. Under a web server, build the agent inside the request
+        handler (`runa serve` does exactly this).
+
         `_context_wrapper` is internal, used by `agent_as_tool`'s nested delegate calls to share
         a forked `RunContextWrapper` with the caller instead of building a fresh one; `context`
         is ignored when it's given. Don't pass it directly.
         """
-        try:
-            result = await Runner.run(
-                self,
-                _turn_input(message, self.history, session),
-                context=context,
-                hooks=hooks,
-                run_config=self._run_config(session),
-                session=session,
-                _context_wrapper=_context_wrapper,
-            )
-        except RunaError as exc:
-            return self._failed(exc)
-        return self._completed(result, session)
+        with self._exclusive(session):
+            try:
+                result = await Runner.run(
+                    self,
+                    _turn_input(message, self.history, session),
+                    context=context,
+                    hooks=hooks,
+                    run_config=self._run_config(session),
+                    session=session,
+                    _context_wrapper=_context_wrapper,
+                )
+            except RunaError as exc:
+                return self._failed(exc)
+            return self._completed(result, session)
 
     def run_sync(
         self,

@@ -106,6 +106,10 @@ class ModelSettings:
     tool_choice: ToolChoice = None
     parallel_tool_calls: bool | None = None
     reasoning: Reasoning | None = None
+    max_retries: int | None = None
+    """How many times to retry a failed request (connection errors, 408/409/429/5xx), on top of
+    the first attempt. `None` uses the backend default of 2; `0` disables retrying outright, for
+    an app that does its own. Honored identically by both backends."""
 
 
 @dataclass

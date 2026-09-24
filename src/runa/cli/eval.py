@@ -8,6 +8,8 @@ production evaluation runs through, not a parallel CLI-only harness. By conventi
 turns a real run into a new line of that file, from "this answer was wrong" to a case guarding it.
 """
 
+from __future__ import annotations
+
 import asyncio
 import importlib
 import json

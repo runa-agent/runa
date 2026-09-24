@@ -17,6 +17,10 @@ class RunConfig:
     `workflow_name` names the `Trace` this run produces; `group_id`/`trace_metadata` are recorded
     on it verbatim. `model_provider` resolves an `Agent.model` string to a `Model`, irrelevant
     when `Agent.model` is already a `Model` instance (as Runa's own tests do, to script one).
+
+    `max_turns`/`max_tokens`/`timeout` are the three ceilings on one run: model calls, tokens
+    spent, and wall-clock seconds. Each is `Agent.max_turns`/`.max_tokens`/`.timeout` by the
+    time it gets here; `None` means no ceiling of that kind.
     """
 
     model_provider: ModelProvider = field(default_factory=ModelProvider)
@@ -24,6 +28,8 @@ class RunConfig:
     group_id: str | None = None
     trace_metadata: dict[str, Any] | None = None
     max_turns: int = DEFAULT_MAX_TURNS
+    max_tokens: int | None = None
+    timeout: float | None = None
 
 
 __all__ = ["DEFAULT_MAX_TURNS", "RunConfig"]
