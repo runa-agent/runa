@@ -248,7 +248,7 @@ async def _run_async(
     user_id = getattr(session, "user_id", None) if session is not None else None
     memory_query = _latest_user_text(items)
 
-    agent_span = _new_span(trace, None, agent.name, "agent")
+    agent_span = _new_span(trace, None, agent.name, "agent", input=memory_query)
 
     if memory_query is not None and (memory is not None or knowledge is not None):
         memory_matches, knowledge_matches = await asyncio.gather(

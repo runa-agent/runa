@@ -1,6 +1,7 @@
 """Tests for `runa.web.app`: every `runa ui` route, over a scaffolded project."""
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,7 @@ def project(tmp_path: Path) -> Path:
             end_time=1.0,
             status="error",
             error="boom",
+            input="Where is my order?",
         ),
         Span(
             id="s2",
@@ -190,6 +192,29 @@ def test_trace_detail_shows_a_divider_after_a_handoff(client: TestClient) -> Non
     detail = client.get("/traces/trace_1")
 
     assert 'class="handoff-divider">Handoff &middot; billing_agent<' in detail.text
+
+
+def test_trace_detail_adds_its_input_to_the_agent_s_evals(
+    client: TestClient, project: Path
+) -> None:
+    """The "Add to evals" form appends the trace's input to `evals/<agent>.jsonl`."""
+    assert 'action="/traces/trace_1/eval"' in client.get("/traces/trace_1").text
+
+    response = client.post("/traces/trace_1/eval", data={"expected": "Looks up the order"})
+
+    assert response.status_code == 200
+    assert "Added to <code>evals/turn.jsonl</code>" in response.text
+    line = (project / "evals" / "turn.jsonl").read_text().splitlines()[-1]
+    assert json.loads(line) == {
+        "input": "Where is my order?",
+        "expected": "Looks up the order",
+        "metadata": {"trace_id": "trace_1"},
+    }
+
+
+def test_trace_detail_hides_add_to_evals_without_a_recorded_input(client: TestClient) -> None:
+    """A trace whose root agent span recorded no input has nothing to add."""
+    assert "Add to evals" not in client.get("/traces/trace_2").text
 
 
 def test_trace_detail_404s_for_an_unknown_trace(client: TestClient) -> None:

@@ -823,6 +823,8 @@ def test_run_sync_trace_has_agent_and_tool_spans() -> None:
     assert types_by_name["TimeAgent"] == "agent"
     assert types_by_name["now"] == "tool"
     assert all(span.status == "ok" for span in run.trace.spans)
+    root = next(span for span in run.trace.spans if span.parent_id is None)
+    assert root.input == "what time is it?"
 
 
 def test_run_sync_trace_records_a_tool_error_span() -> None:

@@ -13,7 +13,7 @@ from runa.eval.evaluation.defaults import DEFAULT_THRESHOLDS
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.eval.evaluation.semantic import evaluate_semantic
 from runa.eval.report import CaseReport, Report
-from runa.eval.storage import save_report
+from runa.eval.storage import load_baseline, save_report
 from runa.eval.tracing.adapter import run_agent_for_eval
 
 
@@ -52,8 +52,9 @@ async def evaluate_agent(
     `judge` overrides the model semantic metrics grade with; it defaults to `agent.model`, so
     grading needs no separate credentials. `threshold` overrides every metric's pass threshold at
     once; `thresholds` overrides just the named ones. Every case runs to completion even if an
-    earlier one fails or errors, and the finished `Report` is persisted to `runa.db` before it's
-    returned (see `eval/storage.py`).
+    earlier one fails or errors. The finished `Report` is compared against the agent's previous
+    run (see `Report.regressions`), then persisted to `runa.db` before it's returned (see
+    `eval/storage.py`).
     """
     resolved_thresholds = _resolve_thresholds(threshold, thresholds)
     judge_model_name = _resolve_judge(judge, agent)
@@ -73,6 +74,7 @@ async def evaluate_agent(
             )
         case_reports.append(CaseReport(index=index, case=case, run=run, results=results))
 
-    report = Report(agent_name=type(agent).__name__, cases=case_reports)
+    agent_name = type(agent).__name__
+    report = Report(agent_name=agent_name, cases=case_reports, baseline=load_baseline(agent_name))
     save_report(report)
     return report

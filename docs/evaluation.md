@@ -17,8 +17,8 @@ runa eval
 ```
 
 The filename is the Agent's declared `name`, the same one `runa chat` takes, so there is nothing
-to register. Each line's keys are `Case` fields, and a line only carries the ones it needs.
-`runa eval` calls `agent.evaluate(dataset)` for every file, the same path production evaluation
+to register. Each line's keys are `Case` fields, and a line only carries the ones it needs. A
+bare string is shorthand for an input-only case: `"Where's my order?"`. `runa eval` calls `agent.evaluate(dataset)` for every file, the same path production evaluation
 runs through.
 
 Pass the Agent's `name` to run just its dataset, for example `runa eval support_agent`.
@@ -36,6 +36,37 @@ Only `input` is required. Everything else is optional evidence that decides whic
 
 With none of them, task completion and answer relevance still run. Every case runs to completion
 even if an earlier one errors, and the finished `Report` is persisted to `runa.db`.
+
+## Turning Real Runs Into Cases
+
+The best cases come from runs that went wrong. Every run is traced, so add a bad one straight from
+its trace:
+
+```bash
+runa eval --add TRACE_ID --expected "Looks up the order status"
+```
+
+Or open the trace in `runa ui` and use "Add to evals". Either way the run's input is appended to
+its agent's `evals/<agent_name>.jsonl`, with the trace id kept in `metadata`. `--expected` is
+optional, and can be filled in later in the file.
+
+## Catching Regressions
+
+Each `runa eval` compares against the agent's previous run, matching cases by input. A case that
+passed last time and fails now is a regression:
+
+```
+3 passed
+1 failed
+1 regressed (last run: 4/4 passed)
+
+Failures
+────────────────────────────────
+case_2  regressed  task_completion: Didn't look up the order
+```
+
+`report.regressions` lists them in Python. `runa eval` still exits with 1 on any failure, so CI
+fails on every broken case, not only new ones.
 
 ## Building Cases in Python
 

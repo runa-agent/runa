@@ -1,4 +1,6 @@
-"""web/app.py: the `runa ui` FastAPI app -- Agents, Sessions, Evaluations, read-only.
+"""web/app.py: the `runa ui` FastAPI app -- Agents, Sessions, Evaluations.
+
+Read-only except for one write: "Add to evals" on a trace page appends a case to `evals/`.
 
 Every route calls straight into one `web/<page>.py`'s render function; no route does its own
 data-fetching or HTML-building. `create_app(root)` closes over the app's directory, the same way
@@ -10,11 +12,14 @@ from a session's trace card and for a session-less trace (an eval run, a one-off
 """
 
 from pathlib import Path
+from urllib.parse import parse_qs, quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from runa.cli._project import AppLoadError, NotARunaProject
+from runa.cli.eval import TraceHasNoInput, add_trace_to_evals
+from runa.cli.traces import TraceNotFound
 from runa.web import agents as agents_page
 from runa.web import evaluations as evaluations_page
 from runa.web import sessions as sessions_page
@@ -50,11 +55,23 @@ def create_app(root: Path) -> FastAPI:
             return HTMLResponse(_error_page("Sessions", "Session not found."), status_code=404)
 
     @app.get("/traces/{trace_id}", response_class=HTMLResponse, include_in_schema=False)
-    def trace_detail(trace_id: str) -> HTMLResponse:
+    def trace_detail(trace_id: str, added: bool = False) -> HTMLResponse:
         try:
-            return HTMLResponse(traces_page.render_detail(trace_id, root=root))
+            return HTMLResponse(traces_page.render_detail(trace_id, root=root, added=added))
         except traces_page.TraceNotFound:
             return HTMLResponse(_error_page("", "Trace not found."), status_code=404)
+
+    @app.post("/traces/{trace_id}/eval", include_in_schema=False, response_model=None)
+    async def trace_add_to_evals(
+        trace_id: str, request: Request
+    ) -> HTMLResponse | RedirectResponse:
+        form = parse_qs((await request.body()).decode())
+        expected = form.get("expected", [""])[0].strip() or None
+        try:
+            add_trace_to_evals(trace_id, root=root, expected=expected)
+        except TraceNotFound, TraceHasNoInput:
+            return HTMLResponse(_error_page("", "Trace has no input to add."), status_code=404)
+        return RedirectResponse(f"/traces/{quote(trace_id)}?added=true", status_code=303)
 
     @app.get("/evaluations", response_class=HTMLResponse, include_in_schema=False)
     def evaluations_list() -> str:

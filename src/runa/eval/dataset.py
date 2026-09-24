@@ -37,9 +37,8 @@ class Dataset:
 
         Each line's JSON object is passed as keyword arguments to `Case`, so
         a line only needs the fields it uses, e.g. `{"input": "...",
-        "expected": "..."}`.
+        "expected": "..."}`. A bare JSON string is shorthand for an input-only
+        case: `"..."` is `{"input": "..."}`.
         """
-        cases = [
-            Case(**json.loads(line)) for line in Path(path).read_text().splitlines() if line.strip()
-        ]
-        return cls(cases)
+        lines = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+        return cls(Case(line) if isinstance(line, str) else Case(**line) for line in lines)

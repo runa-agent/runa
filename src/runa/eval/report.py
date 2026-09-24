@@ -54,6 +54,8 @@ class Report:
 
     agent_name: str
     cases: list[CaseReport]
+    baseline: dict[str, bool] | None = None
+    """Each input of the agent's previous run mapped to whether it passed, `None` if first run."""
 
     @property
     def passed(self) -> list[CaseReport]:
@@ -69,6 +71,12 @@ class Report:
     def failures(self) -> list[CaseReport]:
         """Alias for `failed`, matching the failure-listing use case."""
         return self.failed
+
+    @property
+    def regressions(self) -> list[CaseReport]:
+        """Every failed case whose input passed in the previous run (see `baseline`)."""
+        baseline = self.baseline or {}
+        return [case for case in self.failed if baseline.get(case.run.input)]
 
     @property
     def pass_rate(self) -> float:
@@ -102,9 +110,16 @@ class Report:
         lines.append("")
         lines.append(f"{len(self.passed)} passed")
         lines.append(f"{len(self.failed)} failed")
+        regressions = self.regressions
+        if self.baseline:
+            previous = f"{sum(self.baseline.values())}/{len(self.baseline)}"
+            lines.append(f"{len(regressions)} regressed (last run: {previous} passed)")
         if self.failures:
             lines.append("")
             lines.append("Failures")
             lines.append(rule)
-            lines.extend(f"{case.id}  {case.failure_reason}" for case in self.failures)
+            lines.extend(
+                f"{case.id}  {'regressed  ' if case in regressions else ''}{case.failure_reason}"
+                for case in self.failures
+            )
         return "\n".join(lines)

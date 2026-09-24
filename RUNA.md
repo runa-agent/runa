@@ -309,7 +309,12 @@ code; a `.jsonl` sharing that module's stem is its data, not a second eval.
 
 ```json
 {"input": "Where's my order #4821?", "expected": "Asks for or looks up the order status"}
+"Hi there"
 ```
+
+Grow a dataset from real failures, not invented ones: `runa eval --add
+TRACE_ID` (or "Add to evals" in `runa ui`) appends a traced run's input.
+Each `runa eval` compares against the previous run and flags regressions.
 
 Only `Case.input` is required; add `expected`/`expected_tool`/`context`
 only for the specific grading signal each enables, don't fill in fields

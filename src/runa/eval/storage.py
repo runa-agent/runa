@@ -149,4 +149,30 @@ def get_eval_run(run_id: int, *, db_path: Path = DEFAULT_DB_PATH) -> EvalRun | N
         )
 
 
-__all__ = ["EvalCaseRow", "EvalRun", "get_eval_run", "list_eval_runs", "save_report"]
+def load_baseline(agent_name: str, *, db_path: Path = DEFAULT_DB_PATH) -> dict[str, bool] | None:
+    """Map each input of `agent_name`'s latest eval run to whether it passed.
+
+    `None` when the agent was never evaluated. Keyed by input rather than index, so reordering,
+    adding, or removing cases between runs still lines the rest up.
+    """
+    with closing(_connect(db_path)) as conn:
+        row = conn.execute(
+            f"SELECT id FROM {_RUNS_TABLE} WHERE agent_name = ? ORDER BY id DESC LIMIT 1",
+            (agent_name,),
+        ).fetchone()
+        if row is None:
+            return None
+        rows = conn.execute(
+            f"SELECT input, passed FROM {_CASES_TABLE} WHERE run_id = ?", (row[0],)
+        ).fetchall()
+        return {input: bool(passed) for input, passed in rows}
+
+
+__all__ = [
+    "EvalCaseRow",
+    "EvalRun",
+    "get_eval_run",
+    "list_eval_runs",
+    "load_baseline",
+    "save_report",
+]

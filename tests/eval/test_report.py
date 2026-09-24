@@ -109,3 +109,20 @@ def test_report_str_lists_metrics_and_failures() -> None:
     assert "SupportAgent Evaluation" in rendered
     assert "Task completion" in rendered
     assert "case_41  answer_correctness: unsupported claim" in rendered
+
+
+def test_report_flags_a_failure_that_passed_last_run_as_a_regression() -> None:
+    """A failed case whose input passed in `baseline` regressed, a new or still-failing one not."""
+    fail = [EvaluationResult(metric="task_completion", status=Status.FAIL, reason="wrong")]
+    regressed, still_failing, new = (_case_report(i, fail) for i in range(3))
+    report = Report(
+        agent_name="SupportAgent",
+        cases=[regressed, still_failing, new],
+        baseline={"input 0": True, "input 1": False},
+    )
+
+    assert report.regressions == [regressed]
+    rendered = str(report)
+    assert "1 regressed (last run: 1/2 passed)" in rendered
+    assert "case_0  regressed  task_completion: wrong" in rendered
+    assert "case_1  task_completion: wrong" in rendered

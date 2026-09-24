@@ -14,7 +14,12 @@ from pathlib import Path
 
 from runa.cli._project import AppLoadError, NotARunaProject
 from runa.cli.chat import AgentNotFound, run_agent_repl
-from runa.cli.eval import InvalidEvalModule, run_project_evals
+from runa.cli.eval import (
+    InvalidEvalModule,
+    TraceHasNoInput,
+    add_trace_to_evals,
+    run_project_evals,
+)
 from runa.cli.generate import (
     AgentAlreadyExists,
     AmbiguousComponent,
@@ -144,6 +149,17 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="only run this Agent's evals/ dataset (its declared `name`, e.g. support_agent)",
     )
+    eval_parser.add_argument(
+        "--add",
+        metavar="TRACE_ID",
+        default=None,
+        help="add a traced run's input as a case to its agent's evals/ dataset, instead of running",
+    )
+    eval_parser.add_argument(
+        "--expected",
+        default=None,
+        help="with --add: what a good answer would have said",
+    )
     subparsers.add_parser("test", help="Run this app's tests/ test functions")
 
     traces_parser = subparsers.add_parser("traces", help="Inspect this app's traces in runa.db")
@@ -196,6 +212,7 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
         EvaluationAlreadyExists,
         NotARunaProject,
         InvalidEvalModule,
+        TraceHasNoInput,
         TraceNotFound,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -312,6 +329,13 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         )
         return 0
 
+    if args.command == "eval" and args.add is not None:
+        eval_file = add_trace_to_evals(args.add, root=cwd, expected=args.expected)
+        print(f"added trace {args.add} to {eval_file}")
+        if args.expected is None:
+            print('\nnext: give it an "expected" answer in that file, then\n  runa eval')
+        return 0
+
     if args.command == "eval":
         reports = run_project_evals(cwd, args.agent_name)
         for report in reports:
@@ -319,7 +343,10 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
             print()
         total = sum(len(report.cases) for report in reports)
         failed = sum(len(report.failed) for report in reports)
-        print(f"{total - failed}/{total} passed")
+        regressed = sum(len(report.regressions) for report in reports)
+        print(
+            f"{total - failed}/{total} passed" + (f", {regressed} regressed" if regressed else "")
+        )
         return 1 if failed else 0
 
     if args.command == "test":

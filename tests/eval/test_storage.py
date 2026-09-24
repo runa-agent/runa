@@ -1,4 +1,4 @@
-"""Tests for `runa.eval.storage`: `save_report`."""
+"""Tests for `runa.eval.storage`: `save_report` and reading runs back."""
 
 import json
 import sqlite3
@@ -7,7 +7,7 @@ from pathlib import Path
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
-from runa.eval.storage import get_eval_run, list_eval_runs, save_report
+from runa.eval.storage import get_eval_run, list_eval_runs, load_baseline, save_report
 from runa.eval.tracing.adapter import AgentRun
 
 
@@ -98,3 +98,23 @@ def test_get_eval_run_returns_the_run_with_its_cases(tmp_path: Path) -> None:
     assert run.cases[0].output == "hello"
     assert run.cases[0].passed is True
     assert run.cases[0].results[0]["metric"] == "task_completion"
+
+
+def _graded(input: str, status: Status) -> CaseReport:
+    return CaseReport(
+        index=0,
+        case=Case(input=input),
+        run=AgentRun(input=input, final_output="ok"),
+        results=[EvaluationResult(metric="task_completion", status=status, reason="r")],
+    )
+
+
+def test_load_baseline_maps_the_latest_run_s_inputs_to_their_verdicts(tmp_path: Path) -> None:
+    """Only the agent's most recent run counts, keyed by input."""
+    db_path = tmp_path / "runa.db"
+    save_report(Report("A", [_graded("hi", Status.FAIL)]), db_path=db_path)
+    save_report(Report("A", [_graded("hi", Status.PASS)]), db_path=db_path)
+    save_report(Report("B", [_graded("yo", Status.FAIL)]), db_path=db_path)
+
+    assert load_baseline("A", db_path=db_path) == {"hi": True}
+    assert load_baseline("never_run", db_path=db_path) is None

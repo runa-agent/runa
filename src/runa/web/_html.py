@@ -81,6 +81,12 @@ code { font-family: var(--mono); font-size: 0.92em; background: var(--surface);
   border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
 details summary { cursor: pointer; color: var(--muted); font-size: 12.5px; user-select: none; }
 details summary:hover { color: var(--text); }
+.add-eval { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.add-eval .field-label { flex-basis: 100%; margin: 0; }
+.add-eval input { flex: 1; min-width: 0; padding: 7px 10px; font: inherit; font-size: 13.5px;
+  color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 7px; }
+.add-eval button { padding: 7px 14px; font: inherit; font-size: 13.5px; font-weight: 500;
+  color: #fff; background: var(--accent); border: 0; border-radius: 7px; cursor: pointer; }
 .back { color: var(--muted); font-size: 13px; margin-bottom: 16px; display: inline-block; }
 .back:hover { color: var(--text); }
 .span-tree, .span-tree ul { list-style: none; margin: 0; padding-left: 22px; }

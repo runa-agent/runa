@@ -49,6 +49,12 @@ Run every `test_*` function under `tests/`.
 Run every dataset under `evals/` against its agent, or, with `AGENT_NAME` (the Agent's declared
 `name`, for example `support_agent`), just that one. See [Evaluation](evaluation.md).
 
+```bash
+runa eval                                     # grade every evals/ dataset
+runa eval support_agent                       # grade one agent's dataset
+runa eval --add TRACE_ID [--expected TEXT]    # add a traced run as a case
+```
+
 ## `runa traces SUBCOMMAND`
 
 Inspect this app's traces in `runa.db`. See [Tracing and Hooks](tracing.md).

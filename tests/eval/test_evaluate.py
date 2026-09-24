@@ -38,6 +38,7 @@ def _patch_run_and_storage(monkeypatch: pytest.MonkeyPatch, outputs: dict[str, A
 
     monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
     monkeypatch.setattr("runa.eval.evaluate.save_report", lambda report: 1)
+    monkeypatch.setattr("runa.eval.evaluate.load_baseline", lambda agent_name: None)
 
 
 def _stub_semantic(monkeypatch: pytest.MonkeyPatch, status: Status = Status.PASS) -> None:
