@@ -5,12 +5,14 @@ Covers OpenAI, Gemini, Llama, DeepSeek, and Qwen, every provider that speaks thi
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+import asyncio
+import random
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any, cast
 
 import httpx2 as httpx
 
-from runa._models.interface import StreamDelta, _handoff_dict, _tool_dict
+from runa._models.interface import StreamDelta, _handoff_dict, _output_json_schema, _tool_dict
 from runa._types import (
     InputTokensDetails,
     ModelResponse,
@@ -23,6 +25,44 @@ from runa._types import (
 from runa.exceptions import ModelBehaviorError
 
 _CHAT_COMPLETIONS_PATH = "chat/completions"
+_MAX_RETRIES = 2  # the same default as the `anthropic` SDK's, so both backends behave alike
+_MAX_BACKOFF = 8.0
+
+
+def _retryable(status_code: int) -> bool:
+    return status_code in (408, 409, 429) or status_code >= 500
+
+
+def _backoff(attempt: int, retry_after: str | None = None) -> float:
+    """Seconds to wait before retry `attempt`: the server's `retry-after`, else jittered 2^n."""
+    if retry_after is not None:
+        try:
+            return min(float(retry_after), _MAX_BACKOFF)
+        except ValueError:
+            pass
+    return min(0.5 * 2**attempt, _MAX_BACKOFF) * random.uniform(0.75, 1.0)
+
+
+async def _with_retries(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+    """`send()` until it succeeds, retrying connection errors and 408/409/429/5xx with backoff.
+
+    Whatever still fails after `_MAX_RETRIES` raises `ModelBehaviorError`.
+    """
+    attempt = 0
+    while True:
+        last = attempt == _MAX_RETRIES
+        try:
+            response = await send()
+        except httpx.TransportError as exc:
+            if last:
+                raise ModelBehaviorError(f"model request failed: {exc!r}") from exc
+            await asyncio.sleep(_backoff(attempt))
+        else:
+            if last or not _retryable(response.status_code):
+                return response
+            await response.aclose()
+            await asyncio.sleep(_backoff(attempt, response.headers.get("retry-after")))
+        attempt += 1
 
 
 def _openai_tool_choice(tool_choice: ToolChoice) -> Any:
@@ -117,8 +157,12 @@ class OpenAICompatibleModel:
             request["top_p"] = model_settings.top_p
         if model_settings.max_tokens is not None:
             request["max_tokens"] = model_settings.max_tokens
-        if output_schema is not None and output_schema is not str:
-            request["response_format"] = {"type": "json_object"}
+        schema = _output_json_schema(output_schema)
+        if schema is not None:
+            request["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "output", "schema": schema},
+            }
         return request
 
     async def get_response(
@@ -134,7 +178,9 @@ class OpenAICompatibleModel:
         request = self._request(
             system_instructions, input, model_settings, tools, output_schema, handoffs
         )
-        response = await self._client.post(_CHAT_COMPLETIONS_PATH, json=request)
+        response = await _with_retries(
+            lambda: self._client.post(_CHAT_COMPLETIONS_PATH, json=request)
+        )
         _raise_for_status(response.status_code, response.text)
         data = response.json()
         choice = data["choices"][0]["message"]
@@ -163,7 +209,9 @@ class OpenAICompatibleModel:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        async with self._client.stream("POST", _CHAT_COMPLETIONS_PATH, json=request) as response:
+        http_request = self._client.build_request("POST", _CHAT_COMPLETIONS_PATH, json=request)
+        response = await _with_retries(lambda: self._client.send(http_request, stream=True))
+        try:
             if response.status_code >= 400:
                 body = await response.aread()
                 _raise_for_status(response.status_code, body.decode("utf-8", errors="replace"))
@@ -172,6 +220,10 @@ class OpenAICompatibleModel:
                     continue
                 for delta in _openai_deltas(cast(dict[str, Any], sse.json())):
                     yield delta
+        except httpx.TransportError as exc:  # mid-stream: too late to retry, events went out
+            raise ModelBehaviorError(f"model stream failed: {exc!r}") from exc
+        finally:
+            await response.aclose()
 
 
 __all__ = ["OpenAICompatibleModel"]

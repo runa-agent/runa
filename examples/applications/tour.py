@@ -22,16 +22,12 @@ from runa import (
     Case,
     ConsoleExporter,
     RunHooks,
-    Runner,
     SQLiteExporter,
     approval,
     guardrail,
     observe,
     tool,
 )
-
-# `Agent.run`/`run_sync` don't surface `interruptions` (see docs/approval.md), so driving an
-# approval pause/resume by hand needs the same `Runner` `runa chat` (cli/chat.py) calls directly.
 
 # --------------------------------------------------------------------------------------------
 # 1. Tools, with guardrails on both the agent and one tool's arguments.
@@ -162,14 +158,14 @@ async def demo_approval() -> None:
     """Show a tool pausing for human approval, then resuming once it's granted."""
     print("\n=== 5. Approval: a $75 refund pauses for a human, then resumes ===")
     agent = SupportAgent()
-    result = await Runner.run(agent, "Refund $75 to order A101, they've waited long enough.")
-    while result.interruptions:
-        state = result.to_state()
-        for interruption in result.interruptions:
+    run = await agent.run("Refund $75 to order A101, they've waited long enough.")
+    while run.status == "paused":
+        state = run.to_state()
+        for interruption in run.interruptions:
             print(f"  needs approval: {interruption.name}({interruption.arguments})")
             state.approve(interruption)  # state.reject(interruption) would skip the tool instead
-        result = await Runner.run(agent, state)
-    print(result.final_output)
+        run = await agent.run(state)
+    print(run.output)
 
 
 async def demo_eval() -> None:

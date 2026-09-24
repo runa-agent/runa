@@ -48,10 +48,9 @@ subagents = [Researcher, Translator.delegate]  # Researcher: both, Translator: d
 
 A `.delegate` call shares the caller's [approval](approval.md) ledger and usage accounting: a
 sticky (`always=True`) decision on the caller's side already covers a matching tool the delegate
-calls. There is one known limitation: a delegate call that pauses on a non-sticky approval is not
-surfaced back to the caller as an interruption. It comes back as a plain `None` result instead,
-since a single delegate call has no pause/resume state of its own. Cover approval-gated tools
-reachable from a delegate with a sticky decision ahead of time if the delegate might call them.
+calls. A delegate that pauses on an approval pauses its caller too: the delegate's pending calls
+appear in the caller's `run.interruptions`, and resuming the caller's `RunState` resumes the
+delegate where it stopped, even after a `to_json`/`from_json` round trip.
 
 ## Naming a Delegate's Tool
 

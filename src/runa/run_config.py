@@ -7,7 +7,7 @@ from typing import Any
 
 from runa._models import ModelProvider
 
-_DEFAULT_MAX_TURNS = 10
+DEFAULT_MAX_TURNS = 10
 
 
 @dataclass
@@ -23,7 +23,7 @@ class RunConfig:
     workflow_name: str = "Agent"
     group_id: str | None = None
     trace_metadata: dict[str, Any] | None = None
-    max_turns: int = _DEFAULT_MAX_TURNS
+    max_turns: int = DEFAULT_MAX_TURNS
 
 
-__all__ = ["RunConfig"]
+__all__ = ["DEFAULT_MAX_TURNS", "RunConfig"]

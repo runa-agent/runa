@@ -10,6 +10,7 @@ from typing import Any
 
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.exceptions import DuplicateToolCallError
+from runa.handoff import DelegatePaused
 from runa.lifecycle import RunHooks
 from runa.run_internal.agent_runner_helpers import (
     _agent_tools,
@@ -34,11 +35,12 @@ async def _run_tool_call(
     hooks: RunHooks[Any],
     trace: Trace,
     parent_id: str,
-) -> TResponseInputItem:
+) -> TResponseInputItem | DelegatePaused:
     """Run one already-approved tool call end to end: guardrails, invocation, guardrails.
 
     Guards against executing the same `call_id` twice (e.g. a resumed/duplicated `RunState`)
-    before anything else runs.
+    before anything else runs. A delegate that paused for approval comes back as its
+    `DelegatePaused`, not a result: the call hasn't finished, so resuming may run it again.
     """
     call_id = call["id"]
     if call_id in context_wrapper.executed_call_ids:
@@ -46,7 +48,7 @@ async def _run_tool_call(
     context_wrapper.executed_call_ids.add(call_id)
 
     args_json = call["function"]["arguments"] or "{}"
-    span_type = "delegate" if tool.is_delegate else "tool"
+    span_type = "delegate" if tool.delegate is not None else "tool"
     span = _new_span(trace, parent_id, tool.name, span_type, input=args_json)
     await hooks.on_tool_start(context_wrapper, agent, tool)
     try:
@@ -54,6 +56,10 @@ async def _run_tool_call(
         try:
             result = await tool.on_invoke_tool(context_wrapper, args_json, call_id)
             error: str | None = None
+        except DelegatePaused as paused:
+            context_wrapper.executed_call_ids.discard(call_id)
+            _close_span(span, output="paused for approval")
+            return paused
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
             result = f"error: {exc}"
             error = str(exc)
@@ -71,7 +77,7 @@ async def _run_tool_call(
 
 @dataclass
 class _TurnOutcome:
-    final_output: str | None
+    final_output: Any
     generated: list[TResponseInputItem]
     interruptions: list[Interruption]
     ready_results: list[TResponseInputItem]
@@ -104,7 +110,7 @@ async def _run_message_tool_calls(
     switched_agent: Any = None
     approvals = approvals or {}
     ready = {result["tool_call_id"]: result for result in ready_results or []}
-    runs: dict[int, Callable[[], Awaitable[TResponseInputItem]]] = {}
+    runs: dict[int, Callable[[], Awaitable[TResponseInputItem | DelegatePaused]]] = {}
 
     for call in message.get("tool_calls") or []:
         name = call["function"]["name"]
@@ -159,14 +165,18 @@ async def _run_message_tool_calls(
         results.append({})  # filled in once the approved calls have run
 
     parallel = _model_settings(current_agent).parallel_tool_calls is not False
+    paused: list[int] = []
     for index, result in zip(runs, await _execute(list(runs.values()), parallel), strict=True):
-        results[index] = result
+        if isinstance(result, DelegatePaused):
+            interruptions.extend(result.interruptions)
+            paused.append(index)
+        else:
+            results[index] = result
+    results = [result for index, result in enumerate(results) if index not in paused]
     return results, interruptions, switched_agent
 
 
-async def _execute(
-    calls: list[Callable[[], Awaitable[TResponseInputItem]]], parallel: bool
-) -> list[TResponseInputItem]:
+async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -> list[T]:
     """Run `calls` concurrently (or one by one), cancelling the rest if one raises."""
     if not parallel:
         return [await call() for call in calls]

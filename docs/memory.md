@@ -11,7 +11,7 @@ class SupportAgent(Agent):
 
 ## `"auto"`: the framework remembers for you
 
-Before each run, `Runner` searches memory for anything relevant to the user's message and adds
+Before each run, Runa searches memory for anything relevant to the user's message and adds
 it to context. After the run, it asks the model what's durably worth keeping and stores it. No
 manual `remember`/`search` calls.
 

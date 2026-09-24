@@ -14,7 +14,7 @@ from runa._models.interface import Model
 from runa._models.openai_chatcompletions import OpenAICompatibleModel
 from runa.exceptions import UserError
 
-_DEFAULT_MODEL = "gpt-5.4-nano"
+DEFAULT_MODEL = "gpt-5.4-nano"
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,7 @@ class ModelProvider:
 
     def get_model(self, model_name: str | None) -> Model:
         """Return the `Model` for `model_name` (or Runa's own default, if `None`)."""
-        name = model_name or _DEFAULT_MODEL
+        name = model_name or DEFAULT_MODEL
         lower = name.lower()
 
         if lower.startswith("claude"):
@@ -110,4 +110,4 @@ class ModelProvider:
         return cached[1]
 
 
-__all__ = ["ModelProvider"]
+__all__ = ["DEFAULT_MODEL", "ModelProvider"]

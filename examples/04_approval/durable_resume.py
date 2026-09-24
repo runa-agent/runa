@@ -14,7 +14,7 @@ Run it:
 
 import asyncio
 
-from runa import Agent, Runner, RunState, tool
+from runa import Agent, RunState, tool
 
 
 @tool(needs_approval=True)
@@ -35,8 +35,8 @@ class SupportAgent(Agent):
     tools = [issue_refund]
 
 
-result = Runner.run_sync(SupportAgent(), "Refund $75 to order A101.")
-state = result.to_state()
+run = SupportAgent().run_sync("Refund $75 to order A101.")
+state = run.to_state()
 blob = state.to_json()  # store this anywhere; the run is now paused indefinitely
 print(f"paused, serialized to {len(str(blob))} bytes of JSON-safe data")
 
@@ -47,5 +47,5 @@ restored_state = asyncio.run(RunState.from_json(restored_agent, blob))
 for interruption in restored_state.pending:
     restored_state.approve(interruption)
 
-result = Runner.run_sync(restored_agent, restored_state)
-print(result.final_output)
+run = restored_agent.run_sync(restored_state)
+print(run.output)

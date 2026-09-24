@@ -13,7 +13,7 @@ class SupportAgent(Agent):
 
 ## `"auto"`: retrieved automatically
 
-`Runner` searches `app/knowledge/` before every turn and injects matches as a labeled block. No
+Runa searches `app/knowledge/` before every turn and injects matches as a labeled block. No
 manual `.search` calls, and no `tools=[...]` wiring needed.
 
 ```python

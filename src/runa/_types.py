@@ -126,9 +126,10 @@ class RunContextWrapper[TContext]:
 
     `approval_ledger`/`approval_ledger_messages` hold sticky ("always approve"/"always reject")
     per-tool-name decisions; `executed_call_ids` guards against executing the same tool-call id
-    twice (e.g. from resuming a stale `RunState`). The four `*_guardrail_results` lists are every
-    `GuardrailResult` produced this run, tripped or not -- an audit trail, not just the one that
-    stopped the run.
+    twice (e.g. from resuming a stale `RunState`). `paused_delegates` maps a delegate tool call's
+    id to the nested `RunState` it paused on, so resuming the caller resumes the delegate too.
+    The four `*_guardrail_results` lists are every `GuardrailResult` produced this run, tripped
+    or not -- an audit trail, not just the one that stopped the run.
     """
 
     context: TContext = None  # pyright: ignore[reportAssignmentType]
@@ -136,6 +137,7 @@ class RunContextWrapper[TContext]:
     approval_ledger: dict[str, bool] = field(default_factory=dict)
     approval_ledger_messages: dict[str, str] = field(default_factory=dict)
     executed_call_ids: set[str] = field(default_factory=set)
+    paused_delegates: dict[str, Any] = field(default_factory=dict)
     input_guardrail_results: list[Any] = field(default_factory=list)
     output_guardrail_results: list[Any] = field(default_factory=list)
     tool_input_guardrail_results: list[Any] = field(default_factory=list)
@@ -156,6 +158,7 @@ class RunContextWrapper[TContext]:
             approval_ledger=self.approval_ledger,
             approval_ledger_messages=self.approval_ledger_messages,
             executed_call_ids=self.executed_call_ids,
+            paused_delegates=self.paused_delegates,
             input_guardrail_results=self.input_guardrail_results,
             output_guardrail_results=self.output_guardrail_results,
             tool_input_guardrail_results=self.tool_input_guardrail_results,

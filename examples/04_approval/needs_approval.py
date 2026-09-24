@@ -9,7 +9,7 @@ Run it:
 
 import asyncio
 
-from runa import Agent, Runner, approval, tool
+from runa import Agent, approval, tool
 
 
 @approval
@@ -37,16 +37,16 @@ class SupportAgent(Agent):
 
 
 async def main() -> None:
-    """Run one turn, approving every interruption Runner surfaces along the way."""
+    """Run one turn, approving every interruption it pauses on along the way."""
     agent = SupportAgent()
-    result = await Runner.run(agent, "Refund $75 to order A101, they've waited long enough.")
-    while result.interruptions:
-        state = result.to_state()
-        for interruption in result.interruptions:
+    run = await agent.run("Refund $75 to order A101, they've waited long enough.")
+    while run.status == "paused":
+        state = run.to_state()
+        for interruption in run.interruptions:
             print(f"  needs approval: {interruption.name}({interruption.arguments})")
             state.approve(interruption)  # state.reject(interruption) would skip the tool instead
-        result = await Runner.run(agent, state)
-    print(result.final_output)
+        run = await agent.run(state)
+    print(run.output)
 
 
 asyncio.run(main())

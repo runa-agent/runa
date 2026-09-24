@@ -27,7 +27,8 @@ class SupportAgent(Agent):
 | `mcp` / `mcp_servers` | `[]` | MCP servers whose tools this agent can call. See [MCP Servers](mcp.md). |
 | `memory` | `None` | Long-term memory across conversations. See [Memory](memory.md). |
 | `knowledge` | `None` | Retrieval from application documents. See [Knowledge](knowledge.md). |
-| `output_type` | `None` | A type the final output must parse as. |
+| `output_type` | `None` | A dataclass, Pydantic model or `TypedDict` the final output is parsed into. |
+| `max_turns` | `10` | How many model calls one run may make before it errors. |
 | `hooks` | `None` | An `AgentHooks` instance scoped to this agent. See [Tracing and Hooks](tracing.md). |
 | `compact` | `False` | Keep long-running history from growing without bound. See below. |
 
@@ -78,8 +79,9 @@ same instance continues the conversation. Pass `session=` instead to persist his
 
 `run`/`run_sync` return a `Run`:
 
-* `run.output`: the final output, or `None` if the run errored
-* `run.status`: `"completed"` or `"error"`
+* `run.output`: the final output (an `output_type` instance, when set), or `None` unless completed
+* `run.status`: `"completed"`, `"paused"` (a tool call awaits [approval](approval.md)) or `"error"`
+* `run.interruptions`: the calls awaiting approval, when `status == "paused"`
 * `run.error`: the error message, when `status == "error"`
 * `run.usage`: this call's token usage
 * `run.trace`: the full span tree for this call. See [Tracing and Hooks](tracing.md).
@@ -88,10 +90,39 @@ A tripped guardrail or a runtime error (`MaxTurnsExceeded`, a model error) is ca
 as `status="error"` instead of being raised. `agent.history` is left unchanged, since the turn
 never completed.
 
-`run_streamed` instead yields `StreamEvent`s as the model responds, and updates `agent.history`
-only once the stream is fully consumed. It is the same run as `run`: guardrails, hooks, tracing,
-memory and `session=` all apply. Unlike `run`, an error is raised from the stream rather than
-reported as `status="error"`.
+`run_streamed` instead yields `StreamEvent`s as the model responds. It is the same run as `run`:
+guardrails, hooks, tracing, memory, approvals and `session=` all apply. Once the stream ends,
+`stream.run` holds the same `Run` that `run` would have returned, errors included, and
+`agent.history` is updated:
+
+```python
+stream = agent.run_streamed("My order hasn't arrived.")
+async for event in stream:
+    ...
+print(stream.run.output)
+```
+
+## Structured Output
+
+Set `output_type` and `run.output` is an instance of it. The model is asked for the matching
+JSON schema (on Claude, OpenAI and every chat-completions provider), and an answer that still
+doesn't fit comes back as `status="error"`:
+
+```python
+@dataclass
+class Ticket:
+    category: str
+    urgent: bool
+
+
+class TriageAgent(Agent):
+    name = "triage_agent"
+    output_type = Ticket
+
+
+run = TriageAgent().run_sync("My card was charged twice!")
+run.output.urgent  # True
+```
 
 ## Usage
 

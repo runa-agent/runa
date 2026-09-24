@@ -71,10 +71,14 @@ def test_run_agent_repl_raises_outside_a_runa_project(tmp_path: Path) -> None:
 
 @dataclass
 class _FakeResult:
-    """A stand-in for `RunResult`, just enough for `run_agent_repl` to consume."""
+    """A stand-in for `Run`, just enough for `run_agent_repl` to consume."""
 
-    final_output: Any = "the answer"
+    output: Any = "the answer"
     interruptions: list[Any] = field(default_factory=list)
+
+    @property
+    def status(self) -> str:
+        return "paused" if self.interruptions else "completed"
 
 
 def _scaffold_with_agent(tmp_path: Path) -> Path:
@@ -109,9 +113,9 @@ def test_run_agent_repl_sends_each_line_and_prints_the_reply(
     replies = iter(["hello!", "doing fine"])
 
     def fake_run_sync(agent: Any, message: Any, **kwargs: Any) -> _FakeResult:
-        return _FakeResult(final_output=next(replies))
+        return _FakeResult(output=next(replies))
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
 
     run_agent_repl("Support", root=project_dir)
 
@@ -131,7 +135,7 @@ def test_run_agent_repl_starts_a_new_session_each_time(
         session_ids.append(kwargs["session"].session_id)
         return _FakeResult()
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
 
     _feed_input(monkeypatch, ["hi"])
     run_agent_repl("Support", root=project_dir)
@@ -159,7 +163,7 @@ def test_run_agent_repl_continue_resumes_the_most_recent_session(
         seen.append(kwargs["session"].session_id)
         return _FakeResult()
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
     _feed_input(monkeypatch, ["hi"])
 
     run_agent_repl("Support", root=project_dir, continue_last=True)
@@ -178,7 +182,7 @@ def test_run_agent_repl_continue_with_no_history_starts_a_new_session(
         seen.append(kwargs["session"].session_id)
         return _FakeResult()
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
     _feed_input(monkeypatch, ["hi"])
 
     run_agent_repl("Support", root=project_dir, continue_last=True)
@@ -197,7 +201,7 @@ def test_run_agent_repl_resume_with_an_id_uses_it_directly(
         seen.append(kwargs["session"].session_id)
         return _FakeResult()
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
     _feed_input(monkeypatch, ["hi"])
 
     run_agent_repl("Support", root=project_dir, resume="Support-custom")
@@ -224,7 +228,7 @@ def test_run_agent_repl_resume_without_an_id_prompts_a_picker(
         seen.append(kwargs["session"].session_id)
         return _FakeResult()
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
     _feed_input(monkeypatch, ["", "hi"])  # blank picker answer -> default to the most recent
 
     run_agent_repl("Support", root=project_dir, resume="")
@@ -244,7 +248,7 @@ def test_run_agent_repl_resume_without_an_id_and_no_history_starts_a_new_session
         seen.append(kwargs["session"].session_id)
         return _FakeResult()
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
     _feed_input(monkeypatch, ["hi"])
 
     run_agent_repl("Support", root=project_dir, resume="")
@@ -255,7 +259,7 @@ def test_run_agent_repl_resume_without_an_id_and_no_history_starts_a_new_session
 def test_run_agent_repl_exits_on_the_exit_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Typing `exit` ends the loop without calling the Runner."""
+    """Typing `exit` ends the loop without running the agent."""
     project_dir = _scaffold_with_agent(tmp_path)
     _feed_input(monkeypatch, ["exit"])
     calls: list[Any] = []
@@ -264,7 +268,7 @@ def test_run_agent_repl_exits_on_the_exit_command(
         calls.append(message)
         return _FakeResult()
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
 
     run_agent_repl("Support", root=project_dir)
 
@@ -305,21 +309,20 @@ def test_run_agent_repl_approves_a_pending_tool_call_when_the_operator_says_yes(
     state = _FakeApprovalState()
 
     @dataclass
-    class _InterruptedResult:
-        final_output: Any = None
-        interruptions: list[Any] = field(default_factory=list)
+    class _InterruptedResult(_FakeResult):
+        output: Any = None
 
         def to_state(self) -> _FakeApprovalState:
             return state
 
     results = iter(
-        [_InterruptedResult(interruptions=[interruption]), _InterruptedResult(final_output="done")]
+        [_InterruptedResult(interruptions=[interruption]), _InterruptedResult(output="done")]
     )
 
     def fake_run_sync(agent: Any, message: Any, **kwargs: Any) -> Any:
         return next(results)
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
 
     run_agent_repl("Support", root=project_dir)
 
@@ -340,21 +343,20 @@ def test_run_agent_repl_rejects_a_pending_tool_call_by_default(
     state = _FakeApprovalState()
 
     @dataclass
-    class _InterruptedResult:
-        final_output: Any = None
-        interruptions: list[Any] = field(default_factory=list)
+    class _InterruptedResult(_FakeResult):
+        output: Any = None
 
         def to_state(self) -> _FakeApprovalState:
             return state
 
     results = iter(
-        [_InterruptedResult(interruptions=[interruption]), _InterruptedResult(final_output="done")]
+        [_InterruptedResult(interruptions=[interruption]), _InterruptedResult(output="done")]
     )
 
     def fake_run_sync(agent: Any, message: Any, **kwargs: Any) -> Any:
         return next(results)
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
 
     run_agent_repl("Support", root=project_dir)
 
@@ -375,21 +377,20 @@ def test_run_agent_repl_always_approves_a_pending_tool_call_when_the_operator_sa
     state = _FakeApprovalState()
 
     @dataclass
-    class _InterruptedResult:
-        final_output: Any = None
-        interruptions: list[Any] = field(default_factory=list)
+    class _InterruptedResult(_FakeResult):
+        output: Any = None
 
         def to_state(self) -> _FakeApprovalState:
             return state
 
     results = iter(
-        [_InterruptedResult(interruptions=[interruption]), _InterruptedResult(final_output="done")]
+        [_InterruptedResult(interruptions=[interruption]), _InterruptedResult(output="done")]
     )
 
     def fake_run_sync(agent: Any, message: Any, **kwargs: Any) -> Any:
         return next(results)
 
-    monkeypatch.setattr("runa.cli.chat.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Agent.run_sync", fake_run_sync)
 
     run_agent_repl("Support", root=project_dir)
 

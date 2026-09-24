@@ -21,13 +21,14 @@ from runa.exceptions import (
     RunaError,
     RunErrorDetails,
 )
-from runa.lifecycle import RunHooks, logger
+from runa.lifecycle import LoggingRunHooks, RunHooks, logger
 from runa.result import RunResult
 from runa.run_config import RunConfig
 from runa.run_internal.agent_runner_helpers import (
     _agent_tools,
     _model_settings,
     _normalized_handoffs,
+    _parse_output,
     _resolve_instructions,
     _resolve_model,
 )
@@ -240,7 +241,8 @@ async def _run_turns(
         if not message.get("tool_calls"):
             text = message.get("content") or ""
             await _run_output_guardrails(current_agent, context_wrapper, text, trace, agent_span_id)
-            return _TurnOutcome(text, generated, [], [], current_agent, context_tokens)
+            output = _parse_output(current_agent, text)
+            return _TurnOutcome(output, generated, [], [], current_agent, context_tokens)
 
         for call in message["tool_calls"]:
             notify(RunItemStreamEvent(name="tool_called", item=call))
@@ -260,12 +262,6 @@ async def _run_turns(
             await hooks.on_agent_start(context_wrapper, current_agent)
 
     raise MaxTurnsExceeded(f"max turns ({max_turns}) exceeded")
-
-
-def _default_hooks() -> RunHooks[Any]:
-    from runa.lifecycle import LoggingRunHooks
-
-    return LoggingRunHooks()
 
 
 @dataclass
@@ -365,6 +361,8 @@ async def _finish(
             session_input=run.session_input,
             **_guardrail_results(context_wrapper),
         )
+        for interruption in outcome.interruptions:
+            interruption.owner = interruption.owner or state  # a delegate's keeps its own
         _export(run.trace)
         return RunResult(
             final_output=None,
@@ -418,7 +416,7 @@ async def _run_async(
     emit: Emit | None = None,
 ) -> RunResult:
     run_config = run_config or RunConfig()
-    hooks = hooks or _default_hooks()
+    hooks = hooks or LoggingRunHooks()
 
     if isinstance(input, RunState):
         return await _resume(input, hooks, run_config, session, emit)
@@ -548,4 +546,4 @@ async def _resume(
     return await _finish(run, outcome, hooks, run_config)
 
 
-__all__ = ["_default_hooks", "_resume", "_run_async", "_run_turns"]
+__all__ = ["_resume", "_run_async", "_run_turns"]

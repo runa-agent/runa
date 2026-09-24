@@ -7,9 +7,11 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from pydantic import TypeAdapter, ValidationError
+
 from runa._models import Model, ModelProvider
 from runa._types import ModelSettings, RunContextWrapper
-from runa.exceptions import UserError
+from runa.exceptions import ModelBehaviorError, UserError
 from runa.handoff import Handoff
 from runa.tool import FunctionTool
 
@@ -24,11 +26,11 @@ def _normalized_handoffs(handoffs: list[Any]) -> dict[str, Handoff]:
 
 
 def _find_agent_by_name(root: Any, name: str) -> Any:
-    """BFS `root` and everything reachable via its `.handoffs`, matching on `.name`.
+    """BFS `root` and everything reachable via its handoffs and delegates, matching on `.name`.
 
     Needed to resolve a `RunState`/`Interruption`'s current agent from a name string after
-    deserialization: a handoff may have switched the current agent before the pause, so the
-    match isn't necessarily `root` itself.
+    deserialization: a handoff may have switched the current agent before the pause, or the
+    paused call may belong to a delegate, so the match isn't necessarily `root` itself.
     """
     seen: set[int] = set()
     queue: list[Any] = [root]
@@ -42,6 +44,11 @@ def _find_agent_by_name(root: Any, name: str) -> Any:
         queue.extend(
             handoff.agent
             for handoff in _normalized_handoffs(getattr(candidate, "handoffs", [])).values()
+        )
+        queue.extend(
+            tool.delegate
+            for tool in getattr(candidate, "tools", [])
+            if getattr(tool, "delegate", None) is not None
         )
     raise UserError(f"no agent named {name!r} reachable from {getattr(root, 'name', root)!r}")
 
@@ -137,6 +144,19 @@ def _resolve_model(agent: Any, model_provider: ModelProvider) -> Model:
     )
 
 
+def _parse_output(agent: Any, text: str) -> Any:
+    """The model's final `text`, validated into `agent.output_type` when it declares one."""
+    output_type = getattr(agent, "output_type", None)
+    if output_type is None or output_type is str:
+        return text
+    try:
+        return TypeAdapter(output_type).validate_json(text)
+    except ValidationError as exc:
+        raise ModelBehaviorError(
+            f"final output doesn't match {getattr(output_type, '__name__', output_type)}: {exc}"
+        ) from exc
+
+
 async def _resolve_instructions(agent: Any, context_wrapper: RunContextWrapper) -> str | None:
     """Resolve `agent.instructions`: a string passes through, a callable is called and awaited."""
     instructions = getattr(agent, "instructions", None)
@@ -156,6 +176,7 @@ __all__ = [
     "_needs_approval",
     "_normalized_handoffs",
     "_parse_arguments",
+    "_parse_output",
     "_resolve_instructions",
     "_resolve_model",
 ]

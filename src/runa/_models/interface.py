@@ -6,6 +6,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from pydantic import TypeAdapter
+
 from runa._types import ModelResponse, ModelSettings, TResponseInputItem, Usage
 
 
@@ -88,4 +90,24 @@ def _handoff_dict(handoff: Any) -> dict[str, Any]:
     }
 
 
-__all__ = ["Model", "StreamDelta", "_handoff_dict", "_tool_dict"]
+def _output_json_schema(output_schema: type | None) -> dict[str, Any] | None:
+    """The JSON schema a structured `output_schema` asks for; `None` for plain-text output."""
+    if output_schema is None or output_schema is str:
+        return None
+    return _closed(TypeAdapter(output_schema).json_schema())
+
+
+def _closed(schema: Any) -> Any:
+    """Forbid extra keys on every object in `schema`, as providers' JSON output modes require."""
+    if isinstance(schema, dict):
+        if schema.get("type") == "object":
+            schema.setdefault("additionalProperties", False)
+        for value in schema.values():
+            _closed(value)
+    elif isinstance(schema, list):
+        for value in schema:
+            _closed(value)
+    return schema
+
+
+__all__ = ["Model", "StreamDelta", "_handoff_dict", "_output_json_schema", "_tool_dict"]

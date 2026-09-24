@@ -22,12 +22,20 @@ breaking it isn't a style nit, it's a `TypeError` at runtime.
 class SupportAgent(Agent):
     name = "support_agent"
     model = "claude-sonnet-5"
-    instruction = ""
     tools = [...]
     guardrails = [...]
 ```
 
-`instructions` is loaded by default from `app/prompts/support_agent.md`
+`instructions` is loaded by default from `app/prompts/support_agent.md`.
+
+**An agent is run only through its own methods**: `run`, `run_sync` or `run_streamed`, each
+returning (or ending with) a `Run`: `.output`, `.status` (`"completed"`, `"paused"` or
+`"error"`), `.interruptions`, `.trace`, `.usage`, `.error`. Errors never raise out of a run;
+they come back as `status="error"`. Two more class attributes cover what a run needs:
+
+* `output_type`: a dataclass, Pydantic model or `TypedDict` the final answer is parsed into.
+  The model is asked for that JSON schema (on every provider) and a mismatch is an error `Run`.
+* `max_turns` (default 10): how many model calls one run may make.
 
 ## 2. Tool
 
@@ -59,7 +67,7 @@ def block_empty(x: str) -> bool:
 
 
 # agent guardrail
-class MyAgent:
+class MyAgent(Agent):
     guardrails = [block_empty.input]
 
 
@@ -91,18 +99,19 @@ def large_refund(amount: float) -> bool:
 def issue_refund(amount: float) -> str: ...
 ```
 
-**Pausing and resuming.** A call that needs approval doesn't run: it pauses the run, surfaced
-as `result.interruptions`. Resolve each one against `result.to_state()`, then resume by
-passing that `RunState` back into `Runner.run`/`run_sync` in place of the original input.
-A session-backed run saves nothing while paused: pass the same `session=` when resuming, and
-the whole turn is saved once the run finishes.
+**Pausing and resuming.** A call that needs approval doesn't run: it pauses the run, returned
+as `status="paused"` with `run.interruptions`. Resolve each one against `run.to_state()`, then
+resume by passing that `RunState` back into `run`/`run_sync`/`run_streamed` in place of a
+message. A session-backed run saves nothing while paused: pass the same `session=` when
+resuming, and the whole turn is saved once the run finishes.
 
 ```python
-result = Runner.run_sync(agent, "issue a $75 refund")
-state = result.to_state()
-for item in result.interruptions:
-    state.approve(item)  # or state.reject(item, rejection_message="not authorized")
-result = Runner.run_sync(agent, state)
+run = agent.run_sync("issue a $75 refund")
+while run.status == "paused":
+    state = run.to_state()
+    for item in run.interruptions:
+        state.approve(item)  # or state.reject(item, rejection_message="not authorized")
+    run = agent.run_sync(state)
 ```
 
 `approve`/`reject` also take `always=True`: the decision sticks for every future call to that
@@ -113,8 +122,8 @@ a custom `rejection_message`, fed back to the model instead of the default text;
 already executed once can't be submitted again: resuming the same `RunState` twice raises
 `DuplicateToolCallError` rather than silently re-running the tool.
 
-`Runner.run_streamed` pauses the same way: the stream ends with `interruptions` set, resolved on
-`result.to_state()` and resumed with `Runner.run_streamed(agent, state)` (or `Runner.run`).
+`run_streamed` pauses the same way: once the stream ends, its `.run` is the paused `Run`,
+resumed with `agent.run_streamed(state)` (or `run`/`run_sync`).
 
 **Durability.** `RunState` survives a process restart: `state.to_json()`/`.to_string()`
 serialize it (as a plain dict, or a JSON string); `RunState.from_json(agent, blob)`/
@@ -127,15 +136,15 @@ durably persisted separately (see [Tracing](#14-tracing)). An unrecognized `sche
 raises `UserError` rather than resuming from a blob a different, incompatible version of Runa
 produced.
 
-**Guardrail audit trail.** Every guardrail that ran this run (tripped or not) is recorded on
-`result.input_guardrail_results`/`.output_guardrail_results`/`.tool_input_guardrail_results`/
-`.tool_output_guardrail_results` (and the same four on a paused `RunState`, reflecting only
-what ran before the pause), not just whichever one stopped the run.
+**Guardrail audit trail.** Every guardrail that ran (tripped or not) is a span in `run.trace`,
+and is listed on a paused `RunState`'s `input_guardrail_results`/`.output_guardrail_results`/
+`.tool_input_guardrail_results`/`.tool_output_guardrail_results`, not just whichever one
+stopped the run.
 
 ## 5. Subagent (handoff/delegate)
 
 ```python
-class MyAgent:
+class MyAgent(Agent):
     subagents = [MyAgent2.handoff, MyAgent3.delegate, Agent4]
 ```
 
@@ -146,11 +155,9 @@ class MyAgent:
 
 A `.delegate` call shares the caller's [approval](#4-human-approval) ledger and usage
 accounting: a sticky (`always=True`) decision on the caller's side already covers a matching
-tool the delegate calls. **Known limitation:** a delegate call that pauses on a *non-sticky*
-approval isn't surfaced back to the caller as an interruption: it comes back as a plain `None`
-result instead, since a single delegate call has no pause/resume state of its own. Cover
-approval-gated tools reachable from a delegate with a sticky decision ahead of time if the
-delegate might call them.
+tool the delegate calls. A delegate that pauses for approval pauses its caller too: the
+delegate's calls appear in the caller's `run.interruptions`, and resuming the caller resumes the
+delegate where it stopped (also across `to_json`/`from_json`).
 
 
 ## 6. Session
@@ -183,7 +190,7 @@ class SupportAgent(Agent):
     memory = "auto"
 ```
 
-* `"auto"`: `Runner` retrieves relevant memories before each run and
+* `"auto"`: the run retrieves relevant memories before each run and
   persists new ones after, with no manual `.search`/`.remember` calls.
 * `"llm"`: the model gets a `search_memory` tool and decides itself when
   to call it; nothing is written automatically.
@@ -207,7 +214,7 @@ class SupportAgent(Agent):
     knowledge = "auto"
 ```
 
-* `"auto"` (or a `Knowledge(...)` instance): `Runner` searches it before every turn, injecting
+* `"auto"` (or a `Knowledge(...)` instance): the run searches it before every turn, injecting
   matches as a labeled block -- no manual `.search` calls.
 * `"llm"`: the model gets a `search_knowledge` tool and decides itself when to call it.
 * `None`: the agent behaves exactly as if `runa.knowledge` didn't exist.

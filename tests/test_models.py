@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx2 as httpx
 import pytest
+from pydantic import BaseModel
 
 from runa import content
 from runa._models import (
@@ -15,7 +16,6 @@ from runa._models import (
     ModelProvider,
     OpenAICompatibleModel,
     _anthropic_deltas,
-    _check_plain_text_output,
     _to_anthropic_content,
     _to_anthropic_image,
     _to_anthropic_messages,
@@ -235,6 +235,154 @@ def test_openai_compatible_stream_response_yields_text_and_tool_call_deltas() ->
     assert deltas[2].usage.input_tokens == 3
 
 
+def _ok_response() -> httpx.Response:
+    return httpx.Response(
+        200, json={"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {}}
+    )
+
+
+def _get_response(model: OpenAICompatibleModel, output_schema: Any = None) -> Any:
+    return asyncio.run(
+        model.get_response(
+            None, [{"role": "user", "content": "hi"}], ModelSettings(), [], output_schema, []
+        )
+    )
+
+
+@pytest.fixture
+def no_backoff(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record retry delays instead of sleeping through them."""
+    delays: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        delays.append(seconds)
+
+    monkeypatch.setattr("runa._models.openai_chatcompletions.asyncio.sleep", sleep)
+    return delays
+
+
+def test_openai_compatible_retries_rate_limits_and_server_errors(no_backoff: list[float]) -> None:
+    """A 429 then a 503 are retried with backoff, honoring `retry-after`, until a 200 lands."""
+    replies = [
+        httpx.Response(429, headers={"retry-after": "3"}),
+        httpx.Response(503),
+        _ok_response(),
+    ]
+    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: replies.pop(0)))
+
+    assert _get_response(model).output[0]["content"] == "ok"
+    assert no_backoff[0] == 3.0
+    assert len(no_backoff) == 2
+
+
+def test_openai_compatible_gives_up_after_max_retries(no_backoff: list[float]) -> None:
+    """Still failing after the retries, the last status surfaces as a `ModelBehaviorError`."""
+    from runa.exceptions import ModelBehaviorError
+
+    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: httpx.Response(500)))
+
+    with pytest.raises(ModelBehaviorError, match="500"):
+        _get_response(model)
+    assert len(no_backoff) == 2
+
+
+def test_openai_compatible_retries_connection_errors(no_backoff: list[float]) -> None:
+    """A dropped connection is retried, then raised as a `ModelBehaviorError`, not a raw error."""
+    from runa.exceptions import ModelBehaviorError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+
+    with pytest.raises(ModelBehaviorError, match="ConnectError"):
+        _get_response(model)
+    assert len(no_backoff) == 2
+
+
+def test_openai_compatible_stream_retries_before_the_first_event(no_backoff: list[float]) -> None:
+    """A stream that opens on a 503 is retried; nothing was emitted yet, so it's safe to."""
+    replies = [
+        httpx.Response(503),
+        httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=b'data: {"choices": [{"delta": {"content": "Hi"}}]}\n\ndata: [DONE]\n\n',
+        ),
+    ]
+    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: replies.pop(0)))
+
+    async def collect() -> list[Any]:
+        return [
+            d
+            async for d in model.stream_response(
+                None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
+            )
+        ]
+
+    assert [d.text for d in asyncio.run(collect())] == ["Hi"]
+    assert len(no_backoff) == 1
+
+
+class _Answer(BaseModel):
+    city: str
+    temperature: int
+
+
+def test_openai_compatible_asks_for_the_output_types_json_schema() -> None:
+    """A structured `output_type` is sent as a closed `json_schema` response format."""
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _ok_response()
+
+    _get_response(OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler)), _Answer)
+
+    response_format = seen[0]["response_format"]
+    assert response_format["type"] == "json_schema"
+    schema = response_format["json_schema"]["schema"]
+    assert set(schema["properties"]) == {"city", "temperature"}
+    assert schema["additionalProperties"] is False
+
+
+def test_anthropic_asks_for_the_output_types_json_schema() -> None:
+    """On Claude, a structured `output_type` becomes `output_config.format`; text sends none."""
+    model = AnthropicModel("claude-sonnet-5", client=None)  # type: ignore[arg-type]
+    request = model._request(
+        None, [{"role": "user", "content": "hi"}], ModelSettings(), [], _Answer, []
+    )
+
+    output_format = request["output_config"]["format"]
+    assert output_format["type"] == "json_schema"
+    assert output_format["schema"]["required"] == ["city", "temperature"]
+    assert output_format["schema"]["additionalProperties"] is False
+    plain = model._request(None, [{"role": "user", "content": "hi"}], ModelSettings(), [], str, [])
+    assert "output_config" not in plain
+
+
+def test_anthropic_api_errors_surface_as_model_behavior_errors() -> None:
+    """An `anthropic.APIError` the SDK's own retries couldn't fix becomes a `RunaError`."""
+    import anthropic
+
+    from runa.exceptions import ModelBehaviorError
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+
+    async def create(**_: Any) -> Any:
+        raise anthropic.APIConnectionError(request=request)
+
+    client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    model = AnthropicModel("claude-sonnet-5", client=client)  # type: ignore[arg-type]
+
+    with pytest.raises(ModelBehaviorError, match="model request failed"):
+        asyncio.run(
+            model.get_response(
+                None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
+            )
+        )
+
+
 def test_split_system_and_merges_consecutive_tool_results() -> None:
     """Two tool replies to one multi-tool-call turn merge into a single Anthropic user message."""
     messages: list[dict[str, Any]] = [
@@ -424,15 +572,6 @@ def test_to_usage_converts_anthropic_token_counts() -> None:
     assert result.output_tokens == 5
     assert result.total_tokens == 15
     assert result.input_tokens_details.cached_tokens == 2
-
-
-def test_check_plain_text_output_allows_none_and_str_and_rejects_a_schema() -> None:
-    """A structured output type on a Claude model raises, since translation isn't implemented."""
-    _check_plain_text_output(None)
-    _check_plain_text_output(str)
-
-    with pytest.raises(UserError):
-        _check_plain_text_output(dict)
 
 
 async def _stream(events: list[SimpleNamespace]) -> AsyncIterator[SimpleNamespace]:

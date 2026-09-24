@@ -12,12 +12,14 @@ from typing import Any, cast
 import pytest
 
 from runa import Agent
+from runa._models import StreamDelta
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Subagent
 from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
 from runa.knowledge import Knowledge
 from runa.lifecycle import LoggingRunHooks
 from runa.memory import Memory
+from runa.run_state import RunState
 from runa.tool import FunctionTool, tool
 
 
@@ -584,19 +586,42 @@ class _FakeResult:
         return []
 
 
-def test_run_sync_defaults_to_logging_run_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`run_sync` passes a `LoggingRunHooks` when none is given."""
-    captured: dict[str, Any] = {}
+def _async(fake: Any) -> Any:
+    """Wrap a sync `Runner.run` stand-in as the coroutine function `Agent.run` awaits."""
 
-    def fake_run_sync(*args: Any, hooks: Any, **kwargs: Any) -> _FakeResult:
-        captured["hooks"] = hooks
-        return _FakeResult()
+    async def run(*args: Any, **kwargs: Any) -> Any:
+        return fake(*args, **kwargs)
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    return run
 
-    Researcher().run_sync("hi")
 
-    assert isinstance(captured["hooks"], LoggingRunHooks)
+def test_every_run_shape_defaults_to_logging_run_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no `hooks=`, `run_sync` and `run_streamed` both log through `LoggingRunHooks`."""
+    created: list[Any] = []
+
+    class _Recording(LoggingRunHooks):
+        def __init__(self) -> None:
+            super().__init__()
+            created.append(self)
+
+    monkeypatch.setattr("runa.run_internal.run_loop.LoggingRunHooks", _Recording)
+
+    class Echo(Agent):
+        name = "Echo"
+        instructions = "Echo."
+        model = _ScriptedModel([_final_message("one")])
+
+    agent = Echo()
+    agent.run_sync("hi")
+
+    async def consume() -> None:
+        async for _ in agent.run_streamed("again"):
+            pass
+
+    agent.model = _ScriptedStreamModel("two")
+    asyncio.run(consume())
+
+    assert len(created) == 2
 
 
 def test_run_sync_explicit_hooks_override_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -608,7 +633,7 @@ def test_run_sync_explicit_hooks_override_the_default(monkeypatch: pytest.Monkey
         captured["hooks"] = hooks
         return _FakeResult()
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     Researcher().run_sync("hi", hooks=custom_hooks)
 
@@ -621,7 +646,7 @@ def test_run_sync_records_and_accumulates_usage(monkeypatch: pytest.MonkeyPatch)
     def fake_run_sync(*args: Any, **kwargs: Any) -> _FakeResult:
         return _FakeResult()
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     agent = Researcher()
     agent.run_sync("hi")
@@ -639,7 +664,7 @@ def test_run_sync_returns_a_completed_run(monkeypatch: pytest.MonkeyPatch) -> No
     def fake_run_sync(*args: Any, **kwargs: Any) -> _FakeResult:
         return _FakeResult()
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     run = Researcher().run_sync("hi")
 
@@ -661,7 +686,7 @@ def test_run_sync_passes_multimodal_message_content_through(
         captured["turn_input"] = turn_input
         return _FakeResult()
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     parts = [content.text("what's in this image?"), content.image("https://example.test/cat.png")]
     Researcher().run_sync(parts)
@@ -679,7 +704,7 @@ def test_run_sync_auto_detects_images_in_a_plain_string_list(
         captured["turn_input"] = turn_input
         return _FakeResult()
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     Researcher().run_sync(["what's in this image?", "https://example.test/cat.jpg"])
 
@@ -710,7 +735,7 @@ def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
         captured["turn_input"] = turn_input
         return _FakeResult()
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     parts = [content.image("https://example.test/cat.png")]
     Researcher().run_sync(parts, session=cast(Any, object()))
@@ -739,7 +764,7 @@ def test_run_sync_catches_runa_error_as_error_run(monkeypatch: pytest.MonkeyPatc
     def fake_run_sync(*args: Any, **kwargs: Any) -> _FakeResult:
         raise exc
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     agent = Researcher()
     run = agent.run_sync("hi")
@@ -764,7 +789,7 @@ def test_run_sync_trace_populated_regardless_of_hooks(monkeypatch: pytest.Monkey
     def fake_run_sync(*args: Any, **kwargs: Any) -> _ResultWithTrace:
         return _ResultWithTrace()
 
-    monkeypatch.setattr("runa.agent.Runner.run_sync", staticmethod(fake_run_sync))
+    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
 
     run = Researcher().run_sync("hi", hooks=LoggingRunHooks())
 
@@ -797,6 +822,17 @@ class _ScriptedModel:
             output=[self._messages.pop(0)],
             usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
         )
+
+
+class _ScriptedStreamModel:
+    """A streaming `Model` stand-in that answers `text` in one delta."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
+        yield StreamDelta(text=self._text)
+        yield StreamDelta(usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1))
 
 
 def test_run_sync_trace_has_agent_and_tool_spans() -> None:
@@ -860,6 +896,12 @@ def test_run_streamed_yields_events_and_updates_history(monkeypatch: pytest.Monk
             context=None, usage=Usage(input_tokens=3, output_tokens=4)
         )
         interruptions: list[Any] = []
+        final_output = "ok"
+        trace = None
+
+        @property
+        def result(self) -> Any:
+            return self
 
         def __aiter__(self) -> AsyncIterator[Any]:
             async def _events() -> AsyncIterator[Any]:
@@ -901,6 +943,12 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
     class _FakeStreaming:
         context_wrapper = RunContextWrapper(context=None)
         interruptions: list[Any] = []
+        final_output = "ok"
+        trace = None
+
+        @property
+        def result(self) -> Any:
+            return self
 
         def __aiter__(self) -> AsyncIterator[Any]:
             async def _events() -> AsyncIterator[Any]:
@@ -931,39 +979,6 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
     assert agent.history == [{"role": "user", "content": "earlier"}]
 
 
-def test_run_streamed_defaults_to_logging_run_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`run_streamed` defaults to a `LoggingRunHooks` when none is given."""
-    captured: dict[str, Any] = {}
-
-    class _FakeStreaming:
-        context_wrapper = RunContextWrapper(context=None)
-        interruptions: list[Any] = []
-
-        def __aiter__(self) -> AsyncIterator[Any]:
-            async def _events() -> AsyncIterator[Any]:
-                return
-                yield  # pragma: no cover -- makes this an async generator with no items
-
-            return _events()
-
-        def to_input_list(self) -> list[Any]:
-            return []
-
-    def fake_run_streamed(*args: Any, hooks: Any, **kwargs: Any) -> _FakeStreaming:
-        captured["hooks"] = hooks
-        return _FakeStreaming()
-
-    monkeypatch.setattr("runa.agent.Runner.run_streamed", staticmethod(fake_run_streamed))
-
-    async def _consume() -> None:
-        async for _ in Researcher().run_streamed("hi"):
-            pass
-
-    asyncio.run(_consume())
-
-    assert isinstance(captured["hooks"], LoggingRunHooks)
-
-
 def test_evaluate_delegates_to_evaluate_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     """`Agent.evaluate()` forwards straight to `runa.eval.evaluate.evaluate_agent`."""
     from runa.eval.case import Case
@@ -991,3 +1006,251 @@ def test_evaluate_delegates_to_evaluate_agent(monkeypatch: pytest.MonkeyPatch) -
         "thresholds": None,
         "concurrency": 8,
     }
+
+
+def _refund_tool(calls: list[float]) -> FunctionTool:
+    @tool(needs_approval=True)
+    def refund(amount: float) -> str:
+        """Refund `amount` dollars."""
+        calls.append(amount)
+        return f"refunded {amount}"
+
+    return refund
+
+
+def test_run_sync_pauses_for_approval_and_resumes_from_its_state() -> None:
+    """An approval-gated call pauses the `Run`; the approved state resumes it to completion."""
+    calls: list[float] = []
+
+    class Support(Agent):
+        name = "Support"
+        instructions = "Refund when asked."
+        tools = [_refund_tool(calls)]
+        model = _ScriptedModel(
+            [_tool_call_message("refund", '{"amount": 75}'), _final_message("refunded")]
+        )
+
+    agent = Support()
+    run = agent.run_sync("refund $75")
+
+    assert run.status == "paused"
+    assert [i.name for i in run.interruptions] == ["refund"]
+    assert calls == []
+    assert agent.history == []
+
+    state = run.to_state()
+    state.approve(run.interruptions[0])
+    resumed = agent.run_sync(state)
+
+    assert resumed.status == "completed"
+    assert resumed.output == "refunded"
+    assert calls == [75]
+    assert agent.history[0] == {"role": "user", "content": "refund $75"}
+    assert agent.history[-1]["content"] == "refunded"
+
+
+def test_to_state_on_a_run_that_did_not_pause_raises() -> None:
+    """Only a paused `Run` has a state to resume."""
+    from runa.exceptions import UserError
+
+    class Echo(Agent):
+        name = "Echo"
+        instructions = "Echo."
+        model = _ScriptedModel([_final_message("hi")])
+
+    with pytest.raises(UserError, match="paused"):
+        Echo().run_sync("hi").to_state()
+
+
+def test_run_streamed_pauses_and_resumes_like_run() -> None:
+    """A stream ends paused with `.run.interruptions`; streaming its state finishes the run."""
+    calls: list[float] = []
+
+    class _StreamedScript:
+        def __init__(self, turns: list[list[StreamDelta]]) -> None:
+            self._turns = turns
+
+        async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
+            for delta in self._turns.pop(0):
+                yield delta
+
+    class Support(Agent):
+        name = "Support"
+        instructions = "Refund when asked."
+        tools = [_refund_tool(calls)]
+
+    agent = Support()
+    agent.model = _StreamedScript(
+        [
+            [
+                StreamDelta(tool_call_index=0, tool_call_id="call_1", tool_call_name="refund"),
+                StreamDelta(tool_call_index=0, tool_call_arguments='{"amount": 20}'),
+            ],
+            [StreamDelta(text="done")],
+        ]
+    )
+
+    async def consume(message: Any) -> Any:
+        stream = agent.run_streamed(message)
+        async for _ in stream:
+            pass
+        return stream.run
+
+    paused = asyncio.run(consume("refund $20"))
+    assert paused.status == "paused"
+    state = paused.to_state()
+    state.approve(paused.interruptions[0])
+    finished = asyncio.run(consume(state))
+
+    assert finished.status == "completed"
+    assert finished.output == "done"
+    assert calls == [20]
+
+
+def test_run_streamed_reports_an_error_as_an_error_run() -> None:
+    """A `RunaError` mid-stream ends the stream with an `"error"` `Run`, like `run`."""
+
+    class _AlwaysCallsATool:
+        async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
+            yield StreamDelta(tool_call_index=0, tool_call_id="call_1", tool_call_name="missing")
+
+    class Echo(Agent):
+        name = "Echo"
+        instructions = "Echo."
+        max_turns = 1
+
+    agent = Echo()
+    agent.model = _AlwaysCallsATool()
+
+    async def consume() -> Any:
+        stream = agent.run_streamed("hi")
+        async for _ in stream:
+            pass
+        return stream.run
+
+    run = asyncio.run(consume())
+
+    assert run.status == "error"
+    assert run.error is not None
+
+
+class _Child(Agent):
+    name = "Child"
+    instructions = "Refund when asked."
+
+
+def _parent_with_paused_delegate(calls: list[float]) -> Agent:
+    """A parent whose `.delegate` child calls an approval-gated tool."""
+
+    class Parent(Agent):
+        name = "Parent"
+        instructions = "Delegate refunds."
+        subagents = [_Child.delegate]
+
+    parent = Parent()
+    parent.model = _ScriptedModel(
+        [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
+    )
+    child = next(t.delegate for t in parent.tools if t.delegate is not None)
+    child.tools = [_refund_tool(calls)]
+    child.model = _ScriptedModel(
+        [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
+    )
+    return parent
+
+
+def test_a_delegate_that_pauses_pauses_its_caller_and_resumes_where_it_stopped() -> None:
+    """The child's approval surfaces on the parent's `Run`; approving it finishes both runs."""
+    calls: list[float] = []
+    parent = _parent_with_paused_delegate(calls)
+
+    run = parent.run_sync("please refund")
+
+    assert run.status == "paused"
+    assert [(i.name, i.agent.name) for i in run.interruptions] == [("refund", "Child")]
+
+    state = run.to_state()
+    state.approve(run.interruptions[0])
+    resumed = parent.run_sync(state)
+
+    assert resumed.status == "completed"
+    assert resumed.output == "ok"
+    assert calls == [5]
+    assert parent.history[-2]["content"] == "refunded 5"  # the delegate's answer, as a tool result
+
+
+def test_a_paused_delegate_survives_a_json_round_trip() -> None:
+    """`to_json`/`from_json` carry the child's paused state, so a restart resumes it too."""
+    calls: list[float] = []
+    parent = _parent_with_paused_delegate(calls)
+    blob = parent.run_sync("please refund").to_state().to_json()
+
+    async def restore() -> RunState:
+        return await RunState.from_json(parent, blob)
+
+    state = asyncio.run(restore())
+    state.reject(state.pending[0], rejection_message="not today")
+    resumed = parent.run_sync(state)
+
+    assert resumed.status == "completed"
+    assert calls == []
+
+
+def test_output_type_parses_the_final_answer() -> None:
+    """A declared `output_type` turns the model's JSON answer into that type."""
+
+    @dataclass
+    class Weather:
+        city: str
+        temperature: int
+
+    class Forecaster(Agent):
+        name = "Forecaster"
+        instructions = "Answer in JSON."
+        output_type = Weather
+        model = _ScriptedModel([_final_message('{"city": "Paris", "temperature": 21}')])
+
+    run = Forecaster().run_sync("weather in Paris?")
+
+    assert run.output == Weather(city="Paris", temperature=21)
+
+
+def test_output_type_mismatch_is_an_error_run() -> None:
+    """An answer that doesn't fit `output_type` is a model error, not a silently wrong value."""
+
+    @dataclass
+    class Weather:
+        city: str
+        temperature: int
+
+    class Forecaster(Agent):
+        name = "Forecaster"
+        instructions = "Answer in JSON."
+        output_type = Weather
+        model = _ScriptedModel([_final_message("sunny, 21 degrees")])
+
+    run = Forecaster().run_sync("weather in Paris?")
+
+    assert run.status == "error"
+    assert run.error is not None and "Weather" in run.error
+
+
+def test_max_turns_is_a_class_attribute() -> None:
+    """`max_turns` caps the run's model calls, set like any other agent attribute."""
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    class Looper(Agent):
+        name = "Looper"
+        instructions = "Keep pinging."
+        tools = [ping]
+        max_turns = 2
+        model = _ScriptedModel([_tool_call_message("ping", "{}", f"call_{i}") for i in range(3)])
+
+    run = Looper().run_sync("go")
+
+    assert run.status == "error"
+    assert run.error == "max turns (2) exceeded"

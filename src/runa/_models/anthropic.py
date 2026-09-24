@@ -10,9 +10,9 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from anthropic import APIError, AsyncAnthropic
 
-from runa._models.interface import StreamDelta, _handoff_dict, _tool_dict
+from runa._models.interface import StreamDelta, _handoff_dict, _output_json_schema, _tool_dict
 from runa._types import (
     InputTokensDetails,
     ModelResponse,
@@ -22,16 +22,7 @@ from runa._types import (
     TResponseInputItem,
     Usage,
 )
-from runa.exceptions import UserError
-
-
-def _check_plain_text_output(output_schema: type | None) -> None:
-    """Reject structured output: `AnthropicModel` doesn't translate JSON response formats."""
-    if output_schema is not None and output_schema is not str:
-        raise UserError(
-            "AnthropicModel does not support structured output schemas; use a plain-text "
-            "output type (the default, or `str`) for Claude models."
-        )
+from runa.exceptions import ModelBehaviorError
 
 
 def _text_content(content: Any) -> str:
@@ -188,7 +179,11 @@ def _to_usage(usage: Any) -> Usage:
 
 
 class AnthropicModel:
-    """Talks to Claude directly through the `anthropic` SDK's Messages API."""
+    """Talks to Claude directly through the `anthropic` SDK's Messages API.
+
+    Retries (connection errors, 408/409/429/5xx, with backoff) are the SDK's own; a request that
+    still fails raises `ModelBehaviorError`, like the chat-completions backend.
+    """
 
     def __init__(self, model: str, client: AsyncAnthropic) -> None:
         """Store the model name and the shared Anthropic client to call it through."""
@@ -201,6 +196,7 @@ class AnthropicModel:
         input: list[TResponseInputItem],
         model_settings: ModelSettings,
         tools: list[Any],
+        output_schema: type | None,
         handoffs: list[Any],
     ) -> dict[str, Any]:
         messages = list(input)
@@ -229,6 +225,9 @@ class AnthropicModel:
             request["temperature"] = model_settings.temperature
         if model_settings.top_p is not None:
             request["top_p"] = model_settings.top_p
+        schema = _output_json_schema(output_schema)
+        if schema is not None:
+            request["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
         return request
 
     async def get_response(
@@ -241,9 +240,13 @@ class AnthropicModel:
         handoffs: list[Any],
     ) -> ModelResponse:
         """Send one turn to the model and return its full response."""
-        _check_plain_text_output(output_schema)
-        request = self._request(system_instructions, input, model_settings, tools, handoffs)
-        response = await self._client.messages.create(**request)
+        request = self._request(
+            system_instructions, input, model_settings, tools, output_schema, handoffs
+        )
+        try:
+            response = await self._client.messages.create(**request)
+        except APIError as exc:
+            raise ModelBehaviorError(f"model request failed: {exc}") from exc
 
         message: dict[str, Any] = _to_chat_message(response)
         usage = _to_usage(response.usage)
@@ -259,11 +262,15 @@ class AnthropicModel:
         handoffs: list[Any],
     ) -> AsyncIterator[StreamDelta]:
         """Send one turn to the model and yield incremental `StreamDelta`s as it responds."""
-        _check_plain_text_output(output_schema)
-        request = self._request(system_instructions, input, model_settings, tools, handoffs)
-        raw_stream = await self._client.messages.create(stream=True, **request)
-        async for delta in _anthropic_deltas(raw_stream):
-            yield delta
+        request = self._request(
+            system_instructions, input, model_settings, tools, output_schema, handoffs
+        )
+        try:
+            raw_stream = await self._client.messages.create(stream=True, **request)
+            async for delta in _anthropic_deltas(raw_stream):
+                yield delta
+        except APIError as exc:
+            raise ModelBehaviorError(f"model request failed: {exc}") from exc
 
 
 def _to_chat_message(message: Any) -> dict[str, Any]:
@@ -325,7 +332,6 @@ async def _anthropic_deltas(stream: AsyncIterator[Any]) -> AsyncIterator[StreamD
 __all__ = [
     "AnthropicModel",
     "_anthropic_deltas",
-    "_check_plain_text_output",
     "_to_anthropic_content",
     "_to_anthropic_image",
     "_to_anthropic_messages",

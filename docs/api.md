@@ -64,27 +64,17 @@ signature-level reference.
 
 ::: runa.MCPServer
 
-::: runa.MCPServerStdio
-
-::: runa.MCPServerStreamableHttp
-
 ## Running
-
-::: runa.Runner
 
 ::: runa.Run
 
-::: runa.RunConfig
+::: runa.RunStream
 
 ::: runa._types.ModelSettings
 
 ::: runa.RunState
 
 ::: runa.Interruption
-
-::: runa.RunResult
-
-::: runa.RunResultStreaming
 
 ## Hooks
 

@@ -1,9 +1,5 @@
 """cli/chat.py: `runa chat`, talk to an Agent in a loop from argv.
 
-Calls `Runner.run_sync()` directly rather than `Agent.run_sync()`: the REPL
-needs the full `RunResult` (to detect `interruptions` and resolve them by
-prompting), while `Agent.run_sync()` only returns the final output string.
-
 Each invocation starts a fresh `SQLiteSession` by default, so a chat doesn't
 silently keep piling onto the same conversation. `--continue`/`--resume`
 pick up a past one instead, keyed by session id over the app's `db/runa.db`
@@ -14,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from runa.agent import Agent, _default_hooks
+from runa.agent import Agent
 from runa.cli._project import (
     iter_agent_classes,
     loaded_app,
@@ -22,7 +18,6 @@ from runa.cli._project import (
     resolve_db_path,
 )
 from runa.cli.sessions import list_sessions_for_agent
-from runa.runner import Runner
 from runa.session import SQLiteSession
 
 
@@ -140,17 +135,10 @@ def run_agent_repl(
             if user_input in {"exit", "quit"}:
                 return
 
-            result = Runner.run_sync(
-                agent,
-                user_input,
-                hooks=_default_hooks(),
-                run_config=agent._run_config(session),
-                session=session,
-            )
-
-            while result.interruptions:
-                state = result.to_state()
-                for item in result.interruptions:
+            run = agent.run_sync(user_input, session=session)
+            while run.status == "paused":
+                state = run.to_state()
+                for item in run.interruptions:
                     answer = (
                         input(f"approve {item.name}({item.arguments})? [y/N/a] ").strip().lower()
                     )
@@ -160,12 +148,6 @@ def run_agent_repl(
                         state.approve(item)
                     else:
                         state.reject(item)
-                result = Runner.run_sync(
-                    agent,
-                    state,
-                    hooks=_default_hooks(),
-                    run_config=agent._run_config(session),
-                    session=session,
-                )
+                run = agent.run_sync(state, session=session)
 
-            print(result.final_output)
+            print(run.output if run.status == "completed" else f"error: {run.error}")

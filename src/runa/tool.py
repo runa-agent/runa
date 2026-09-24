@@ -43,9 +43,9 @@ class FunctionTool:
     tool_input_guardrails: list[ToolInputGuardrail[Any]] | None = None
     tool_output_guardrails: list[ToolOutputGuardrail[Any]] | None = None
     needs_approval: _NeedsApproval = False
-    is_delegate: bool = False
-    """Set by `agent_as_tool` (`.delegate`): traced as a `"delegate"` span, not a plain `"tool"`,
-    since invoking it runs a whole nested `Agent.run()`, not just a function."""
+    delegate: Any = None
+    """The sub-`Agent` behind a `.delegate` tool (set by `agent_as_tool`): traced as a
+    `"delegate"` span, not a plain `"tool"`, and resolvable by name when resuming a paused run."""
 
 
 def _json_type(annotation: Any) -> dict[str, Any]:

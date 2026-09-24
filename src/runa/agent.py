@@ -1,5 +1,6 @@
 """Class-based Agent, built on Runa's own runtime (`runa.runner`/`runa.run_internal`)."""
 
+import asyncio
 import inspect
 import re
 from collections.abc import AsyncIterator, Iterable
@@ -8,16 +9,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from runa import content
-from runa._models import ModelProvider
+from runa._models import DEFAULT_MODEL, ModelProvider
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, TResponseInputItem, Usage
 from runa.exceptions import RunaError, UserError
 from runa.guardrail import flatten_agent_guardrails
 from runa.handoff import agent_as_tool
 from runa.knowledge import Knowledge
-from runa.lifecycle import LoggingRunHooks, RunHooks
+from runa.lifecycle import RunHooks
 from runa.memory import Memory
-from runa.run import Run
-from runa.run_config import RunConfig
+from runa.result import RunResult
+from runa.run import Run, RunStream
+from runa.run_config import DEFAULT_MAX_TURNS, RunConfig
 from runa.run_state import RunState
 from runa.runner import Runner
 from runa.session import SessionABC
@@ -42,19 +44,10 @@ _AGENT_FIELDS = (
     "memory",
     "knowledge",
     "compact",
+    "max_turns",
 )
 
 _MODEL_PROVIDER = ModelProvider()
-
-
-def _default_hooks() -> RunHooks[Any]:
-    """Build the default `hooks` for a run: `LoggingRunHooks`."""
-    return LoggingRunHooks()
-
-
-def _usage_from_exception(exc: RunaError) -> Usage:
-    """Recover whatever token usage a run accrued before a `RunaError` stopped it."""
-    return exc.run_data.context_wrapper.usage if exc.run_data else Usage()
 
 
 def _adapt_instructions(instructions: Any) -> Any:
@@ -78,17 +71,22 @@ def _adapt_instructions(instructions: Any) -> Any:
 
 
 def _turn_input(
-    message: MessageContent, history: list[TResponseInputItem], session: SessionABC | None
-) -> str | list[TResponseInputItem]:
-    """Build the `input` for `Runner.run`/`run_sync` from this turn's `message`.
+    message: MessageContent | RunState,
+    history: list[TResponseInputItem],
+    session: SessionABC | None,
+) -> str | list[TResponseInputItem] | RunState:
+    """Build the `input` for `Runner.run` from this turn's `message`.
 
-    A list `message` goes through `runa.content.parts` first, auto-detecting each bare string
-    as text or an image; a plain string is left untouched. With no `session`, the result joins
-    `history` as a new user message. With a `session`, only the new turn is ever sent (prior
-    turns come back from the session itself): a plain string passes straight through, a
-    multimodal one is wrapped in a single-item message list instead, since `Runner.run`'s
-    session path only wraps a bare string into `{"role": "user", ...}` itself.
+    A paused `RunState` passes straight through, to be resumed. A list `message` goes through
+    `runa.content.parts` first, auto-detecting each bare string as text or an image; a plain
+    string is left untouched. With no `session`, the result joins `history` as a new user
+    message. With a `session`, only the new turn is ever sent (prior turns come back from the
+    session itself): a plain string passes straight through, a multimodal one is wrapped in a
+    single-item message list instead, since `Runner.run`'s session path only wraps a bare
+    string into `{"role": "user", ...}` itself.
     """
+    if isinstance(message, RunState):
+        return message
     resolved = message if isinstance(message, str) else content.parts(message)
     if session is not None:
         return resolved if isinstance(resolved, str) else [{"role": "user", "content": resolved}]
@@ -208,7 +206,8 @@ class Agent:
     h = handoff
     delegate = _Mode("delegate")
     d = delegate
-    model = "gpt-5.4-nano"
+    model = DEFAULT_MODEL
+    max_turns = DEFAULT_MAX_TURNS
 
     def __init__(self, **kwargs: Any) -> None:
         """Build config from class attributes and wire up any subagents and guardrails.
@@ -242,6 +241,8 @@ class Agent:
           - a `runa.compact.Compactor` (any `(items, usage_tokens) -> items | None` callable):
             your own strategy -- a different threshold, an LLM summary, whatever you return.
           - `False` (the default): off.
+
+        `max_turns` caps how many model calls one run may make before `MaxTurnsExceeded`.
         """
         if type(self) is Agent:
             raise TypeError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
@@ -282,7 +283,7 @@ class Agent:
 
         self.name: str = kwargs["name"]
         self.instructions = _adapt_instructions(kwargs.get("instructions"))
-        self.model: str | Any = kwargs.get("model", "gpt-5.4-nano")
+        self.model: str | Any = kwargs["model"]
         self.model_settings: ModelSettings = kwargs.get("model_settings") or ModelSettings()
         self.tools: list[FunctionTool] = tools
         self.handoffs: list[Any] = handoffs
@@ -292,6 +293,7 @@ class Agent:
         self.output_type: type | None = kwargs.get("output_type")
         self.hooks = kwargs.get("hooks")
         self.compact: bool = kwargs.get("compact", False)
+        self.max_turns: int = kwargs["max_turns"]
 
         self.history: list[TResponseInputItem] = []
         self.usage = Usage()
@@ -317,11 +319,41 @@ class Agent:
             model_provider=_MODEL_PROVIDER,
             workflow_name=type(self).__name__,
             group_id=getattr(session, "session_id", None),
+            max_turns=self.max_turns,
+        )
+
+    def _completed(self, result: RunResult, session: SessionABC | None) -> Run:
+        """Record `result`'s usage (and, unless paused or session-backed, history) as a `Run`."""
+        self.last_usage = result.context_wrapper.usage
+        self.usage.add(self.last_usage)
+        if result.interruptions:
+            return Run(
+                output=None,
+                trace=result.trace,
+                usage=self.last_usage,
+                status="paused",
+                interruptions=result.interruptions,
+                _state=result.to_state(),
+            )
+        if session is None:
+            self.history = result.to_input_list()
+        return Run(output=result.final_output, trace=result.trace, usage=self.last_usage)
+
+    def _failed(self, exc: RunaError) -> Run:
+        """Record what a run that `exc` stopped had used, as an `"error"` `Run`."""
+        self.last_usage = exc.run_data.context_wrapper.usage if exc.run_data else Usage()
+        self.usage.add(self.last_usage)
+        return Run(
+            output=None,
+            trace=exc.run_data.trace if exc.run_data else None,
+            usage=self.last_usage,
+            status="error",
+            error=str(exc),
         )
 
     async def run(
         self,
-        message: MessageContent,
+        message: MessageContent | RunState,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
         session: SessionABC | None = None,
@@ -333,21 +365,23 @@ class Agent:
         `message` is plain text, or a list for a multimodal message: bare strings are
         auto-detected as text or an image by extension (`"cat.jpg"`, a URL, a `data:image/...`
         URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
-        string doesn't have a recognizable image extension.
+        string doesn't have a recognizable image extension. It can also be the `RunState` of a
+        paused `Run`, once its interruptions are approved or rejected, to resume that run.
 
         `context` is available to a single-argument `instructions` callable (and to tools,
         guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle
-        callbacks (`on_agent_start`, `on_tool_end`, etc.) from `Runner`; it defaults to
-        `LoggingRunHooks`.
+        callbacks (`on_agent_start`, `on_tool_end`, etc.); it defaults to `LoggingRunHooks`.
 
         Pass a `session` (e.g. `SQLiteSession`) to persist conversation history there instead
         of on `self.history`; the session supplies prior turns automatically, so only the new
-        `message` is sent as input, and `self.history` is left untouched.
+        `message` is sent as input, and `self.history` is left untouched. Resume a paused run
+        with the same `session` it started with.
 
-        Returns a `Run` exposing `.output`, `.trace`, `.usage`, `.status`, and `.error`. A
-        guardrail tripwire, `MaxTurnsExceeded`, or another `RunaError` is caught and reported as
-        `status="error"` instead of propagating; `self.history` is left unchanged when that
-        happens, since the turn never completed.
+        Returns a `Run` exposing `.output`, `.status`, `.interruptions`, `.trace`, `.usage` and
+        `.error`. A tool call needing approval pauses the run (`status="paused"`). A guardrail
+        tripwire, `MaxTurnsExceeded`, or another `RunaError` is caught and reported as
+        `status="error"` instead of propagating. `self.history` only changes once a turn
+        completes.
 
         Token usage for this call is recorded to `self.last_usage` and accumulated into
         `self.usage`, regardless of `session`, `hooks`, or whether the run errored.
@@ -356,33 +390,66 @@ class Agent:
         a forked `RunContextWrapper` with the caller instead of building a fresh one; `context`
         is ignored when it's given. Don't pass it directly.
         """
-        turn_input = _turn_input(message, self.history, session)
-        run_hooks = hooks or _default_hooks()
         try:
             result = await Runner.run(
                 self,
-                turn_input,
+                _turn_input(message, self.history, session),
                 context=context,
-                hooks=run_hooks,
+                hooks=hooks,
                 run_config=self._run_config(session),
                 session=session,
                 _context_wrapper=_context_wrapper,
             )
         except RunaError as exc:
-            self.last_usage = _usage_from_exception(exc)
-            self.usage.add(self.last_usage)
-            return Run(
-                output=None,
-                trace=exc.run_data.trace if exc.run_data else None,
-                usage=self.last_usage,
-                status="error",
-                error=str(exc),
-            )
-        self.last_usage = result.context_wrapper.usage
-        self.usage.add(self.last_usage)
-        if session is None and not result.interruptions:
-            self.history = result.to_input_list()
-        return Run(output=result.final_output, trace=result.trace, usage=self.last_usage)
+            return self._failed(exc)
+        return self._completed(result, session)
+
+    def run_sync(
+        self,
+        message: MessageContent | RunState,
+        context: Any = None,
+        hooks: RunHooks[Any] | None = None,
+        session: SessionABC | None = None,
+    ) -> Run:
+        """Synchronous `run`, for callers not already inside an event loop."""
+        return asyncio.run(self.run(message, context, hooks, session))
+
+    def run_streamed(
+        self,
+        message: MessageContent | RunState,
+        context: Any = None,
+        hooks: RunHooks[Any] | None = None,
+        session: SessionABC | None = None,
+    ) -> RunStream:
+        """Run a turn as a stream of events: the same run as `run`, with the same arguments.
+
+        Iterate the returned `RunStream` for `StreamEvent`s (`raw_response_event`,
+        `run_item_stream_event`, `agent_updated_stream_event`) as they arrive; once it ends,
+        its `.run` holds the `Run` that `run` would have returned, paused, completed or errored.
+        History and usage are recorded only once the stream is fully consumed, so a caller that
+        stops iterating early leaves them unchanged.
+        """
+        result = Runner.run_streamed(
+            self,
+            _turn_input(message, self.history, session),
+            context=context,
+            hooks=hooks,
+            run_config=self._run_config(session),
+            session=session,
+        )
+
+        async def events() -> AsyncIterator[StreamEvent]:
+            try:
+                async for event in result:
+                    yield event
+            except RunaError as exc:
+                stream.run = self._failed(exc)
+                return
+            assert result.result is not None  # set once the stream is exhausted
+            stream.run = self._completed(result.result, session)
+
+        stream = RunStream(events())
+        return stream
 
     async def evaluate(
         self,
@@ -411,102 +478,6 @@ class Agent:
             thresholds=thresholds,
             concurrency=concurrency,
         )
-
-    async def run_streamed(
-        self,
-        message: MessageContent,
-        context: Any = None,
-        hooks: RunHooks[Any] | None = None,
-        session: SessionABC | None = None,
-    ) -> AsyncIterator[StreamEvent]:
-        """Run a turn as a stream of events, appending it to the conversation history.
-
-        `message` is plain text, or a list for a multimodal message: bare strings are
-        auto-detected as text or an image by extension (`"cat.jpg"`, a URL, a `data:image/...`
-        URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
-        string doesn't have a recognizable image extension.
-
-        Yields `StreamEvent`s (`raw_response_event`, `run_item_stream_event`,
-        `agent_updated_stream_event`) as they arrive. `context`, `hooks` and `session` behave as
-        in `run`/`run_sync`. The conversation history is updated only once the stream is fully
-        consumed, so a caller that stops iterating early leaves `self.history` unchanged.
-
-        Token usage for this call is recorded to `self.last_usage` and accumulated into
-        `self.usage` once the stream is fully consumed; a caller that stops iterating early
-        leaves both unchanged, same as `self.history`.
-        """
-        result = Runner.run_streamed(
-            self,
-            _turn_input(message, self.history, session),
-            context=context,
-            hooks=hooks or _default_hooks(),
-            run_config=self._run_config(session),
-            session=session,
-        )
-        async for event in result:
-            yield event
-        self.last_usage = result.context_wrapper.usage
-        self.usage.add(self.last_usage)
-        if session is None and not result.interruptions:
-            self.history = result.to_input_list()
-
-    def run_sync(
-        self,
-        message: MessageContent,
-        context: Any = None,
-        hooks: RunHooks[Any] | None = None,
-        session: SessionABC | None = None,
-    ) -> Run:
-        """Run a turn synchronously, appending it to the conversation history.
-
-        `message` is plain text, or a list for a multimodal message: bare strings are
-        auto-detected as text or an image by extension (`"cat.jpg"`, a URL, a `data:image/...`
-        URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
-        string doesn't have a recognizable image extension.
-
-        `context` is available to a single-argument `instructions` callable (and to tools,
-        guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle
-        callbacks (`on_agent_start`, `on_tool_end`, etc.) from `Runner`; it defaults to
-        `LoggingRunHooks`.
-
-        Pass a `session` (e.g. `SQLiteSession`) to persist conversation history there instead
-        of on `self.history`; the session supplies prior turns automatically, so only the new
-        `message` is sent as input, and `self.history` is left untouched.
-
-        Returns a `Run` exposing `.output`, `.trace`, `.usage`, `.status`, and `.error`. A
-        guardrail tripwire, `MaxTurnsExceeded`, or another `RunaError` is caught and reported as
-        `status="error"` instead of propagating; `self.history` is left unchanged when that
-        happens, since the turn never completed.
-
-        Token usage for this call is recorded to `self.last_usage` and accumulated into
-        `self.usage`, regardless of `session`, `hooks`, or whether the run errored.
-        """
-        turn_input = _turn_input(message, self.history, session)
-        run_hooks = hooks or _default_hooks()
-        try:
-            result = Runner.run_sync(
-                self,
-                turn_input,
-                context=context,
-                hooks=run_hooks,
-                run_config=self._run_config(session),
-                session=session,
-            )
-        except RunaError as exc:
-            self.last_usage = _usage_from_exception(exc)
-            self.usage.add(self.last_usage)
-            return Run(
-                output=None,
-                trace=exc.run_data.trace if exc.run_data else None,
-                usage=self.last_usage,
-                status="error",
-                error=str(exc),
-            )
-        self.last_usage = result.context_wrapper.usage
-        self.usage.add(self.last_usage)
-        if session is None and not result.interruptions:
-            self.history = result.to_input_list()
-        return Run(output=result.final_output, trace=result.trace, usage=self.last_usage)
 
 
 @dataclass(frozen=True)

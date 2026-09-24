@@ -2,7 +2,7 @@
 
 See RUNA.md #7 and docs/memory.md.
 
-Before each run, `Runner` searches memory for anything relevant to the user's message. After the
+Before each run, Runa searches memory for anything relevant to the user's message. After the
 run, it asks the model what's durably worth keeping and stores it -- no manual `remember`/
 `search` calls. Memory is scoped by `user_id`, set on the `session` passed to `run`.
 

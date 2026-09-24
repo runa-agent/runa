@@ -83,6 +83,12 @@ class SupportAgent(Agent):
     model = "claude-opus-5"
 ```
 
+## Retries
+
+Every provider retries the same failures the same way: connection errors, 408, 409, 429 and 5xx
+are retried twice with exponential backoff, honoring a `retry-after` header. A request that still
+fails ends the run with `status="error"`, never an uncaught HTTP exception.
+
 ## Example
 
 ```python

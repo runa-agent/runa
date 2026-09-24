@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from runa._types import RunContextWrapper
+from runa._types import RunContextWrapper, Usage
 from runa.tool import FunctionTool
 
 _DELEGATE_INPUT_SCHEMA = {
@@ -62,19 +62,30 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
 
     The delegate's context is `ctx.fork()`ed, not just `ctx.context` unwrapped: this shares the
     sticky approval ledger, the call-id replay guard, and the guardrail-result audit trail with
-    the delegate (and back), and merges the delegate's usage into the caller's afterward. A
-    delegate run that pauses on a *non-sticky* approval still isn't surfaced here, though --
-    `Run.status` has no "paused" state, so its `Interruption` is silently lost as `output=None`;
-    a known limitation, not something this fork() change fixes.
+    the delegate (and back), and merges the delegate's usage into the caller's afterward.
+
+    A delegate run that pauses for approval raises `DelegatePaused`: the caller's run pauses on
+    the same interruptions, and the nested `RunState` waits in `ctx.paused_delegates` under this
+    call's id, so resuming the caller resumes the delegate instead of starting it over.
     """
     resolved_name = tool_name or _slugify(agent.name)
     resolved_description = tool_description or f"Delegate a task to {agent.name}."
 
     async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
-        args = json.loads(arguments_json) if arguments_json else {}
-        forked = ctx.fork()
-        run = await agent.run(args.get("input", ""), _context_wrapper=forked)
+        paused = ctx.paused_delegates.pop(call_id, None)
+        if paused is not None:
+            forked = paused.context_wrapper
+            run = await agent.run(paused)
+        else:
+            args = json.loads(arguments_json) if arguments_json else {}
+            forked = ctx.fork()
+            run = await agent.run(args.get("input", ""), _context_wrapper=forked)
         ctx.usage.add(forked.usage)
+        if run.status == "paused":
+            forked.usage = Usage()  # already merged into the caller's
+            state = run.to_state()
+            ctx.paused_delegates[call_id] = state
+            raise DelegatePaused(state.pending)
         return run.output if run.status == "completed" else f"error: {run.error}"
 
     return FunctionTool(
@@ -82,8 +93,17 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
         description=resolved_description,
         params_json_schema=_DELEGATE_INPUT_SCHEMA,
         on_invoke_tool=on_invoke_tool,
-        is_delegate=True,
+        delegate=agent,
     )
 
 
-__all__ = ["Handoff", "agent_as_tool"]
+class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
+    """Raised by a delegate tool whose nested run paused: carries its `interruptions` up."""
+
+    def __init__(self, interruptions: list[Any]) -> None:
+        """Hold the nested run's pending `Interruption`s for the caller's run to surface."""
+        super().__init__(f"delegate paused on {len(interruptions)} approval(s)")
+        self.interruptions = interruptions
+
+
+__all__ = ["DelegatePaused", "Handoff", "agent_as_tool"]

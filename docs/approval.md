@@ -54,16 +54,18 @@ resolves the pending call.
 
 ## Pausing and Resuming
 
-A call that needs approval does not run. It pauses the run instead, surfaced as
-`result.interruptions`. Resolve each one against `result.to_state()`, then resume by passing that
-`RunState` back into `Runner.run`/`run_sync` in place of the original input:
+A call that needs approval does not run. It pauses the run instead: the `Run` comes back with
+`status="paused"` and the pending calls in `run.interruptions`. Resolve each one against
+`run.to_state()`, then resume by passing that `RunState` back into `run`/`run_sync` in place of
+a message:
 
 ```python
-result = Runner.run_sync(agent, "issue a $75 refund")
-state = result.to_state()
-for item in result.interruptions:
-    state.approve(item)  # or state.reject(item, rejection_message="not authorized")
-result = Runner.run_sync(agent, state)
+run = agent.run_sync("issue a $75 refund")
+while run.status == "paused":
+    state = run.to_state()
+    for item in run.interruptions:
+        state.approve(item)  # or state.reject(item, rejection_message="not authorized")
+    run = agent.run_sync(state)
 ```
 
 `approve`/`reject` also take `always=True`: the decision then sticks for every future call to
@@ -75,19 +77,23 @@ carry a custom `rejection_message`, fed back to the model instead of the default
 A `call_id` that already ran once cannot be submitted again. Resuming the same `RunState` twice
 raises `DuplicateToolCallError` rather than silently re-running the tool.
 
-`Runner.run_streamed` pauses the same way. The stream ends normally with `interruptions` set;
-resolve them on `to_state()` and pass the state back to continue, streaming again:
+`run_streamed` pauses the same way. Once the stream ends, its `.run` is the paused `Run`;
+resolve it and pass the state back to continue, streaming again:
 
 ```python
-stream = Runner.run_streamed(agent, "issue a $75 refund")
+stream = agent.run_streamed("issue a $75 refund")
 async for event in stream:
     ...
-state = stream.to_state()
-for item in stream.interruptions:
+state = stream.run.to_state()
+for item in stream.run.interruptions:
     state.approve(item)
-async for event in Runner.run_streamed(agent, state):
+async for event in agent.run_streamed(state):
     ...
 ```
+
+A [delegate](subagents.md) that calls an approval-gated tool pauses its caller the same way: the
+delegate's calls show up in the caller's `run.interruptions`, and resuming the caller resumes the
+delegate right where it stopped.
 
 ## Durability
 
