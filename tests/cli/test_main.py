@@ -422,3 +422,54 @@ def test_chat_show_reports_unknown_session_as_a_clean_error(
 
     assert exit_code == 1
     assert "no session found" in capsys.readouterr().err
+
+
+def test_a_missing_extra_is_one_clean_line_not_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`runa serve` without the `serve` extra names the extra and how to install it.
+
+    The web stack is imported lazily so a plain install still runs every other command, which
+    means this failure only ever surfaces at the moment someone tries the feature. That is an
+    operator error, and this module's contract is that those get one line, not a traceback.
+    """
+    scaffold_project("demo", root=tmp_path)
+    monkeypatch.setattr(
+        "runa.cli.main.serve_agents",
+        lambda *a, **k: (_ for _ in ()).throw(ModuleNotFoundError(name="fastapi")),
+    )
+
+    exit_code = main(["serve"], cwd=tmp_path / "demo")
+
+    assert exit_code == 1
+    assert 'uv add "runa-ai[serve]"' in capsys.readouterr().err
+
+
+def test_a_missing_extra_names_the_ui_extra_for_runa_ui(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`serve` and `ui` ship the same packages, so the command decides which extra to name."""
+    scaffold_project("demo", root=tmp_path)
+    monkeypatch.setattr(
+        "runa.cli.main.serve_ui",
+        lambda *a, **k: (_ for _ in ()).throw(ModuleNotFoundError(name="fastapi")),
+    )
+
+    exit_code = main(["ui"], cwd=tmp_path / "demo")
+
+    assert exit_code == 1
+    assert 'uv add "runa-ai[ui]"' in capsys.readouterr().err
+
+
+def test_an_unrelated_import_error_still_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real bug must not be disguised as a missing-extra hint."""
+    scaffold_project("demo", root=tmp_path)
+    monkeypatch.setattr(
+        "runa.cli.main.serve_agents",
+        lambda *a, **k: (_ for _ in ()).throw(ModuleNotFoundError(name="some_real_bug")),
+    )
+
+    with pytest.raises(ModuleNotFoundError):
+        main(["serve"], cwd=tmp_path / "demo")

@@ -46,6 +46,24 @@ from runa.cli.test import run_project_tests
 from runa.cli.traces import TraceNotFound, list_errors_cli, list_traces_cli, show_trace
 from runa.cli.ui import serve_ui
 
+_EXTRA_FOR_MODULE = {
+    "fastapi": "serve",
+    "uvicorn": "serve",
+    "asyncpg": "postgres",
+    "pgvector": "postgres",
+    "redis": "redis",
+}
+"""Which optional extra provides a module, so a missing one is an instruction, not a traceback.
+
+`runa serve` and `runa ui` both import their web stack lazily, which keeps a plain install
+working for every other command but means the failure surfaces only when the command is run.
+That failure is an operator error, and this module's contract is that those get one clean line.
+
+`serve` and `ui` ship the same two packages, so a missing `fastapi`/`uvicorn` could be either;
+the command being run decides which one to name, since telling a `runa ui` user to install
+`serve` would be advice that happens to work while explaining nothing.
+"""
+
 
 def _split_names(value: str | None) -> list[str]:
     """Split a `--tool`/`--guardrail` value ("a, b,c") into trimmed, non-empty names."""
@@ -237,9 +255,19 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
     try:
         return _dispatch(args, cwd)
     except ModuleNotFoundError as exc:
-        if exc.name != "main":
+        if exc.name == "main":
+            print(f"error: no main.py found in {cwd}, is this a Runa app?", file=sys.stderr)
+            return 1
+        extra = _EXTRA_FOR_MODULE.get(exc.name or "")
+        if extra is None:
             raise
-        print(f"error: no main.py found in {cwd}, is this a Runa app?", file=sys.stderr)
+        if extra == "serve" and args.command == "ui":
+            extra = "ui"
+        print(
+            f"error: `runa {args.command}` needs the `{extra}` extra, which a plain install "
+            f'does not include.\n  uv add "runa-ai[{extra}]"',
+            file=sys.stderr,
+        )
         return 1
     except (
         SessionNotFound,
