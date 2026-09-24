@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from graphviz import Digraph, Source
+    from graphviz import Digraph
 
 
 def _agent_node_id(agent: Any) -> str:
@@ -57,13 +57,17 @@ def _add_agent(dot: Digraph, agent: Any, seen: set[int]) -> None:
         _add_agent(dot, target, seen)
 
 
-def draw_graph(agent: Any) -> Source:
-    """Render `agent`, and its tools/subagents/MCP servers (recursively), as a Graphviz `Source`."""
+def draw_graph(agent: Any) -> Digraph:
+    """Render `agent`, and its tools/subagents/MCP servers (recursively), as a Graphviz `Digraph`.
+
+    Building it runs no Graphviz executable: only `.render()` (or Jupyter's inline image) needs
+    the system `dot` binary.
+    """
     from graphviz import Digraph
 
     dot = Digraph()
     _add_agent(dot, agent, set())
-    return dot.unflatten(stagger=3)
+    return dot
 
 
 __all__ = ["draw_graph"]

@@ -10,10 +10,8 @@ from types import ModuleType
 from typing import Any, cast
 
 import pytest
-from graphviz import Digraph
 
 from runa import Agent, tracing
-from runa._graph import _add_agent
 from runa._models import StreamDelta
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Subagent
@@ -73,9 +71,7 @@ def test_graph_draws_delegates_and_handoffs_as_agents() -> None:
         instructions = "Lead."
         subagents = [Researcher.delegate, Translator.handoff]
 
-    dot = Digraph()
-    _add_agent(dot, Lead(), set())
-    source = dot.source
+    source = Lead().graph.source
 
     assert "label=Researcher" in source and "label=Translator" in source
     assert "style=dotted" in source and "style=dashed" in source

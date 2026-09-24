@@ -28,7 +28,7 @@ from runa.tool import FunctionTool
 from runa.tracing.manual import current_trace
 
 if TYPE_CHECKING:
-    from graphviz import Source
+    from graphviz import Digraph
 
     from runa.eval.case import Case
     from runa.eval.report import Report
@@ -306,7 +306,7 @@ class Agent:
         return agent_as_tool(self, tool_name, tool_description)
 
     @property
-    def graph(self) -> Source:
+    def graph(self) -> Digraph:
         """Render this agent, and its tools/subagents, as a Graphviz diagram.
 
         Displays inline in Jupyter; call `.render(filename)` to save it, or `.source` for the
