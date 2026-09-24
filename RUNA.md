@@ -94,6 +94,8 @@ def issue_refund(amount: float) -> str: ...
 **Pausing and resuming.** A call that needs approval doesn't run: it pauses the run, surfaced
 as `result.interruptions`. Resolve each one against `result.to_state()`, then resume by
 passing that `RunState` back into `Runner.run`/`run_sync` in place of the original input.
+A session-backed run saves nothing while paused: pass the same `session=` when resuming, and
+the whole turn is saved once the run finishes.
 
 ```python
 result = Runner.run_sync(agent, "issue a $75 refund")

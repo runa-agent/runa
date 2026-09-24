@@ -497,6 +497,122 @@ def test_needs_approval_always_reject_feeds_back_the_sticky_message_for_later_ca
     assert tool_messages.count("not allowed, ever") == 2
 
 
+def _safe_and_gated_calls_response() -> ModelResponse:
+    """One assistant message calling an ungated `safe` tool and an approval-gated `gated` one."""
+    return ModelResponse(
+        output=[
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "safe", "arguments": "{}"},
+                    },
+                    {
+                        "id": "c2",
+                        "type": "function",
+                        "function": {"name": "gated", "arguments": "{}"},
+                    },
+                ],
+            }
+        ],
+        usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
+    )
+
+
+def _safe_and_gated_tools(ran: list[str]) -> list[Any]:
+    @tool
+    def safe() -> str:
+        """Run without approval."""
+        ran.append("safe")
+        return "safe done"
+
+    @tool(needs_approval=True)
+    def gated() -> str:
+        """Needs approval."""
+        ran.append("gated")
+        return "gated done"
+
+    return [safe, gated]
+
+
+def test_resume_runs_the_approved_call_and_reuses_the_ready_result_from_the_same_message() -> None:
+    """A message mixing an ungated and a gated call resumes with both results, each run once."""
+    ran: list[str] = []
+    model = _ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")])
+    agent = _agent(tools=_safe_and_gated_tools(ran), model=model)
+
+    result = asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+    state = result.to_state()
+    state.approve(result.interruptions[0])
+    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+
+    assert ran == ["safe", "gated"]
+    assert resumed.final_output == "all done"
+    assert [item["role"] for item in model.calls[1]] == ["user", "assistant", "tool", "tool"]
+    assert [item["content"] for item in model.calls[1][2:]] == ["safe done", "gated done"]
+    assert resumed.to_input_list() == [
+        _safe_and_gated_calls_response().output[0],
+        {"role": "tool", "tool_call_id": "c1", "content": "safe done"},
+        {"role": "tool", "tool_call_id": "c2", "content": "gated done"},
+        {"role": "assistant", "content": "all done", "tool_calls": None},
+    ]
+
+
+def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
+    """A paused session-backed run saves nothing; resuming saves the full turn once."""
+    from runa.session import SQLiteSession
+
+    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    ran: list[str] = []
+    agent = _agent(
+        tools=_safe_and_gated_tools(ran),
+        model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
+    )
+
+    result = asyncio.run(Runner.run(agent, "go", session=session, run_config=_run_config()))
+    assert asyncio.run(session.get_items()) == []
+
+    state = result.to_state()
+    state.approve(result.interruptions[0])
+    asyncio.run(Runner.run(agent, state, session=session, run_config=_run_config()))
+
+    assert asyncio.run(session.get_items()) == [
+        {"role": "user", "content": "go"},
+        _safe_and_gated_calls_response().output[0],
+        {"role": "tool", "tool_call_id": "c1", "content": "safe done"},
+        {"role": "tool", "tool_call_id": "c2", "content": "gated done"},
+        {"role": "assistant", "content": "all done", "tool_calls": None},
+    ]
+
+
+def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
+    """`new_items`/`session_input` survive `to_json`/`from_json`, so a restart still persists."""
+    from runa.run_state import RunState
+    from runa.session import SQLiteSession
+
+    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    ran: list[str] = []
+    agent = _agent(
+        tools=_safe_and_gated_tools(ran),
+        model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
+    )
+
+    result = asyncio.run(Runner.run(agent, "go", session=session, run_config=_run_config()))
+    blob = result.to_state().to_json()
+    state = asyncio.run(RunState.from_json(agent, blob))
+    state.approve(state.pending[0])
+    asyncio.run(Runner.run(agent, state, session=session, run_config=_run_config()))
+
+    assert ran == ["safe", "gated"]
+    items = asyncio.run(session.get_items())
+    assert items[0] == {"role": "user", "content": "go"}
+    assert items[-1] == {"role": "assistant", "content": "all done", "tool_calls": None}
+    assert len(items) == 5
+
+
 def test_resuming_the_same_state_twice_raises_duplicate_call_id_error() -> None:
     """Resuming the same paused `RunState` a second time doesn't silently re-run the tool."""
 

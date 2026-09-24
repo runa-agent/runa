@@ -83,14 +83,20 @@ async def _run_message_tool_calls(
     parent_id: str,
     approvals: dict[str, bool] | None,
     rejection_messages: dict[str, str] | None = None,
+    ready_results: list[TResponseInputItem] | None = None,
 ) -> tuple[list[TResponseInputItem], list[Interruption], Any]:
-    """Execute (or defer for approval) every tool call in `message`; returns results so far."""
+    """Execute (or defer for approval) every tool call in `message`; returns results so far.
+
+    `ready_results` are results a paused run already computed for calls in `message`: reused
+    as is on resume, never executed a second time.
+    """
     handoff_map = _normalized_handoffs(getattr(current_agent, "handoffs", []))
     tools = await _agent_tools(current_agent)
     results: list[TResponseInputItem] = []
     interruptions: list[Interruption] = []
     switched_agent: Any = None
     approvals = approvals or {}
+    ready = {result["tool_call_id"]: result for result in ready_results or []}
 
     for call in message.get("tool_calls") or []:
         name = call["function"]["name"]
@@ -110,6 +116,9 @@ async def _run_message_tool_calls(
             )
             continue
 
+        if call_id in ready:
+            results.append(ready[call_id])
+            continue
         tool = _find_tool(tools, name)
         if tool is None:
             results.append(

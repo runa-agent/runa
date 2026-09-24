@@ -77,6 +77,8 @@ class _RunStateSchema(BaseModel):
     original_input: list[dict[str, Any]]
     generated_items: list[dict[str, Any]]
     ready_results: list[dict[str, Any]]
+    new_items: list[dict[str, Any]] = []
+    session_input: list[dict[str, Any]] = []
     pending: list[_InterruptionSchema]
     approvals: dict[str, bool]
     rejection_messages: dict[str, str] = {}
@@ -104,6 +106,8 @@ class RunState:
     `generated_items` ends with the assistant message that requested the paused calls;
     `ready_results` holds results already computed this turn for calls in that same message that
     *didn't* need approval: they're carried forward rather than re-executed on resume.
+    `new_items` is what this run generated before the pause, and `session_input` the user turn
+    a session-backed run still has to persist: both are saved once the resumed run finishes.
 
     `to_json()`/`to_string()`/`from_json()`/`from_string()` let a paused run survive a process
     restart -- see their docstrings for what is (and isn't) preserved.
@@ -116,6 +120,8 @@ class RunState:
     pending: list[Interruption]
     context_wrapper: RunContextWrapper
     trace: Trace
+    new_items: list[TResponseInputItem] = field(default_factory=list)
+    session_input: list[TResponseInputItem] = field(default_factory=list)
     approvals: dict[str, bool] = field(default_factory=dict)
     rejection_messages: dict[str, str] = field(default_factory=dict)
     input_guardrail_results: list[Any] = field(default_factory=list)
@@ -166,6 +172,8 @@ class RunState:
             original_input=self.original_input,
             generated_items=self.generated_items,
             ready_results=self.ready_results,
+            new_items=self.new_items,
+            session_input=self.session_input,
             pending=[
                 _InterruptionSchema(
                     name=i.name, arguments=i.arguments, call_id=i.call_id, agent_name=i.agent.name
@@ -276,6 +284,8 @@ class RunState:
             pending=pending,
             context_wrapper=context_wrapper,
             trace=trace,
+            new_items=schema.new_items,
+            session_input=schema.session_input,
             approvals=dict(schema.approvals),
             rejection_messages=dict(schema.rejection_messages),
         )
