@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from runa.cli._project import NotARunaProject
+from runa.cli.chat import AgentNotFound
 from runa.cli.generate import (
     AgentAlreadyExists,
     AmbiguousComponent,
@@ -426,6 +427,7 @@ def test_generate_evaluation_writes_a_jsonl_dataset_named_after_the_agent(
 ) -> None:
     """`name` is the agent's `runa chat`-style identity, and becomes `evals/<name>.jsonl`."""
     project_dir = scaffold_project("demo", root=tmp_path)
+    generate_agent("GreeterAgent", root=project_dir, instructions="Greet.")
 
     eval_file = generate_evaluation("greeter_agent", root=project_dir)
 
@@ -436,7 +438,18 @@ def test_generate_evaluation_writes_a_jsonl_dataset_named_after_the_agent(
 def test_generate_evaluation_raises_if_the_file_already_exists(tmp_path: Path) -> None:
     """`generate_evaluation` refuses to overwrite an existing evaluation module."""
     project_dir = scaffold_project("demo", root=tmp_path)
-    generate_evaluation("Support", root=project_dir)
+    generate_agent("SupportAgent", root=project_dir, instructions="Help.")
+    generate_evaluation("support_agent", root=project_dir)
 
     with pytest.raises(EvaluationAlreadyExists):
-        generate_evaluation("Support", root=project_dir)
+        generate_evaluation("support_agent", root=project_dir)
+
+
+def test_generate_evaluation_raises_for_an_unknown_agent(tmp_path: Path) -> None:
+    """`generate_evaluation` refuses a name no Agent under `app/agents/` declares."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+
+    with pytest.raises(AgentNotFound):
+        generate_evaluation("ghost_agent", root=project_dir)
+
+    assert not (project_dir / "evals" / "ghost_agent.jsonl").exists()

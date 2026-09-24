@@ -18,6 +18,7 @@ from pathlib import Path
 
 from runa.agent import _PROMPT_TEMPLATE
 from runa.cli._project import NotARunaProject
+from runa.cli.chat import AgentNotFound
 
 _TOOL_IMPORT = "from runa import tool"
 
@@ -387,11 +388,14 @@ def generate_evaluation(name: str, *, root: Path) -> Path:
     `name` is the agent's snake_case identity, the same one `runa chat <name>` takes (e.g.
     `support_agent`), not the class name: `runa eval` resolves the Agent from the filename
     (see `cli/eval.py`), so the file needs nothing but cases, one JSON object per line. It
-    starts with a single input-only case, graded on task completion and answer relevance.
+    starts with a single input-only case, graded on task completion and answer relevance. The
+    Agent must already exist, checked by scanning source rather than importing the app.
     """
     evals_dir = _require_dir(root, "evals")
 
     file_stem = _snake_case(name)
+    if _find_agent_name(_require_dir(root, "app", "agents"), file_stem) is None:
+        raise AgentNotFound(f"no Agent named {file_stem!r} found under app/agents/")
     eval_file = evals_dir / f"{file_stem}.jsonl"
     if eval_file.exists():
         raise EvaluationAlreadyExists(f"{eval_file} already exists")
