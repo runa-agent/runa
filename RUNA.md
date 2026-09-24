@@ -30,7 +30,7 @@ class SupportAgent(Agent):
 
 **An agent is run only through its own methods**: `run`, `run_sync` or `run_streamed`, each
 returning (or ending with) a `Run`: `.output`, `.status` (`"completed"`, `"paused"` or
-`"error"`), `.interruptions`, `.trace`, `.usage`, `.error`. Errors never raise out of a run;
+`"error"`), `.interruptions`, `.trace`, `.usage`, `.error`, and the guardrail audit trail. Errors never raise out of a run;
 they come back as `status="error"`. Two more class attributes cover what a run needs:
 
 * `output_type`: a dataclass, Pydantic model or `TypedDict` the final answer is parsed into.
@@ -136,10 +136,10 @@ durably persisted separately (see [Tracing](#14-tracing)). An unrecognized `sche
 raises `UserError` rather than resuming from a blob a different, incompatible version of Runa
 produced.
 
-**Guardrail audit trail.** Every guardrail that ran (tripped or not) is a span in `run.trace`,
-and is listed on a paused `RunState`'s `input_guardrail_results`/`.output_guardrail_results`/
+**Guardrail audit trail.** Every guardrail that ran (tripped or not, a delegate's included) is
+listed on the `Run`, whatever its status, as `input_guardrail_results`/`.output_guardrail_results`/
 `.tool_input_guardrail_results`/`.tool_output_guardrail_results`, not just whichever one
-stopped the run.
+stopped the run. A paused `RunState` carries the same four; each is also a span in `run.trace`.
 
 ## 5. Subagent (handoff/delegate)
 

@@ -7,9 +7,9 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
-from runa._types import TResponseInputItem
+from runa._types import RunContextWrapper, TResponseInputItem
 
 _Predicate = Callable[[Any], bool | Awaitable[bool]]
 _GuardrailFunction = Callable[[Any, Any, Any], Awaitable["GuardrailFunctionOutput"]]
@@ -35,6 +35,25 @@ class GuardrailResult:
     guardrail: Any
     output: Any
     tripped: bool
+
+
+class GuardrailResults(TypedDict):
+    """A run's guardrail audit trail: every guardrail that ran, by where it ran."""
+
+    input_guardrail_results: list[GuardrailResult]
+    output_guardrail_results: list[GuardrailResult]
+    tool_input_guardrail_results: list[GuardrailResult]
+    tool_output_guardrail_results: list[GuardrailResult]
+
+
+def guardrail_results(context_wrapper: RunContextWrapper) -> GuardrailResults:
+    """A snapshot of the run's four audit lists, as keyword arguments for a result or state."""
+    return GuardrailResults(
+        input_guardrail_results=list(context_wrapper.input_guardrail_results),
+        output_guardrail_results=list(context_wrapper.output_guardrail_results),
+        tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
+        tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
+    )
 
 
 @dataclass
@@ -330,6 +349,7 @@ def flatten_tool_guardrails(
 __all__ = [
     "Guardrail",
     "GuardrailResult",
+    "GuardrailResults",
     "GuardrailsDict",
     "GuardrailsList",
     "ToolGuardrailsDict",
@@ -337,4 +357,5 @@ __all__ = [
     "flatten_agent_guardrails",
     "flatten_tool_guardrails",
     "guardrail",
+    "guardrail_results",
 ]

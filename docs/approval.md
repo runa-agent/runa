@@ -104,17 +104,10 @@ and each pending tool by name. A live `Agent` instance and a tool's closure cann
 through JSON themselves.
 
 A `context` that was a dataclass comes back as a plain dict, not its original class. The run's
-guardrail audit trail (below) and trace spans are not included in the serialized blob. Spans are
+[guardrail audit trail](guardrails.md#audit-trail) and trace spans are not included in the serialized blob. Spans are
 already persisted separately (see [Tracing and Hooks](tracing.md)). An unrecognized
 `schema_version` raises `UserError` rather than resuming from a blob a different, incompatible
 version of Runa produced.
-
-## Guardrail Audit Trail
-
-Every guardrail that ran during a run, tripped or not, is recorded on
-`result.input_guardrail_results`, `.output_guardrail_results`, `.tool_input_guardrail_results`,
-and `.tool_output_guardrail_results` (and the same four on a paused `RunState`, reflecting only
-what ran before the pause), not just whichever one stopped the run.
 
 ## Example
 

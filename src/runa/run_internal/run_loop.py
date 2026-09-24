@@ -11,7 +11,7 @@ import asyncio
 import time
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any
 
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.compact import Compactor, default_compactor
@@ -21,6 +21,7 @@ from runa.exceptions import (
     RunaError,
     RunErrorDetails,
 )
+from runa.guardrail import guardrail_results
 from runa.lifecycle import LoggingRunHooks, RunHooks, logger
 from runa.result import RunResult
 from runa.run_config import RunConfig
@@ -280,23 +281,6 @@ class _Run:
     generated: list[TResponseInputItem]
 
 
-class _GuardrailResults(TypedDict):
-    input_guardrail_results: list[Any]
-    output_guardrail_results: list[Any]
-    tool_input_guardrail_results: list[Any]
-    tool_output_guardrail_results: list[Any]
-
-
-def _guardrail_results(context_wrapper: RunContextWrapper) -> _GuardrailResults:
-    """The run's four guardrail audit lists, as keyword arguments for a result or state."""
-    return _GuardrailResults(
-        input_guardrail_results=list(context_wrapper.input_guardrail_results),
-        output_guardrail_results=list(context_wrapper.output_guardrail_results),
-        tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
-        tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
-    )
-
-
 async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
     """Await `turns`; on a `RunaError`, close the trace and attach what the run had so far."""
     try:
@@ -312,7 +296,7 @@ async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
             last_agent=run.agent,
             context_wrapper=run.context_wrapper,
             trace=run.trace,
-            **_guardrail_results(run.context_wrapper),
+            **guardrail_results(run.context_wrapper),
         )
         raise
 
@@ -359,7 +343,7 @@ async def _finish(
             trace=run.trace,
             new_items=list(run.generated),
             session_input=run.session_input,
-            **_guardrail_results(context_wrapper),
+            **guardrail_results(context_wrapper),
         )
         for interruption in outcome.interruptions:
             interruption.owner = interruption.owner or state  # a delegate's keeps its own
@@ -372,7 +356,7 @@ async def _finish(
             _generated_items=list(run.generated),
             interruptions=outcome.interruptions,
             _state=state,
-            **_guardrail_results(context_wrapper),
+            **guardrail_results(context_wrapper),
         )
 
     # The next call's history starts from the same cut compaction made mid-run: the session's
@@ -400,7 +384,7 @@ async def _finish(
         trace=run.trace,
         _original_input=run.original_input,
         _generated_items=list(run.generated),
-        **_guardrail_results(context_wrapper),
+        **guardrail_results(context_wrapper),
     )
 
 

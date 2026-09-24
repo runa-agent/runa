@@ -74,6 +74,21 @@ predicate is awaited directly instead, which avoids that thread-dispatch overhea
 that's already genuinely async. Neither choice can break the run either way; it's purely a style
 call.
 
+## Audit Trail
+
+Every guardrail that ran, tripped or not, is recorded on the `Run`, by where it ran:
+
+```python
+run = agent.run_sync("where is my order?")
+for result in run.input_guardrail_results:  # also output_, tool_input_, tool_output_
+    print(result.guardrail, result.tripped)
+```
+
+That holds whatever the `status`: an error `Run` shows the guardrail that stopped it alongside
+the ones that passed before it, a paused one (and its `RunState`) what ran before the pause. A
+[delegate](subagents.md)'s guardrails are included in its caller's lists. Each guardrail is also
+a span in `run.trace`.
+
 ## Human Approval
 
 Some tool calls should not run without a person saying yes. That is a different mechanism from a

@@ -12,7 +12,7 @@ from runa import content
 from runa._models import DEFAULT_MODEL, ModelProvider
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, TResponseInputItem, Usage
 from runa.exceptions import RunaError, UserError
-from runa.guardrail import flatten_agent_guardrails
+from runa.guardrail import flatten_agent_guardrails, guardrail_results
 from runa.handoff import agent_as_tool
 from runa.knowledge import Knowledge
 from runa.lifecycle import RunHooks
@@ -326,6 +326,7 @@ class Agent:
         """Record `result`'s usage (and, unless paused or session-backed, history) as a `Run`."""
         self.last_usage = result.context_wrapper.usage
         self.usage.add(self.last_usage)
+        audit = guardrail_results(result.context_wrapper)
         if result.interruptions:
             return Run(
                 output=None,
@@ -334,14 +335,16 @@ class Agent:
                 status="paused",
                 interruptions=result.interruptions,
                 _state=result.to_state(),
+                **audit,
             )
         if session is None:
             self.history = result.to_input_list()
-        return Run(output=result.final_output, trace=result.trace, usage=self.last_usage)
+        return Run(output=result.final_output, trace=result.trace, usage=self.last_usage, **audit)
 
     def _failed(self, exc: RunaError) -> Run:
-        """Record what a run that `exc` stopped had used, as an `"error"` `Run`."""
-        self.last_usage = exc.run_data.context_wrapper.usage if exc.run_data else Usage()
+        """Record what a run that `exc` stopped had used, and ran, as an `"error"` `Run`."""
+        context_wrapper = exc.run_data.context_wrapper if exc.run_data else RunContextWrapper()
+        self.last_usage = context_wrapper.usage
         self.usage.add(self.last_usage)
         return Run(
             output=None,
@@ -349,6 +352,7 @@ class Agent:
             usage=self.last_usage,
             status="error",
             error=str(exc),
+            **guardrail_results(context_wrapper),
         )
 
     async def run(

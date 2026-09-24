@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from runa._types import Usage
 from runa.exceptions import UserError
+from runa.guardrail import GuardrailResult
 from runa.run_state import Interruption, RunState
 from runa.stream_events import StreamEvent
 from runa.tracing import Trace
@@ -28,6 +29,10 @@ class Run:
     `interruptions` on `to_state()`, then pass that state back to `run`/`run_sync` in place of a
     message. It is `"error"` when a `RunaError` (a guardrail tripwire, `MaxTurnsExceeded`, a
     model error, ...) stopped the run; `error` then holds that exception's message.
+
+    The four `*_guardrail_results` lists are the guardrail audit trail: every guardrail that ran
+    (tripped or not, a delegate's included), by where it ran, whatever the `status`. The same
+    four are on a paused `RunState`.
     """
 
     output: Any
@@ -36,6 +41,10 @@ class Run:
     status: Status = "completed"
     error: str | None = None
     interruptions: list[Interruption] = field(default_factory=list)
+    input_guardrail_results: list[GuardrailResult] = field(default_factory=list)
+    output_guardrail_results: list[GuardrailResult] = field(default_factory=list)
+    tool_input_guardrail_results: list[GuardrailResult] = field(default_factory=list)
+    tool_output_guardrail_results: list[GuardrailResult] = field(default_factory=list)
     _state: RunState | None = field(default=None, repr=False)
 
     def to_state(self) -> RunState:

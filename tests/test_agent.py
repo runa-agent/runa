@@ -16,6 +16,7 @@ from runa._models import StreamDelta
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Subagent
 from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
+from runa.guardrail import guardrail
 from runa.knowledge import Knowledge
 from runa.lifecycle import LoggingRunHooks
 from runa.memory import Memory
@@ -1254,3 +1255,85 @@ def test_max_turns_is_a_class_attribute() -> None:
 
     assert run.status == "error"
     assert run.error == "max turns (2) exceeded"
+
+
+@guardrail
+def _never_trips(x: str) -> bool:
+    """Let everything through."""
+    return False
+
+
+@guardrail
+def _trips_on_empty(x: str) -> bool:
+    """Trip on an empty message."""
+    return not x.strip()
+
+
+def test_a_completed_run_carries_every_guardrail_that_ran() -> None:
+    """Passing agent and tool guardrails are all listed on `Run`, not just ones that trip."""
+
+    @tool(guardrails=[_never_trips.input, _never_trips.output])
+    def lookup(order_id: str) -> str:
+        """Look up an order."""
+        return "shipped"
+
+    class Support(Agent):
+        name = "Support"
+        instructions = "Look orders up."
+        tools = [lookup]
+        guardrails = [_trips_on_empty.input, _never_trips.output]
+        model = _ScriptedModel(
+            [_tool_call_message("lookup", '{"order_id": "A1"}'), _final_message("shipped")]
+        )
+
+    run = Support().run_sync("where is A1?")
+
+    assert run.status == "completed"
+    assert [r.tripped for r in run.input_guardrail_results] == [False]
+    assert [r.tripped for r in run.output_guardrail_results] == [False]
+    assert [r.tripped for r in run.tool_input_guardrail_results] == [False]
+    assert [r.tripped for r in run.tool_output_guardrail_results] == [False]
+
+
+def test_an_error_run_carries_the_guardrail_that_stopped_it() -> None:
+    """A tripped input guardrail ends the run with `status="error"` and shows up as tripped."""
+
+    class Support(Agent):
+        name = "Support"
+        instructions = "Help."
+        guardrails = [_trips_on_empty.input]
+        model = _ScriptedModel([])
+
+    run = Support().run_sync("   ")
+
+    assert run.status == "error"
+    assert [r.tripped for r in run.input_guardrail_results] == [True]
+
+
+def test_a_delegates_guardrails_show_up_on_its_callers_run() -> None:
+    """A delegate shares its caller's audit trail: its tool guardrails land on the caller's Run."""
+
+    @tool(guardrails=[_never_trips.input])
+    def lookup(order_id: str) -> str:
+        """Look up an order."""
+        return "shipped"
+
+    class Parent(Agent):
+        name = "Parent"
+        instructions = "Delegate lookups."
+        subagents = [_Child.delegate]
+
+    parent = Parent()
+    parent.model = _ScriptedModel(
+        [_tool_call_message("child", '{"input": "find A1"}', "outer_1"), _final_message("ok")]
+    )
+    child = next(t.delegate for t in parent.tools if t.delegate is not None)
+    child.tools = [lookup]
+    child.model = _ScriptedModel(
+        [_tool_call_message("lookup", '{"order_id": "A1"}', "inner_1"), _final_message("shipped")]
+    )
+
+    run = parent.run_sync("where is A1?")
+
+    assert run.status == "completed"
+    assert [r.tripped for r in run.tool_input_guardrail_results] == [False]

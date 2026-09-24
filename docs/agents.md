@@ -85,6 +85,8 @@ same instance continues the conversation. Pass `session=` instead to persist his
 * `run.error`: the error message, when `status == "error"`
 * `run.usage`: this call's token usage
 * `run.trace`: the full span tree for this call. See [Tracing and Hooks](tracing.md).
+* `run.input_guardrail_results` (and `output_`, `tool_input_`, `tool_output_`): every guardrail
+  that ran. See [Guardrails](guardrails.md#audit-trail).
 
 A tripped guardrail or a runtime error (`MaxTurnsExceeded`, a model error) is caught and reported
 as `status="error"` instead of being raised. `agent.history` is left unchanged, since the turn
