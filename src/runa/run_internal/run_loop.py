@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from collections.abc import Awaitable
+from dataclasses import dataclass
+from typing import Any, TypedDict
 
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.compact import Compactor, default_compactor
@@ -18,6 +20,7 @@ from runa.exceptions import (
     MaxTurnsExceeded,
     ModelBehaviorError,
     RunaError,
+    RunErrorDetails,
 )
 from runa.lifecycle import RunHooks, logger
 from runa.result import RunResult
@@ -36,6 +39,7 @@ from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutco
 from runa.run_state import RunState
 from runa.session import SessionABC
 from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
+from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 
@@ -157,6 +161,7 @@ async def _run_turns(
     agent_span_id: str,
     *,
     max_turns: int,
+    generated: list[TResponseInputItem],
     pending_resume: tuple[
         TResponseInputItem, dict[str, bool], dict[str, str], list[TResponseInputItem]
     ]
@@ -167,10 +172,10 @@ async def _run_turns(
 
     With `emit` (a streamed run), the model is streamed and every step is emitted as a
     `StreamEvent`; a call needing approval raises `ApprovalRequiredError`, since a stream
-    can't pause.
+    can't pause. Every generated item is appended to `generated`, owned by the caller so a
+    run that errors can still report what it produced.
     """
     notify = emit or _ignore
-    generated: list[TResponseInputItem] = []
 
     if pending_resume is not None:
         last_message, approvals, rejection_messages, ready_results = pending_resume
@@ -186,7 +191,7 @@ async def _run_turns(
             ready_results,
         )
         if interruptions:
-            return _TurnOutcome(None, [], interruptions, results, current_agent)
+            return _TurnOutcome(None, generated, interruptions, results, current_agent)
         items.extend(results)
         generated.extend(results)
         if switched is not None:
@@ -257,6 +262,144 @@ def _default_hooks() -> RunHooks[Any]:
     return LoggingRunHooks()
 
 
+@dataclass
+class _Run:
+    """What a fresh run and a resumed one share once the turn loop starts."""
+
+    agent: Any
+    input: str | list[TResponseInputItem]
+    items: list[TResponseInputItem]
+    context_wrapper: RunContextWrapper
+    trace: Trace
+    span: Span
+    original_input: list[TResponseInputItem]
+    session: SessionABC | None
+    session_input: list[TResponseInputItem]
+    generated: list[TResponseInputItem]
+
+
+class _GuardrailResults(TypedDict):
+    input_guardrail_results: list[Any]
+    output_guardrail_results: list[Any]
+    tool_input_guardrail_results: list[Any]
+    tool_output_guardrail_results: list[Any]
+
+
+def _guardrail_results(context_wrapper: RunContextWrapper) -> _GuardrailResults:
+    """The run's four guardrail audit lists, as keyword arguments for a result or state."""
+    return _GuardrailResults(
+        input_guardrail_results=list(context_wrapper.input_guardrail_results),
+        output_guardrail_results=list(context_wrapper.output_guardrail_results),
+        tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
+        tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
+    )
+
+
+async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
+    """Await `turns`; on a `RunaError`, close the trace and attach what the run had so far."""
+    try:
+        return await turns
+    except RunaError as exc:
+        _close_span(run.span, error=str(exc))
+        run.trace.end_time = time.time()
+        _export(run.trace)
+        exc.run_data = RunErrorDetails(
+            input=run.input,
+            new_items=list(run.generated),
+            raw_responses=[],
+            last_agent=run.agent,
+            context_wrapper=run.context_wrapper,
+            trace=run.trace,
+            **_guardrail_results(run.context_wrapper),
+        )
+        raise
+
+
+async def _extract_memory(run: _Run, final_output: Any, run_config: RunConfig) -> None:
+    """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
+    memory = getattr(run.agent, "memory", None)
+    query = _latest_user_text([*run.original_input, *run.session_input])
+    if memory is None or query is None:
+        return
+    span = _new_span(run.trace, None, "memory", "custom", input=query)
+    try:
+        stored = await memory.remember_from_conversation(
+            f"User: {query}\nAssistant: {final_output}",
+            user_id=getattr(run.session, "user_id", None),
+            model=_resolve_model(run.agent, run_config.model_provider),
+        )
+        _close_span(span, output={"stored": len(stored)})
+    except Exception as exc:
+        _close_span(span, error=str(exc))
+        logger.warning("memory extraction failed for agent %s", run.agent.name, exc_info=True)
+
+
+async def _finish(
+    run: _Run, outcome: _TurnOutcome, hooks: RunHooks[Any], run_config: RunConfig
+) -> RunResult:
+    """Turn the loop's outcome into a `RunResult`: a paused `RunState`, or a completed turn.
+
+    A session-backed run persists nothing while paused: the whole turn is saved once it
+    completes, whether that's straight away or after one or more resumes.
+    """
+    _close_span(run.span, output=outcome.final_output)
+    run.trace.end_time = time.time()
+    context_wrapper = run.context_wrapper
+
+    if outcome.interruptions:
+        state = RunState(
+            agent=outcome.current_agent,
+            original_input=run.original_input,
+            generated_items=list(run.items),
+            ready_results=outcome.ready_results,
+            pending=outcome.interruptions,
+            context_wrapper=context_wrapper,
+            trace=run.trace,
+            new_items=list(run.generated),
+            session_input=run.session_input,
+            **_guardrail_results(context_wrapper),
+        )
+        _export(run.trace)
+        return RunResult(
+            final_output=None,
+            context_wrapper=context_wrapper,
+            trace=run.trace,
+            _original_input=run.original_input,
+            _generated_items=list(run.generated),
+            interruptions=outcome.interruptions,
+            _state=state,
+            **_guardrail_results(context_wrapper),
+        )
+
+    # The next call's history starts from the same cut compaction made mid-run: the session's
+    # stored history, or `original_input` (what `to_input_list()` returns) without one.
+    if run.session is not None:
+        await _save_to_session(
+            run.agent,
+            run.session,
+            [*run.session_input, *run.generated],
+            outcome.context_tokens,
+            run.trace,
+            run.span.id,
+        )
+    else:
+        _maybe_compact(
+            run.agent, run.original_input, outcome.context_tokens, run.trace, run.span.id
+        )
+    await _extract_memory(run, outcome.final_output, run_config)
+
+    await hooks.on_agent_end(context_wrapper, outcome.current_agent, outcome.final_output)
+    _export(run.trace)
+    return RunResult(
+        final_output=outcome.final_output,
+        context_wrapper=context_wrapper,
+        trace=run.trace,
+        _original_input=run.original_input,
+        _generated_items=list(run.generated),
+        **_guardrail_results(context_wrapper),
+    )
+
+
 async def _run_async(
     agent: Any,
     input: str | list[TResponseInputItem] | RunState,
@@ -287,40 +430,44 @@ async def _run_async(
         trace.metadata = {**(run_config.trace_metadata or {}), "group_id": run_config.group_id}
 
     turn_input = [{"role": "user", "content": input}] if isinstance(input, str) else list(input)
-    if session is not None:
-        items = [*await session.get_items(), *turn_input]
-        original_input: list[TResponseInputItem] = []
-    else:
-        items = list(turn_input)
-        original_input = list(items)
+    history = await session.get_items() if session is not None else []
+    items = [*history, *turn_input]
+    query = _latest_user_text(turn_input)
+    run = _Run(
+        agent=agent,
+        input=input if isinstance(input, str) else list(input),
+        items=items,
+        context_wrapper=context_wrapper,
+        trace=trace,
+        span=_new_span(trace, None, agent.name, "agent", input=query),
+        original_input=[] if session is not None else list(turn_input),
+        session=session,
+        session_input=turn_input if session is not None else [],
+        generated=[],
+    )
 
     memory = getattr(agent, "memory", None)
     knowledge = getattr(agent, "knowledge", None)
-    user_id = getattr(session, "user_id", None) if session is not None else None
-    memory_query = _latest_user_text(items)
-
-    agent_span = _new_span(trace, None, agent.name, "agent", input=memory_query)
-
-    if memory_query is not None and (memory is not None or knowledge is not None):
+    if query is not None and (memory is not None or knowledge is not None):
         memory_matches, knowledge_matches = await asyncio.gather(
             _retrieve(
                 memory,
-                memory_query,
+                query,
                 label="memory",
                 agent_name=agent.name,
                 trace=trace,
-                parent_id=agent_span.id,
-                user_id=user_id,
+                parent_id=run.span.id,
+                user_id=getattr(session, "user_id", None),
             )
             if memory is not None
             else _no_matches(),
             _retrieve(
                 knowledge,
-                memory_query,
+                query,
                 label="knowledge",
                 agent_name=agent.name,
                 trace=trace,
-                parent_id=agent_span.id,
+                parent_id=run.span.id,
             )
             if knowledge is not None
             else _no_matches(),
@@ -330,226 +477,61 @@ async def _run_async(
         if knowledge_matches:
             items.insert(len(items) - 1, _knowledge_block(knowledge_matches))
 
-    await hooks.on_agent_start(context_wrapper, agent)
-    try:
-        await _run_input_guardrails(agent, context_wrapper, input, trace, agent_span.id)
-        outcome = await _run_turns(
+    async def turns() -> _TurnOutcome:
+        await _run_input_guardrails(agent, context_wrapper, input, trace, run.span.id)
+        return await _run_turns(
             agent,
             items,
             context_wrapper,
             hooks,
             run_config,
             trace,
-            agent_span.id,
+            run.span.id,
             max_turns=run_config.max_turns,
+            generated=run.generated,
             emit=emit,
         )
-    except RunaError as exc:
-        _close_span(agent_span, error=str(exc))
-        trace.end_time = time.time()
-        _export(trace)
-        from runa.exceptions import RunErrorDetails
 
-        exc.run_data = RunErrorDetails(
-            input=input if isinstance(input, str) else list(input),
-            new_items=[],
-            raw_responses=[],
-            last_agent=agent,
-            context_wrapper=context_wrapper,
-            input_guardrail_results=list(context_wrapper.input_guardrail_results),
-            output_guardrail_results=list(context_wrapper.output_guardrail_results),
-            tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
-            tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
-            trace=trace,
-        )
-        raise
-
-    _close_span(agent_span, error=None, output=outcome.final_output)
-    trace.end_time = time.time()
-
-    if outcome.interruptions:
-        state = RunState(
-            agent=outcome.current_agent,
-            original_input=original_input,
-            generated_items=list(items),
-            ready_results=outcome.ready_results,
-            pending=outcome.interruptions,
-            context_wrapper=context_wrapper,
-            trace=trace,
-            new_items=outcome.generated,
-            session_input=turn_input if session is not None else [],
-            input_guardrail_results=list(context_wrapper.input_guardrail_results),
-            output_guardrail_results=list(context_wrapper.output_guardrail_results),
-            tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
-            tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
-        )
-        _export(trace)
-        return RunResult(
-            final_output=None,
-            context_wrapper=context_wrapper,
-            trace=trace,
-            _original_input=original_input,
-            _generated_items=outcome.generated,
-            interruptions=outcome.interruptions,
-            _state=state,
-            input_guardrail_results=list(context_wrapper.input_guardrail_results),
-            output_guardrail_results=list(context_wrapper.output_guardrail_results),
-            tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
-            tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
-        )
-
-    if session is not None:
-        await _save_to_session(
-            agent,
-            session,
-            [*turn_input, *outcome.generated],
-            outcome.context_tokens,
-            trace,
-            agent_span.id,
-        )
-
-    if memory is not None and memory_query is not None:
-        extraction_span = _new_span(trace, None, "memory", "custom", input=memory_query)
-        try:
-            conversation = f"User: {memory_query}\nAssistant: {outcome.final_output}"
-            resolved_model = _resolve_model(agent, run_config.model_provider)
-            stored = await memory.remember_from_conversation(
-                conversation, user_id=user_id, model=resolved_model
-            )
-            _close_span(extraction_span, output={"stored": len(stored)})
-        except Exception as exc:
-            _close_span(extraction_span, error=str(exc))
-            logger.warning("memory extraction failed for agent %s", agent.name, exc_info=True)
-
-    # `original_input` is what `agent.history` becomes via `to_input_list()` for a no-session run
-    # (the session case is compacted above, against `session`'s own stored history) -- compact it
-    # too, so the *next* call starts from the same cut `items` already made mid-run, not the full
-    # pre-compaction history.
-    if session is None:
-        _maybe_compact(agent, original_input, outcome.context_tokens, trace, agent_span.id)
-
-    await hooks.on_agent_end(context_wrapper, outcome.current_agent, outcome.final_output)
-    _export(trace)
-    return RunResult(
-        final_output=outcome.final_output,
-        context_wrapper=context_wrapper,
-        trace=trace,
-        _original_input=original_input,
-        _generated_items=outcome.generated,
-        input_guardrail_results=list(context_wrapper.input_guardrail_results),
-        output_guardrail_results=list(context_wrapper.output_guardrail_results),
-        tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
-        tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
-    )
+    await hooks.on_agent_start(context_wrapper, agent)
+    outcome = await _guarded(run, turns())
+    return await _finish(run, outcome, hooks, run_config)
 
 
 async def _resume(
     state: RunState, hooks: RunHooks[Any], run_config: RunConfig, session: SessionABC | None
 ) -> RunResult:
-    """Continue a paused run once its interruptions are resolved.
-
-    A session-backed run persists nothing while paused: the whole turn (`state.session_input`,
-    `state.new_items`, and everything generated since) is saved to `session` once it finishes.
-    """
-    items = list(state.generated_items)
-    agent_span = _new_span(state.trace, None, state.agent.name, "agent")
-
-    pending_message = state.generated_items[-1]
-    try:
-        outcome = await _run_turns(
-            state.agent,
-            items,
-            state.context_wrapper,
-            hooks,
-            run_config,
-            state.trace,
-            agent_span.id,
-            max_turns=run_config.max_turns,
-            pending_resume=(
-                pending_message,
-                state.approvals,
-                state.rejection_messages,
-                state.ready_results,
-            ),
-        )
-    except RunaError as exc:
-        _close_span(agent_span, error=str(exc))
-        state.trace.end_time = time.time()
-        _export(state.trace)
-        from runa.exceptions import RunErrorDetails
-
-        exc.run_data = RunErrorDetails(
-            input=state.original_input,
-            new_items=[],
-            raw_responses=[],
-            last_agent=state.agent,
-            context_wrapper=state.context_wrapper,
-            input_guardrail_results=list(state.context_wrapper.input_guardrail_results),
-            output_guardrail_results=list(state.context_wrapper.output_guardrail_results),
-            tool_input_guardrail_results=list(state.context_wrapper.tool_input_guardrail_results),
-            tool_output_guardrail_results=list(state.context_wrapper.tool_output_guardrail_results),
-            trace=state.trace,
-        )
-        raise
-
-    _close_span(agent_span, output=outcome.final_output)
-    state.trace.end_time = time.time()
-
-    if outcome.interruptions:
-        new_state = RunState(
-            agent=outcome.current_agent,
-            original_input=state.original_input,
-            generated_items=items,
-            ready_results=outcome.ready_results,
-            pending=outcome.interruptions,
-            context_wrapper=state.context_wrapper,
-            trace=state.trace,
-            new_items=[*state.new_items, *outcome.generated],
-            session_input=state.session_input,
-            input_guardrail_results=list(state.context_wrapper.input_guardrail_results),
-            output_guardrail_results=list(state.context_wrapper.output_guardrail_results),
-            tool_input_guardrail_results=list(state.context_wrapper.tool_input_guardrail_results),
-            tool_output_guardrail_results=list(state.context_wrapper.tool_output_guardrail_results),
-        )
-        _export(state.trace)
-        return RunResult(
-            final_output=None,
-            context_wrapper=state.context_wrapper,
-            trace=state.trace,
-            _original_input=state.original_input,
-            _generated_items=outcome.generated,
-            interruptions=outcome.interruptions,
-            _state=new_state,
-            input_guardrail_results=list(state.context_wrapper.input_guardrail_results),
-            output_guardrail_results=list(state.context_wrapper.output_guardrail_results),
-            tool_input_guardrail_results=list(state.context_wrapper.tool_input_guardrail_results),
-            tool_output_guardrail_results=list(state.context_wrapper.tool_output_guardrail_results),
-        )
-
-    generated = [*state.new_items, *outcome.generated]
-    if session is not None:
-        await _save_to_session(
-            state.agent,
-            session,
-            [*state.session_input, *generated],
-            outcome.context_tokens,
-            state.trace,
-            agent_span.id,
-        )
-
-    await hooks.on_agent_end(state.context_wrapper, outcome.current_agent, outcome.final_output)
-    _export(state.trace)
-    return RunResult(
-        final_output=outcome.final_output,
+    """Continue a paused run once its interruptions are resolved."""
+    run = _Run(
+        agent=state.agent,
+        input=state.original_input,
+        items=list(state.generated_items),
         context_wrapper=state.context_wrapper,
         trace=state.trace,
-        _original_input=state.original_input,
-        _generated_items=generated,
-        input_guardrail_results=list(state.context_wrapper.input_guardrail_results),
-        output_guardrail_results=list(state.context_wrapper.output_guardrail_results),
-        tool_input_guardrail_results=list(state.context_wrapper.tool_input_guardrail_results),
-        tool_output_guardrail_results=list(state.context_wrapper.tool_output_guardrail_results),
+        span=_new_span(state.trace, None, state.agent.name, "agent"),
+        original_input=state.original_input,
+        session=session,
+        session_input=state.session_input,
+        generated=list(state.new_items),
     )
+    turns = _run_turns(
+        state.agent,
+        run.items,
+        state.context_wrapper,
+        hooks,
+        run_config,
+        state.trace,
+        run.span.id,
+        max_turns=run_config.max_turns,
+        generated=run.generated,
+        pending_resume=(
+            state.generated_items[-1],
+            state.approvals,
+            state.rejection_messages,
+            state.ready_results,
+        ),
+    )
+    outcome = await _guarded(run, turns)
+    return await _finish(run, outcome, hooks, run_config)
 
 
 __all__ = ["_default_hooks", "_resume", "_run_async", "_run_turns"]
