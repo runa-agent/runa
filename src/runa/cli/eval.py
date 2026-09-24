@@ -30,6 +30,10 @@ class TraceHasNoInput(Exception):
     """Raised when a trace recorded no user input to replay as an eval case."""
 
 
+class CaseAlreadyInEvals(Exception):
+    """Raised when a trace's input is already a case in its agent's `evals/` dataset."""
+
+
 def _require_evals_dir(root: Path) -> Path:
     evals_dir = root / "evals"
     if not evals_dir.is_dir():
@@ -50,12 +54,18 @@ def traced_input(trace: Trace) -> tuple[str, str] | None:
     return agent_span.name, agent_span.input
 
 
+def has_case(eval_file: Path, input: str) -> bool:
+    """Whether `eval_file` already holds a case with this `input`."""
+    return eval_file.exists() and any(case.input == input for case in Dataset.from_jsonl(eval_file))
+
+
 def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None) -> Path:
     """Append the traced run's input as a new case to `evals/<agent_name>.jsonl`.
 
     The agent is the trace's root agent span, the one the run started with. `expected` says what a
     good answer would have been; without it the case still grades task completion and relevance.
     The case's `metadata` keeps `trace_id`, so a failing case links back to the run it came from.
+    An input already in the file raises `CaseAlreadyInEvals` rather than adding it twice.
     """
     evals_dir = _require_evals_dir(root)
     trace = get_trace(trace_id, db_path=resolve_db_path(root))
@@ -72,6 +82,8 @@ def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None
     case["metadata"] = {"trace_id": trace.id}
 
     eval_file = evals_dir / f"{agent_name}.jsonl"
+    if has_case(eval_file, input):
+        raise CaseAlreadyInEvals(f"{input!r} is already a case in {eval_file}")
     existing = eval_file.read_text() if eval_file.exists() else ""
     separator = "\n" if existing and not existing.endswith("\n") else ""
     eval_file.write_text(f"{existing}{separator}{json.dumps(case, ensure_ascii=False)}\n")

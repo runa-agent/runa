@@ -201,11 +201,14 @@ def test_trace_detail_adds_its_input_to_the_agent_s_evals(
     assert 'action="/traces/trace_1/eval"' in client.get("/traces/trace_1").text
 
     response = client.post("/traces/trace_1/eval", data={"expected": "Looks up the order"})
+    client.post("/traces/trace_1/eval", data={"expected": "a double submit"})
 
     assert response.status_code == 200
-    assert "Added to <code>evals/turn.jsonl</code>" in response.text
-    line = (project / "evals" / "turn.jsonl").read_text().splitlines()[-1]
-    assert json.loads(line) == {
+    assert "In <code>evals/turn.jsonl</code>" in response.text
+    assert "Add to evals" not in response.text
+    lines = (project / "evals" / "turn.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == {
         "input": "Where is my order?",
         "expected": "Looks up the order",
         "metadata": {"trace_id": "trace_1"},
@@ -215,6 +218,32 @@ def test_trace_detail_adds_its_input_to_the_agent_s_evals(
 def test_trace_detail_hides_add_to_evals_without_a_recorded_input(client: TestClient) -> None:
     """A trace whose root agent span recorded no input has nothing to add."""
     assert "Add to evals" not in client.get("/traces/trace_2").text
+
+
+def test_evaluation_detail_links_cases_to_traces_and_flags_regressions(
+    client: TestClient, project: Path
+) -> None:
+    """A newer run failing a case the fixture's run passed marks it regressed, with a trace link."""
+    failing = CaseReport(
+        index=0,
+        case=Case(input="hi"),
+        run=AgentRun(
+            input="hi",
+            final_output="no",
+            trace=Trace(id="trace_1", name="support_agent", start_time=0.0),
+        ),
+        results=[EvaluationResult(metric="task_completion", status=Status.FAIL, reason="bad")],
+    )
+    run_id = save_report(
+        Report(agent_name="support_agent", cases=[failing]),
+        db_path=project / "db" / "runa.db",
+    )
+
+    detail = client.get(f"/evaluations/{run_id}").text
+
+    assert "last run 1/1 passed" in detail
+    assert ">regressed<" in detail
+    assert 'href="/traces/trace_1"' in detail
 
 
 def test_trace_detail_404s_for_an_unknown_trace(client: TestClient) -> None:

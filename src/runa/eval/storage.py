@@ -19,6 +19,7 @@ from runa.eval.report import Report
 
 _RUNS_TABLE = "eval_runs"
 _CASES_TABLE = "eval_cases"
+_NO_LIMIT = 2**63 - 1  # SQLite's largest integer, above every `eval_runs.id`
 
 _DDL = f"""
 CREATE TABLE IF NOT EXISTS {_RUNS_TABLE} (
@@ -35,13 +36,19 @@ CREATE TABLE IF NOT EXISTS {_CASES_TABLE} (
     output TEXT,
     passed INTEGER NOT NULL,
     results_json TEXT NOT NULL,
+    trace_id TEXT,
     PRIMARY KEY (run_id, case_index)
 );
 """
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
-    return _connect_db(db_path, _DDL)
+    conn = _connect_db(db_path, _DDL)
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({_CASES_TABLE})")}
+    if "trace_id" not in columns:  # a runa.db from before eval cases linked to their trace
+        conn.execute(f"ALTER TABLE {_CASES_TABLE} ADD COLUMN trace_id TEXT")
+        conn.commit()
+    return conn
 
 
 def save_report(report: Report, *, db_path: Path = DEFAULT_DB_PATH) -> int:
@@ -58,8 +65,8 @@ def save_report(report: Report, *, db_path: Path = DEFAULT_DB_PATH) -> int:
         conn.executemany(
             f"""
             INSERT INTO {_CASES_TABLE}
-                (run_id, case_index, input, output, passed, results_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (run_id, case_index, input, output, passed, results_json, trace_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -69,6 +76,7 @@ def save_report(report: Report, *, db_path: Path = DEFAULT_DB_PATH) -> int:
                     case.run.final_output,
                     int(case.passed),
                     json.dumps([asdict(result) for result in case.results], default=str),
+                    case.run.trace.id or None,
                 )
                 for case in report.cases
             ],
@@ -86,6 +94,7 @@ class EvalCaseRow:
     output: str | None
     passed: bool
     results: list[dict[str, Any]]
+    trace_id: str | None = None
 
 
 @dataclass
@@ -107,6 +116,7 @@ def _row_to_case(row: sqlite3.Row) -> EvalCaseRow:
         output=row["output"],
         passed=bool(row["passed"]),
         results=json.loads(row["results_json"]),
+        trace_id=row["trace_id"],
     )
 
 
@@ -149,16 +159,20 @@ def get_eval_run(run_id: int, *, db_path: Path = DEFAULT_DB_PATH) -> EvalRun | N
         )
 
 
-def load_baseline(agent_name: str, *, db_path: Path = DEFAULT_DB_PATH) -> dict[str, bool] | None:
+def load_baseline(
+    agent_name: str, *, before: int | None = None, db_path: Path = DEFAULT_DB_PATH
+) -> dict[str, bool] | None:
     """Map each input of `agent_name`'s latest eval run to whether it passed.
 
-    `None` when the agent was never evaluated. Keyed by input rather than index, so reordering,
-    adding, or removing cases between runs still lines the rest up.
+    `before` looks at the latest run older than that `eval_runs.id` instead, the baseline a past
+    run was compared against. `None` when there's no such run. Keyed by input rather than index,
+    so reordering, adding, or removing cases between runs still lines the rest up.
     """
     with closing(_connect(db_path)) as conn:
         row = conn.execute(
-            f"SELECT id FROM {_RUNS_TABLE} WHERE agent_name = ? ORDER BY id DESC LIMIT 1",
-            (agent_name,),
+            f"SELECT id FROM {_RUNS_TABLE} WHERE agent_name = ? AND id < ? "
+            "ORDER BY id DESC LIMIT 1",
+            (agent_name, before if before is not None else _NO_LIMIT),
         ).fetchone()
         if row is None:
             return None

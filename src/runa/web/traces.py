@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 from runa.cli._project import resolve_db_path
-from runa.cli.eval import traced_input
+from runa.cli.eval import has_case, traced_input
 from runa.tracing import Trace, get_trace
 from runa.tracing.spans import Span
 from runa.tracing.traces import _TYPE_LABELS, _fmt_duration, _fmt_tokens
@@ -128,34 +128,34 @@ def _tree(trace: Trace) -> str:
     return f'<ul class="span-tree">{_siblings_html(roots, children)}</ul>'
 
 
-def _add_to_evals(trace: Trace, *, added: bool) -> str:
-    """The "Add to evals" form, or a confirmation once it was submitted.
+def _add_to_evals(trace: Trace, *, root: Path) -> str:
+    """The "Add to evals" form, or where the case already is once it's been added.
 
     Nothing to add when the trace recorded no user input (see `cli/eval.py`'s `traced_input`).
     """
     traced = traced_input(trace)
     if traced is None:
         return ""
-    eval_file = escape(f"evals/{traced[0]}.jsonl")
-    if added:
+    agent_name, input = traced
+    eval_file = f"evals/{agent_name}.jsonl"
+    if has_case(root / eval_file, input):
         run = "<code>runa eval</code>"
-        return f'<div class="card">Added to <code>{eval_file}</code>. Run {run}.</div>'
+        return f'<div class="card">In <code>{escape(eval_file)}</code>. Run {run}.</div>'
     action = escape(f"/traces/{quote(trace.id)}/eval")
     return (
         f'<form class="card add-eval" method="post" action="{action}">'
-        f'<div class="field-label">Add this input to <code>{eval_file}</code></div>'
+        f'<div class="field-label">Add this input to <code>{escape(eval_file)}</code></div>'
         '<input name="expected" placeholder="What a good answer says (optional)">'
         '<button type="submit">Add to evals</button>'
         "</form>"
     )
 
 
-def render_detail(trace_id: str, *, root: Path, added: bool = False) -> str:
+def render_detail(trace_id: str, *, root: Path) -> str:
     """Render `/traces/{trace_id}`: that trace's header, its span waterfall, and "Add to evals".
 
-    No nav tab is active here: this page is reached from a session's trace card ("open trace") or
-    a direct link, not browsed from a list, so nothing in `NAV_ITEMS` describes it. `added` shows
-    the confirmation `web/app.py` redirects back with after the form's POST.
+    No nav tab is active here: this page is reached from a session's trace card ("open trace"), an
+    evaluation case, or a direct link, not browsed from a list, so nothing in `NAV_ITEMS` does.
     """
     trace = get_trace(trace_id, db_path=resolve_db_path(root))
     if trace is None:
@@ -171,5 +171,5 @@ def render_detail(trace_id: str, *, root: Path, added: bool = False) -> str:
         f'<p class="subtitle">{escape(trace.id)} · {escape(_fmt_duration(trace.duration))}'
         f"{session_link}</p>"
     )
-    body = header + _add_to_evals(trace, added=added) + _tree(trace)
+    body = header + _add_to_evals(trace, root=root) + _tree(trace)
     return page(title=trace.name, active="", body=body)

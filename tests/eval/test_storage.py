@@ -9,6 +9,7 @@ from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
 from runa.eval.storage import get_eval_run, list_eval_runs, load_baseline, save_report
 from runa.eval.tracing.adapter import AgentRun
+from runa.tracing import Trace
 
 
 def test_save_report_persists_a_run_and_its_cases(tmp_path: Path) -> None:
@@ -118,3 +119,44 @@ def test_load_baseline_maps_the_latest_run_s_inputs_to_their_verdicts(tmp_path: 
 
     assert load_baseline("A", db_path=db_path) == {"hi": True}
     assert load_baseline("never_run", db_path=db_path) is None
+
+
+def test_save_report_links_each_case_to_its_run_s_trace(tmp_path: Path) -> None:
+    """A case's `trace_id` is its run's trace, so a failing case opens straight onto its spans."""
+    db_path = tmp_path / "runa.db"
+    case = _graded("hi", Status.PASS)
+    case.run.trace = Trace(id="trace_9", name="A", start_time=0.0)
+
+    untraced = _graded("yo", Status.PASS)
+    untraced.index = 1
+
+    run_id = save_report(Report("A", [case, untraced]), db_path=db_path)
+
+    run = get_eval_run(run_id, db_path=db_path)
+    assert run is not None
+    assert [row.trace_id for row in run.cases] == ["trace_9", None]
+
+
+def test_storage_adds_trace_id_to_an_older_runa_db(tmp_path: Path) -> None:
+    """A `runa.db` whose `eval_cases` predates `trace_id` gets the column on next connect."""
+    db_path = tmp_path / "runa.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE eval_cases (run_id INTEGER NOT NULL, case_index INTEGER NOT NULL, "
+            "input TEXT NOT NULL, output TEXT, passed INTEGER NOT NULL, "
+            "results_json TEXT NOT NULL, PRIMARY KEY (run_id, case_index))"
+        )
+
+    save_report(Report("A", [_graded("hi", Status.PASS)]), db_path=db_path)
+
+    assert load_baseline("A", db_path=db_path) == {"hi": True}
+
+
+def test_load_baseline_before_a_run_is_the_run_it_was_compared_against(tmp_path: Path) -> None:
+    """`before=run_id` skips that run and anything newer."""
+    db_path = tmp_path / "runa.db"
+    first = save_report(Report("A", [_graded("hi", Status.PASS)]), db_path=db_path)
+    second = save_report(Report("A", [_graded("hi", Status.FAIL)]), db_path=db_path)
+
+    assert load_baseline("A", before=second, db_path=db_path) == {"hi": True}
+    assert load_baseline("A", before=first, db_path=db_path) is None

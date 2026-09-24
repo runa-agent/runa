@@ -944,4 +944,9 @@ def test_evaluate_delegates_to_evaluate_agent(monkeypatch: pytest.MonkeyPatch) -
     assert report == "a report"
     assert captured["agent"] is agent
     assert captured["dataset"] is dataset
-    assert captured["kwargs"] == {"judge": "gpt-5.4", "threshold": 0.8, "thresholds": None}
+    assert captured["kwargs"] == {
+        "judge": "gpt-5.4",
+        "threshold": 0.8,
+        "thresholds": None,
+        "concurrency": 8,
+    }

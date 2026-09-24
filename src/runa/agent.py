@@ -391,18 +391,25 @@ class Agent:
         judge: str | None = None,
         threshold: float | None = None,
         thresholds: dict[str, float] | None = None,
+        concurrency: int = 8,
     ) -> "Report":  # noqa: UP037 -- Report is TYPE_CHECKING-only, must stay quoted
         """Run every case in `dataset` through this agent and grade it: see `runa.eval`.
 
         Deterministic checks and DeepEval-backed semantic metrics (task completion, answer
         correctness/relevance, faithfulness, tool correctness) are chosen automatically per case
         based on what evidence it supplies; no metric configuration is required. `judge` overrides
-        the model semantic metrics grade with, defaulting to this agent's own `model`.
+        the model semantic metrics grade with, defaulting to this agent's own `model`. Up to
+        `concurrency` cases run at once.
         """
         from runa.eval.evaluate import evaluate_agent
 
         return await evaluate_agent(
-            self, dataset, judge=judge, threshold=threshold, thresholds=thresholds
+            self,
+            dataset,
+            judge=judge,
+            threshold=threshold,
+            thresholds=thresholds,
+            concurrency=concurrency,
         )
 
     async def run_streamed(

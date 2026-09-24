@@ -15,6 +15,7 @@ from pathlib import Path
 from runa.cli._project import AppLoadError, NotARunaProject
 from runa.cli.chat import AgentNotFound, run_agent_repl
 from runa.cli.eval import (
+    CaseAlreadyInEvals,
     InvalidEvalModule,
     TraceHasNoInput,
     add_trace_to_evals,
@@ -212,6 +213,7 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
         EvaluationAlreadyExists,
         NotARunaProject,
         InvalidEvalModule,
+        CaseAlreadyInEvals,
         TraceHasNoInput,
         TraceNotFound,
     ) as exc:

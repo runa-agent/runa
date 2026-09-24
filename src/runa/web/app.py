@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from runa.cli._project import AppLoadError, NotARunaProject
-from runa.cli.eval import TraceHasNoInput, add_trace_to_evals
+from runa.cli.eval import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
 from runa.cli.traces import TraceNotFound
 from runa.web import agents as agents_page
 from runa.web import evaluations as evaluations_page
@@ -55,9 +55,9 @@ def create_app(root: Path) -> FastAPI:
             return HTMLResponse(_error_page("Sessions", "Session not found."), status_code=404)
 
     @app.get("/traces/{trace_id}", response_class=HTMLResponse, include_in_schema=False)
-    def trace_detail(trace_id: str, added: bool = False) -> HTMLResponse:
+    def trace_detail(trace_id: str) -> HTMLResponse:
         try:
-            return HTMLResponse(traces_page.render_detail(trace_id, root=root, added=added))
+            return HTMLResponse(traces_page.render_detail(trace_id, root=root))
         except traces_page.TraceNotFound:
             return HTMLResponse(_error_page("", "Trace not found."), status_code=404)
 
@@ -69,9 +69,11 @@ def create_app(root: Path) -> FastAPI:
         expected = form.get("expected", [""])[0].strip() or None
         try:
             add_trace_to_evals(trace_id, root=root, expected=expected)
+        except CaseAlreadyInEvals:
+            pass  # e.g. a double submit: the trace page already shows where the case is
         except TraceNotFound, TraceHasNoInput:
             return HTMLResponse(_error_page("", "Trace has no input to add."), status_code=404)
-        return RedirectResponse(f"/traces/{quote(trace_id)}?added=true", status_code=303)
+        return RedirectResponse(f"/traces/{quote(trace_id)}", status_code=303)
 
     @app.get("/evaluations", response_class=HTMLResponse, include_in_schema=False)
     def evaluations_list() -> str:

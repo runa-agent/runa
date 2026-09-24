@@ -8,6 +8,7 @@ import pytest
 from runa.cli._project import NotARunaProject
 from runa.cli.chat import AgentNotFound
 from runa.cli.eval import (
+    CaseAlreadyInEvals,
     InvalidEvalModule,
     TraceHasNoInput,
     add_trace_to_evals,
@@ -176,7 +177,7 @@ def _save_agent_trace(project_dir: Path, trace_id: str, input: str | None) -> No
 def test_add_trace_to_evals_appends_the_run_s_input_to_its_agent_s_dataset(
     tmp_path: Path,
 ) -> None:
-    """The trace's input lands as a new last line of `evals/<agent>.jsonl`, linked by trace id."""
+    """The trace's input is appended once to `evals/<agent>.jsonl`, linked by trace id."""
     project_dir = scaffold_project("demo", root=tmp_path)
     eval_file = project_dir / "evals" / "support_agent.jsonl"
     eval_file.write_text('"an existing case"')  # no trailing newline
@@ -191,6 +192,9 @@ def test_add_trace_to_evals_appends_the_run_s_input_to_its_agent_s_dataset(
     assert Dataset.from_jsonl(eval_file)[1] == Case(
         input="Where is my order?", expected="Looks it up", metadata={"trace_id": "t1"}
     )
+    with pytest.raises(CaseAlreadyInEvals):
+        add_trace_to_evals("t1", root=project_dir)
+    assert len(Dataset.from_jsonl(eval_file)) == 2
 
 
 def test_add_trace_to_evals_rejects_an_unknown_trace_or_one_without_input(

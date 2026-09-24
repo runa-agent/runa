@@ -48,7 +48,7 @@ runa eval --add TRACE_ID --expected "Looks up the order status"
 
 Or open the trace in `runa ui` and use "Add to evals". Either way the run's input is appended to
 its agent's `evals/<agent_name>.jsonl`, with the trace id kept in `metadata`. `--expected` is
-optional, and can be filled in later in the file.
+optional, and can be filled in later in the file. An input already in the file isn't added twice.
 
 ## Catching Regressions
 
@@ -67,6 +67,9 @@ case_2  regressed  task_completion: Didn't look up the order
 
 `report.regressions` lists them in Python. `runa eval` still exits with 1 on any failure, so CI
 fails on every broken case, not only new ones.
+
+In `runa ui`, an evaluation run marks the same regressions, and every case links to the trace of
+its run, so a failure opens straight onto the tool calls and model turns behind it.
 
 ## Building Cases in Python
 
@@ -98,6 +101,12 @@ correctness) are graded by a judge model, by default the agent's own `model`:
 
 ```python
 report = await agent.evaluate(dataset, judge="gpt-5.4")
+```
+
+Cases run 8 at a time. Pass `concurrency=1` for an agent whose tools can't run in parallel:
+
+```python
+await agent.evaluate(dataset, concurrency=1)
 ```
 
 Override a pass threshold globally or per metric:

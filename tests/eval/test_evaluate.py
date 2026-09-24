@@ -192,3 +192,29 @@ def test_evaluate_agent_persists_the_report(monkeypatch: pytest.MonkeyPatch) -> 
     report = asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
 
     assert saved == [report]
+
+
+@pytest.mark.parametrize(("concurrency", "expected_peak"), [(8, 3), (2, 2), (1, 1)])
+def test_evaluate_agent_runs_cases_concurrently_in_dataset_order(
+    monkeypatch: pytest.MonkeyPatch, concurrency: int, expected_peak: int
+) -> None:
+    """Up to `concurrency` cases run at once, and the report keeps the dataset's order."""
+    _patch_run_and_storage(monkeypatch, {})
+    _stub_semantic(monkeypatch)
+    running, peak = 0, 0
+
+    async def slow_run(agent: Any, input: Any, **kwargs: Any) -> Any:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01 if input == "a" else 0)
+        running -= 1
+        return _FakeResult(final_output=input)
+
+    monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(slow_run))
+    dataset = [Case(input="a"), Case(input="b"), Case(input="c")]
+
+    report = asyncio.run(evaluate_agent(_AGENT, dataset, concurrency=concurrency))
+
+    assert peak == expected_peak
+    assert [case.case.input for case in report.cases] == ["a", "b", "c"]
