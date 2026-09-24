@@ -1,0 +1,22 @@
+# Runa pins nothing by hand: `uv.lock` is the source of truth, and these two ecosystems are the
+# only places a version can drift in without a human choosing it.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # One PR a week for the dev toolchain, which moves often and matters little; runtime
+      # dependencies stay per-PR, since each one can change what an agent actually does.
+      dev-dependencies:
+        dependency-type: "development"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
