@@ -1337,3 +1337,13 @@ def test_a_delegates_guardrails_show_up_on_its_callers_run() -> None:
 
     assert run.status == "completed"
     assert [r.tripped for r in run.tool_input_guardrail_results] == [False]
+
+
+def test_run_sync_rejects_a_transcript_as_the_message() -> None:
+    """`message` is one turn: replaying past messages goes through `history`/`session` instead."""
+    agent = Researcher()
+
+    with pytest.raises(TypeError, match="does not take a list of past messages"):
+        agent.run_sync([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}])
+
+    assert agent.history == []

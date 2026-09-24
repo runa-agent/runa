@@ -3,6 +3,8 @@
 import base64
 from pathlib import Path
 
+import pytest
+
 from runa import content
 
 
@@ -86,3 +88,9 @@ def test_parts_passes_an_explicit_content_dict_through_unchanged() -> None:
     explicit = content.image("https://example.test/api/img?id=123")
 
     assert content.parts(["hi", explicit]) == [{"type": "text", "text": "hi"}, explicit]
+
+
+def test_parts_rejects_a_transcript_of_past_messages() -> None:
+    """A list of `{"role": ...}` messages is a conversation, not one turn's content parts."""
+    with pytest.raises(TypeError, match="does not take a list of past messages"):
+        content.parts([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}])

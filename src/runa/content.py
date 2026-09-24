@@ -54,17 +54,36 @@ def _looks_like_image(value: str) -> bool:
     return path.lower().endswith(_IMAGE_EXTENSIONS)
 
 
+_NOT_ONE_TURN = (
+    "message only takes one user turn: a string, or a list of text and image parts. It does "
+    "not take a list of past messages. To start from an earlier conversation, set "
+    "agent.history = [...] directly, or seed a session with session.add_items([...]) before "
+    "the first run."
+)
+
+
+def _part(item: str | dict[str, Any]) -> dict[str, Any]:
+    """Classify one item of a `message` list, rejecting anything that isn't a content part."""
+    if not isinstance(item, dict):
+        return image(item) if _looks_like_image(item) else text(item)
+    if "type" not in item:
+        raise TypeError(_NOT_ONE_TURN)
+    return item
+
+
 def parts(message: Sequence[str | dict[str, Any]]) -> list[dict[str, Any]]:
     """Build content parts from a `message` list, auto-detecting each bare string.
 
     A string is passed to `image()` when `_looks_like_image` recognizes it, `text()` otherwise;
     a dict (already a content part, built explicitly for a string the heuristic can't classify)
     passes through unchanged.
+
+    A dict with no `"type"` isn't a content part at all -- almost always a whole message
+    (`{"role": ..., "content": ...}`) from a transcript someone is trying to replay -- and raises
+    `TypeError` rather than reaching a provider, where it would be dropped silently (Anthropic)
+    or rejected as a bad request (OpenAI).
     """
-    return [
-        item if isinstance(item, dict) else image(item) if _looks_like_image(item) else text(item)
-        for item in message
-    ]
+    return [_part(item) for item in message]
 
 
 __all__ = ["image", "parts", "text"]

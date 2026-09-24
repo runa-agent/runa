@@ -34,6 +34,8 @@ pick session-backed or in-memory per agent instance, not both for the same conve
 
 ```python
 await session.get_items()  # this session's items, oldest first
+await session.add_items(items)  # append items to this session's history
+await session.set_items(items)  # replace this session's whole history
 await session.pop_item()  # remove and return the most recent item
 await session.clear_session()  # delete the session and all its items
 ```
@@ -41,6 +43,26 @@ await session.clear_session()  # delete the session and all its items
 Pass `user_id="user-42"` to `SQLiteSession` to also scope that agent's automatic
 [Memory](memory.md) to this user. `session.user_id` is unrelated to conversation history itself;
 `run` reads it only to know which user's memories to retrieve and store.
+
+## Loading an Existing Transcript
+
+`message` is one turn: a string, or a list of text and image parts. It does not take a list of
+past messages, and passing one raises `TypeError`. To start from an earlier conversation, seed it
+through the seam the mode already uses, before the first run:
+
+```python
+transcript = [
+    {"role": "user", "content": "My order hasn't arrived."},
+    {"role": "assistant", "content": "What is the order number?"},
+]
+
+agent.history = transcript  # in-memory
+asyncio.run(session.add_items(transcript))  # session-backed
+```
+
+`add_items` appends, so seeding a session that already holds turns concatenates two
+conversations; `set_items` replaces its history instead. Both are `async`, hence the
+`asyncio.run` in synchronous code: inside an `async def`, `await` them directly.
 
 ## Writing Your Own Backend
 

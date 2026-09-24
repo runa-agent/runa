@@ -78,8 +78,9 @@ def _turn_input(
     """Build the `input` for `Runner.run` from this turn's `message`.
 
     A paused `RunState` passes straight through, to be resumed. A list `message` goes through
-    `runa.content.parts` first, auto-detecting each bare string as text or an image; a plain
-    string is left untouched. With no `session`, the result joins `history` as a new user
+    `runa.content.parts` first, auto-detecting each bare string as text or an image (and
+    rejecting a list of past messages, which belongs in `history`/`session`); a plain string is
+    left untouched. With no `session`, the result joins `history` as a new user
     message. With a `session`, only the new turn is ever sent (prior turns come back from the
     session itself): a plain string passes straight through, a multimodal one is wrapped in a
     single-item message list instead, since `Runner.run`'s session path only wraps a bare
@@ -371,6 +372,10 @@ class Agent:
         URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
         string doesn't have a recognizable image extension. It can also be the `RunState` of a
         paused `Run`, once its interruptions are approved or rejected, to resume that run.
+
+        It is always one user turn, never a transcript: a list of `{"role": ...}` messages raises
+        `TypeError`. Start from an earlier conversation by setting `self.history` directly, or by
+        seeding the `session` with `add_items` before the first run.
 
         `context` is available to a single-argument `instructions` callable (and to tools,
         guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle

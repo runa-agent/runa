@@ -176,6 +176,12 @@ With a `session`, only the new message is ever passed to `run`/`run_sync`,
 prior turns come back from `runa.db` automatically, and `agent.history`
 is left untouched. Don't mix the two: pick session-backed or
 in-memory per agent instance, not both for the same conversation.
+
+**`message` is one turn, never a transcript** (enforced: a list of
+`{"role": ..., "content": ...}` messages raises `TypeError`). Load an
+earlier conversation through the seam the chosen mode already has:
+`agent.history = [...]` in memory, `await session.add_items([...])`
+before the first run with a session.
 `SQLiteSession` is the only session implementation Runa ships; a custom
 store subclasses `SessionABC`'s four methods, nothing less.
 
