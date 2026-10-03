@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 TResponseInputItem = dict[str, Any]
@@ -23,12 +24,14 @@ TResponseOutputItem = TResponseInputItem
 `TResponseInputItem`; see that alias for why one shape covers both.
 """
 
-MessageContent = str | Sequence[str | dict[str, Any]]
+MessageContent = str | Sequence[str | Path | dict[str, Any]]
 """One user message's `content`: plain text, or a list for a multimodal message. Each list item
-is either a bare string (auto-detected as text or an image by `runa.content.parts`) or an
-already-built content part dict (`runa.content.text`/`.image`, an escape hatch for a string the
-heuristic can't classify). `runa._models.openai_chatcompletions` passes the resulting parts
-straight through; `runa._models.anthropic` translates them into Claude's own content blocks.
+is a bare string (text, or an image when it is an image URL or `data:` URI -- `runa.content.parts`
+refuses to read a string as a local path, since the list may carry user input), a `Path` (a local
+image, read off disk), or an already-built content part dict (`runa.content.text`/`.image`, an
+escape hatch for a string the heuristic can't classify). `runa._models.openai_chatcompletions`
+passes the resulting parts straight through; `runa._models.anthropic` translates them into
+Claude's own content blocks.
 
 `Sequence`, not `list`, so a `list[dict[str, Any]]` of already-built parts type-checks too --
 `list` is invariant, `Sequence` is covariant.

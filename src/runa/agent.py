@@ -85,13 +85,13 @@ def _turn_input(
     """Build the `input` for `Runner.run` from this turn's `message`.
 
     A paused `RunState` passes straight through, to be resumed. A list `message` goes through
-    `runa.content.parts` first, auto-detecting each bare string as text or an image (and
-    rejecting a list of past messages, which belongs in `history`/`session`); a plain string is
-    left untouched. With no `session`, the result joins `history` as a new user
-    message. With a `session`, only the new turn is ever sent (prior turns come back from the
-    session itself): a plain string passes straight through, a multimodal one is wrapped in a
-    single-item message list instead, since `Runner.run`'s session path only wraps a bare
-    string into `{"role": "user", ...}` itself.
+    `runa.content.parts` first, classifying each item as text or an image (and rejecting a list
+    of past messages, which belongs in `history`/`session`); a plain string is left untouched.
+    With no `session`, the result joins `history` as a new user message. With a `session`, only
+    the new turn is ever sent (prior turns come back from the session itself): a plain string
+    passes straight through, a multimodal one is wrapped in a single-item message list instead,
+    since `Runner.run`'s session path only wraps a bare string into `{"role": "user", ...}`
+    itself.
     """
     if isinstance(message, RunState):
         return message
@@ -434,11 +434,12 @@ class Agent:
     ) -> Run:
         """Run a turn asynchronously, appending it to the conversation history.
 
-        `message` is plain text, or a list for a multimodal message: bare strings are
-        auto-detected as text or an image by extension (`"cat.jpg"`, a URL, a `data:image/...`
-        URI), or build a part explicitly with `content.text(...)`/`content.image(...)` when a
-        string doesn't have a recognizable image extension. It can also be the `RunState` of a
-        paused `Run`, once its interruptions are approved or rejected, to resume that run.
+        `message` is plain text, or a list for a multimodal message: a bare string is text, or
+        an image when it is an image URL or a `data:image/...` URI; a local image is a
+        `Path("cat.jpg")`, never a bare string, since the list may carry a user's own words (see
+        `content.parts`). Build a part explicitly with `content.text(...)`/`content.image(...)`
+        when a string doesn't have a recognizable image extension. It can also be the `RunState`
+        of a paused `Run`, once its interruptions are approved or rejected, to resume that run.
 
         It is always one user turn, never a transcript: a list of `{"role": ...}` messages raises
         `TypeError`. Start from an earlier conversation by setting `self.history` directly, or by

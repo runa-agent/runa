@@ -55,14 +55,21 @@ class SupportAgent(Agent):
 
 ## Images
 
-`Agent.run`/`run_sync`/`run_streamed` also take a list of strings instead of plain text, for a
-multimodal message. Each string is auto-detected by extension: an image (a URL, a `data:image/...`
-URI, or a local file path, base64-encoded automatically) or plain text otherwise.
+`Agent.run`/`run_sync`/`run_streamed` also take a list instead of plain text, for a multimodal
+message. Each item is auto-detected: an image URL or `data:image/...` URI becomes an image, a
+`Path` is read off disk and base64-encoded automatically, and any other string is plain text.
 
 ```python
+from pathlib import Path
+
 agent.run_sync(["What's in this image?", "https://example.com/cat.png"])
-agent.run_sync(["What's in this image?", "photo.jpg"])  # a local file works too
+agent.run_sync(["What's in this image?", Path("photo.jpg")])  # a local file, read for you
 ```
+
+A local file is a `Path`, never a bare string: the list often carries a user's own words, and a
+string that happens to end in `.png` would otherwise turn their message into a read of your
+filesystem. A bare string naming a local image raises `ValueError` and names both spellings that
+say the path is yours, `Path(...)` and `content.image(...)`.
 
 For a string the extension heuristic can't classify (a signed URL with no file extension, say),
 build the part explicitly with `runa.content` and mix it into the list:

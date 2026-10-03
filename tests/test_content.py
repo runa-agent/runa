@@ -62,6 +62,36 @@ def test_parts_auto_detects_text_and_image_strings() -> None:
     ]
 
 
+def test_parts_reads_a_path_off_disk(tmp_path: Path) -> None:
+    """A `Path` item is the program's own file, so it is read and encoded like `image()`."""
+    file = tmp_path / "cat.png"
+    file.write_bytes(b"fake-png-bytes")
+
+    expected_data = base64.b64encode(b"fake-png-bytes").decode()
+    assert content.parts([file]) == [
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{expected_data}"}}
+    ]
+
+
+def test_parts_refuses_to_read_a_local_path_from_a_bare_string(tmp_path: Path) -> None:
+    """A string naming a local image is never read: the list may carry a user's own words."""
+    file = tmp_path / "cat.png"
+    file.write_bytes(b"fake-png-bytes")
+
+    with pytest.raises(ValueError, match="names a local image file"):
+        content.parts([str(file)])
+
+
+@pytest.mark.parametrize(
+    "traversal",
+    ["../../../etc/passwd.png", "/etc/ssl/private/server.png", "~/.ssh/known_hosts.png"],
+)
+def test_parts_refuses_a_traversal_string(traversal: str) -> None:
+    """The refusal is what closes path traversal: no untrusted string reaches the filesystem."""
+    with pytest.raises(ValueError, match="names a local image file"):
+        content.parts([traversal])
+
+
 def test_parts_recognizes_a_data_image_uri_as_an_image() -> None:
     """A `data:image/...` URI string is classified as an image, not text."""
     uri = "data:image/png;base64,aGVsbG8="
