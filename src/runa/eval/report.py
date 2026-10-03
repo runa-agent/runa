@@ -1,7 +1,5 @@
 """eval/report.py: `CaseReport` and `Report`, the aggregated result of `agent.evaluate()`."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 from runa.eval.case import Case

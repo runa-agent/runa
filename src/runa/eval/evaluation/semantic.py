@@ -11,8 +11,6 @@ step grades each extracted piece, and the score is a plain aggregate of those ve
 mirrors how LLM-judge frameworks get more reliable scores than a single holistic call would.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Coroutine
 from typing import Any

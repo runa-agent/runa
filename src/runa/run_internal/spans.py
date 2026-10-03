@@ -1,7 +1,5 @@
 """spans.py: tracing span helpers shared by the turn loop, guardrails, and tool execution."""
 
-from __future__ import annotations
-
 import time
 from typing import Any
 

@@ -7,8 +7,6 @@ output back to the *calling* agent, which keeps going (`.delegate` mode). See `r
 for how a class wires either mode up from its `subagents` list.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from dataclasses import dataclass

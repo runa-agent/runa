@@ -9,8 +9,6 @@ histories and a dashboard that can only ever show one. The contract under test i
 Postgres backends are indistinguishable from the SQLite ones through the public API.
 """
 
-from __future__ import annotations
-
 import asyncio
 import os
 import uuid

@@ -6,8 +6,6 @@ scaffolded project has (see `cli/new.py`'s `.env` template). Talks to it directl
 same as `OpenAICompatibleModel`, rather than pulling in the `openai` SDK for one endpoint.
 """
 
-from __future__ import annotations
-
 import os
 
 import httpx2 as httpx

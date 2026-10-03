@@ -6,8 +6,6 @@ own `Trace`, for instrumenting code that isn't itself an agent run. An `Agent.ru
 so a code-driven workflow's runs are grouped without passing anything to `run`.
 """
 
-from __future__ import annotations
-
 import time
 import uuid
 from contextvars import ContextVar

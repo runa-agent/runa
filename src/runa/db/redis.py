@@ -10,8 +10,6 @@ JSON-serializable values are cacheable. Unlike the other two backends, expiry is
 (`PX`), not lazy-on-read: an expired key is simply gone, not evicted by the next `get`.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 from typing import Any

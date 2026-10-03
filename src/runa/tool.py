@@ -6,8 +6,6 @@ themselves" approach the rest of Runa follows, and the one the `pyright` overrid
 `pyproject.toml` already documents as this codebase's intended design for tool schemas.
 """
 
-from __future__ import annotations
-
 import asyncio
 import enum
 import inspect

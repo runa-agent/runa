@@ -5,8 +5,6 @@ and it keeps every page a plain, testable function (the same spirit as `Trace.__
 JavaScript: `<details>` covers every collapsible bit a trace/session/eval page needs.
 """
 
-from __future__ import annotations
-
 import html
 from typing import Literal
 

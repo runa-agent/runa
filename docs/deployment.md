@@ -190,7 +190,7 @@ you, on purpose: a framework should not decide when to delete your data.
 `runa new` scaffolds a `Dockerfile` that serves the app:
 
 ```dockerfile
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 COPY . .

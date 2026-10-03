@@ -7,8 +7,6 @@ lifetime (not per `Runner.run()` call): an MCP server is meant to be a persisten
 connection, not something reopened every turn.
 """
 
-from __future__ import annotations
-
 import json
 from contextlib import AsyncExitStack
 from typing import Any

@@ -10,8 +10,6 @@ at DEBUG only, and even there it goes through `runa.tracing`'s redact/truncate p
 `observe(redact=[...])` and `observe(capture_outputs=False)` govern these lines too.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

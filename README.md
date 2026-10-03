@@ -73,7 +73,7 @@ one replica is no longer enough.
 1. Install [uv](https://docs.astral.sh/uv/), then Runa:
 
    ```bash
-   uv venv --python 3.12  # 3.12, 3.13 and 3.14 are all supported
+   uv venv --python 3.14  # Runa needs 3.14 or newer
    source .venv/bin/activate
    uv add runa-ai
    ```

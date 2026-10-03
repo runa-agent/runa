@@ -17,9 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Runa supports 3.12+. The floor and the ceiling both run: the floor is where an
-        # eagerly-evaluated annotation breaks, the ceiling is where most contributors develop.
-        python-version: ["3.12", "3.13", "3.14"]
+        # Runa supports 3.14+, so there is one version to test. The matrix stays because the
+        # next release lands here as a second entry rather than as a rewrite of this job.
+        python-version: ["3.14"]
 
     # test_postgres.py/test_redis.py skip themselves if these aren't reachable, but CI always
     # has them, so those suites run for real instead of just against SQLite's sqlite-vec.

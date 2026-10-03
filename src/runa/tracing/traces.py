@@ -1,7 +1,5 @@
 """tracing/traces.py: `Trace`, one logical agent execution and its `Span` tree."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any
 

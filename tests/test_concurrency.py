@@ -5,8 +5,6 @@ conversation and race to write it back, losing one into the other. In a server t
 leak between users, so it is refused rather than allowed to happen quietly.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

@@ -10,8 +10,6 @@ an exclusive lock on the table, which is not something a retention job should do
 other replicas are actively writing to.
 """
 
-from __future__ import annotations
-
 from datetime import datetime, timedelta
 from typing import Any
 

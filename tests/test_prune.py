@@ -4,8 +4,6 @@ Everything Runa persists is append-only, so without this a long-lived deployment
 until the disk runs out. These cover the cutoff, the parent/child deletes, and the safety rails.
 """
 
-from __future__ import annotations
-
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime, timedelta

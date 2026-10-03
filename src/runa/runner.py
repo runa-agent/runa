@@ -1,7 +1,5 @@
 """runner.py: `Runner`, Runa's own agent loop, replaces `agents.Runner`."""
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

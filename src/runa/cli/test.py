@@ -11,8 +11,6 @@ dependency just so a generated app can run its own tests, matching
 `run_evals()`'s choice not to depend on an external harness either.
 """
 
-from __future__ import annotations
-
 import asyncio
 import importlib
 import inspect

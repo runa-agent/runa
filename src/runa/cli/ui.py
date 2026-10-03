@@ -4,8 +4,6 @@
 (no `ui` extra) still works for every other command; only running `runa ui` itself needs them.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 

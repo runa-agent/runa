@@ -1,7 +1,5 @@
 """`@guardrail` decorator that turns a plain predicate into an input/output guardrail."""
 
-from __future__ import annotations
-
 import asyncio
 import inspect
 import json
@@ -163,7 +161,7 @@ def _tool_args(data: ToolInputGuardrailData) -> Any:
     """Parse a tool call's raw JSON arguments into a dict, falling back to the raw string."""
     try:
         return json.loads(data.context.tool_arguments)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return data.context.tool_arguments
 
 

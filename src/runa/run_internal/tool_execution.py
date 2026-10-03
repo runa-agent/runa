@@ -1,7 +1,5 @@
 """tool_execution.py: executing one message's tool calls, handoffs, approval gating, guardrails."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass

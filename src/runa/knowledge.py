@@ -14,8 +14,6 @@ built the app. `run_internal.run_loop._run_async` is what makes retrieval automa
 `Knowledge(store=...)`'s narrower escape hatch of swapping just the storage backend.
 """
 
-from __future__ import annotations
-
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass

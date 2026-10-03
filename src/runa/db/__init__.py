@@ -6,8 +6,6 @@ directly. What does live here is the one question every one of them has to ask f
 deployment sharing a database, or does it have its own file?
 """
 
-from __future__ import annotations
-
 import os
 
 SHARED_DSN_ENV = "RUNA_POSTGRES_DSN"

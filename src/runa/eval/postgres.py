@@ -8,8 +8,6 @@ Postgres instead, picked up automatically whenever `RUNA_POSTGRES_DSN` is set.
 Optional: part of the `runa[postgres]` extra, like `db/postgres.py` and `tracing/postgres.py`.
 """
 
-from __future__ import annotations
-
 import json
 from dataclasses import asdict
 from datetime import UTC, datetime

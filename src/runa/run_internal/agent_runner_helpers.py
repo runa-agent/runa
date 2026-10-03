@@ -1,7 +1,5 @@
 """agent_runner_helpers.py: low-level per-turn helpers, model/instruction/tool resolution."""
 
-from __future__ import annotations
-
 import inspect
 import json
 from dataclasses import dataclass

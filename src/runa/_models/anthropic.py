@@ -4,8 +4,6 @@ Anthropic's Messages API isn't chat-completions-shaped: content blocks instead o
 array, a separate `system` param, strict user/assistant alternation, and its own streaming events.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import AsyncIterator
 from typing import Any

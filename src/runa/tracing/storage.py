@@ -9,8 +9,6 @@ call site is what lets `runa traces`, `runa ui` and the exporter stay backend-ag
 `list_traces(...)` and get whichever history the deployment actually has.
 """
 
-from __future__ import annotations
-
 import json
 import sqlite3
 from contextlib import closing

@@ -1,7 +1,5 @@
 """guardrails.py: running an agent's or tool's guardrails, raising on a tripwire."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from runa._types import RunContextWrapper

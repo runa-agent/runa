@@ -13,8 +13,6 @@ opening their own -- the same "just works" ergonomics as `db/sqlite.py`'s shared
 here applied to pool reuse instead of file reuse.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import threading

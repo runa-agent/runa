@@ -5,8 +5,6 @@ install (no `serve` extra) still works for every other command, the same arrange
 uses for the dashboard.
 """
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 

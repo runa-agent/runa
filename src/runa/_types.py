@@ -6,8 +6,6 @@ settings. `run_internal` builds and consumes these; each `Model` implementation 
 and from whatever shape its own provider's wire format actually wants.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path

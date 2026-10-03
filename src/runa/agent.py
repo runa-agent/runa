@@ -1,7 +1,5 @@
 """Class-based Agent, built on Runa's own runtime (`runa.runner`/`runa.run_internal`)."""
 
-from __future__ import annotations
-
 import asyncio
 import copy
 import inspect
@@ -537,13 +535,13 @@ class Agent:
 
     async def evaluate(
         self,
-        dataset: Iterable["Case"],  # noqa: UP037 -- Case is TYPE_CHECKING-only, must stay quoted
+        dataset: Iterable[Case],
         *,
         judge: str | None = None,
         threshold: float | None = None,
         thresholds: dict[str, float] | None = None,
         concurrency: int = 8,
-    ) -> "Report":  # noqa: UP037 -- Report is TYPE_CHECKING-only, must stay quoted
+    ) -> Report:
         """Run every case in `dataset` through this agent and grade it: see `runa.eval`.
 
         Deterministic checks and judge-graded semantic metrics (task completion, answer

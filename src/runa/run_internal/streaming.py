@@ -6,8 +6,6 @@ streaming-specific step is here: consuming `Model.stream_response` instead of `g
 emitting each raw delta as it arrives.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from typing import Any
 

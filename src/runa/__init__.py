@@ -1,7 +1,5 @@
 """Runa: an opinionated framework for agentic AI."""
 
-from __future__ import annotations
-
 from importlib.metadata import version
 
 from runa._types import ModelSettings, Reasoning, TResponseInputItem, Usage

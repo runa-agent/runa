@@ -1,7 +1,5 @@
 """multi_provider.py: `ModelProvider`, routing a model name to one of two backends by its prefix."""
 
-from __future__ import annotations
-
 import asyncio
 import os
 from dataclasses import dataclass

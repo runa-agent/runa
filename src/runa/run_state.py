@@ -1,7 +1,5 @@
 """run_state.py: `RunState`, enough of a paused run to resume it once approvals are resolved."""
 
-from __future__ import annotations
-
 import dataclasses
 import json
 from dataclasses import dataclass, field

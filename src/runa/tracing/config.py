@@ -5,8 +5,6 @@ whether input/output are kept at all; `redact`/`redactor` scrub what's kept; the
 limits truncate what's left. `RunaTraceProcessor` (`tracing/processor.py`) is the only caller.
 """
 
-from __future__ import annotations
-
 import json
 import os
 from collections.abc import Callable
@@ -134,7 +132,7 @@ def apply_policy(value: Any, *, max_bytes: int) -> Any:
     if isinstance(value, dict | list):
         try:
             value = json.loads(_truncate(json.dumps(value, default=str), max_bytes))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             value = _truncate(str(value), max_bytes)
     elif isinstance(value, str):
         value = _truncate(value, max_bytes)

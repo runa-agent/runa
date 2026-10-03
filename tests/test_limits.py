@@ -4,8 +4,6 @@ Each one ends a run as `Run(status="error")` rather than raising, the same contr
 `RunaError` follows, and each still produces an inspectable trace.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

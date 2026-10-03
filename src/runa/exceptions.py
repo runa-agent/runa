@@ -6,8 +6,6 @@ model behaving unexpectedly, or a `UserError` in how the framework itself was us
 `Run(status="error", ...)`, see `runa.agent`.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 

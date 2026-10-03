@@ -20,8 +20,6 @@ Three decisions this makes for you, each the one a production deployment wants:
 only `runa serve` itself needs the `serve` extra.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import AsyncIterator
 from dataclasses import asdict, is_dataclass

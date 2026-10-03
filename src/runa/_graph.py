@@ -6,8 +6,6 @@ promised. A delegate is drawn as the agent it wraps (dotted edge), not as a plai
 handoff gets a dashed edge.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:

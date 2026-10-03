@@ -1,7 +1,5 @@
 """run_config.py: `RunConfig`, per-call configuration for `Runner.run`/`run_sync`/`run_streamed`."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any
 

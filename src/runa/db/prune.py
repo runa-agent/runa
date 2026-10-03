@@ -15,8 +15,6 @@ Prunes whichever store the app actually uses: the shared Postgres when `RUNA_POS
 the local `db/runa.db` otherwise.
 """
 
-from __future__ import annotations
-
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass

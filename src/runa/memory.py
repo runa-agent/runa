@@ -12,8 +12,6 @@ the turn's exchange into zero or more remembered facts; `MemoryLike` is the cont
 narrower escape hatch of swapping just the storage backend.
 """
 
-from __future__ import annotations
-
 import json
 import re
 import sqlite3

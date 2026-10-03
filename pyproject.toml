@@ -8,7 +8,7 @@ description = "The application framework for agentic AI."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "anthropic>=0.75.0",
     "graphviz>=0.21",
@@ -74,7 +74,7 @@ omit = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 # `ruff format` also reformats fenced ```python blocks inside Markdown files, which mangles
 # pymdownx.snippets' `--8<--` include marker (docs/*.md) into invalid syntax. Docs prose isn't
 # ruff's to format anyway, so it's excluded outright rather than worked around per line.
@@ -93,24 +93,12 @@ select = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
-# Runa supports 3.12+, where an annotation is evaluated eagerly; 3.14 (PEP 649) defers it and
-# silently forgives a self-reference like `def __enter__(self) -> observe:`. Requiring the future
-# import everywhere makes every supported version behave like the newest one, so a 3.14 developer
-# cannot write an annotation that only explodes on someone else's 3.12.
-[tool.ruff.lint.isort]
-required-imports = ["from __future__ import annotations"]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["I002"]  # test modules are never imported by the library
-"examples/**" = ["I002"]  # examples read better without the ceremony
-".claude/**" = ["I002"]  # editor/harness scripts, not part of the package
-
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
 
 [tool.pyright]
-pythonVersion = "3.12"
+pythonVersion = "3.14"
 include = ["src", "tests", "examples"]
 reportIncompatibleMethodOverride = false

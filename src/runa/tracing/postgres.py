@@ -10,8 +10,6 @@ Optional: part of the `runa[postgres]` extra, like `db/postgres.py`, which this 
 pool and for the background loop that lets a synchronous exporter talk to `asyncpg`.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any
 

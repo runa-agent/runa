@@ -4,8 +4,6 @@ Thin formatting over `runa.db.prune`, the same way `cli/traces.py` only formats 
 `runa.tracing.storage` already exposes.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from runa.cli._project import resolve_db_path

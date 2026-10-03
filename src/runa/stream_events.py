@@ -1,7 +1,5 @@
 """stream_events.py: the events `Runner.run_streamed`/`Agent.run_streamed` yield."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Any, Literal
 

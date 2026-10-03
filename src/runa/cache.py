@@ -12,8 +12,6 @@ database with no setup regardless of which module writes to it first). Values ro
 written, at the cost of only JSON-serializable values being cacheable.
 """
 
-from __future__ import annotations
-
 import json
 import sqlite3
 import time

@@ -6,8 +6,6 @@ SQLite database, and developer docs (at the project root) without any configurat
 `name`, scaffolds into `root/name`; without one, scaffolds `root` itself in place.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 _APP_SUBDIRS = ("agents", "guardrails", "prompts", "tools")
@@ -27,7 +25,7 @@ _TOP_LEVEL_ENTRIES = (
 _PYPROJECT_TEMPLATE = """[project]
 name = "{name}"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = ["runa-ai", "python-dotenv"]
 
 [project.optional-dependencies]
@@ -77,7 +75,7 @@ db/runa.db
 .env
 """
 
-_DOCKERFILE_TEMPLATE = """FROM python:3.13-slim
+_DOCKERFILE_TEMPLATE = """FROM python:3.14-slim
 
 WORKDIR /app
 COPY . .

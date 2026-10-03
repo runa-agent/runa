@@ -5,8 +5,6 @@ same `Trace`/`Span` data instead of two parallel execution-history models: `Agen
 is derived straight from `AgentRun.trace.spans`.
 """
 
-from __future__ import annotations
-
 import time
 from dataclasses import dataclass, field
 

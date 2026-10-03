@@ -3,8 +3,6 @@
 Covers OpenAI, Gemini, Llama, DeepSeek, and Qwen, every provider that speaks this wire format.
 """
 
-from __future__ import annotations
-
 import asyncio
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator

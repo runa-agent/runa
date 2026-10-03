@@ -11,8 +11,6 @@ and mix it into the list. `runa._models.openai_chatcompletions` passes parts str
 `runa._models.anthropic` translates them into Claude's own content blocks.
 """
 
-from __future__ import annotations
-
 import base64
 import mimetypes
 from collections.abc import Sequence

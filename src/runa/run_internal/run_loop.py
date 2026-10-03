@@ -5,8 +5,6 @@ The public `Runner` that calls into this lives in `runa.runner`, matching openai
 APIs belong at the top level.
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 from collections.abc import Awaitable

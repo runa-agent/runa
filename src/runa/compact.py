@@ -8,8 +8,6 @@ full raw `items`/`usage_tokens` and decides entirely for itself whether/how to t
 `run_internal.run_loop._maybe_compact`, the only caller.
 """
 
-from __future__ import annotations
-
 from typing import Protocol
 
 from runa._types import TResponseInputItem

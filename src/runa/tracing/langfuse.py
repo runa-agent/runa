@@ -17,8 +17,6 @@ maintainers point to for backdated/nested traces like this one (their SDK-level 
 https://langfuse.com/integrations/native/opentelemetry
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import os

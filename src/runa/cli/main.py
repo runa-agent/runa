@@ -7,8 +7,6 @@ touch it, but only by calling existing library functions
 the app in `cwd`; no logic lives here that doesn't already exist elsewhere.
 """
 
-from __future__ import annotations
-
 import argparse
 import sys
 from importlib.metadata import PackageNotFoundError, version

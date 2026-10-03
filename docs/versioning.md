@@ -31,9 +31,9 @@ HTTP API rather than the terminal.
 
 ## Supported Python
 
-Runa supports the three most recent stable Python versions, currently **3.12, 3.13 and 3.14**,
-and every one of them is tested in CI. Dropping a version is a breaking change and follows the
-rule above.
+Runa requires **Python 3.14** or newer, and every supported version is tested in CI. The floor
+is 3.14 because Runa relies on [PEP 649](https://peps.python.org/pep-0649/) lazy annotations
+rather than stringifying them. Raising the floor is a breaking change and follows the rule above.
 
 ## Deprecation
 
