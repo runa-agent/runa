@@ -110,15 +110,47 @@ Runa persists moves to a shared database:
 
 ```bash
 uv add "runa-ai[postgres]"
-export RUNA_POSTGRES_DSN=postgresql://user:password@host:5432/runa
+export RUNA_DATABASE_URL=postgresql://user:password@host:5432/runa
 ```
 
-That covers sessions, memory, knowledge, **traces** and **eval history**. No code changes:
-`list_traces(...)`, `runa traces`, `runa ui` and the exporter all follow the same variable, so a
-trace written by one replica is readable from any of them.
+That covers sessions, memory, knowledge, the cache, **traces** and **eval history**. No code
+changes: `runa serve`, `Memory()`, `list_traces(...)`, `runa sessions`, `runa traces` and `runa
+ui` all resolve their backend through `runa.db`, so a session or trace written by one replica is
+readable from any of them.
 
-Leave it unset and nothing changes: a single process keeps its own `db/runa.db`, which is the
-right answer for one machine.
+The cache moves with it, into a `cache_entries` table in the same database. No second service to
+run. Reach for `RedisCache("redis://...")` explicitly if you want hot keys off the query path:
+
+```python
+from runa.cache.redis import RedisCache
+
+cache = RedisCache("redis://localhost:6379/0")
+```
+
+Leave the variable unset and nothing changes: a single process keeps its own `db/runa.db`, which
+is the right answer for one machine. `sqlite:///data/runa.db` relocates that file if you need it
+somewhere specific.
+
+To run the shared path locally before you ship it, point the variable at containers:
+
+```yaml
+# docker-compose.yml
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment: { POSTGRES_USER: runa, POSTGRES_PASSWORD: runa, POSTGRES_DB: runa }
+    ports: ["5432:5432"]
+  app:
+    build: .
+    environment:
+      RUNA_DATABASE_URL: postgresql://runa:runa@postgres:5432/runa
+    ports: ["8000:8000"]
+    depends_on: [postgres]
+```
+
+The `pgvector` image matters: `Memory` and `Knowledge` need that extension, and Runa creates it
+on first connect. In production the variable comes from your platform's environment or secrets,
+not from a compose file.
 
 ## Bounding a run
 
@@ -210,7 +242,7 @@ A deployment checklist, in the order things tend to go wrong:
 
 - [ ] `RUNA_API_KEY` set (or `--no-auth`, deliberately)
 - [ ] The model provider's key set (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...)
-- [ ] `RUNA_POSTGRES_DSN` set if more than one replica
+- [ ] `RUNA_DATABASE_URL` set if more than one replica
 - [ ] `/health` wired to the liveness probe
 - [ ] `max_tokens` and `timeout` set on agents that face the public
 - [ ] `runa prune` on a schedule

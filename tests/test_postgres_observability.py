@@ -1,6 +1,6 @@
 """Tests for `tracing/postgres.py` and `eval/postgres.py`, the shared-history backends.
 
-Needs a live Postgres at `RUNA_TEST_POSTGRES_DSN` (defaults to `DEFAULT_POSTGRES_DSN`); skipped
+Needs a live Postgres at `RUNA_TEST_POSTGRES_DSN` (defaults to a local one); skipped
 wholesale when there isn't one, exactly like `test_postgres.py`, since CI provisions one as a
 service container but a plain `make test` locally may not.
 
@@ -18,12 +18,11 @@ from typing import Any
 import asyncpg
 import pytest
 
-import runa.db.postgres as postgres_module
-from runa.db.postgres import DEFAULT_POSTGRES_DSN
+import runa.db.pool as pool_module
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
-_DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", DEFAULT_POSTGRES_DSN)
+_DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", "postgresql://runa:runa@localhost:5432/runa")
 
 
 def _reachable() -> bool:
@@ -43,7 +42,7 @@ pytestmark = pytest.mark.skipif(not _reachable(), reason=f"no Postgres reachable
 
 def run[T](coro: Coroutine[Any, Any, T]) -> T:
     """Run `coro` on the same background loop the synchronous backends use."""
-    return postgres_module.run_sync(coro)
+    return pool_module.run_sync(coro)
 
 
 def _trace(name: str = "Agent", *, session_id: str | None = None, error: bool = False) -> Trace:
@@ -72,9 +71,9 @@ def test_a_trace_round_trips_with_its_spans() -> None:
     from runa.tracing import postgres
 
     trace = _trace()
-    postgres.save_trace(trace, dsn=_DSN)
+    postgres.save_trace(trace, url=_DSN)
 
-    loaded = postgres.get_trace(trace.id, dsn=_DSN)
+    loaded = postgres.get_trace(trace.id, url=_DSN)
 
     assert loaded is not None
     assert loaded.name == "Agent"
@@ -86,7 +85,7 @@ def test_an_unknown_trace_id_is_none() -> None:
     """Same contract as the SQLite backend: a miss is `None`, not an exception."""
     from runa.tracing import postgres
 
-    assert postgres.get_trace(uuid.uuid4().hex, dsn=_DSN) is None
+    assert postgres.get_trace(uuid.uuid4().hex, url=_DSN) is None
 
 
 def test_saving_the_same_trace_twice_replaces_it() -> None:
@@ -94,11 +93,11 @@ def test_saving_the_same_trace_twice_replaces_it() -> None:
     from runa.tracing import postgres
 
     trace = _trace()
-    postgres.save_trace(trace, dsn=_DSN)
+    postgres.save_trace(trace, url=_DSN)
     trace.name = "Renamed"
-    postgres.save_trace(trace, dsn=_DSN)
+    postgres.save_trace(trace, url=_DSN)
 
-    loaded = postgres.get_trace(trace.id, dsn=_DSN)
+    loaded = postgres.get_trace(trace.id, url=_DSN)
 
     assert loaded is not None
     assert loaded.name == "Renamed"
@@ -110,10 +109,10 @@ def test_traces_can_be_filtered_by_session() -> None:
     from runa.tracing import postgres
 
     session_id = uuid.uuid4().hex
-    postgres.save_trace(_trace(session_id=session_id), dsn=_DSN)
-    postgres.save_trace(_trace(), dsn=_DSN)
+    postgres.save_trace(_trace(session_id=session_id), url=_DSN)
+    postgres.save_trace(_trace(), url=_DSN)
 
-    found = postgres.list_traces(session_id=session_id, dsn=_DSN)
+    found = postgres.list_traces(session_id=session_id, url=_DSN)
 
     assert len(found) == 1
     assert found[0].session_id == session_id
@@ -124,9 +123,9 @@ def test_traces_can_be_filtered_by_error_status() -> None:
     from runa.tracing import postgres
 
     name = uuid.uuid4().hex
-    postgres.save_trace(_trace(name=name, error=True), dsn=_DSN)
+    postgres.save_trace(_trace(name=name, error=True), url=_DSN)
 
-    found = postgres.list_traces(agent=name, status="error", dsn=_DSN)
+    found = postgres.list_traces(agent=name, status="error", url=_DSN)
 
     assert len(found) == 1
     assert found[0].status == "error"
@@ -138,10 +137,10 @@ def test_listing_attaches_each_trace_its_own_spans() -> None:
 
     name = uuid.uuid4().hex
     first, second = _trace(name=name), _trace(name=name)
-    postgres.save_trace(first, dsn=_DSN)
-    postgres.save_trace(second, dsn=_DSN)
+    postgres.save_trace(first, url=_DSN)
+    postgres.save_trace(second, url=_DSN)
 
-    found = postgres.list_traces(agent=name, dsn=_DSN)
+    found = postgres.list_traces(agent=name, url=_DSN)
 
     assert len(found) == 2
     for trace in found:
@@ -152,7 +151,7 @@ def test_an_empty_listing_is_an_empty_list() -> None:
     """No traces for an agent is not an error, and must not try to fetch spans for nothing."""
     from runa.tracing import postgres
 
-    assert postgres.list_traces(agent=uuid.uuid4().hex, dsn=_DSN) == []
+    assert postgres.list_traces(agent=uuid.uuid4().hex, url=_DSN) == []
 
 
 def test_the_exporter_persists_a_finished_trace() -> None:
@@ -162,19 +161,45 @@ def test_the_exporter_persists_a_finished_trace() -> None:
     trace = _trace()
     PostgresExporter(_DSN).export(trace)
 
-    assert get_trace(trace.id, dsn=_DSN) is not None
+    assert get_trace(trace.id, url=_DSN) is not None
 
 
 def test_the_shared_dsn_env_var_routes_traces_to_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The whole point of `RUNA_POSTGRES_DSN`: no code change, and reads follow writes."""
+    """The whole point of `RUNA_DATABASE_URL`: no code change, and reads follow writes."""
     from runa.tracing import storage
 
-    monkeypatch.setenv("RUNA_POSTGRES_DSN", _DSN)
+    monkeypatch.setenv("RUNA_DATABASE_URL", _DSN)
     trace = _trace()
 
     storage.save_trace(trace)  # no db_path, no dsn: the env var decides
 
     assert storage.get_trace(trace.id) is not None
+
+
+def test_sessions_are_readable_from_the_shared_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`runa sessions` and `runa ui`'s Sessions page must follow the variable too.
+
+    They used to read `db/runa.db` with raw SQL no matter what, so a Postgres deployment showed
+    an empty session list beside Traces and Evaluations pages that worked.
+    """
+    from runa.session.storage import session_messages, session_rows
+
+    monkeypatch.setenv("RUNA_DATABASE_URL", _DSN)
+    session_id = uuid.uuid4().hex
+    session = run(_write_session(session_id))
+
+    assert session_id in [row[0] for row in session_rows()]
+    assert [message["text"] for message in session_messages(session_id)] == ["hello"]
+    run(session.clear_session())
+
+
+async def _write_session(session_id: str) -> Any:
+    """One session with one user message, written through the Postgres adapter."""
+    from runa.session.postgres import PostgresSession
+
+    session = PostgresSession(session_id, _DSN)
+    await session.add_items([{"role": "user", "content": "hello"}])
+    return session
 
 
 def test_without_the_env_var_traces_stay_in_sqlite(
@@ -183,7 +208,7 @@ def test_without_the_env_var_traces_stay_in_sqlite(
     """The default is unchanged: an app that sets nothing still gets its local file."""
     from runa.tracing import storage
 
-    monkeypatch.delenv("RUNA_POSTGRES_DSN", raising=False)
+    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
     trace = _trace()
     db = tmp_path / "runa.db"
 
@@ -218,9 +243,9 @@ def test_an_eval_run_round_trips_with_its_cases() -> None:
     from runa.eval import postgres
 
     agent = uuid.uuid4().hex
-    run_id = postgres.save_report(_report(agent), dsn=_DSN)
+    run_id = postgres.save_report(_report(agent), url=_DSN)
 
-    loaded = postgres.get_eval_run(run_id, dsn=_DSN)
+    loaded = postgres.get_eval_run(run_id, url=_DSN)
 
     assert loaded is not None
     assert loaded.agent_name == agent
@@ -233,10 +258,10 @@ def test_the_baseline_is_the_latest_run_for_that_agent() -> None:
     from runa.eval import postgres
 
     agent = uuid.uuid4().hex
-    postgres.save_report(_report(agent, passed=False), dsn=_DSN)
-    postgres.save_report(_report(agent, passed=True), dsn=_DSN)
+    postgres.save_report(_report(agent, passed=False), url=_DSN)
+    postgres.save_report(_report(agent, passed=True), url=_DSN)
 
-    baseline = postgres.load_baseline(agent, dsn=_DSN)
+    baseline = postgres.load_baseline(agent, url=_DSN)
 
     assert baseline == {"in": True}
 
@@ -246,17 +271,17 @@ def test_the_baseline_can_look_before_a_given_run() -> None:
     from runa.eval import postgres
 
     agent = uuid.uuid4().hex
-    postgres.save_report(_report(agent, passed=False), dsn=_DSN)
-    second = postgres.save_report(_report(agent, passed=True), dsn=_DSN)
+    postgres.save_report(_report(agent, passed=False), url=_DSN)
+    second = postgres.save_report(_report(agent, passed=True), url=_DSN)
 
-    assert postgres.load_baseline(agent, before=second, dsn=_DSN) == {"in": False}
+    assert postgres.load_baseline(agent, before=second, url=_DSN) == {"in": False}
 
 
 def test_no_baseline_for_an_agent_that_has_never_run() -> None:
     """`None`, not an empty dict: "no baseline" and "everything failed" are different."""
     from runa.eval import postgres
 
-    assert postgres.load_baseline(uuid.uuid4().hex, dsn=_DSN) is None
+    assert postgres.load_baseline(uuid.uuid4().hex, url=_DSN) is None
 
 
 def test_eval_runs_are_listed_newest_first() -> None:
@@ -264,10 +289,10 @@ def test_eval_runs_are_listed_newest_first() -> None:
     from runa.eval import postgres
 
     agent = uuid.uuid4().hex
-    first = postgres.save_report(_report(agent), dsn=_DSN)
-    second = postgres.save_report(_report(agent), dsn=_DSN)
+    first = postgres.save_report(_report(agent), url=_DSN)
+    second = postgres.save_report(_report(agent), url=_DSN)
 
-    listed = [run.id for run in postgres.list_eval_runs(limit=100, dsn=_DSN)]
+    listed = [run.id for run in postgres.list_eval_runs(limit=100, url=_DSN)]
 
     assert listed.index(second) < listed.index(first)
 
@@ -276,7 +301,7 @@ def test_an_unknown_eval_run_id_is_none() -> None:
     """A miss is `None`, matching `eval/storage.py`."""
     from runa.eval import postgres
 
-    assert postgres.get_eval_run(2**40, dsn=_DSN) is None
+    assert postgres.get_eval_run(2**40, url=_DSN) is None
 
 
 def test_pruning_a_shared_postgres_removes_old_traces(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -284,17 +309,17 @@ def test_pruning_a_shared_postgres_removes_old_traces(monkeypatch: pytest.Monkey
     from runa.db.prune import prune
     from runa.tracing import postgres
 
-    monkeypatch.setenv("RUNA_POSTGRES_DSN", _DSN)
+    monkeypatch.setenv("RUNA_DATABASE_URL", _DSN)
     old = _trace()
     old.start_time = 0.0  # 1970, comfortably past any cutoff
     old.spans[0].start_time = 0.0
-    postgres.save_trace(old, dsn=_DSN)
+    postgres.save_trace(old, url=_DSN)
 
     pruned = prune(older_than_days=30)
 
     assert pruned.traces >= 1
     assert pruned.spans >= 1
-    assert postgres.get_trace(old.id, dsn=_DSN) is None
+    assert postgres.get_trace(old.id, url=_DSN) is None
 
 
 def test_pruning_a_shared_postgres_keeps_recent_traces(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -304,14 +329,14 @@ def test_pruning_a_shared_postgres_keeps_recent_traces(monkeypatch: pytest.Monke
     from runa.db.prune import prune
     from runa.tracing import postgres
 
-    monkeypatch.setenv("RUNA_POSTGRES_DSN", _DSN)
+    monkeypatch.setenv("RUNA_DATABASE_URL", _DSN)
     recent = _trace()
     recent.start_time = time.time()
-    postgres.save_trace(recent, dsn=_DSN)
+    postgres.save_trace(recent, url=_DSN)
 
     prune(older_than_days=30)
 
-    assert postgres.get_trace(recent.id, dsn=_DSN) is not None
+    assert postgres.get_trace(recent.id, url=_DSN) is not None
 
 
 def test_a_postgres_dry_run_deletes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -319,12 +344,12 @@ def test_a_postgres_dry_run_deletes_nothing(monkeypatch: pytest.MonkeyPatch) -> 
     from runa.db.prune import prune
     from runa.tracing import postgres
 
-    monkeypatch.setenv("RUNA_POSTGRES_DSN", _DSN)
+    monkeypatch.setenv("RUNA_DATABASE_URL", _DSN)
     old = _trace()
     old.start_time = 0.0
-    postgres.save_trace(old, dsn=_DSN)
+    postgres.save_trace(old, url=_DSN)
 
     pruned = prune(older_than_days=30, dry_run=True)
 
     assert pruned.traces >= 1
-    assert postgres.get_trace(old.id, dsn=_DSN) is not None
+    assert postgres.get_trace(old.id, url=_DSN) is not None

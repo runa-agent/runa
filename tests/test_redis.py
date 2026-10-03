@@ -1,6 +1,6 @@
-"""Tests for `runa.db.redis.RedisCache`.
+"""Tests for `runa.cache.redis.RedisCache`.
 
-Needs a live Redis reachable at `RUNA_TEST_REDIS_URL` (defaults to `redis.DEFAULT_REDIS_URL`);
+Needs a live Redis reachable at `RUNA_TEST_REDIS_URL` (defaults to a local one);
 the whole module is skipped if it isn't reachable, since CI provisions one as a service
 container (see `.github/workflows/ci.yml`) but a plain `make test` locally may not have one
 running.
@@ -18,9 +18,9 @@ import uuid
 import pytest
 import redis.asyncio as redis_asyncio
 
-from runa.db.redis import DEFAULT_REDIS_URL, RedisCache
+from runa.cache.redis import RedisCache
 
-_URL = os.environ.get("RUNA_TEST_REDIS_URL", DEFAULT_REDIS_URL)
+_URL = os.environ.get("RUNA_TEST_REDIS_URL", "redis://localhost:6379/0")
 
 
 def _reachable() -> bool:

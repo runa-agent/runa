@@ -1,21 +1,26 @@
-r"""Serving an Agent over HTTP, backed by Postgres + `pgvector` and Redis instead of SQLite.
+r"""Serving an Agent over HTTP across several replicas, backed by Postgres and `pgvector`.
 
-The multi-process-safe counterpart to `api.py`: that example's `SQLiteSession` (and
+The multi-process-safe counterpart to `api.py`, and the point of this example is how little
+differs: not one import, class or call below names a backend. `api.py`'s `SQLiteSession` (and
 `sqlite-vec`-backed `Memory`/`Knowledge`) only tolerate one process touching `db/runa.db` at a
-time (see `session.py`'s docstring). Swap in `runa.db.postgres`'s `PostgresSession`/
-`PostgresMemoryStore`/`PostgresKnowledgeStore` and this same FastAPI app can run behind
-`uvicorn --workers N`, or as several replicas, all sharing one database -- no other code changes,
-since `Memory(store=...)`/`Knowledge(store=...)`/`session=` are exactly the escape hatches
-`memory.py`/`knowledge.py`/`session.py` document for this.
+time, so `runa.db` reads `RUNA_DATABASE_URL` and hands every concern a Postgres-backed store
+instead when it is set:
 
-`RedisCache` plays a different role: not something `Agent.run` touches automatically (`Cache` is
-plain application-level caching -- see `cache.py`), so `lookup_order_status` below calls it by
-hand, the way any tool's own code would.
+    export RUNA_DATABASE_URL=postgresql://runa:runa@localhost:5432/runa
 
-Needs the `runa[postgres,redis]` extras (`uv add "runa[postgres,redis]"`) alongside `fastapi`/
-`uvicorn`, none of which are core `runa` dependencies.
+With that set, this same app runs behind `uvicorn --workers N`, or as several replicas, all
+sharing one database. With it unset, the identical code runs on one SQLite file, which is what
+you want on a laptop. The sessions, memories and knowledge chunks all move together, so no
+replica can end up reading history another one wrote somewhere else.
 
-Run it (see docker-compose.yml for `postgres`/`redis` alongside this app):
+`RedisCache` is the one thing still chosen by hand, and deliberately so. A shared deployment
+already has a cache (`db.cache()` returns a `PostgresCache` over the same database), so Redis is
+worth naming only when you want hot keys off the query path. `Cache` is also plain
+application-level caching that `Agent.run` never touches by itself, so `lookup_order_status`
+calls it the way any tool's own code would.
+
+Needs the `runa-ai[postgres,redis]` extras alongside `fastapi`/`uvicorn`, none of which are core
+dependencies. See docs/deployment.md for a compose file running `postgres` alongside this app.
 
     uv run uvicorn examples.applications.api_postgres:app --port 8000
 
@@ -31,20 +36,10 @@ import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from runa import Agent, Knowledge, Memory, tool
-from runa.db.postgres import (
-    DEFAULT_POSTGRES_DSN,
-    PostgresKnowledgeStore,
-    PostgresMemoryStore,
-    PostgresSession,
-)
-from runa.db.redis import DEFAULT_REDIS_URL, RedisCache
+from runa import Agent, Knowledge, Memory, db, tool
+from runa.cache.redis import RedisCache
 
-_POSTGRES_DSN = os.environ.get("POSTGRES_DSN", DEFAULT_POSTGRES_DSN)
-_REDIS_URL = os.environ.get("REDIS_URL", DEFAULT_REDIS_URL)
-_EMBEDDING_DIMENSIONS = 1536  # text-embedding-3-small, Memory/Knowledge's own default model
-
-cache = RedisCache(_REDIS_URL)
+cache = RedisCache(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
 
 
 @tool
@@ -63,15 +58,13 @@ async def lookup_order_status(order_id: str) -> str:
 
 
 class SupportAgent(Agent):
-    """A support agent with memory and a knowledge base, both stored in Postgres."""
+    """A support agent with memory and a knowledge base, both wherever `runa.db` resolves."""
 
     name = "support_agent"
     instructions = "You are a helpful customer support assistant."
     tools = [lookup_order_status]
-    memory = Memory(store=PostgresMemoryStore(_POSTGRES_DSN, dimensions=_EMBEDDING_DIMENSIONS))
-    knowledge = Knowledge(
-        store=PostgresKnowledgeStore(_POSTGRES_DSN, dimensions=_EMBEDDING_DIMENSIONS)
-    )
+    memory = Memory()
+    knowledge = Knowledge()
 
 
 app = FastAPI()
@@ -79,7 +72,7 @@ agent = SupportAgent()
 
 
 class ChatRequest(BaseModel):
-    """One turn of a conversation, keyed by `session_id` so history persists in Postgres."""
+    """One turn of a conversation, keyed by `session_id` so history persists across replicas."""
 
     session_id: str
     message: str
@@ -95,8 +88,8 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat")
 async def chat(request: ChatRequest) -> ChatResponse:
-    """Run one turn for `request.session_id`, resuming its history from Postgres."""
-    session = PostgresSession(request.session_id, _POSTGRES_DSN)
+    """Run one turn for `request.session_id`, resuming its history from the shared database."""
+    session = db.session(request.session_id)
     run = await agent.run(request.message, session=session)
     return ChatResponse(output=run.output, status=run.status, error=run.error)
 

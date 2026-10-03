@@ -9,8 +9,6 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 from runa.db.prune import prune
 from runa.tracing.spans import Span
 from runa.tracing.storage import save_trace
@@ -170,28 +168,6 @@ def test_dry_run_counts_without_deleting(tmp_path: Path) -> None:
 
     assert pruned.traces == 1
     assert _rows(db, "traces") == 1  # still there
-
-
-def test_kinds_narrows_what_is_touched(tmp_path: Path) -> None:
-    """`--only traces` leaves sessions and evals alone."""
-    db = tmp_path / "runa.db"
-    _write_trace(db, "old", age_days=90)
-    _write_session(db, "old", age_days=90)
-
-    pruned = prune(older_than_days=30, db_path=db, kinds=("traces",))
-
-    assert pruned.traces == 1
-    assert pruned.sessions == 0
-    assert _rows(db, "agent_sessions") == 1
-
-
-def test_an_unknown_kind_is_rejected(tmp_path: Path) -> None:
-    """A typo should not silently prune nothing and report success."""
-    db = tmp_path / "runa.db"
-    _write_trace(db, "old", age_days=90)
-
-    with pytest.raises(ValueError, match="unknown kind"):
-        prune(older_than_days=30, db_path=db, kinds=("tracez",))
 
 
 def test_a_database_with_only_some_tables_is_fine(tmp_path: Path) -> None:

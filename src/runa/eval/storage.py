@@ -13,8 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from runa.db import shared_dsn
-from runa.db.sqlite import DEFAULT_DB_PATH
+from runa.db import DEFAULT_DB_PATH, shared_url
 from runa.db.sqlite import connect as _connect_db
 from runa.eval.report import Report
 
@@ -54,10 +53,10 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def save_report(report: Report, *, db_path: Path = DEFAULT_DB_PATH) -> int:
     """Persist `report` to `db_path`, returning the new `eval_runs.id`."""
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.eval import postgres
 
-        return postgres.save_report(report, dsn=dsn)
+        return postgres.save_report(report, url=url)
     created_at = datetime.now(UTC).isoformat()
     with closing(_connect(db_path)) as conn:
         cursor = conn.execute(
@@ -127,10 +126,10 @@ def _row_to_case(row: sqlite3.Row) -> EvalCaseRow:
 
 def list_eval_runs(*, limit: int = 50, db_path: Path = DEFAULT_DB_PATH) -> list[EvalRun]:
     """Return the most recent `limit` eval runs, newest first, without their cases."""
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.eval import postgres
 
-        return postgres.list_eval_runs(limit=limit, dsn=dsn)
+        return postgres.list_eval_runs(limit=limit, url=url)
     with closing(_connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -150,10 +149,10 @@ def list_eval_runs(*, limit: int = 50, db_path: Path = DEFAULT_DB_PATH) -> list[
 
 def get_eval_run(run_id: int, *, db_path: Path = DEFAULT_DB_PATH) -> EvalRun | None:
     """Look up one eval run by id, with every case it graded, or `None` if it doesn't exist."""
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.eval import postgres
 
-        return postgres.get_eval_run(run_id, dsn=dsn)
+        return postgres.get_eval_run(run_id, url=url)
     with closing(_connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(f"SELECT * FROM {_RUNS_TABLE} WHERE id = ?", (run_id,)).fetchone()
@@ -181,10 +180,10 @@ def load_baseline(
     run was compared against. `None` when there's no such run. Keyed by input rather than index,
     so reordering, adding, or removing cases between runs still lines the rest up.
     """
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.eval import postgres
 
-        return postgres.load_baseline(agent_name, before=before, dsn=dsn)
+        return postgres.load_baseline(agent_name, before=before, url=url)
     with closing(_connect(db_path)) as conn:
         row = conn.execute(
             f"SELECT id FROM {_RUNS_TABLE} WHERE agent_name = ? AND id < ? "

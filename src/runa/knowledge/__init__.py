@@ -1,33 +1,28 @@
-"""knowledge.py: `Knowledge`, application/domain documents retrieved into the run automatically.
+"""`runa.knowledge`: `Knowledge`, the application's own documents, retrieved by meaning.
 
-Layered like `memory.py`: `Knowledge` (discovers/chunks/embeds text, hides vectors) over a
-`KnowledgeStore` (persists/searches vectors) -- `SQLiteKnowledgeStore` is the default, sharing the
-same connect-and-create-if-missing `db/runa.db` file `SQLiteSession`/`Memory` use (`db/sqlite.py`).
-Unlike `Memory`, `Knowledge` is application-scoped, not `user_id`-scoped, and its source of truth
-is a directory of files on disk (`app/knowledge/` by default), not calls to `remember`.
+Layered like `runa.memory`: `Knowledge` (discovers/chunks/embeds text, hides vectors) over a
+`KnowledgeStore` (persists/searches vectors). Which store a bare `Knowledge()` gets is
+`runa.db`'s decision: `knowledge/sqlite.py` locally, `knowledge/postgres.py` when
+`RUNA_DATABASE_URL` points at a shared database.
 
-Kept deliberately separate from `Memory`: `Memory` is durable facts about a user/agent, learned
-from conversations; `Knowledge` is the application's own domain documents, put there by whoever
-built the app. `run_internal.run_loop._run_async` is what makes retrieval automatic during `run`
--- see its `knowledge`/`_knowledge_block` handling, the same shape as its `memory` handling.
-`KnowledgeLike` is the contract a wholesale custom `knowledge=` object needs, as opposed to
-`Knowledge(store=...)`'s narrower escape hatch of swapping just the storage backend.
+Unlike `Memory`, `Knowledge` is application-scoped rather than `user_id`-scoped, and its source
+of truth is a directory of files on disk (`app/knowledge/` by default), not calls to `remember`.
+Kept deliberately separate: `Memory` is durable facts about a user, learned from conversations;
+`Knowledge` is the domain documents whoever built the app put there.
+
+`run_internal.run_loop._run_async` is what makes retrieval automatic during `run`, see its
+`knowledge`/`_knowledge_block` handling. `KnowledgeLike` is the contract a wholesale custom
+`knowledge=` object needs, as opposed to `Knowledge(store=...)`'s narrower escape hatch of
+swapping just the storage backend.
 """
 
-import sqlite3
-from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from runa.db.sqlite import DEFAULT_DB_PATH
-from runa.db.sqlite import connect as _connect_db
-from runa.db.sqlite import pack_vector as _pack
+from runa import db
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.tool import FunctionTool, tool
-
-_ITEMS_TABLE = "knowledge_items"
-_VECTORS_TABLE = "knowledge_vectors"
 
 DEFAULT_KNOWLEDGE_DIR = Path("app/knowledge")
 
@@ -50,8 +45,8 @@ class KnowledgeLike(Protocol):
     """What `Agent(knowledge=...)` needs from a custom object, beyond `"auto"`/`"llm"`/`None`.
 
     `Knowledge` satisfies this already. Implement it yourself to replace Runa's own
-    discover-chunk-embed pipeline entirely -- a hosted retrieval service, a differently-indexed
-    document store, whatever -- rather than just swapping `Knowledge(store=...)`'s storage
+    discover-chunk-embed pipeline entirely (a hosted retrieval service, a differently-indexed
+    document store, whatever) rather than just swapping `Knowledge(store=...)`'s storage
     backend. No inheritance required.
     """
 
@@ -64,7 +59,8 @@ class KnowledgeStore(Protocol):
     """The storage a `Knowledge` needs: add/search already-embedded chunks, and clear them all.
 
     The escape hatch for `Knowledge(store=...)`: any object with these three async methods works,
-    no inheritance required. `SQLiteKnowledgeStore` is the default.
+    no inheritance required. `SQLiteKnowledgeStore` and `PostgresKnowledgeStore` satisfy it by
+    matching shape.
     """
 
     async def add(self, *, text: str, source: str, embedding: list[float]) -> int:
@@ -78,73 +74,6 @@ class KnowledgeStore(Protocol):
     async def clear(self) -> None:
         """Delete every stored chunk, ahead of a fresh `Knowledge.ingest()`."""
         ...
-
-
-def _ddl(dimensions: int) -> str:
-    return f"""
-    CREATE TABLE IF NOT EXISTS {_ITEMS_TABLE} (
-        id INTEGER PRIMARY KEY,
-        text TEXT NOT NULL,
-        source TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE VIRTUAL TABLE IF NOT EXISTS {_VECTORS_TABLE} USING vec0(
-        embedding float[{dimensions}]
-    );
-    """
-
-
-class SQLiteKnowledgeStore:
-    """The default `KnowledgeStore`: `db/runa.db`'s `knowledge_items`/`knowledge_vectors` tables."""
-
-    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH, *, dimensions: int) -> None:
-        """Store where this store's chunks/vectors live and the embedding size its table expects."""
-        self.db_path = Path(db_path)
-        self.dimensions = dimensions
-
-    def _connect(self) -> sqlite3.Connection:
-        return _connect_db(self.db_path, _ddl(self.dimensions), load_vec=True)
-
-    async def add(self, *, text: str, source: str, embedding: list[float]) -> int:
-        """Store one already-embedded chunk, returning its new id."""
-        with closing(self._connect()) as conn:
-            cursor = conn.execute(
-                f"INSERT INTO {_ITEMS_TABLE} (text, source) VALUES (?, ?)",
-                (text, source),
-            )
-            item_id = cursor.lastrowid
-            assert item_id is not None
-            conn.execute(
-                f"INSERT INTO {_VECTORS_TABLE} (rowid, embedding) VALUES (?, ?)",
-                (item_id, _pack(embedding)),
-            )
-            conn.commit()
-        return item_id
-
-    async def search(self, *, embedding: list[float], k: int) -> list[KnowledgeMatch]:
-        """Return the `k` chunks closest to `embedding`, nearest first."""
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
-                f"""
-                SELECT items.id, items.text, items.source, vectors.distance
-                FROM {_VECTORS_TABLE} AS vectors
-                JOIN {_ITEMS_TABLE} AS items ON items.id = vectors.rowid
-                WHERE vectors.embedding MATCH ? AND vectors.k = ?
-                ORDER BY vectors.distance
-                """,
-                (_pack(embedding), k),
-            ).fetchall()
-        return [
-            KnowledgeMatch(id=item_id, text=text, source=source, distance=distance)
-            for item_id, text, source, distance in rows
-        ]
-
-    async def clear(self) -> None:
-        """Delete every stored chunk, ahead of a fresh `Knowledge.ingest()`."""
-        with closing(self._connect()) as conn:
-            conn.execute(f"DELETE FROM {_VECTORS_TABLE}")
-            conn.execute(f"DELETE FROM {_ITEMS_TABLE}")
-            conn.commit()
 
 
 def _discover(directory: Path) -> list[Path]:
@@ -184,18 +113,17 @@ def _chunk(text: str, *, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP)
 class Knowledge:
     """Application/domain documents, retrieved by meaning: `search`/`ingest`, nothing lower.
 
-    `Knowledge()` means `app/knowledge/`, `db/runa.db`, `sqlite-vec`, OpenAI's
-    `text-embedding-3-small` -- discovery, chunking, embeddings, and vector storage are entirely
-    internal; callers only ever see a source directory in and `KnowledgeMatch`es out. Attach an
-    instance to `Agent(knowledge=...)` and `run`/`run_sync` search it automatically before every
-    turn; no `tools=[...]` wiring needed.
+    `Knowledge()` means `app/knowledge/`, OpenAI's `text-embedding-3-small`, and whichever
+    database `runa.db` resolves: discovery, chunking, embeddings and vector storage are entirely
+    internal, so callers only ever see a source directory in and `KnowledgeMatch`es out. Attach
+    an instance to `Agent(knowledge=...)` and `run`/`run_sync` search it automatically before
+    every turn; no `tools=[...]` wiring needed.
     """
 
     def __init__(
         self,
         directory: str | Path = DEFAULT_KNOWLEDGE_DIR,
         *,
-        db_path: str | Path = DEFAULT_DB_PATH,
         model: str = DEFAULT_EMBEDDING_MODEL,
         dimensions: int | None = None,
         store: KnowledgeStore | None = None,
@@ -207,16 +135,14 @@ class Knowledge:
         self.directory = Path(directory)
         self.model = model
         self.dimensions: int = resolve_dimensions(model, dimensions)
-        self._store: KnowledgeStore = store or SQLiteKnowledgeStore(
-            db_path, dimensions=self.dimensions
-        )
+        self._store: KnowledgeStore = store or db.knowledge_store(dimensions=self.dimensions)
         self._ingested = False
 
     async def ingest(self) -> int:
         """Rebuild the knowledge base from `self.directory`, returning how many chunks it stored.
 
         A full rebuild every time: discovers supported files, extracts their text, chunks it,
-        embeds every chunk, clears whatever was stored before, and stores the fresh set -- so
+        embeds every chunk, clears whatever was stored before, and stores the fresh set, so
         editing or removing a source file and calling `ingest()` again never leaves stale chunks
         behind, with no file-tracking table to keep in sync. Safe to call when `self.directory`
         doesn't exist or has no supported files: stores nothing rather than raising.
@@ -249,7 +175,7 @@ class Knowledge:
         """A `@tool` that searches this knowledge base, as plain text.
 
         Internal: `Agent(knowledge="llm")` wires this in on the model's behalf; not meant to be
-        built and attached to `tools=[...]` by hand -- see `Agent.__init__`'s `knowledge=` modes.
+        built and attached to `tools=[...]` by hand, see `Agent.__init__`'s `knowledge=` modes.
         """
 
         @tool(
@@ -265,4 +191,16 @@ class Knowledge:
         return search_knowledge
 
 
-__all__ = ["Knowledge", "KnowledgeLike", "KnowledgeMatch", "KnowledgeStore"]
+# Below `KnowledgeMatch`, not above: `knowledge/sqlite.py` returns them, so the name has to
+# exist first. Re-exported because the local adapter is always importable, where
+# `PostgresKnowledgeStore` needs the `postgres` extra.
+from runa.knowledge.sqlite import SQLiteKnowledgeStore  # noqa: E402
+
+__all__ = [
+    "DEFAULT_KNOWLEDGE_DIR",
+    "Knowledge",
+    "KnowledgeLike",
+    "KnowledgeMatch",
+    "KnowledgeStore",
+    "SQLiteKnowledgeStore",
+]

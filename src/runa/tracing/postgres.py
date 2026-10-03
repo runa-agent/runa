@@ -4,7 +4,7 @@ The default `SQLiteExporter` writes to a `db/runa.db` beside the process. That i
 for one machine and wrong for a deployment: three replicas keep three disjoint trace histories,
 and `runa ui` can only ever show whichever one it happens to be looking at. This backend puts the
 same two tables (`traces`/`spans`) in Postgres instead, and is picked up automatically whenever
-`RUNA_POSTGRES_DSN` is set (see `runa.db.shared_dsn`).
+`RUNA_DATABASE_URL` is set (see `runa.db.shared_url`).
 
 Optional: part of the `runa[postgres]` extra, like `db/postgres.py`, which this builds on for its
 pool and for the background loop that lets a synchronous exporter talk to `asyncpg`.
@@ -13,7 +13,8 @@ pool and for the background loop that lets a synchronous exporter talk to `async
 import json
 from typing import Any
 
-from runa.db.postgres import DEFAULT_POSTGRES_DSN, _connect, run_sync
+from runa.db.pool import connect as _connect
+from runa.db.pool import run_sync
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -59,8 +60,8 @@ def _as_text(value: object) -> str | None:
     return json.dumps(value, default=str)
 
 
-async def _save(trace: Trace, dsn: str) -> None:
-    pool = await _connect(dsn, _DDL)
+async def _save(trace: Trace, url: str) -> None:
+    pool = await _connect(url, _DDL)
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
             f"""
@@ -112,9 +113,9 @@ async def _save(trace: Trace, dsn: str) -> None:
             )
 
 
-def save_trace(trace: Trace, *, dsn: str = DEFAULT_POSTGRES_DSN) -> None:
+def save_trace(trace: Trace, *, url: str) -> None:
     """Persist `trace` and every span in it, replacing any row with the same id."""
-    run_sync(_save(trace, dsn))
+    run_sync(_save(trace, url))
 
 
 def _row_to_span(row: Any) -> Span:
@@ -147,8 +148,8 @@ def _row_to_trace(row: Any, span_rows: list[Any]) -> Trace:
     return trace
 
 
-async def _get(trace_id: str, dsn: str) -> Trace | None:
-    pool = await _connect(dsn, _DDL)
+async def _get(trace_id: str, url: str) -> Trace | None:
+    pool = await _connect(url, _DDL)
     row = await pool.fetchrow(f"SELECT * FROM {_TRACES_TABLE} WHERE id = $1", trace_id)
     if row is None:
         return None
@@ -158,15 +159,15 @@ async def _get(trace_id: str, dsn: str) -> Trace | None:
     return _row_to_trace(row, list(spans))
 
 
-def get_trace(trace_id: str, *, dsn: str = DEFAULT_POSTGRES_DSN) -> Trace | None:
+def get_trace(trace_id: str, *, url: str) -> Trace | None:
     """Look up one trace by id, with every span it has, or `None` if this database has none."""
-    return run_sync(_get(trace_id, dsn))
+    return run_sync(_get(trace_id, url))
 
 
 async def _list(
-    dsn: str, limit: int, agent: str | None, status: str | None, session_id: str | None
+    url: str, limit: int, agent: str | None, status: str | None, session_id: str | None
 ) -> list[Trace]:
-    pool = await _connect(dsn, _DDL)
+    pool = await _connect(url, _DDL)
     clauses: list[str] = []
     params: list[Any] = []
     for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
@@ -197,29 +198,29 @@ def list_traces(
     agent: str | None = None,
     status: str | None = None,
     session_id: str | None = None,
-    dsn: str = DEFAULT_POSTGRES_DSN,
+    url: str,
 ) -> list[Trace]:
     """Return the most recent `limit` traces, newest first, optionally filtered.
 
     Same filters and ordering as the SQLite backend, so callers cannot tell the two apart.
     """
-    return run_sync(_list(dsn, limit, agent, status, session_id))
+    return run_sync(_list(url, limit, agent, status, session_id))
 
 
 class PostgresExporter:
     """A `TraceExporter` that persists every finished trace to Postgres.
 
-    Installed automatically when `RUNA_POSTGRES_DSN` is set, in place of the default
+    Installed automatically when `RUNA_DATABASE_URL` is set, in place of the default
     `SQLiteExporter`; construct one explicitly to export to a database other than that one.
     """
 
-    def __init__(self, dsn: str = DEFAULT_POSTGRES_DSN) -> None:
+    def __init__(self, url: str) -> None:
         """Store which Postgres database finished traces are written to."""
-        self.dsn = dsn
+        self.url = url
 
     def export(self, trace: Trace) -> None:
         """Persist `trace`. Exceptions are caught by the caller; tracing never fails a run."""
-        save_trace(trace, dsn=self.dsn)
+        save_trace(trace, url=self.url)
 
 
 __all__ = ["PostgresExporter", "get_trace", "list_traces", "save_trace"]

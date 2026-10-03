@@ -2,6 +2,7 @@
 
 from importlib.metadata import version
 
+from runa import db
 from runa._types import ModelSettings, Reasoning, TResponseInputItem, Usage
 from runa.agent import Agent
 from runa.approval import approval
@@ -84,6 +85,7 @@ __all__ = [
     "__version__",
     "add_exporter",
     "approval",
+    "db",
     "guardrail",
     "observe",
     "tool",

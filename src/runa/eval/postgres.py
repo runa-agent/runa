@@ -3,7 +3,7 @@
 `eval/storage.py` keeps eval runs in the same per-process `db/runa.db` as everything else, which
 means a CI job and a developer's laptop each compare against a baseline the other cannot see, and
 `runa ui` shows only whichever history it opened. Same two tables (`eval_runs`/`eval_cases`) in
-Postgres instead, picked up automatically whenever `RUNA_POSTGRES_DSN` is set.
+Postgres instead, picked up automatically whenever `RUNA_DATABASE_URL` is set.
 
 Optional: part of the `runa[postgres]` extra, like `db/postgres.py` and `tracing/postgres.py`.
 """
@@ -13,7 +13,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 
-from runa.db.postgres import DEFAULT_POSTGRES_DSN, _connect, run_sync
+from runa.db.pool import connect as _connect
+from runa.db.pool import run_sync
 from runa.eval.report import Report
 from runa.eval.storage import EvalCaseRow, EvalRun
 
@@ -42,8 +43,8 @@ CREATE TABLE IF NOT EXISTS {_CASES_TABLE} (
 """
 
 
-async def _save(report: Report, dsn: str) -> int:
-    pool = await _connect(dsn, _DDL)
+async def _save(report: Report, url: str) -> int:
+    pool = await _connect(url, _DDL)
     created_at = datetime.now(UTC).isoformat()
     async with pool.acquire() as conn, conn.transaction():
         run_id: int = await conn.fetchval(
@@ -77,9 +78,9 @@ async def _save(report: Report, dsn: str) -> int:
     return run_id
 
 
-def save_report(report: Report, *, dsn: str = DEFAULT_POSTGRES_DSN) -> int:
+def save_report(report: Report, *, url: str) -> int:
     """Persist `report`, returning the new `eval_runs.id`."""
-    return run_sync(_save(report, dsn))
+    return run_sync(_save(report, url))
 
 
 def _row_to_case(row: Any) -> EvalCaseRow:
@@ -104,19 +105,19 @@ def _row_to_run(row: Any, cases: list[Any]) -> EvalRun:
     )
 
 
-async def _list(dsn: str, limit: int) -> list[EvalRun]:
-    pool = await _connect(dsn, _DDL)
+async def _list(url: str, limit: int) -> list[EvalRun]:
+    pool = await _connect(url, _DDL)
     rows = await pool.fetch(f"SELECT * FROM {_RUNS_TABLE} ORDER BY id DESC LIMIT $1", limit)
     return [_row_to_run(row, []) for row in rows]
 
 
-def list_eval_runs(*, limit: int = 50, dsn: str = DEFAULT_POSTGRES_DSN) -> list[EvalRun]:
+def list_eval_runs(*, limit: int = 50, url: str) -> list[EvalRun]:
     """Return the most recent `limit` eval runs, newest first, without their cases."""
-    return run_sync(_list(dsn, limit))
+    return run_sync(_list(url, limit))
 
 
-async def _get(run_id: int, dsn: str) -> EvalRun | None:
-    pool = await _connect(dsn, _DDL)
+async def _get(run_id: int, url: str) -> EvalRun | None:
+    pool = await _connect(url, _DDL)
     row = await pool.fetchrow(f"SELECT * FROM {_RUNS_TABLE} WHERE id = $1", run_id)
     if row is None:
         return None
@@ -126,13 +127,13 @@ async def _get(run_id: int, dsn: str) -> EvalRun | None:
     return _row_to_run(row, list(cases))
 
 
-def get_eval_run(run_id: int, *, dsn: str = DEFAULT_POSTGRES_DSN) -> EvalRun | None:
+def get_eval_run(run_id: int, *, url: str) -> EvalRun | None:
     """Look up one eval run by id, with every case it graded, or `None` if it doesn't exist."""
-    return run_sync(_get(run_id, dsn))
+    return run_sync(_get(run_id, url))
 
 
-async def _baseline(agent_name: str, before: int | None, dsn: str) -> dict[str, bool] | None:
-    pool = await _connect(dsn, _DDL)
+async def _baseline(agent_name: str, before: int | None, url: str) -> dict[str, bool] | None:
+    pool = await _connect(url, _DDL)
     if before is None:
         row = await pool.fetchrow(
             f"SELECT id FROM {_RUNS_TABLE} WHERE agent_name = $1 ORDER BY id DESC LIMIT 1",
@@ -154,13 +155,13 @@ async def _baseline(agent_name: str, before: int | None, dsn: str) -> dict[str, 
 
 
 def load_baseline(
-    agent_name: str, *, before: int | None = None, dsn: str = DEFAULT_POSTGRES_DSN
+    agent_name: str, *, before: int | None = None, url: str
 ) -> dict[str, bool] | None:
     """Map each input of `agent_name`'s latest eval run to whether it passed.
 
     Same contract as the SQLite backend, including `before` and the keyed-by-input behavior.
     """
-    return run_sync(_baseline(agent_name, before, dsn))
+    return run_sync(_baseline(agent_name, before, url))
 
 
 __all__ = ["get_eval_run", "list_eval_runs", "load_baseline", "save_report"]

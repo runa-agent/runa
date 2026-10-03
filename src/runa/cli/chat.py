@@ -1,9 +1,9 @@
 """cli/chat.py: `runa chat`, talk to an Agent in a loop from argv.
 
-Each invocation starts a fresh `SQLiteSession` by default, so a chat doesn't
-silently keep piling onto the same conversation. `--continue`/`--resume`
-pick up a past one instead, keyed by session id over the app's `db/runa.db`
-(the same file `runa chat --list`/`--show` reads, see `cli/sessions.py`).
+Each invocation starts a fresh session by default, so a chat doesn't silently keep piling onto
+the same conversation. `--continue`/`--resume` pick up a past one instead, keyed by session id
+over whichever store `runa.db` resolves (the same history `runa chat --list`/`--show` reads, see
+`cli/sessions.py`).
 
 A line is one turn; a triple-quote line opens a multi-line block that the next one closes,
 so a pasted document or stack trace is sent as one message instead of one turn per line.
@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from runa import db
 from runa.agent import Agent
 from runa.cli._project import (
     iter_agent_classes,
@@ -20,8 +21,8 @@ from runa.cli._project import (
     require_agents_dir,
     resolve_db_path,
 )
-from runa.cli.sessions import list_sessions_for_agent
-from runa.session import SessionABC, SQLiteSession
+from runa.session import SessionABC
+from runa.session.storage import sessions_for_agent
 
 _BLOCK = '"""'
 
@@ -53,7 +54,7 @@ def _pick_session(agent_name: str, *, root: Path) -> str:
 
     Falls back to starting a new session when there's no history to pick from.
     """
-    sessions = list_sessions_for_agent(agent_name, root=root)
+    sessions = sessions_for_agent(agent_name, db_path=resolve_db_path(root))
     if not sessions:
         print(f"no previous session for {agent_name!r}, starting a new one")
         return _new_session_id(agent_name)
@@ -87,7 +88,7 @@ def _resolve_session_id(
     if session_id is not None:
         return session_id
     if continue_last:
-        sessions = list_sessions_for_agent(agent_name, root=root)
+        sessions = sessions_for_agent(agent_name, db_path=resolve_db_path(root))
         if sessions:
             return sessions[0][0]
         print(f"no previous session for {agent_name!r}, starting a new one")
@@ -169,7 +170,7 @@ def run_agent_repl(
             continue_last=continue_last,
             resume=resume,
         )
-        session = SQLiteSession(resolved_session_id, db_path=db_path)
+        session = db.session(resolved_session_id, db_path=db_path)
 
         if message is not None:
             if message.strip():

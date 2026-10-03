@@ -13,7 +13,7 @@ other replicas are actively writing to.
 from datetime import datetime, timedelta
 from typing import Any
 
-from runa.db.postgres import _get_pool, run_sync
+from runa.db.pool import get_pool, run_sync
 from runa.db.prune import Pruned
 
 
@@ -54,57 +54,50 @@ async def _delete(
     return len(ids), children
 
 
-async def _prune(
-    dsn: str, now: datetime, older_than_days: int, kinds: tuple[str, ...], dry_run: bool
-) -> Pruned:
+async def _prune(url: str, now: datetime, older_than_days: int, dry_run: bool) -> Pruned:
     pruned = Pruned()
     cutoff = now - timedelta(days=older_than_days)
     epoch_cutoff = cutoff.timestamp()
     iso_cutoff = cutoff.isoformat()
 
-    pool = await _get_pool(dsn)
+    pool = await get_pool(url)
     async with pool.acquire() as conn, conn.transaction():
-        if "traces" in kinds:
-            pruned.traces, pruned.spans = await _delete(
-                conn,
-                parent="traces",
-                child="spans",
-                parent_key="id",
-                child_key="trace_id",
-                where="start_time",
-                cutoff=epoch_cutoff,
-                dry_run=dry_run,
-            )
-        if "sessions" in kinds:
-            pruned.sessions, pruned.messages = await _delete(
-                conn,
-                parent="agent_sessions",
-                child="agent_messages",
-                parent_key="session_id",
-                child_key="session_id",
-                where="updated_at",
-                cutoff=cutoff,
-                dry_run=dry_run,
-            )
-        if "evals" in kinds:
-            pruned.eval_runs, pruned.eval_cases = await _delete(
-                conn,
-                parent="eval_runs",
-                child="eval_cases",
-                parent_key="id",
-                child_key="run_id",
-                where="created_at",
-                cutoff=iso_cutoff,
-                dry_run=dry_run,
-            )
+        pruned.traces, pruned.spans = await _delete(
+            conn,
+            parent="traces",
+            child="spans",
+            parent_key="id",
+            child_key="trace_id",
+            where="start_time",
+            cutoff=epoch_cutoff,
+            dry_run=dry_run,
+        )
+        pruned.sessions, pruned.messages = await _delete(
+            conn,
+            parent="agent_sessions",
+            child="agent_messages",
+            parent_key="session_id",
+            child_key="session_id",
+            where="updated_at",
+            cutoff=cutoff,
+            dry_run=dry_run,
+        )
+        pruned.eval_runs, pruned.eval_cases = await _delete(
+            conn,
+            parent="eval_runs",
+            child="eval_cases",
+            parent_key="id",
+            child_key="run_id",
+            where="created_at",
+            cutoff=iso_cutoff,
+            dry_run=dry_run,
+        )
     return pruned
 
 
-def prune(
-    *, dsn: str, now: datetime, older_than_days: int, kinds: tuple[str, ...], dry_run: bool
-) -> Pruned:
-    """Delete traces, sessions and eval runs older than `older_than_days` from `dsn`."""
-    return run_sync(_prune(dsn, now, older_than_days, kinds, dry_run))
+def prune(*, url: str, now: datetime, older_than_days: int, dry_run: bool) -> Pruned:
+    """Delete traces, sessions and eval runs older than `older_than_days` from `url`."""
+    return run_sync(_prune(url, now, older_than_days, dry_run))
 
 
 __all__ = ["prune"]

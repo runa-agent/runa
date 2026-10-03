@@ -3,7 +3,7 @@
 Same file, same connect-and-create-if-missing pattern as `eval/storage.py`, so a local app
 accumulates one `runa.db` with no setup regardless of which of eval or tracing wrote to it first.
 
-Every function here first asks `runa.db.shared_dsn()` whether this deployment has a database to
+Every function here first asks `runa.db.shared_url()` whether this deployment has a database to
 share, and hands off to `tracing/postgres.py` if it does. Dispatching here rather than at each
 call site is what lets `runa traces`, `runa ui` and the exporter stay backend-agnostic: they call
 `list_traces(...)` and get whichever history the deployment actually has.
@@ -14,8 +14,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from runa.db import shared_dsn
-from runa.db.sqlite import DEFAULT_DB_PATH
+from runa.db import DEFAULT_DB_PATH, shared_url
 from runa.db.sqlite import connect as _connect_db
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -57,10 +56,10 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def save_trace(trace: Trace, *, db_path: Path = DEFAULT_DB_PATH) -> None:
     """Persist `trace` and every span in it, replacing any existing row with the same id."""
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.tracing import postgres
 
-        postgres.save_trace(trace, dsn=dsn)
+        postgres.save_trace(trace, url=url)
         return
     with closing(_connect(db_path)) as conn:
         conn.execute(
@@ -145,10 +144,10 @@ def _row_to_trace(conn: sqlite3.Connection, row: sqlite3.Row) -> Trace:
 
 def get_trace(trace_id: str, *, db_path: Path = DEFAULT_DB_PATH) -> Trace | None:
     """Look up one trace by id, with every span it has, or `None` if it isn't in `db_path`."""
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.tracing import postgres
 
-        return postgres.get_trace(trace_id, dsn=dsn)
+        return postgres.get_trace(trace_id, url=url)
     with closing(_connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(f"SELECT * FROM {_TRACES_TABLE} WHERE id = ?", (trace_id,)).fetchone()
@@ -170,11 +169,11 @@ def list_traces(
     `agent` matches `Trace.name` (the workflow name `Agent.run` sets to the agent's class name);
     `session_id` matches the `SessionABC` a session-backed run was passed, when it was passed one.
     """
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.tracing import postgres
 
         return postgres.list_traces(
-            limit=limit, agent=agent, status=status, session_id=session_id, dsn=dsn
+            limit=limit, agent=agent, status=status, session_id=session_id, url=url
         )
     clauses, params = [], []
     if agent is not None:

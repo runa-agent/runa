@@ -24,20 +24,9 @@ def _lines(pruned: Pruned) -> list[str]:
     ]
 
 
-def prune_cli(
-    *,
-    root: Path,
-    older_than_days: int,
-    kinds: tuple[str, ...],
-    dry_run: bool = False,
-) -> str:
-    """Prune `root`'s `db/runa.db` and describe what went (or, for `--dry-run`, what would)."""
-    pruned = prune(
-        older_than_days=older_than_days,
-        db_path=resolve_db_path(root),
-        kinds=kinds,
-        dry_run=dry_run,
-    )
+def prune_cli(*, root: Path, older_than_days: int, dry_run: bool = False) -> str:
+    """Prune this deployment's history and describe what went (or, for `--dry-run`, what would)."""
+    pruned = prune(older_than_days=older_than_days, db_path=resolve_db_path(root), dry_run=dry_run)
     if not pruned.total:
         return f"nothing older than {older_than_days} days"
 

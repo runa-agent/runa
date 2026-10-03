@@ -534,7 +534,7 @@ class GreeterAgent(Agent):
 ```
 
 ```bash
-export RUNA_POSTGRES_DSN=postgresql://...  # share state across replicas
+export RUNA_DATABASE_URL=postgresql://...  # share state across replicas
 runa prune --older-than 30                 # on a schedule, so the database stays bounded
 ```
 

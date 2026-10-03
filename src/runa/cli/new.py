@@ -66,7 +66,7 @@ RUNA_API_KEY=
 
 # Uncomment to share sessions, traces and eval history across replicas instead of keeping them
 # in this process's db/runa.db. Needed for any deployment running more than one instance.
-# RUNA_POSTGRES_DSN=postgresql://user:password@host:5432/runa
+# RUNA_DATABASE_URL=postgresql://user:password@host:5432/runa
 """
 
 _GITIGNORE_TEMPLATE = """__pycache__/

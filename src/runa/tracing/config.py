@@ -8,7 +8,7 @@ limits truncate what's left. `RunaTraceProcessor` (`tracing/processor.py`) is th
 import json
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from runa.tracing.traces import Trace
@@ -50,7 +50,7 @@ class ConsoleExporter:
 def _default_exporters() -> list[TraceExporter]:
     """The local store, plus `LangfuseExporter` if its credentials are already in the env.
 
-    The local store is `PostgresExporter` when `RUNA_POSTGRES_DSN` is set and `SQLiteExporter`
+    The local store is `PostgresExporter` when `RUNA_DATABASE_URL` is set and `SQLiteExporter`
     otherwise. Naming the exporter that is actually in use, rather than letting `SQLiteExporter`
     quietly write somewhere that is not SQLite, keeps `observe()` honest about where traces go.
 
@@ -75,20 +75,18 @@ def _default_exporters() -> list[TraceExporter]:
 def _local_exporter() -> TraceExporter:
     """`PostgresExporter` when this deployment shares a database, `SQLiteExporter` otherwise.
 
-    Falls back to SQLite if the `postgres` extra isn't installed: a missing optional dependency
-    should not cost an app its trace history, and the import error would surface on the very
-    next session/memory call anyway.
+    No fallback if the `postgres` extra is missing. Quietly writing traces to SQLite while
+    sessions and eval history go to Postgres splits one deployment's story across two stores to
+    avoid an error message, and the next session call would raise the same `ImportError` anyway.
     """
-    from runa.db import shared_dsn
+    from runa.db import shared_url
 
-    dsn = shared_dsn()
-    if dsn is None:
+    url = shared_url()
+    if url is None:
         return SQLiteExporter()
-    try:
-        from runa.tracing.postgres import PostgresExporter
-    except ImportError:
-        return SQLiteExporter()
-    return PostgresExporter(dsn)
+    from runa.tracing.postgres import PostgresExporter
+
+    return PostgresExporter(url)
 
 
 @dataclass
@@ -100,7 +98,16 @@ class _Config:
     max_input_bytes: int = 32_000
     max_output_bytes: int = 32_000
     max_tool_result_bytes: int = 32_000
-    exporters: list[TraceExporter] = field(default_factory=_default_exporters)
+    exporters: list[TraceExporter] | None = None
+    """`None` until first read, when `exporters()` resolves `_default_exporters()`.
+
+    Not a `default_factory`: this dataclass is instantiated at import, and resolving the default
+    there would read `RUNA_DATABASE_URL`/`LANGFUSE_*` before a generated `main.py` has run its
+    `load_dotenv()`. An app whose `.env` names a shared database would then write its traces to
+    SQLite while its sessions went to Postgres, which is the exact split `runa.db` exists to
+    prevent. Deciding on first use instead means the environment is whatever the app has set up
+    by the time a trace actually needs exporting.
+    """
 
 
 _config = _Config()
@@ -165,7 +172,13 @@ def tool_result_limit() -> int:
 
 
 def exporters() -> list[TraceExporter]:
-    """Return the active list of `TraceExporter`s a finished trace is sent to."""
+    """Return the active list of `TraceExporter`s a finished trace is sent to.
+
+    Resolves the default on first call, so the environment that decides it is the one in place
+    when tracing is first used rather than when `runa.tracing` was imported.
+    """
+    if _config.exporters is None:
+        _config.exporters = _default_exporters()
     return _config.exporters
 
 
@@ -179,7 +192,7 @@ def add_exporter(exporter: TraceExporter) -> None:
     losing local trace history. `LangfuseExporter` itself doesn't need this: `_default_exporters`
     already adds one automatically once `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are set.
     """
-    _config.exporters = [*_config.exporters, exporter]
+    _config.exporters = [*exporters(), exporter]
 
 
 class observe:

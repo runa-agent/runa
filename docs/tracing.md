@@ -124,11 +124,12 @@ Every trace above -- SQLite, Langfuse, or a custom exporter -- is also browsable
 
 The default exporter writes to this process's `db/runa.db`, which is per-process by design. Three
 replicas keep three disjoint histories and a dashboard that shows one of them. Set one variable
-and traces (along with sessions, memory, knowledge and eval history) go to a shared Postgres:
+and traces (along with sessions, memory, knowledge, the cache and eval history) go to a shared
+Postgres:
 
 ```bash
 uv add "runa-ai[postgres]"
-export RUNA_POSTGRES_DSN=postgresql://user:password@host:5432/runa
+export RUNA_DATABASE_URL=postgresql://user:password@host:5432/runa
 ```
 
 No code changes: `list_traces(...)`, `runa traces`, `runa ui` and the exporter all follow that

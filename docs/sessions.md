@@ -70,13 +70,22 @@ conversations; `set_items` replaces its history instead. Both are `async`, hence
 custom store subclasses `SessionABC`'s four abstract methods (`get_items`, `add_items`,
 `pop_item`, `clear_session`), nothing less.
 
-For a deployment where multiple processes need to share one store, use `PostgresSession` (the
-`runa-ai[postgres]` extra):
+For a deployment where multiple processes share one store, set `RUNA_DATABASE_URL` and change
+nothing else. `runa serve`, `runa chat` and `runa ui` all resolve their session store through
+`runa.db`, so they follow it automatically:
+
+```bash
+uv add "runa-ai[postgres]"
+export RUNA_DATABASE_URL=postgresql://runa:runa@localhost:5432/runa
+```
+
+Constructing one by hand is the escape hatch for a database that is not this deployment's shared
+one:
 
 ```python
-from runa.db.postgres import PostgresSession
+from runa.session.postgres import PostgresSession
 
-session = PostgresSession("user-42", dsn="postgresql://runa:runa@localhost:5432/runa")
+session = PostgresSession("user-42", "postgresql://runa:runa@localhost:5432/runa")
 ```
 
 It implements the same interface, backed by Postgres instead of SQLite.

@@ -37,8 +37,8 @@ def _fake_embed(monkeypatch: pytest.MonkeyPatch) -> None:
 def _knowledge(tmp_path: Path, directory: Path | None = None) -> Knowledge:
     return Knowledge(
         directory if directory is not None else tmp_path / "knowledge",
-        db_path=tmp_path / "runa.db",
         dimensions=_DIMENSIONS,
+        store=SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS),
     )
 
 

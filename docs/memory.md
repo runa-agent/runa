@@ -57,15 +57,17 @@ instead, so restating the same fact across conversations doesn't pile up duplica
 
 ## A Different Store
 
-`store=` swaps the default `SQLiteMemoryStore` for a custom one, without touching how embeddings
-work. For a deployment where multiple processes need to share one store, use
-`PostgresMemoryStore` (the `runa-ai[postgres]` extra):
+A bare `Memory()` stores wherever `runa.db` resolves: the local `db/runa.db`, or the shared
+Postgres once `RUNA_DATABASE_URL` is set. Going multi-replica needs no code change.
+
+`store=` is for a backend Runa does not ship, and swaps storage without touching how embeddings
+work. Note `dimensions`, which must match your embedding model:
 
 ```python
 from runa import Memory
-from runa.db.postgres import PostgresMemoryStore
+from runa.memory.postgres import PostgresMemoryStore
 
-memory = Memory(store=PostgresMemoryStore(dsn="postgresql://runa:runa@localhost:5432/runa"))
+memory = Memory(store=PostgresMemoryStore("postgresql://...", dimensions=1536))
 ```
 
 ## Memory vs. Session vs. Knowledge

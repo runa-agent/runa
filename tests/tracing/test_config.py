@@ -122,6 +122,32 @@ def test_default_exporters_adds_langfuse_once_its_env_vars_are_set(
     assert names == ["SQLiteExporter", "LangfuseExporter"]
 
 
+def test_the_local_exporter_follows_the_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Traces must land in the same database sessions do, or a deployment's story is split."""
+    pytest.importorskip("asyncpg")
+    monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
+
+    assert type(config._local_exporter()).__name__ == "PostgresExporter"
+
+
+def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generated `main.py` calls `load_dotenv()` after importing runa, so import is too early.
+
+    Resolving at import meant an app whose `.env` set `RUNA_DATABASE_URL` got a `SQLiteExporter`
+    frozen in before that file had run, writing traces to a local file while its sessions went
+    to Postgres.
+    """
+    pytest.importorskip("asyncpg")
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.setattr(config._config, "exporters", None)  # as it is at import
+    monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
+
+    assert [type(e).__name__ for e in config.exporters()] == ["PostgresExporter"]
+
+
 def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
     """`add_exporter` keeps whatever was active (the default `SQLiteExporter`) and adds to it.
 

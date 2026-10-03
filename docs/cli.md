@@ -88,13 +88,14 @@ append-only, so without this the database grows without bound. See
 [Deployment](deployment.md#retention).
 
 ```bash
-runa prune                                # older than 30 days (the default)
-runa prune --older-than 90                # older than 90 days
-runa prune --older-than 30 --dry-run      # report what would go, delete nothing
-runa prune --older-than 30 --only traces  # one kind; repeatable
+runa prune                            # older than 30 days (the default)
+runa prune --older-than 90            # older than 90 days
+runa prune --older-than 30 --dry-run  # report what would go, delete nothing
 ```
 
-Prunes the shared Postgres when `RUNA_POSTGRES_DSN` is set, the local `db/runa.db` otherwise.
+One cutoff covers traces, sessions and eval runs together, because "how far back do we care?" is
+one decision rather than three. Prunes the shared Postgres when `RUNA_DATABASE_URL` is set, the
+local `db/runa.db` otherwise.
 
 ## `runa ui`
 

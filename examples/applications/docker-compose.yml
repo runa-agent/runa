@@ -1,7 +1,7 @@
 # Multi-worker deployment for api_postgres.py: unlike api.py's SQLite version, this app can run
-# several replicas (bump `deploy.replicas`, or copy the `app` service) since PostgresSession/
-# PostgresMemoryStore/PostgresKnowledgeStore share one Postgres database instead of each process
-# owning its own db/runa.db file.
+# several replicas (bump `deploy.replicas`, or copy the `app` service), because RUNA_DATABASE_URL
+# below sends every session, memory and knowledge chunk to one shared Postgres instead of each
+# process owning its own db/runa.db file. The app code is identical either way.
 services:
   app:
     build:
@@ -14,7 +14,9 @@ services:
     ports:
       - "8000:8000"
     environment:
-      POSTGRES_DSN: postgresql://runa:runa@postgres:5432/runa
+      RUNA_DATABASE_URL: postgresql://runa:runa@postgres:5432/runa
+      # Only because this example's tool caches in Redis by hand; the framework itself needs
+      # nothing but the URL above, and caches in that same database.
       REDIS_URL: redis://redis:6379/0
       # Whichever provider `SupportAgent.model` resolves to needs its key set in the shell
       # `docker compose` runs in -- OPENAI_API_KEY for the default `gpt-*` model.

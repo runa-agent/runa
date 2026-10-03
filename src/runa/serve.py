@@ -11,7 +11,10 @@ Three decisions this makes for you, each the one a production deployment wants:
   `Agent.run`), so a module-level agent shared across requests would interleave users' histories.
   Constructing one is cheap; the alternative is a data leak.
 * **Conversation state is a `session`, never `self.history`.** A `session_id` in the request body
-  is the whole continuity mechanism, which is also what makes more than one replica possible.
+  is the whole continuity mechanism, and `runa.db` decides where that history lives: the local
+  `db/runa.db` by default, the shared Postgres once `RUNA_DATABASE_URL` is set, which is what
+  makes more than one replica possible. Serving behind replicas is therefore one variable, not a
+  code change, and nothing here names a backend.
 * **Authentication is on unless you turn it off.** A bearer token from `RUNA_API_KEY`, checked on
   every route but `/health`. An agent endpoint spends money per call, so open-by-default is the
   wrong default, and `--no-auth` is one flag away for local use.
@@ -30,11 +33,16 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from runa import db
 from runa.agent import Agent
-from runa.cli._project import iter_agent_classes, loaded_app, require_agents_dir
+from runa.cli._project import (
+    iter_agent_classes,
+    loaded_app,
+    require_agents_dir,
+    resolve_db_path,
+)
 from runa.lifecycle import logger
 from runa.run import Run
-from runa.session import SQLiteSession
 
 
 class RunRequest(BaseModel):
@@ -103,6 +111,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     assuming `cwd`, so a test (or an app embedding this) can be explicit.
     """
     agents_dir = require_agents_dir(root)
+    db_path = resolve_db_path(root)
 
     def _agent_classes() -> dict[str, type[Agent]]:
         """Resolve the app's agents by declared `name`, importing `main.py` first.
@@ -157,7 +166,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         """Run one turn and return the whole `Run`."""
         agent = _build(agent_name)
         session = (
-            SQLiteSession(body.session_id, root / "db" / "runa.db", user_id=body.user_id)
+            db.session(body.session_id, user_id=body.user_id, db_path=db_path)
             if body.session_id
             else None
         )
@@ -174,7 +183,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         """
         agent = _build(agent_name)
         session = (
-            SQLiteSession(body.session_id, root / "db" / "runa.db", user_id=body.user_id)
+            db.session(body.session_id, user_id=body.user_id, db_path=db_path)
             if body.session_id
             else None
         )

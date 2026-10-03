@@ -1,15 +1,15 @@
-"""Tests for `runa.db.postgres` (`PostgresSession`/`PostgresMemoryStore`/`PostgresKnowledgeStore`).
+"""Tests for the Postgres adapters: session, memory and knowledge stores.
 
 Needs a live Postgres with the `pgvector` extension reachable at `RUNA_TEST_POSTGRES_DSN`
-(defaults to `postgres.DEFAULT_POSTGRES_DSN`); the whole module is skipped if it isn't reachable,
+(defaults to a local one); the whole module is skipped if it isn't reachable,
 since CI provisions one as a service container (see `.github/workflows/ci.yml`) but a plain
 `make test` locally may not have one running.
 
 Every test uses a fresh `uuid4` session/user id so tests can share the live database without
 cleaning up after each other or colliding on identifiers.
 
-All tests run on one shared event loop instead of a fresh `asyncio.run()` each: `postgres.py`
-caches a connection pool per `(loop, dsn)` (see its `_get_pool` docstring), so a fresh loop per
+All tests run on one shared event loop instead of a fresh `asyncio.run()` each: `db/pool.py`
+caches a connection pool per `(loop, url)` (see its `get_pool` docstring), so a fresh loop per
 test would leak that test's whole pool -- `asyncio.run()` tears the loop down without ever
 `close()`-ing what was cached against it, and a Postgres instance only accepts so many
 connections before `TooManyConnectionsError`.
@@ -24,15 +24,12 @@ from typing import Any
 import asyncpg
 import pytest
 
-import runa.db.postgres as postgres_module
-from runa.db.postgres import (
-    DEFAULT_POSTGRES_DSN,
-    PostgresKnowledgeStore,
-    PostgresMemoryStore,
-    PostgresSession,
-)
+import runa.db.pool as pool_module
+from runa.knowledge.postgres import PostgresKnowledgeStore
+from runa.memory.postgres import PostgresMemoryStore
+from runa.session.postgres import PostgresSession
 
-_DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", DEFAULT_POSTGRES_DSN)
+_DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", "postgresql://runa:runa@localhost:5432/runa")
 _DIMENSIONS = 4
 
 _loop = asyncio.new_event_loop()
@@ -62,7 +59,7 @@ pytestmark = pytest.mark.skipif(not _reachable(), reason=f"no Postgres reachable
 def _close_pool_after_module() -> Any:
     """Close this module's pool and loop once every test has run, instead of leaking them."""
     yield
-    pool = postgres_module._pools.pop((id(_loop), _DSN), None)
+    pool = pool_module._pools.pop((id(_loop), _DSN), None)
     if pool is not None:
         run(pool.close())
     _loop.close()

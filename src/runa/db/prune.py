@@ -10,7 +10,7 @@ rather than three policies to configure separately. Each table's own timestamp c
 is old: `traces.start_time` (epoch seconds), `agent_sessions.updated_at` and `eval_runs.created_at`
 (ISO text), so a session stays alive as long as it is still being talked to.
 
-Prunes whichever store the app actually uses: the shared Postgres when `RUNA_POSTGRES_DSN` is set
+Prunes whichever store the app actually uses: the shared Postgres when `RUNA_DATABASE_URL` is set
 (where unbounded growth matters most, since that database outlives every replica writing to it),
 the local `db/runa.db` otherwise.
 """
@@ -21,10 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from runa.db import shared_dsn
-from runa.db.sqlite import DEFAULT_DB_PATH
-
-_KINDS = ("traces", "sessions", "evals")
+from runa.db import DEFAULT_DB_PATH, shared_url
 
 
 @dataclass
@@ -126,28 +123,25 @@ def prune(
     *,
     older_than_days: int,
     db_path: Path = DEFAULT_DB_PATH,
-    kinds: tuple[str, ...] = _KINDS,
     dry_run: bool = False,
     vacuum: bool = True,
 ) -> Pruned:
     """Delete traces, sessions and eval runs older than `older_than_days`, reporting the counts.
 
-    `kinds` narrows what is touched to any of `"traces"`, `"sessions"`, `"evals"`. `dry_run`
-    counts without deleting, so an operator can see the damage before agreeing to it. `vacuum`
-    reclaims the freed pages afterward: SQLite does not shrink the file on `DELETE` alone, and
-    reclaiming disk is usually the whole reason for pruning.
-    """
-    unknown = set(kinds) - set(_KINDS)
-    if unknown:
-        raise ValueError(f"unknown kind(s) {sorted(unknown)}; expected any of {list(_KINDS)}")
+    `dry_run` counts without deleting, so an operator can see the damage before agreeing to it.
+    `vacuum` reclaims the freed pages afterward: SQLite does not shrink the file on `DELETE`
+    alone, and reclaiming disk is usually the whole reason for pruning.
 
+    `db_path` is where the *local* file lives, for a CLI invoked against another project's
+    `--root`; a shared deployment has one database and leaves it unread.
+    """
     pruned = Pruned()
     now = datetime.now(UTC)
-    if (dsn := shared_dsn()) is not None:
+    if (url := shared_url()) is not None:
         from runa.db import prune_postgres
 
         return prune_postgres.prune(
-            dsn=dsn, now=now, older_than_days=older_than_days, kinds=kinds, dry_run=dry_run
+            url=url, now=now, older_than_days=older_than_days, dry_run=dry_run
         )
     if not Path(db_path).exists():
         return pruned
@@ -156,12 +150,9 @@ def prune(
     iso_cutoff = (now - timedelta(days=older_than_days)).isoformat()
 
     with closing(sqlite3.connect(db_path)) as conn:
-        if "traces" in kinds:
-            _prune_traces(conn, epoch_cutoff, pruned, not dry_run)
-        if "sessions" in kinds:
-            _prune_sessions(conn, iso_cutoff, pruned, not dry_run)
-        if "evals" in kinds:
-            _prune_evals(conn, iso_cutoff, pruned, not dry_run)
+        _prune_traces(conn, epoch_cutoff, pruned, not dry_run)
+        _prune_sessions(conn, iso_cutoff, pruned, not dry_run)
+        _prune_evals(conn, iso_cutoff, pruned, not dry_run)
         if not dry_run:
             conn.commit()
             if vacuum and pruned.total:

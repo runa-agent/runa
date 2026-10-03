@@ -50,13 +50,23 @@ cache = SQLiteCache("db/cache.db")  # or your own file
 Values are serialized with `json.dumps`/`json.loads`, so only JSON-serializable values (dicts,
 lists, strings, numbers, booleans, `None`) can be cached.
 
-## `RedisCache`: shared across processes
+## Shared across processes
 
-For a deployment where multiple processes need to share one cache, use `RedisCache` (the
+A deployment that sets `RUNA_DATABASE_URL` already has a shared cache: `runa.db.cache()` returns
+a `PostgresCache` over a `cache_entries` table in that same database, so there is no second
+service to run.
+
+```python
+from runa import db
+
+cache = db.cache()  # SQLiteCache locally, PostgresCache when the URL is shared
+```
+
+For hot keys you want off the database's query path, ask for Redis by name (the
 `runa-ai[redis]` extra):
 
 ```python
-from runa.db.redis import RedisCache
+from runa.cache.redis import RedisCache
 
 cache = RedisCache("redis://localhost:6379/0")
 ```

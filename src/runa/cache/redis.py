@@ -1,13 +1,13 @@
-"""db/redis.py: `RedisCache`, a `Cache` backed by Redis, shared across processes.
+"""cache/redis.py: `RedisCache`, a `Cache` backed by Redis.
 
-Optional -- the `runa[redis]` extra, not a core dependency; nothing outside this module imports
-it. Same shape as `cache.py`'s `MemoryCache`/`SQLiteCache` -- no inheritance required, just the
-matching `get`/`set`/`delete`/`clear` methods -- for a deployment where multiple processes need
-to share one cache instead of each having their own in-process dict or `db/runa.db`.
+The `runa-ai[redis]` extra, not a core dependency. The one persistent backend `runa.db` never
+picks for you: a shared deployment's cache goes in the database it already has
+(`cache/postgres.py`), so reaching for Redis is a deliberate call that its speed is worth a
+second service to run. Pass one to whatever holds your `Cache` and nothing else changes.
 
-Values round-trip through `json.dumps`/`json.loads`, same as `SQLiteCache`, so only
-JSON-serializable values are cacheable. Unlike the other two backends, expiry is Redis's own
-(`PX`), not lazy-on-read: an expired key is simply gone, not evicted by the next `get`.
+Values round-trip through `json.dumps`/`json.loads`, same as the other persistent backends, so
+only JSON-serializable values are cacheable. Unlike them, expiry is Redis's own (`PX`) rather
+than lazy-on-read: an expired key is simply gone, not evicted by the next `get`.
 """
 
 import asyncio
@@ -16,13 +16,11 @@ from typing import Any
 
 import redis.asyncio as redis
 
-DEFAULT_REDIS_URL = "redis://localhost:6379/0"
-
 
 class RedisCache:
-    """`Cache` backed by Redis: `MemoryCache`/`SQLiteCache`'s shape, shared across processes."""
+    """`Cache` backed by Redis, shared across processes, off the database's query path."""
 
-    def __init__(self, url: str = DEFAULT_REDIS_URL) -> None:
+    def __init__(self, url: str) -> None:
         """Store which Redis instance this cache's entries live in; connected lazily."""
         self.url = url
         self._client: tuple[asyncio.AbstractEventLoop, redis.Redis] | None = None
@@ -34,7 +32,7 @@ class RedisCache:
         connects, so a client left over from a now-closed loop (e.g. a second `asyncio.run()`
         call reusing this same `RedisCache`, as `Runner.run_sync` makes easy to hit) would
         crash with "Event loop is closed" instead of reconnecting; same fix as
-        `ModelProvider`'s HTTP clients and `db/postgres.py`'s pools.
+        `ModelProvider`'s HTTP clients and `db/pool.py`'s pools.
         """
         loop = asyncio.get_running_loop()
         if self._client is None or self._client[0] is not loop:
@@ -67,4 +65,4 @@ class RedisCache:
         await self._connect().flushdb()
 
 
-__all__ = ["DEFAULT_REDIS_URL", "RedisCache"]
+__all__ = ["RedisCache"]

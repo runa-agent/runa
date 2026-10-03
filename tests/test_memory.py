@@ -37,7 +37,10 @@ def _fake_embed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _memory(tmp_path: Path) -> Memory:
-    return Memory(tmp_path / "runa.db", dimensions=_DIMENSIONS)
+    return Memory(
+        dimensions=_DIMENSIONS,
+        store=SQLiteMemoryStore(tmp_path / "runa.db", dimensions=_DIMENSIONS),
+    )
 
 
 def test_default_configuration_needs_no_arguments() -> None:

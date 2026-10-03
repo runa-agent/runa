@@ -43,6 +43,7 @@ from runa.cli.sessions import SessionNotFound, list_sessions, show_session
 from runa.cli.test import run_project_tests
 from runa.cli.traces import TraceNotFound, list_errors_cli, list_traces_cli, show_trace
 from runa.cli.ui import serve_ui
+from runa.db import InvalidDatabaseURL
 
 _EXTRA_FOR_MODULE = {
     "fastapi": "serve",
@@ -203,13 +204,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="delete anything older than this many days (default: 30)",
     )
     prune_parser.add_argument(
-        "--only",
-        choices=["traces", "sessions", "evals"],
-        action="append",
-        default=None,
-        help="limit to one kind; repeatable. Default: all three",
-    )
-    prune_parser.add_argument(
         "--dry-run", action="store_true", help="report what would go, without deleting it"
     )
 
@@ -284,6 +278,7 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
         TraceHasNoInput,
         TraceNotFound,
         MissingAPIKey,
+        InvalidDatabaseURL,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -430,14 +425,7 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 1 if failed else 0
 
     if args.command == "prune":
-        print(
-            prune_cli(
-                root=cwd,
-                older_than_days=args.older_than,
-                kinds=tuple(args.only) if args.only else ("traces", "sessions", "evals"),
-                dry_run=args.dry_run,
-            )
-        )
+        print(prune_cli(root=cwd, older_than_days=args.older_than, dry_run=args.dry_run))
         return 0
 
     if args.command == "serve":

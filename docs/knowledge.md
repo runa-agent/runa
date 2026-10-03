@@ -33,7 +33,7 @@ class SupportAgent(Agent):
 
 ## `Knowledge` Directly
 
-Reach for a `Knowledge()` instance for a non-default `directory`/`db_path`/`model`/`store`, or to
+Reach for a `Knowledge()` instance for a non-default `directory`/`model`/`store`, or to
 call `.search`/`.ingest()` yourself:
 
 ```python
@@ -61,17 +61,17 @@ leaves stale chunks behind.
 
 ## A Different Store
 
-`store=` swaps the default `SQLiteKnowledgeStore` for a custom one. For a deployment where
-multiple processes need to share one store, use `PostgresKnowledgeStore` (the `runa-ai[postgres]`
-extra):
+A bare `Knowledge()` stores wherever `runa.db` resolves: the local `db/runa.db`, or the shared
+Postgres once `RUNA_DATABASE_URL` is set. Going multi-replica needs no code change.
+
+`store=` is for a backend Runa does not ship. Note `dimensions`, which must match your embedding
+model:
 
 ```python
 from runa import Knowledge
-from runa.db.postgres import PostgresKnowledgeStore
+from runa.knowledge.postgres import PostgresKnowledgeStore
 
-knowledge = Knowledge(
-    store=PostgresKnowledgeStore(dsn="postgresql://runa:runa@localhost:5432/runa")
-)
+knowledge = Knowledge(store=PostgresKnowledgeStore("postgresql://...", dimensions=1536))
 ```
 
 ## Example
