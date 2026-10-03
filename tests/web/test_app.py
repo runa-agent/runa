@@ -18,7 +18,7 @@ from runa.session import SQLiteSession
 from runa.tracing.spans import Span
 from runa.tracing.storage import save_trace
 from runa.tracing.traces import Trace
-from runa.web.app import create_app
+from runa.web.app import _trace_url, create_app
 
 
 @pytest.fixture
@@ -213,6 +213,17 @@ def test_trace_detail_adds_its_input_to_the_agent_s_evals(
         "expected": "Looks up the order",
         "metadata": {"trace_id": "trace_1"},
     }
+
+
+def test_trace_add_to_evals_never_redirects_off_site(client: TestClient) -> None:
+    """A trace id crafted to look like a host stays one path segment of this app (CWE-601)."""
+    response = client.post("//traces/evil.example.com/eval", follow_redirects=False)
+
+    assert response.status_code == 404
+    assert "evil.example.com" not in response.headers.get("location", "")
+
+    assert _trace_url("/evil.example.com") == "/traces/%2Fevil.example.com"
+    assert _trace_url("\\\\evil.example.com") == "/traces/%5C%5Cevil.example.com"
 
 
 def test_trace_detail_hides_add_to_evals_without_a_recorded_input(client: TestClient) -> None:
