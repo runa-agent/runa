@@ -188,12 +188,14 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
                     text = _token_text(event)
                     if text:
                         yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
-            except Exception as exc:  # noqa: BLE001 -- the client must not be left hanging
+            except Exception:  # noqa: BLE001 -- the client must not be left hanging
                 # The response status went out with the first byte, so an error here cannot
                 # become a 500. Silently truncating the stream would leave a client unable to
                 # tell a finished answer from a dropped one, so the failure is itself an event.
+                # The event says only that the run failed: an exception's type and message can
+                # name internals a caller has no business reading, so they stay in the log.
                 logger.exception("streamed run failed for agent %s", agent_name)
-                error = {"type": "error", "error": f"{type(exc).__name__}: {exc}"}
+                error = {"type": "error", "error": "the run failed"}
                 yield f"data: {json.dumps(error)}\n\n"
             else:
                 if stream.run is not None:

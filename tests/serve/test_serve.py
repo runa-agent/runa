@@ -260,7 +260,9 @@ def test_a_mid_stream_failure_is_reported_as_an_event(project: Path) -> None:
     """A stream cannot become a 500: the status went out with the first byte.
 
     Truncating silently would leave a client unable to tell a finished answer from a dropped
-    connection, so an unexpected failure has to arrive as an `error` event instead.
+    connection, so an unexpected failure has to arrive as an `error` event instead. What it says
+    is deliberately generic: the exception's type and message belong in the server log, not in a
+    caller's hands (CWE-209).
     """
     broken = project / "app" / "stub_model.py"
     broken.write_text(
@@ -283,4 +285,6 @@ def test_a_mid_stream_failure_is_reported_as_an_event(project: Path) -> None:
             if line.startswith("data: ") and not line.endswith("[DONE]")
         ]
 
-    assert [p for p in payloads if p.get("type") == "error"]
+    errors = [p for p in payloads if p.get("type") == "error"]
+    assert errors
+    assert errors[0]["error"] == "the run failed"
