@@ -87,7 +87,7 @@ def create_app(root: Path) -> FastAPI:
             pass  # e.g. a double submit: the trace page already shows where the case is
         except (TraceNotFound, TraceHasNoInput):
             return HTMLResponse(_error_page("", "Trace has no input to add."), status_code=404)
-        return RedirectResponse("/sessions", status_code=303)
+        return RedirectResponse(_trace_url(trace_id), status_code=303)
 
     @app.get("/evaluations", response_class=HTMLResponse, include_in_schema=False)
     def evaluations_list() -> str:
