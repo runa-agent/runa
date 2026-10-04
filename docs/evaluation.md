@@ -35,7 +35,18 @@ Only `input` is required. Everything else is optional evidence that decides whic
 | `metadata` | Arbitrary data carried through to the report |
 
 With none of them, task completion and answer relevance still run. Every case runs to completion
-even if an earlier one errors, and the finished `Report` is persisted to `runa.db`.
+even if an earlier one errors, and the finished `Report` is persisted to this deployment's eval
+store, which is also the baseline the next run is graded against:
+
+```python
+from runa import db
+
+store = db.evals()
+
+store.list(limit=10)                # most recent runs, newest first, without their cases
+store.get(run_id)                   # one run with every case it graded
+store.baseline("support_agent")     # that agent's latest run, input -> passed
+```
 
 ## Turning Real Runs Into Cases
 

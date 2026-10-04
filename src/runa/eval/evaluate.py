@@ -8,13 +8,13 @@ actually completed, so a case that errors doesn't also burn a judge-model call. 
 import asyncio
 from collections.abc import Iterable
 
+from runa import db
 from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.evaluation.defaults import DEFAULT_THRESHOLDS
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.eval.evaluation.semantic import evaluate_semantic
 from runa.eval.report import CaseReport, Report
-from runa.eval.storage import load_baseline, save_report
 from runa.eval.tracing.adapter import run_agent_for_eval
 
 
@@ -70,7 +70,7 @@ async def evaluate_agent(
     `concurrency=1` runs them one by one, for an agent whose tools can't run in parallel. Every
     case runs to completion even if another fails or errors. The finished `Report` keeps dataset
     order, is compared against the agent's previous run (see `Report.regressions`), then persisted
-    to `runa.db` before it's returned (see `eval/storage.py`).
+    to `runa.db` before it's returned (see `eval/store.py`).
     """
     resolved_thresholds = _resolve_thresholds(threshold, thresholds)
     judge_model_name = _resolve_judge(judge, agent)
@@ -86,8 +86,11 @@ async def evaluate_agent(
         *(_bounded(index, case) for index, case in enumerate(dataset))
     )
 
+    # One store, resolved once: the baseline this run is graded against and the history it
+    # becomes are the same store, which they were not while each function asked separately.
+    store = db.evals()
     report = Report(
-        agent_name=agent.name, cases=list(case_reports), baseline=load_baseline(agent.name)
+        agent_name=agent.name, cases=list(case_reports), baseline=store.baseline(agent.name)
     )
-    save_report(report)
+    store.save(report)
     return report

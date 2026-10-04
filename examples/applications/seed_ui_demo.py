@@ -26,16 +26,15 @@ import shutil
 import time
 from pathlib import Path
 
+from runa import db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
-from runa.eval.storage import save_report
 from runa.eval.tracing.adapter import AgentRun
-from runa.session import SQLiteSession
+from runa.session import SessionABC
 from runa.tracing.spans import Span
-from runa.tracing.storage import save_trace
 from runa.tracing.traces import Trace
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -46,7 +45,7 @@ project = scaffold_project("ui_demo", root=REPO_ROOT)
 generate_agent("SupportAgent", root=project, model="gpt-5.4-nano")
 generate_agent("BillingAgent", root=project, model="gpt-5.4-nano")
 generate_agent("PolicyResearcherAgent", root=project, model="gpt-5.4-nano")
-db_path = project / "db" / "runa.db"
+traces = db.traces(project)
 
 # Wire the real subagent relationships (`generate_agent` has no --subagent flag; you write these
 # by hand, same as tools/guardrails) so the Agents page's "Subagents" chip actually shows them --
@@ -72,11 +71,11 @@ db_path = project / "db" / "runa.db"
     "    subagents = [BillingAgent.handoff, PolicyResearcherAgent.delegate]\n"
 )
 
-session1 = SQLiteSession("support_agent-1", db_path=db_path)
-session2 = SQLiteSession("billing_agent-1", db_path=db_path)
+session1 = db.session("support_agent-1", root=project)
+session2 = db.session("billing_agent-1", root=project)
 
 
-async def add(session: SQLiteSession, role: str, content: str) -> None:
+async def add(session: SessionABC, role: str, content: str) -> None:
     """Append one message to `session`'s history."""
     await session.add_items([{"role": role, "content": content}])
 
@@ -149,7 +148,7 @@ trace_ok.spans = [
         output={"content": "your invoice total is $42.00", "usage": {"total_tokens": 268}},
     ),
 ]
-save_trace(trace_ok, db_path=db_path)
+traces.save(trace_ok)
 asyncio.run(add(session1, "user", "my invoice looks wrong"))
 asyncio.run(add(session1, "assistant", "your invoice total is $42.00"))
 time.sleep(1.1)
@@ -186,7 +185,7 @@ trace_ok2.spans = [
         output={"content": "anything else I can help with?", "usage": {"total_tokens": 140}},
     ),
 ]
-save_trace(trace_ok2, db_path=db_path)
+traces.save(trace_ok2)
 asyncio.run(add(session1, "user", "nope that's all, thanks"))
 asyncio.run(add(session1, "assistant", "anything else I can help with?"))
 time.sleep(1.1)
@@ -240,7 +239,7 @@ trace_err.spans = [
         error="refund of $500 exceeds the $100 auto-approval limit",
     ),
 ]
-save_trace(trace_err, db_path=db_path)
+traces.save(trace_err)
 asyncio.run(add(session2, "user", "can you refund me $500?"))
 asyncio.run(add(session2, "assistant", "sure, here's the refund"))
 time.sleep(1.1)
@@ -250,7 +249,7 @@ time.sleep(1.1)
 # (support_agent, since that's who started the turn) and every span, before and after the
 # switch, stays a sibling under it -- `run_loop.py` never creates a second root span for the
 # agent that took over, it just keeps appending to the same one.
-session3 = SQLiteSession("support_agent-3", db_path=db_path)
+session3 = db.session("support_agent-3", root=project)
 root4_start = now()
 llm5_start = now()
 time.sleep(0.3)
@@ -311,7 +310,7 @@ trace_handoff.spans = [
         },
     ),
 ]
-save_trace(trace_handoff, db_path=db_path)
+traces.save(trace_handoff)
 asyncio.run(add(session3, "user", "cancel my subscription and refund me"))
 asyncio.run(
     add(session3, "assistant", "done, your subscription is cancelled and the refund is on its way")
@@ -326,7 +325,7 @@ time.sleep(1.1)
 # as its own trace, with no session (a delegate call is never given `session=`) and, today,
 # nothing in the outer trace's "delegate" span linking to it -- you'd only find it by knowing its
 # id.
-session4 = SQLiteSession("support_agent-4", db_path=db_path)
+session4 = db.session("support_agent-4", root=project)
 root5_start = now()
 llm7_start = now()
 time.sleep(0.3)
@@ -370,7 +369,7 @@ trace_delegate_inner.spans = [
         },
     ),
 ]
-save_trace(trace_delegate_inner, db_path=db_path)
+traces.save(trace_delegate_inner)
 
 delegate_end = now()
 llm8_start = now()
@@ -429,7 +428,7 @@ trace_delegate_outer.spans = [
         },
     ),
 ]
-save_trace(trace_delegate_outer, db_path=db_path)
+traces.save(trace_delegate_outer)
 asyncio.run(add(session4, "user", "what's your late delivery policy?"))
 asyncio.run(
     add(
@@ -439,7 +438,7 @@ asyncio.run(
     )
 )
 
-save_report(
+db.evals(project).save(
     Report(
         agent_name="support_agent",
         cases=[
@@ -468,7 +467,6 @@ save_report(
             ),
         ],
     ),
-    db_path=db_path,
 )
 
 print(f"seeded {project}")

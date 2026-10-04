@@ -1,17 +1,17 @@
-"""session/postgres.py: `PostgresSession`, the shared `SessionABC`.
+"""session/postgres.py: the shared session backend, both sides of it.
 
 The `runa-ai[postgres]` extra, not a core dependency. Same tables and query shapes as
 `session/sqlite.py`, minus the single-process assumption: every process on the same URL sees the
 same history, since Postgres (unlike a bare `sqlite3.connect`) tolerates concurrent writers
-without corrupting the file.
+without corrupting the file. `PostgresSession` is the write side a run appends to,
+`PostgresSessionStore` the read side `runa sessions` and `runa ui` query.
 
-`runa.db.session(...)` builds this whenever `RUNA_DATABASE_URL` is a `postgresql://` one, so no
-call site has to name it. Constructing it by hand is the escape hatch for a database that is not
-this deployment's shared one.
+`runa.db.session(...)`/`runa.db.sessions(...)` build these whenever `RUNA_DATABASE_URL` is a
+`postgresql://` one, so no call site has to name them. Constructing one by hand is the escape
+hatch for a database that is not this deployment's shared one.
 """
 
 import json
-from typing import Any
 
 import asyncpg
 
@@ -19,6 +19,14 @@ from runa._types import TResponseInputItem
 from runa.db.pool import connect as _connect
 from runa.db.pool import run_sync
 from runa.session import SessionABC
+from runa.session.store import (
+    SessionMessage,
+    SessionNotFound,
+    SessionSummary,
+    agent_pattern,
+    as_timestamp,
+    to_message,
+)
 
 SESSIONS_TABLE = "agent_sessions"
 MESSAGES_TABLE = "agent_messages"
@@ -29,6 +37,8 @@ CREATE TABLE IF NOT EXISTS {SESSIONS_TABLE} (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_{SESSIONS_TABLE}_updated_at
+    ON {SESSIONS_TABLE} (updated_at DESC, session_id DESC);
 CREATE TABLE IF NOT EXISTS {MESSAGES_TABLE} (
     id BIGSERIAL PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES {SESSIONS_TABLE}(session_id) ON DELETE CASCADE,
@@ -140,60 +150,58 @@ class PostgresSession(SessionABC):
             )
 
 
-async def _rows(url: str, where: str, *params: Any) -> list[tuple[str, str]]:
-    """`(session_id, updated_at)` rows matching `where`, timestamps as ISO text.
+class PostgresSessionStore:
+    """The shared `SessionStore`: the read side of this deployment's session tables.
 
-    `session/storage.py` compares and renders these as strings, the way SQLite already hands them
-    over, so a `TIMESTAMPTZ` is formatted here rather than leaking a `datetime` into one backend's
-    results and not the other's.
+    Same ordering and the same timestamp rendering as `session/sqlite.py`, both of which come
+    from `session/store.py` rather than from here. They used to be this module's own: it broke
+    ties on `session_id` where SQLite broke them on `rowid`, and rendered a `TIMESTAMPTZ` with its
+    offset where SQLite's text had none, so one deployment's Sessions page and another's listed
+    the same two sessions in a different order and printed their timestamps differently.
     """
-    pool = await _connect(url, DDL)
-    rows = await pool.fetch(f"SELECT session_id, updated_at FROM {SESSIONS_TABLE} {where}", *params)
-    return [
-        (row["session_id"], row["updated_at"].isoformat(sep=" ", timespec="seconds"))
-        for row in rows
-    ]
 
+    def __init__(self, url: str) -> None:
+        """Store which Postgres database this history lives in; connected lazily."""
+        self.url = url
 
-def session_rows(url: str) -> list[tuple[str, str]]:
-    """Return `(session_id, updated_at)` for every session in `url`, oldest first."""
-    return run_sync(_rows(url, "ORDER BY updated_at"))
+    def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
+        """Return this database's sessions, most recently updated first."""
+        return run_sync(self._listing(agent))
 
+    def messages(self, session_id: str) -> list[SessionMessage]:
+        """Return `session_id`'s messages, oldest first."""
+        return run_sync(self._messages(session_id))
 
-def sessions_for_agent(url: str, agent_name: str, pattern: str) -> list[tuple[str, str]]:
-    """Return `(session_id, updated_at)` for `agent_name`'s past sessions, newest first."""
-    return run_sync(
-        _rows(
-            url,
-            "WHERE session_id = $1 OR session_id LIKE $2 ORDER BY updated_at DESC, session_id DESC",
-            agent_name,
-            pattern,
+    async def _listing(self, agent: str | None) -> list[SessionSummary]:
+        pool = await _connect(self.url, DDL)
+        where = ""
+        params: tuple[object, ...] = ()
+        if agent is not None:
+            where = "WHERE session_id = $1 OR session_id LIKE $2 "
+            params = (agent, agent_pattern(agent))
+        rows = await pool.fetch(
+            f"SELECT session_id, updated_at FROM {SESSIONS_TABLE} {where}"
+            "ORDER BY updated_at DESC, session_id DESC",
+            *params,
         )
-    )
+        return [
+            SessionSummary(id=row["session_id"], updated_at=as_timestamp(row["updated_at"]))
+            for row in rows
+        ]
 
-
-async def _messages(url: str, session_id: str) -> list[tuple[str, str]]:
-    pool = await _connect(url, DDL)
-    exists = await pool.fetchval(
-        f"SELECT 1 FROM {SESSIONS_TABLE} WHERE session_id = $1", session_id
-    )
-    if exists is None:
-        from runa.session.storage import SessionNotFound
-
-        raise SessionNotFound(f"no session found with id {session_id!r}")
-    rows = await pool.fetch(
-        f"SELECT created_at, message_data FROM {MESSAGES_TABLE} WHERE session_id = $1 ORDER BY id",
-        session_id,
-    )
-    return [
-        (row["created_at"].isoformat(sep=" ", timespec="seconds"), row["message_data"])
-        for row in rows
-    ]
-
-
-def session_messages(url: str, session_id: str) -> list[tuple[str, str]]:
-    """Return `session_id`'s `(created_at, message_data)` rows from `url`, oldest first."""
-    return run_sync(_messages(url, session_id))
+    async def _messages(self, session_id: str) -> list[SessionMessage]:
+        pool = await _connect(self.url, DDL)
+        exists = await pool.fetchval(
+            f"SELECT 1 FROM {SESSIONS_TABLE} WHERE session_id = $1", session_id
+        )
+        if exists is None:
+            raise SessionNotFound(f"no session found with id {session_id!r}")
+        rows = await pool.fetch(
+            f"SELECT created_at, message_data FROM {MESSAGES_TABLE} WHERE session_id = $1 "
+            "ORDER BY id",
+            session_id,
+        )
+        return [to_message(row["created_at"], row["message_data"]) for row in rows]
 
 
 __all__ = [
@@ -201,7 +209,5 @@ __all__ = [
     "MESSAGES_TABLE",
     "SESSIONS_TABLE",
     "PostgresSession",
-    "session_messages",
-    "session_rows",
-    "sessions_for_agent",
+    "PostgresSessionStore",
 ]

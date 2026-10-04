@@ -1,21 +1,29 @@
-"""tracing/postgres.py: traces in Postgres, so more than one replica shares one history.
+"""tracing/postgres.py: `PostgresTraceStore`, traces in a shared database.
 
-The default `SQLiteExporter` writes to a `db/runa.db` beside the process. That is exactly right
+The local `SQLiteTraceStore` writes to a `db/runa.db` beside the process. That is exactly right
 for one machine and wrong for a deployment: three replicas keep three disjoint trace histories,
 and `runa ui` can only ever show whichever one it happens to be looking at. This backend puts the
-same two tables (`traces`/`spans`) in Postgres instead, and is picked up automatically whenever
-`RUNA_DATABASE_URL` is set (see `runa.db.shared_url`).
+same two tables (`traces`/`spans`) in Postgres instead, and `runa.db.traces()` picks it up
+automatically whenever `RUNA_DATABASE_URL` is a `postgresql://` one.
 
-Optional: part of the `runa[postgres]` extra, like `db/postgres.py`, which this builds on for its
-pool and for the background loop that lets a synchronous exporter talk to `asyncpg`.
+Optional: part of the `runa[postgres]` extra, like `db/pool.py`, which this builds on for its
+pool and for the background loop that lets a synchronous exporter talk to `asyncpg`. The row
+marshalling is `tracing/store.py`'s, shared with the SQLite adapter; what is genuinely this
+backend's own is the async driver, the `ON CONFLICT` upsert, and the batched span fetch.
 """
 
-import json
 from typing import Any
 
 from runa.db.pool import connect as _connect
 from runa.db.pool import run_sync
-from runa.tracing.spans import Span
+from runa.tracing.config import StoreExporter
+from runa.tracing.store import (
+    SPAN_COLUMNS,
+    TRACE_COLUMNS,
+    span_values,
+    to_trace,
+    trace_values,
+)
 from runa.tracing.traces import Trace
 
 _TRACES_TABLE = "traces"
@@ -51,176 +59,117 @@ CREATE INDEX IF NOT EXISTS idx_{_SPANS_TABLE}_trace_id ON {_SPANS_TABLE} (trace_
 """
 
 
-def _as_text(value: object) -> str | None:
-    """Render a span's `input`/`output` as text, matching `tracing/storage.py`'s SQLite shape."""
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, default=str)
+def _placeholders(columns: tuple[str, ...]) -> str:
+    return ", ".join(f"${index}" for index in range(1, len(columns) + 1))
 
 
-async def _save(trace: Trace, url: str) -> None:
-    pool = await _connect(url, _DDL)
-    async with pool.acquire() as conn, conn.transaction():
-        await conn.execute(
-            f"""
-            INSERT INTO {_TRACES_TABLE}
-                (id, name, start_time, end_time, status, session_id, metadata_json)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (id) DO UPDATE SET
-                name = EXCLUDED.name, start_time = EXCLUDED.start_time,
-                end_time = EXCLUDED.end_time, status = EXCLUDED.status,
-                session_id = EXCLUDED.session_id, metadata_json = EXCLUDED.metadata_json
-            """,
-            trace.id,
-            trace.name,
-            trace.start_time,
-            trace.end_time,
-            trace.status,
-            trace.session_id,
-            json.dumps(trace.metadata, default=str),
-        )
-        if trace.spans:
-            await conn.executemany(
-                f"""
-                INSERT INTO {_SPANS_TABLE}
-                    (id, trace_id, parent_id, name, type, start_time, end_time, status,
-                     attributes_json, input, output, error)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                ON CONFLICT (id) DO UPDATE SET
-                    end_time = EXCLUDED.end_time, status = EXCLUDED.status,
-                    attributes_json = EXCLUDED.attributes_json, input = EXCLUDED.input,
-                    output = EXCLUDED.output, error = EXCLUDED.error
-                """,
-                [
-                    (
-                        span.id,
-                        span.trace_id,
-                        span.parent_id,
-                        span.name,
-                        span.type,
-                        span.start_time,
-                        span.end_time,
-                        span.status,
-                        json.dumps(span.attributes, default=str),
-                        _as_text(span.input),
-                        _as_text(span.output),
-                        span.error,
-                    )
-                    for span in trace.spans
-                ],
-            )
+def _assignments(columns: tuple[str, ...], *, keep: str = "id") -> str:
+    return ", ".join(f"{column} = EXCLUDED.{column}" for column in columns if column != keep)
 
 
-def save_trace(trace: Trace, *, url: str) -> None:
-    """Persist `trace` and every span in it, replacing any row with the same id."""
-    run_sync(_save(trace, url))
+class PostgresTraceStore:
+    """The shared `TraceStore`: `traces`/`spans` in this deployment's Postgres database.
 
-
-def _row_to_span(row: Any) -> Span:
-    return Span(
-        id=row["id"],
-        trace_id=row["trace_id"],
-        parent_id=row["parent_id"],
-        name=row["name"],
-        type=row["type"],
-        start_time=row["start_time"],
-        end_time=row["end_time"],
-        status=row["status"],
-        attributes=json.loads(row["attributes_json"]),
-        input=row["input"],
-        output=row["output"],
-        error=row["error"],
-    )
-
-
-def _row_to_trace(row: Any, span_rows: list[Any]) -> Trace:
-    trace = Trace(
-        id=row["id"],
-        name=row["name"],
-        start_time=row["start_time"],
-        end_time=row["end_time"],
-        session_id=row["session_id"],
-        metadata=json.loads(row["metadata_json"]),
-    )
-    trace.spans = [_row_to_span(span) for span in span_rows]
-    return trace
-
-
-async def _get(trace_id: str, url: str) -> Trace | None:
-    pool = await _connect(url, _DDL)
-    row = await pool.fetchrow(f"SELECT * FROM {_TRACES_TABLE} WHERE id = $1", trace_id)
-    if row is None:
-        return None
-    spans = await pool.fetch(
-        f"SELECT * FROM {_SPANS_TABLE} WHERE trace_id = $1 ORDER BY start_time", trace_id
-    )
-    return _row_to_trace(row, list(spans))
-
-
-def get_trace(trace_id: str, *, url: str) -> Trace | None:
-    """Look up one trace by id, with every span it has, or `None` if this database has none."""
-    return run_sync(_get(trace_id, url))
-
-
-async def _list(
-    url: str, limit: int, agent: str | None, status: str | None, session_id: str | None
-) -> list[Trace]:
-    pool = await _connect(url, _DDL)
-    clauses: list[str] = []
-    params: list[Any] = []
-    for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
-        if value is not None:
-            params.append(value)
-            clauses.append(f"{column} = ${len(params)}")
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    params.append(limit)
-    rows = await pool.fetch(
-        f"SELECT * FROM {_TRACES_TABLE} {where} ORDER BY start_time DESC LIMIT ${len(params)}",
-        *params,
-    )
-    if not rows:
-        return []
-    ids = [row["id"] for row in rows]
-    spans = await pool.fetch(
-        f"SELECT * FROM {_SPANS_TABLE} WHERE trace_id = ANY($1::text[]) ORDER BY start_time", ids
-    )
-    by_trace: dict[str, list[Any]] = {trace_id: [] for trace_id in ids}
-    for span in spans:
-        by_trace[span["trace_id"]].append(span)
-    return [_row_to_trace(row, by_trace[row["id"]]) for row in rows]
-
-
-def list_traces(
-    *,
-    limit: int = 50,
-    agent: str | None = None,
-    status: str | None = None,
-    session_id: str | None = None,
-    url: str,
-) -> list[Trace]:
-    """Return the most recent `limit` traces, newest first, optionally filtered.
-
-    Same filters and ordering as the SQLite backend, so callers cannot tell the two apart.
-    """
-    return run_sync(_list(url, limit, agent, status, session_id))
-
-
-class PostgresExporter:
-    """A `TraceExporter` that persists every finished trace to Postgres.
-
-    Installed automatically when `RUNA_DATABASE_URL` is set, in place of the default
-    `SQLiteExporter`; construct one explicitly to export to a database other than that one.
+    `runa.db.traces()` builds this whenever `RUNA_DATABASE_URL` is a `postgresql://` one, so no
+    call site has to name it. Constructing one by hand is the escape hatch for a database that is
+    not this deployment's shared one.
     """
 
     def __init__(self, url: str) -> None:
-        """Store which Postgres database finished traces are written to."""
+        """Store which Postgres database this history lives in; connected lazily."""
         self.url = url
 
-    def export(self, trace: Trace) -> None:
-        """Persist `trace`. Exceptions are caught by the caller; tracing never fails a run."""
-        save_trace(trace, url=self.url)
+    def save(self, trace: Trace) -> None:
+        """Persist `trace` and every span in it, replacing any existing one with the same id."""
+        run_sync(self._save(trace))
+
+    def get(self, trace_id: str) -> Trace | None:
+        """Look up one trace by id, with every span it has, or `None` if this database has none."""
+        return run_sync(self._get(trace_id))
+
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        agent: str | None = None,
+        status: str | None = None,
+        session_id: str | None = None,
+    ) -> list[Trace]:
+        """Return the most recent `limit` traces, newest first, optionally filtered."""
+        return run_sync(self._list(limit, agent, status, session_id))
+
+    async def _save(self, trace: Trace) -> None:
+        pool = await _connect(self.url, _DDL)
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                f"""
+                INSERT INTO {_TRACES_TABLE} ({", ".join(TRACE_COLUMNS)})
+                VALUES ({_placeholders(TRACE_COLUMNS)})
+                ON CONFLICT (id) DO UPDATE SET {_assignments(TRACE_COLUMNS)}
+                """,
+                *trace_values(trace),
+            )
+            if trace.spans:
+                await conn.executemany(
+                    f"""
+                    INSERT INTO {_SPANS_TABLE} ({", ".join(SPAN_COLUMNS)})
+                    VALUES ({_placeholders(SPAN_COLUMNS)})
+                    ON CONFLICT (id) DO UPDATE SET {_assignments(SPAN_COLUMNS)}
+                    """,
+                    [span_values(span) for span in trace.spans],
+                )
+
+    async def _get(self, trace_id: str) -> Trace | None:
+        pool = await _connect(self.url, _DDL)
+        row = await pool.fetchrow(f"SELECT * FROM {_TRACES_TABLE} WHERE id = $1", trace_id)
+        if row is None:
+            return None
+        spans = await pool.fetch(
+            f"SELECT * FROM {_SPANS_TABLE} WHERE trace_id = $1 ORDER BY start_time", trace_id
+        )
+        return to_trace(row, list(spans))
+
+    async def _list(
+        self, limit: int, agent: str | None, status: str | None, session_id: str | None
+    ) -> list[Trace]:
+        pool = await _connect(self.url, _DDL)
+        clauses: list[str] = []
+        params: list[Any] = []
+        for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
+            if value is not None:
+                params.append(value)
+                clauses.append(f"{column} = ${len(params)}")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = await pool.fetch(
+            f"SELECT * FROM {_TRACES_TABLE} {where} ORDER BY start_time DESC LIMIT ${len(params)}",
+            *params,
+        )
+        if not rows:
+            return []
+        # One query for every listed trace's spans, where the SQLite adapter asks per trace: a
+        # shared database is a network round trip, so N+1 of them is the cost worth avoiding.
+        ids = [row["id"] for row in rows]
+        spans = await pool.fetch(
+            f"SELECT * FROM {_SPANS_TABLE} WHERE trace_id = ANY($1::text[]) ORDER BY start_time",
+            ids,
+        )
+        by_trace: dict[str, list[Any]] = {trace_id: [] for trace_id in ids}
+        for span in spans:
+            by_trace[span["trace_id"]].append(span)
+        return [to_trace(row, by_trace[row["id"]]) for row in rows]
 
 
-__all__ = ["PostgresExporter", "get_trace", "list_traces", "save_trace"]
+class PostgresExporter(StoreExporter):
+    """A `TraceExporter` that persists every finished trace to Postgres.
+
+    `_default_exporters` builds a plain `StoreExporter` over whatever `runa.db.traces()` resolved,
+    so this name is for an app that wants to export to a database other than this deployment's.
+    """
+
+    def __init__(self, url: str) -> None:
+        """Export to `url`'s `traces`/`spans` tables."""
+        super().__init__(PostgresTraceStore(url))
+
+
+__all__ = ["PostgresExporter", "PostgresTraceStore"]

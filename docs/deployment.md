@@ -114,8 +114,8 @@ export RUNA_DATABASE_URL=postgresql://user:password@host:5432/runa
 ```
 
 That covers sessions, memory, knowledge, the cache, **traces** and **eval history**. No code
-changes: `runa serve`, `Memory()`, `list_traces(...)`, `runa sessions`, `runa traces` and `runa
-ui` all resolve their backend through `runa.db`, so a session or trace written by one replica is
+changes: `runa serve`, `Memory()`, `db.traces()`, `runa sessions`, `runa traces` and `runa ui`
+all resolve their backend through `runa.db`, so a session or trace written by one replica is
 readable from any of them.
 
 The cache moves with it, into a `cache_entries` table in the same database. No second service to
@@ -130,6 +130,26 @@ cache = RedisCache("redis://localhost:6379/0")
 Leave the variable unset and nothing changes: a single process keeps its own `db/runa.db`, which
 is the right answer for one machine. `sqlite:///data/runa.db` relocates that file if you need it
 somewhere specific.
+
+### Testing against the store
+
+`memory://` is the third answer to the same question: every concern resolves to an in-process
+store that dies with the process. No file to clean up, no server to run, and the code under test
+goes through the same interfaces a deployment does.
+
+```python
+import pytest
+from runa import db
+
+
+@pytest.fixture(autouse=True)
+def in_memory_store(monkeypatch):
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+    db.reset_ephemeral()  # the stores are process-wide, like a file
+```
+
+It is a testing and local-prototyping backend, not a deployment one: nothing is persisted, and
+two replicas would share nothing at all.
 
 To run the shared path locally before you ship it, point the variable at containers:
 

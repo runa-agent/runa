@@ -9,8 +9,10 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
+from runa.tracing.store import TraceStore
 from runa.tracing.traces import Trace
 
 _REDACTED = "[REDACTED]"
@@ -29,14 +31,38 @@ class TraceExporter(Protocol):
         ...
 
 
-class SQLiteExporter:
-    """The default exporter: persists every finished trace to `runa.db` (`tracing/storage.py`)."""
+class StoreExporter:
+    """A `TraceExporter` that writes every finished trace to a `TraceStore`.
+
+    The whole implementation, for every persistent exporter: which store it holds is decided once,
+    when the exporter is built, instead of per write. `SQLiteExporter` and `PostgresExporter` are
+    this class with a store already chosen, and `_local_exporter` builds one over whatever
+    `runa.db.traces()` resolved.
+
+    Deciding once is a fix, not a tidy-up. The old `SQLiteExporter.export` called a module-level
+    `save_trace` that asked `runa.db` for the backend all over again, so the exporter a
+    deployment had installed and the store its traces landed in were two separate answers to one
+    question.
+    """
+
+    def __init__(self, store: TraceStore) -> None:
+        """Store where finished traces are written."""
+        self.store = store
 
     def export(self, trace: Trace) -> None:
-        """Persist `trace` to the default `runa.db`."""
-        from runa.tracing.storage import save_trace
+        """Persist `trace`. Exceptions are caught by the caller; tracing never fails a run."""
+        self.store.save(trace)
 
-        save_trace(trace)
+
+class SQLiteExporter(StoreExporter):
+    """The local exporter: persists every finished trace to `db/runa.db` (`tracing/sqlite.py`)."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        """Export to `path`, or to wherever `runa.db` says this deployment's local file is."""
+        from runa.db import sqlite_path
+        from runa.tracing.sqlite import SQLiteTraceStore
+
+        super().__init__(SQLiteTraceStore(path or sqlite_path()))
 
 
 class ConsoleExporter:
@@ -48,11 +74,7 @@ class ConsoleExporter:
 
 
 def _default_exporters() -> list[TraceExporter]:
-    """The local store, plus `LangfuseExporter` if its credentials are already in the env.
-
-    The local store is `PostgresExporter` when `RUNA_DATABASE_URL` is set and `SQLiteExporter`
-    otherwise. Naming the exporter that is actually in use, rather than letting `SQLiteExporter`
-    quietly write somewhere that is not SQLite, keeps `observe()` honest about where traces go.
+    """This deployment's store, plus `LangfuseExporter` if its credentials are already in the env.
 
     Checking `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` here (rather than requiring an explicit
     `add_exporter(LangfuseExporter())` call) is what lets a Langfuse project just work the moment
@@ -73,20 +95,15 @@ def _default_exporters() -> list[TraceExporter]:
 
 
 def _local_exporter() -> TraceExporter:
-    """`PostgresExporter` when this deployment shares a database, `SQLiteExporter` otherwise.
+    """An exporter over whatever store `runa.db` resolved: one decision, asked once.
 
     No fallback if the `postgres` extra is missing. Quietly writing traces to SQLite while
     sessions and eval history go to Postgres splits one deployment's story across two stores to
     avoid an error message, and the next session call would raise the same `ImportError` anyway.
     """
-    from runa.db import shared_url
+    from runa import db
 
-    url = shared_url()
-    if url is None:
-        return SQLiteExporter()
-    from runa.tracing.postgres import PostgresExporter
-
-    return PostgresExporter(url)
+    return StoreExporter(db.traces())
 
 
 @dataclass
@@ -188,8 +205,8 @@ def add_exporter(exporter: TraceExporter) -> None:
     `observe(exporter=...)` is a full override, since it's also how a bare `with observe(...)`
     block temporarily swaps exporters for its duration. That makes it the wrong tool for adding
     one more exporter (e.g. a second `LangfuseExporter`, pointed at a different project, or a
-    `ConsoleExporter` for local debugging) without disabling the default `SQLiteExporter` and
-    losing local trace history. `LangfuseExporter` itself doesn't need this: `_default_exporters`
+    `ConsoleExporter` for local debugging) without disabling the default store exporter and
+    losing trace history. `LangfuseExporter` itself doesn't need this: `_default_exporters`
     already adds one automatically once `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are set.
     """
     _config.exporters = [*exporters(), exporter]
@@ -246,4 +263,10 @@ class observe:
         _config = self._previous
 
 
-__all__ = ["ConsoleExporter", "SQLiteExporter", "TraceExporter", "observe"]
+__all__ = [
+    "ConsoleExporter",
+    "SQLiteExporter",
+    "StoreExporter",
+    "TraceExporter",
+    "observe",
+]

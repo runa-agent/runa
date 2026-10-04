@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from runa import db
 from runa.cli._project import NotARunaProject
 from runa.cli.chat import AgentNotFound
 from runa.cli.eval import (
@@ -19,7 +20,6 @@ from runa.cli.new import scaffold_project
 from runa.cli.traces import TraceNotFound
 from runa.eval import Case, Dataset
 from runa.tracing import Span, Trace
-from runa.tracing.storage import save_trace
 
 
 def _write_evaluation(project_dir: Path, filename: str, source: str) -> None:
@@ -57,8 +57,7 @@ def _patch_runner(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
     monkeypatch.setattr("runa.eval.evaluate.evaluate_semantic", fake_evaluate_semantic)
-    monkeypatch.setattr("runa.eval.evaluate.save_report", lambda report: 1)
-    monkeypatch.setattr("runa.eval.evaluate.load_baseline", lambda agent_name: None)
+    monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
 
 
 def test_run_project_evals_raises_outside_a_runa_project(tmp_path: Path) -> None:
@@ -171,7 +170,7 @@ def _save_agent_trace(project_dir: Path, trace_id: str, input: str | None) -> No
             input=input,
         )
     ]
-    save_trace(trace, db_path=project_dir / "db" / "runa.db")
+    db.traces(project_dir).save(trace)
 
 
 def test_add_trace_to_evals_appends_the_run_s_input_to_its_agent_s_dataset(

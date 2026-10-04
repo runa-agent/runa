@@ -1,7 +1,7 @@
-"""web/evaluations.py: the Evaluations pages -- `agent.evaluate()` runs, from `db/runa.db`.
+"""web/evaluations.py: the Evaluations pages -- `agent.evaluate()` runs, from the eval store.
 
-Data comes from `runa.eval.storage` (`list_eval_runs`/`get_eval_run`/`load_baseline`); this
-module only turns `EvalRun`/`EvalCaseRow` into HTML. A case links to the trace of its run, and one
+Data comes from the `EvalStore` `runa.db.evals(root)` hands back; this module only turns
+`EvalRun`/`EvalCaseRow` into HTML. A case links to the trace of its run, and one
 that passed in the agent's previous run but failed here is marked regressed.
 """
 
@@ -9,15 +9,15 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from runa.cli._project import resolve_db_path
-from runa.eval.storage import EvalCaseRow, EvalRun, get_eval_run, list_eval_runs, load_baseline
+from runa import db
+from runa.eval.store import EvalCaseRow, EvalRun
 from runa.web._html import back_link, chip, empty, empty_hint, escape, page, pre
 
 __all__ = ["EvalRunNotFound", "render_detail", "render_list"]
 
 
 class EvalRunNotFound(Exception):
-    """Raised when `render_detail` names an `eval_runs.id` `db/runa.db` has no record of."""
+    """Raised when `render_detail` names a run id this deployment has no record of."""
 
 
 def _fmt_timestamp(value: str) -> str:
@@ -71,7 +71,7 @@ def _case_card(case: EvalCaseRow, *, regressed: bool) -> str:
 
 def render_list(*, root: Path) -> str:
     """Render `/evaluations`: the most recent `agent.evaluate()` runs, newest first."""
-    runs = list_eval_runs(limit=100, db_path=resolve_db_path(root))
+    runs = db.evals(root).list(limit=100)
     if not runs:
         body = empty_hint("no evaluation runs yet, run", "runa eval")
     else:
@@ -92,11 +92,11 @@ def render_list(*, root: Path) -> str:
 
 def render_detail(run_id: int, *, root: Path) -> str:
     """Render `/evaluations/{run_id}`: that run's summary plus every case it graded."""
-    db_path = resolve_db_path(root)
-    run: EvalRun | None = get_eval_run(run_id, db_path=db_path)
+    store = db.evals(root)
+    run: EvalRun | None = store.get(run_id)
     if run is None:
         raise EvalRunNotFound(f"no eval run found with id {run_id!r}")
-    baseline = load_baseline(run.agent_name, before=run.id, db_path=db_path) or {}
+    baseline = store.baseline(run.agent_name, before=run.id) or {}
     last_run = f" · last run {sum(baseline.values())}/{len(baseline)} passed" if baseline else ""
     header = (
         f"<h1>{escape(run.agent_name)}</h1>"

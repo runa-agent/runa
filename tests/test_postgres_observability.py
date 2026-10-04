@@ -1,12 +1,16 @@
-"""Tests for `tracing/postgres.py` and `eval/postgres.py`, the shared-history backends.
+"""Tests for `PostgresTraceStore`, `PostgresEvalStore` and `PostgresSessionStore`.
 
-Needs a live Postgres at `RUNA_TEST_POSTGRES_DSN` (defaults to a local one); skipped
-wholesale when there isn't one, exactly like `test_postgres.py`, since CI provisions one as a
-service container but a plain `make test` locally may not.
+Needs a live Postgres at `RUNA_TEST_POSTGRES_DSN` (defaults to a local one); skipped wholesale
+when there isn't one, exactly like `test_postgres.py`, since CI provisions one as a service
+container but a plain `make test` locally may not.
 
-These exist because SQLite is per-process: without them, three replicas keep three disjoint trace
-histories and a dashboard that can only ever show one. The contract under test is that the
-Postgres backends are indistinguishable from the SQLite ones through the public API.
+These exist because SQLite is per-process: without them, three replicas keep three disjoint
+trace histories and a dashboard that can only ever show one. The contract under test is that the
+Postgres stores are indistinguishable from the others through the interface, which is why what
+each adapter shares with them -- the ordering, the marshalling, the timestamp format -- is
+asserted once in `tests/tracing/test_store.py`, `tests/eval/test_store.py` and
+`tests/test_session_store.py` against the backends that need no server. What is left here is
+this backend's own: the upsert, the batched span fetch, and the `RUNA_DATABASE_URL` routing.
 """
 
 import asyncio
@@ -19,6 +23,7 @@ import asyncpg
 import pytest
 
 import runa.db.pool as pool_module
+from runa import db
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -45,6 +50,22 @@ def run[T](coro: Coroutine[Any, Any, T]) -> T:
     return pool_module.run_sync(coro)
 
 
+@pytest.fixture
+def traces() -> Any:
+    """The Postgres `TraceStore`, built directly so it is the one under test."""
+    from runa.tracing.postgres import PostgresTraceStore
+
+    return PostgresTraceStore(_DSN)
+
+
+@pytest.fixture
+def evals() -> Any:
+    """The Postgres `EvalStore`, built directly so it is the one under test."""
+    from runa.eval.postgres import PostgresEvalStore
+
+    return PostgresEvalStore(_DSN)
+
+
 def _trace(name: str = "Agent", *, session_id: str | None = None, error: bool = False) -> Trace:
     trace_id = uuid.uuid4().hex
     trace = Trace(id=trace_id, name=name, start_time=1000.0, end_time=1002.5, session_id=session_id)
@@ -66,114 +87,112 @@ def _trace(name: str = "Agent", *, session_id: str | None = None, error: bool = 
     return trace
 
 
-def test_a_trace_round_trips_with_its_spans() -> None:
+def test_a_trace_round_trips_with_its_spans(traces: Any) -> None:
     """What went in comes back out, spans and structured input/output included."""
-    from runa.tracing import postgres
-
     trace = _trace()
-    postgres.save_trace(trace, url=_DSN)
+    traces.save(trace)
 
-    loaded = postgres.get_trace(trace.id, url=_DSN)
+    loaded = traces.get(trace.id)
 
     assert loaded is not None
     assert loaded.name == "Agent"
     assert len(loaded.spans) == 1
     assert loaded.spans[0].type == "llm"
+    assert loaded.spans[0].input == '{"prompt": "hi"}'
 
 
-def test_an_unknown_trace_id_is_none() -> None:
-    """Same contract as the SQLite backend: a miss is `None`, not an exception."""
-    from runa.tracing import postgres
-
-    assert postgres.get_trace(uuid.uuid4().hex, url=_DSN) is None
+def test_an_unknown_trace_id_is_none(traces: Any) -> None:
+    """Same contract as every other backend: a miss is `None`, not an exception."""
+    assert traces.get(uuid.uuid4().hex) is None
 
 
-def test_saving_the_same_trace_twice_replaces_it() -> None:
-    """A trace is exported once per run, but a re-export must not duplicate rows."""
-    from runa.tracing import postgres
-
+def test_saving_the_same_trace_twice_replaces_it(traces: Any) -> None:
+    """The `ON CONFLICT` upsert: one export per run, but a re-export must not duplicate rows."""
     trace = _trace()
-    postgres.save_trace(trace, url=_DSN)
+    traces.save(trace)
     trace.name = "Renamed"
-    postgres.save_trace(trace, url=_DSN)
+    traces.save(trace)
 
-    loaded = postgres.get_trace(trace.id, url=_DSN)
+    loaded = traces.get(trace.id)
 
     assert loaded is not None
     assert loaded.name == "Renamed"
     assert len(loaded.spans) == 1
 
 
-def test_traces_can_be_filtered_by_session() -> None:
-    """`runa ui`'s session timeline needs this filter to behave as it does on SQLite."""
-    from runa.tracing import postgres
-
+def test_traces_can_be_filtered_by_session(traces: Any) -> None:
+    """`runa ui`'s session timeline needs this filter to behave as it does locally."""
     session_id = uuid.uuid4().hex
-    postgres.save_trace(_trace(session_id=session_id), url=_DSN)
-    postgres.save_trace(_trace(), url=_DSN)
+    traces.save(_trace(session_id=session_id))
+    traces.save(_trace())
 
-    found = postgres.list_traces(session_id=session_id, url=_DSN)
+    found = traces.list(session_id=session_id)
 
     assert len(found) == 1
     assert found[0].session_id == session_id
 
 
-def test_traces_can_be_filtered_by_error_status() -> None:
+def test_traces_can_be_filtered_by_error_status(traces: Any) -> None:
     """`runa traces errors` is a status filter; a trace is an error when a span is."""
-    from runa.tracing import postgres
-
     name = uuid.uuid4().hex
-    postgres.save_trace(_trace(name=name, error=True), url=_DSN)
+    traces.save(_trace(name=name, error=True))
 
-    found = postgres.list_traces(agent=name, status="error", url=_DSN)
+    found = traces.list(agent=name, status="error")
 
     assert len(found) == 1
     assert found[0].status == "error"
 
 
-def test_listing_attaches_each_trace_its_own_spans() -> None:
-    """The batched span fetch must not cross-assign spans between traces."""
-    from runa.tracing import postgres
-
+def test_listing_attaches_each_trace_its_own_spans(traces: Any) -> None:
+    """The batched span fetch, this backend's own, must not cross-assign spans between traces."""
     name = uuid.uuid4().hex
     first, second = _trace(name=name), _trace(name=name)
-    postgres.save_trace(first, url=_DSN)
-    postgres.save_trace(second, url=_DSN)
+    traces.save(first)
+    traces.save(second)
 
-    found = postgres.list_traces(agent=name, url=_DSN)
+    found = traces.list(agent=name)
 
     assert len(found) == 2
     for trace in found:
         assert [span.trace_id for span in trace.spans] == [trace.id]
 
 
-def test_an_empty_listing_is_an_empty_list() -> None:
+def test_an_empty_listing_is_an_empty_list(traces: Any) -> None:
     """No traces for an agent is not an error, and must not try to fetch spans for nothing."""
-    from runa.tracing import postgres
-
-    assert postgres.list_traces(agent=uuid.uuid4().hex, url=_DSN) == []
+    assert traces.list(agent=uuid.uuid4().hex) == []
 
 
-def test_the_exporter_persists_a_finished_trace() -> None:
-    """`PostgresExporter` is what `_default_exporters` installs; it must actually write."""
-    from runa.tracing.postgres import PostgresExporter, get_trace
+def test_the_exporter_persists_a_finished_trace(traces: Any) -> None:
+    """`PostgresExporter` is a `StoreExporter` over this store; it must actually write."""
+    from runa.tracing.postgres import PostgresExporter
 
     trace = _trace()
     PostgresExporter(_DSN).export(trace)
 
-    assert get_trace(trace.id, url=_DSN) is not None
+    assert traces.get(trace.id) is not None
 
 
 def test_the_shared_dsn_env_var_routes_traces_to_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
     """The whole point of `RUNA_DATABASE_URL`: no code change, and reads follow writes."""
-    from runa.tracing import storage
-
-    monkeypatch.setenv("RUNA_DATABASE_URL", _DSN)
+    monkeypatch.setenv(db.DATABASE_URL_ENV, _DSN)
     trace = _trace()
 
-    storage.save_trace(trace)  # no db_path, no dsn: the env var decides
+    db.traces().save(trace)  # no path, no dsn: the env var decides
 
-    assert storage.get_trace(trace.id) is not None
+    assert db.traces().get(trace.id) is not None
+
+
+def test_without_the_env_var_traces_stay_in_sqlite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The default is unchanged: an app that sets nothing still gets its local file."""
+    monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
+    trace = _trace()
+
+    db.traces(tmp_path).save(trace)
+
+    assert (tmp_path / "db" / "runa.db").exists()
+    assert db.traces(tmp_path).get(trace.id) is not None
 
 
 def test_sessions_are_readable_from_the_shared_database(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,14 +201,32 @@ def test_sessions_are_readable_from_the_shared_database(monkeypatch: pytest.Monk
     They used to read `db/runa.db` with raw SQL no matter what, so a Postgres deployment showed
     an empty session list beside Traces and Evaluations pages that worked.
     """
-    from runa.session.storage import session_messages, session_rows
-
-    monkeypatch.setenv("RUNA_DATABASE_URL", _DSN)
+    monkeypatch.setenv(db.DATABASE_URL_ENV, _DSN)
     session_id = uuid.uuid4().hex
     session = run(_write_session(session_id))
 
-    assert session_id in [row[0] for row in session_rows()]
-    assert [message["text"] for message in session_messages(session_id)] == ["hello"]
+    store = db.sessions()
+    assert session_id in [summary.id for summary in store.listing()]
+    assert [message.text for message in store.messages(session_id)] == ["hello"]
+    run(session.clear_session())
+
+
+def test_a_shared_sessions_updated_at_is_rendered_like_a_local_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`"YYYY-MM-DD HH:MM:SS"`, no offset: the format `tests/test_session_store.py` pins.
+
+    This side used to hand back a `TIMESTAMPTZ`'s offset-bearing ISO string, so one deployment's
+    Sessions page printed a timestamp the other's never would.
+    """
+    monkeypatch.setenv(db.DATABASE_URL_ENV, _DSN)
+    session_id = uuid.uuid4().hex
+    session = run(_write_session(session_id))
+
+    summary = next(s for s in db.sessions().listing() if s.id == session_id)
+
+    assert len(summary.updated_at) == len("2026-10-04 10:08:03")
+    assert "+" not in summary.updated_at
     run(session.clear_session())
 
 
@@ -200,22 +237,6 @@ async def _write_session(session_id: str) -> Any:
     session = PostgresSession(session_id, _DSN)
     await session.add_items([{"role": "user", "content": "hello"}])
     return session
-
-
-def test_without_the_env_var_traces_stay_in_sqlite(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-) -> None:
-    """The default is unchanged: an app that sets nothing still gets its local file."""
-    from runa.tracing import storage
-
-    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
-    trace = _trace()
-    db = tmp_path / "runa.db"
-
-    storage.save_trace(trace, db_path=db)
-
-    assert db.exists()
-    assert storage.get_trace(trace.id, db_path=db) is not None
 
 
 def _report(agent_name: str, *, passed: bool = True) -> Any:
@@ -238,67 +259,54 @@ def _report(agent_name: str, *, passed: bool = True) -> Any:
     return Report(agent_name=agent_name, cases=[case], baseline=None)
 
 
-def test_an_eval_run_round_trips_with_its_cases() -> None:
+def test_an_eval_run_round_trips_with_its_cases(evals: Any) -> None:
     """Eval history has to survive the trip, or the baseline comparison is meaningless."""
-    from runa.eval import postgres
-
     agent = uuid.uuid4().hex
-    run_id = postgres.save_report(_report(agent), url=_DSN)
+    run_id = evals.save(_report(agent))
 
-    loaded = postgres.get_eval_run(run_id, url=_DSN)
+    loaded = evals.get(run_id)
 
     assert loaded is not None
     assert loaded.agent_name == agent
     assert len(loaded.cases) == 1
     assert loaded.cases[0].input == "in"
+    assert loaded.cases[0].passed is True
 
 
-def test_the_baseline_is_the_latest_run_for_that_agent() -> None:
+def test_the_baseline_is_the_latest_run_for_that_agent(evals: Any) -> None:
     """A shared baseline is why this exists: CI and a laptop must compare against the same run."""
-    from runa.eval import postgres
-
     agent = uuid.uuid4().hex
-    postgres.save_report(_report(agent, passed=False), url=_DSN)
-    postgres.save_report(_report(agent, passed=True), url=_DSN)
+    evals.save(_report(agent, passed=False))
+    evals.save(_report(agent, passed=True))
 
-    baseline = postgres.load_baseline(agent, url=_DSN)
-
-    assert baseline == {"in": True}
+    assert evals.baseline(agent) == {"in": True}
 
 
-def test_the_baseline_can_look_before_a_given_run() -> None:
+def test_the_baseline_can_look_before_a_given_run(evals: Any) -> None:
     """`before` is what a past run was compared against, for showing a regression in context."""
-    from runa.eval import postgres
-
     agent = uuid.uuid4().hex
-    postgres.save_report(_report(agent, passed=False), url=_DSN)
-    second = postgres.save_report(_report(agent, passed=True), url=_DSN)
+    evals.save(_report(agent, passed=False))
+    second = evals.save(_report(agent, passed=True))
 
-    assert postgres.load_baseline(agent, before=second, url=_DSN) == {"in": False}
+    assert evals.baseline(agent, before=second) == {"in": False}
 
 
-def test_no_baseline_for_an_agent_that_has_never_run() -> None:
+def test_no_baseline_for_an_agent_that_has_never_run(evals: Any) -> None:
     """`None`, not an empty dict: "no baseline" and "everything failed" are different."""
-    from runa.eval import postgres
-
-    assert postgres.load_baseline(uuid.uuid4().hex, url=_DSN) is None
+    assert evals.baseline(uuid.uuid4().hex) is None
 
 
-def test_eval_runs_are_listed_newest_first() -> None:
-    """The UI's ordering contract, matching the SQLite backend."""
-    from runa.eval import postgres
-
+def test_eval_runs_are_listed_newest_first(evals: Any) -> None:
+    """The UI's ordering contract, matching every other backend."""
     agent = uuid.uuid4().hex
-    first = postgres.save_report(_report(agent), url=_DSN)
-    second = postgres.save_report(_report(agent), url=_DSN)
+    first = evals.save(_report(agent))
+    second = evals.save(_report(agent))
 
-    listed = [run.id for run in postgres.list_eval_runs(limit=100, url=_DSN)]
+    listed = [run.id for run in evals.list(limit=100)]
 
     assert listed.index(second) < listed.index(first)
 
 
-def test_an_unknown_eval_run_id_is_none() -> None:
-    """A miss is `None`, matching `eval/storage.py`."""
-    from runa.eval import postgres
-
-    assert postgres.get_eval_run(2**40, url=_DSN) is None
+def test_an_unknown_eval_run_id_is_none(evals: Any) -> None:
+    """A miss is `None`, matching every other backend."""
+    assert evals.get(2**40) is None

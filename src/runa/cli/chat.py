@@ -15,14 +15,8 @@ from uuid import uuid4
 
 from runa import db
 from runa.agent import Agent
-from runa.cli._project import (
-    iter_agent_classes,
-    loaded_app,
-    require_agents_dir,
-    resolve_db_path,
-)
+from runa.cli._project import iter_agent_classes, loaded_app, require_agents_dir
 from runa.session import SessionABC
-from runa.session.storage import sessions_for_agent
 
 _BLOCK = '"""'
 
@@ -54,21 +48,21 @@ def _pick_session(agent_name: str, *, root: Path) -> str:
 
     Falls back to starting a new session when there's no history to pick from.
     """
-    sessions = sessions_for_agent(agent_name, db_path=resolve_db_path(root))
+    sessions = db.sessions(root).listing(agent=agent_name)
     if not sessions:
         print(f"no previous session for {agent_name!r}, starting a new one")
         return _new_session_id(agent_name)
 
     print(f"previous sessions for {agent_name}:")
-    for index, (session_id, updated_at) in enumerate(sessions, start=1):
-        print(f"  {index}. {session_id}  ({updated_at})")
+    for index, session in enumerate(sessions, start=1):
+        print(f"  {index}. {session.id}  ({session.updated_at})")
     choice = input(f"resume which? [1-{len(sessions)}, default 1] ").strip()
     try:
         index = int(choice) if choice else 1
     except ValueError:
         index = 1
     index = min(max(index, 1), len(sessions))
-    return sessions[index - 1][0]
+    return sessions[index - 1].id
 
 
 def _resolve_session_id(
@@ -88,9 +82,9 @@ def _resolve_session_id(
     if session_id is not None:
         return session_id
     if continue_last:
-        sessions = sessions_for_agent(agent_name, db_path=resolve_db_path(root))
+        sessions = db.sessions(root).listing(agent=agent_name)
         if sessions:
-            return sessions[0][0]
+            return sessions[0].id
         print(f"no previous session for {agent_name!r}, starting a new one")
         return _new_session_id(agent_name)
     if resume is not None:
@@ -158,7 +152,6 @@ def run_agent_repl(
     instead of looping. Approvals then get rejected, since stdin is already used up.
     """
     agents_dir = require_agents_dir(root)
-    db_path = resolve_db_path(root)
 
     with loaded_app(root):
         agent_cls = find_agent_class(agent_name, agents_dir=agents_dir)
@@ -170,7 +163,7 @@ def run_agent_repl(
             continue_last=continue_last,
             resume=resume,
         )
-        session = db.session(resolved_session_id, db_path=db_path)
+        session = db.session(resolved_session_id, root=root)
 
         if message is not None:
             if message.strip():

@@ -6,11 +6,12 @@ from typing import Any
 
 import pytest
 
+from runa import db
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.run_config import RunConfig
 from runa.runner import Runner
 from runa.tool import tool
-from runa.tracing import ConsoleExporter, config, observe
+from runa.tracing import ConsoleExporter, Trace, config, observe
 
 
 class _TextModel:
@@ -95,14 +96,18 @@ def test_observe_context_manager_restores_the_previous_setting_on_exit() -> None
     assert config.capture_inputs() is True
 
 
-def test_default_exporters_is_sqlite_only_without_langfuse_env_vars(
+def test_default_exporters_is_the_store_only_without_langfuse_env_vars(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With no `LANGFUSE_*` env vars set, the default exporter list is just `SQLiteExporter`."""
+    """With no `LANGFUSE_*` env vars set, the default list is one exporter over the store."""
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
-    assert [type(e).__name__ for e in config._default_exporters()] == ["SQLiteExporter"]
+    exporters = config._default_exporters()
+
+    assert [type(e).__name__ for e in exporters] == ["StoreExporter"]
+    assert type(exporters[0].store).__name__ == "SQLiteTraceStore"  # type: ignore[attr-defined]
 
 
 def test_default_exporters_adds_langfuse_once_its_env_vars_are_set(
@@ -116,10 +121,11 @@ def test_default_exporters_adds_langfuse_once_its_env_vars_are_set(
     """
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-env")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-env")
+    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
     names = [type(e).__name__ for e in config._default_exporters()]
 
-    assert names == ["SQLiteExporter", "LangfuseExporter"]
+    assert names == ["StoreExporter", "LangfuseExporter"]
 
 
 def test_the_local_exporter_follows_the_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,7 +133,9 @@ def test_the_local_exporter_follows_the_database_url(monkeypatch: pytest.MonkeyP
     pytest.importorskip("asyncpg")
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
 
-    assert type(config._local_exporter()).__name__ == "PostgresExporter"
+    exporter = config._local_exporter()
+
+    assert type(exporter.store).__name__ == "PostgresTraceStore"  # type: ignore[attr-defined]
 
 
 def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
@@ -135,9 +143,9 @@ def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
 ) -> None:
     """A generated `main.py` calls `load_dotenv()` after importing runa, so import is too early.
 
-    Resolving at import meant an app whose `.env` set `RUNA_DATABASE_URL` got a `SQLiteExporter`
-    frozen in before that file had run, writing traces to a local file while its sessions went
-    to Postgres.
+    Resolving at import meant an app whose `.env` set `RUNA_DATABASE_URL` got a local store
+    frozen in before that file had run, writing traces to a file while its sessions went to
+    Postgres.
     """
     pytest.importorskip("asyncpg")
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
@@ -145,11 +153,34 @@ def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
     monkeypatch.setattr(config._config, "exporters", None)  # as it is at import
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
 
-    assert [type(e).__name__ for e in config.exporters()] == ["PostgresExporter"]
+    exporters = config.exporters()
+
+    assert [type(e).__name__ for e in exporters] == ["StoreExporter"]
+    assert type(exporters[0].store).__name__ == "PostgresTraceStore"  # type: ignore[attr-defined]
+
+
+def test_the_exporter_writes_to_the_store_it_was_resolved_with(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One decision per exporter, not one per write.
+
+    `SQLiteExporter.export` used to call a module-level `save_trace` that asked `runa.db` for the
+    backend all over again, so the store a deployment had installed and the store its traces
+    landed in were two separate answers to the same question. Changing the environment after an
+    exporter exists must not move its traces.
+    """
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+    exporter = config._local_exporter()
+
+    monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://nowhere:5432/none")
+    exporter.export(Trace(id="t1", name="A", start_time=0.0))
+
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+    assert [trace.id for trace in db.traces().list()] == ["t1"]
 
 
 def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
-    """`add_exporter` keeps whatever was active (the default `SQLiteExporter`) and adds to it.
+    """`add_exporter` keeps whatever was active (the default store exporter) and adds to it.
 
     Unlike `observe(exporter=...)`, which fully replaces the list -- the right tool for a
     `with observe(...):` block that swaps exporters temporarily, but a footgun for the common

@@ -7,8 +7,9 @@ with an `"auto"`/`"llm"` opt-in story like `Memory`.
 Four backends behind one protocol. `MemoryCache` (`cache/memory.py`) is an in-process dict, gone
 when the process exits. The other three are persistent, and `runa.db.cache()` picks between them
 the same way it picks a session store: `SQLiteCache` locally, `PostgresCache` when
-`RUNA_DATABASE_URL` is shared. `RedisCache` (`cache/redis.py`) is the explicit opt-in for a
-deployment that wants its hot keys off the database's query path.
+`RUNA_DATABASE_URL` is a `postgresql://` one, and `MemoryCache` under `memory://`, where nothing
+else is persisted either. `RedisCache` (`cache/redis.py`) is the explicit opt-in for a deployment
+that wants its hot keys off the database's query path.
 
 Values round-trip through `json.dumps`/`json.loads`, not `pickle`, in every persistent backend:
 safe to load from a store another process may have written, at the cost of only

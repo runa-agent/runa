@@ -109,12 +109,30 @@ runa chat support_agent --resume SESSION_ID  # resume a specific one
 runa chat support_agent --session SESSION_ID # pin an exact id
 ```
 
-Inspect what's stored in `runa.db` without starting a chat:
+Inspect what's stored without starting a chat:
 
 ```bash
 runa chat --list             # every session
 runa chat --show SESSION_ID  # replay one session's full history
 ```
+
+Or from code. `runa.db.sessions()` hands back this deployment's `SessionStore`, pointed at
+whichever backend it has, which is the same one those two commands read:
+
+```python
+from runa import db
+
+store = db.sessions()
+
+store.listing()                      # every session, most recently updated first
+store.listing(agent="support_agent") # one agent's past sessions
+store.messages("support_agent-1")    # that session's transcript, oldest first
+```
+
+`listing` returns `SessionSummary(id, updated_at)` and `messages` returns
+`SessionMessage(created_at, role, text)`, identically on every backend. `messages` raises
+`SessionNotFound` for a session id with no history, which is a different answer from a session
+with nothing in it.
 
 ## Example
 

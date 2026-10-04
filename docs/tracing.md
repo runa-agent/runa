@@ -53,8 +53,8 @@ dict keys to scrub) or a custom `redactor` callable, and `max_input_bytes`/`max_
 
 ### Custom Exporters
 
-By default, traces go to `runa.db` via `SQLiteExporter`. `add_exporter` adds one more exporter
-alongside whatever's active, without disabling the default:
+By default, every finished trace goes to whichever store `runa.db` resolved for this deployment.
+`add_exporter` adds one more exporter alongside whatever's active, without disabling the default:
 
 ```python
 from runa import add_exporter, ConsoleExporter
@@ -120,6 +120,34 @@ More in [`examples/14_tracing/`](https://github.com/Benybrahim/runa/tree/main/ex
 Every trace above -- SQLite, Langfuse, or a custom exporter -- is also browsable visually with
 `runa ui`. See [CLI Reference](cli.md#runa-ui).
 
+## Reading Traces
+
+`runa.db.traces()` hands back this deployment's `TraceStore`, already pointed at whichever
+backend it has. Three methods, and no caller names a file or a URL:
+
+```python
+from runa import db
+
+store = db.traces()
+
+store.list(limit=20)                         # most recent first
+store.list(agent="SupportAgent")             # one agent's runs
+store.list(status="error")                   # what `runa traces errors` shows
+store.list(session_id="support_agent-1")     # one conversation's runs
+store.get("trace_abc123")                    # one trace with its full span tree
+store.save(trace)                            # what an exporter does
+```
+
+Pass a project directory to read another app's local history:
+
+```python
+db.traces(Path("../other-app")).list(limit=5)
+```
+
+`db.sessions()` and `db.evals()` are the same shape for conversation history and eval runs. All
+three replaced the module-level `list_traces(db_path=...)`-style functions in 0.x; see
+[Versioning](versioning.md).
+
 ## Traces Across Replicas
 
 The default exporter writes to this process's `db/runa.db`, which is per-process by design. Three
@@ -132,7 +160,7 @@ uv add "runa-ai[postgres]"
 export RUNA_DATABASE_URL=postgresql://user:password@host:5432/runa
 ```
 
-No code changes: `list_traces(...)`, `runa traces`, `runa ui` and the exporter all follow that
+No code changes: `db.traces()`, `runa traces`, `runa ui` and the exporter all follow that
 variable, so a trace written by one replica is readable from any of them.
 
 ## Retention

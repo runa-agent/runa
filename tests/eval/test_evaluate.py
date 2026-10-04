@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from runa import db
 from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.evaluate import evaluate_agent
@@ -31,14 +32,20 @@ class _FakeResult:
 
 
 def _patch_run_and_storage(monkeypatch: pytest.MonkeyPatch, outputs: dict[str, Any]) -> None:
+    """Fake the model call, and send eval history to the in-process store.
+
+    `memory://` is a real `EvalStore`, so `evaluate_agent`'s own save and baseline lookup run
+    exactly as they do in an app. They used to be two monkeypatched module attributes, which
+    meant nothing here exercised the path from a finished `Report` to stored history.
+    """
+
     async def fake_run(agent: Any, input: Any, **kwargs: Any) -> Any:
         if input in outputs and isinstance(outputs[input], Exception):
             raise outputs[input]
         return _FakeResult(final_output=outputs.get(input, input))
 
     monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
-    monkeypatch.setattr("runa.eval.evaluate.save_report", lambda report: 1)
-    monkeypatch.setattr("runa.eval.evaluate.load_baseline", lambda agent_name: None)
+    monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
 
 
 def _stub_semantic(monkeypatch: pytest.MonkeyPatch, status: Status = Status.PASS) -> None:
@@ -183,15 +190,33 @@ def test_evaluate_agent_applies_a_per_metric_threshold_override(
 
 
 def test_evaluate_agent_persists_the_report(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`evaluate_agent` writes the finished `Report` to storage before returning it."""
+    """`evaluate_agent` writes the finished `Report` to the store before returning it."""
     _patch_run_and_storage(monkeypatch, {"hi": "hi"})
     _stub_semantic(monkeypatch)
-    saved: list[Any] = []
-    monkeypatch.setattr("runa.eval.evaluate.save_report", saved.append)
 
     report = asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
 
-    assert saved == [report]
+    stored = db.evals().list()
+    assert [run.agent_name for run in stored] == [report.agent_name]
+    saved = db.evals().get(stored[0].id)
+    assert saved is not None
+    assert [case.input for case in saved.cases] == ["hi"]
+
+
+def test_evaluate_agent_grades_against_its_previous_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run just saved is the baseline the next one compares against.
+
+    One store, resolved once: the baseline read and the history write used to be separate
+    questions to `runa.db`, each able to answer with a different backend.
+    """
+    _patch_run_and_storage(monkeypatch, {"hi": "hi"})
+    _stub_semantic(monkeypatch, status=Status.FAIL)
+    asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
+
+    _stub_semantic(monkeypatch, status=Status.PASS)
+    report = asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
+
+    assert report.baseline == {"hi": False}
 
 
 @pytest.mark.parametrize(("concurrency", "expected_peak"), [(8, 3), (2, 2), (1, 1)])

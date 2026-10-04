@@ -1,64 +1,54 @@
-"""Tests for session history reads: `runa.cli.sessions`' formatting over `session.storage`."""
+"""Tests for `runa.cli.sessions`: formatting over whatever `runa.db.sessions(root)` resolved.
+
+The store's own behaviour -- ordering, timestamps, agent matching, `SessionNotFound` -- is
+`tests/test_session_store.py`'s, run against every backend. What's left here is this module's
+only job: turning a listing and a transcript into lines.
+"""
 
 import asyncio
 from pathlib import Path
 
 import pytest
 
-from runa.cli._project import resolve_db_path
+from runa import db
 from runa.cli.new import scaffold_project
-from runa.cli.sessions import list_sessions, show_session
-from runa.session import SQLiteSession
-from runa.session.storage import (
-    SessionNotFound,
-    session_messages,
-    session_rows,
-    sessions_for_agent,
-)
+from runa.cli.sessions import SessionNotFound, list_sessions, show_session
 
 
-def _add_history(db_path: Path, session_id: str) -> None:
-    session = SQLiteSession(session_id, db_path=db_path)
+def _add_history(root: Path, session_id: str) -> None:
+    session = db.session(session_id, root=root)
     asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
 
 
-def test_list_sessions_reports_none_when_runa_db_is_empty(tmp_path: Path) -> None:
-    """`list_sessions` reports no sessions when `runa.db` has no history yet."""
+def test_list_sessions_reports_none_when_there_is_no_history(tmp_path: Path) -> None:
+    """`list_sessions` reports no sessions when the project has no history yet."""
     project_dir = scaffold_project("demo", root=tmp_path)
 
     assert list_sessions(root=project_dir) == "no sessions found"
 
 
 def test_list_sessions_lists_a_session_with_history(tmp_path: Path) -> None:
-    """A session with history appears in the listing."""
+    """A session with history appears in the listing, with its timestamp."""
     project_dir = scaffold_project("demo", root=tmp_path)
-    _add_history(project_dir / "db" / "runa.db", "SupportAgent")
+    _add_history(project_dir, "SupportAgent")
 
-    assert "SupportAgent" in list_sessions(root=project_dir)
+    output = list_sessions(root=project_dir)
+
+    assert output.startswith("SupportAgent  ")
 
 
-def test_sessions_for_agent_matches_prefixed_and_exact_ids(tmp_path: Path) -> None:
-    """`sessions_for_agent` finds both `Support-<suffix>` chats and a bare `Support` one.
+def test_list_sessions_reads_the_project_at_root(tmp_path: Path) -> None:
+    """`root` names the project being read, and its `db/runa.db` is the one opened.
 
-    It ignores sessions belonging to a different agent.
+    The convention that resolves to lives in `runa.db.sqlite_path(root)` now; this is the test
+    that it still holds from a caller that only ever names a directory.
     """
-    project_dir = scaffold_project("demo", root=tmp_path)
-    db_path = project_dir / "db" / "runa.db"
-    _add_history(db_path, "Support-20260101-000000-aaaa")
-    _add_history(db_path, "Support")
-    _add_history(db_path, "OtherAgent-20260101-000000-bbbb")
+    other = scaffold_project("other", root=tmp_path)
+    _add_history(other, "SupportAgent")
+    empty = scaffold_project("empty", root=tmp_path)
 
-    sessions = sessions_for_agent("Support", db_path=resolve_db_path(project_dir))
-
-    ids = [session_id for session_id, _ in sessions]
-    assert set(ids) == {"Support-20260101-000000-aaaa", "Support"}
-
-
-def test_sessions_for_agent_reports_none_when_there_is_no_history(tmp_path: Path) -> None:
-    """`sessions_for_agent` returns an empty list when `runa.db` has no matching session."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-
-    assert sessions_for_agent("Support", db_path=resolve_db_path(project_dir)) == []
+    assert "SupportAgent" in list_sessions(root=other)
+    assert list_sessions(root=empty) == "no sessions found"
 
 
 def test_show_session_raises_for_an_unknown_session(tmp_path: Path) -> None:
@@ -70,45 +60,11 @@ def test_show_session_raises_for_an_unknown_session(tmp_path: Path) -> None:
 
 
 def test_show_session_renders_history(tmp_path: Path) -> None:
-    """`show_session` renders the session's messages."""
+    """`show_session` renders each message as `<timestamp>  <role>: <text>`."""
     project_dir = scaffold_project("demo", root=tmp_path)
-    _add_history(project_dir / "db" / "runa.db", "SupportAgent")
+    _add_history(project_dir, "SupportAgent")
 
     output = show_session("SupportAgent", root=project_dir)
 
-    assert "hello" in output
-
-
-def test_session_rows_reports_no_rows_when_runa_db_is_empty(tmp_path: Path) -> None:
-    """`session_rows` returns an empty list when `runa.db` has no history yet."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-
-    assert session_rows(db_path=resolve_db_path(project_dir)) == []
-
-
-def test_session_rows_returns_id_and_updated_at_pairs(tmp_path: Path) -> None:
-    """`session_rows` returns every session as an `(id, updated_at)` pair."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-    _add_history(project_dir / "db" / "runa.db", "SupportAgent")
-
-    rows = session_rows(db_path=resolve_db_path(project_dir))
-
-    assert [session_id for session_id, _ in rows] == ["SupportAgent"]
-
-
-def test_session_messages_raises_for_an_unknown_session(tmp_path: Path) -> None:
-    """`session_messages` raises `SessionNotFound` for a session id with no history."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-
-    with pytest.raises(SessionNotFound):
-        session_messages("nope", db_path=resolve_db_path(project_dir))
-
-
-def test_session_messages_returns_role_and_text_per_message(tmp_path: Path) -> None:
-    """`session_messages` splits each message into its `role` and `text`."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-    _add_history(project_dir / "db" / "runa.db", "SupportAgent")
-
-    messages = session_messages("SupportAgent", db_path=resolve_db_path(project_dir))
-
-    assert messages == [{"created_at": messages[0]["created_at"], "role": "user", "text": "hello"}]
+    assert output.startswith("session SupportAgent\n\n")
+    assert output.rstrip().endswith("user: hello")

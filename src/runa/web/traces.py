@@ -1,9 +1,9 @@
-"""web/traces.py: the trace detail page -- one run's span tree, from `db/runa.db`.
+"""web/traces.py: the trace detail page -- one run's span tree, from this deployment's store.
 
-Data comes straight from `runa.tracing` (`get_trace`, the same query API `cli/traces.py show`
-uses); this module only turns a `Trace`'s `Span` tree into an HTML waterfall. No standalone list
-page: `web/sessions.py`'s merged timeline is the primary way to reach a trace; this is the
-"open trace"/direct-by-id destination (see `web/app.py`'s module docstring).
+Data comes straight from the `TraceStore` `runa.db.traces(root)` hands back, the same one
+`cli/traces.py show` reads; this module only turns a `Trace`'s `Span` tree into an HTML
+waterfall. No standalone list page: `web/sessions.py`'s merged timeline is the primary way to
+reach a trace; this is the "open trace"/direct-by-id destination (see `web/app.py`'s docstring).
 """
 
 import json
@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from runa.cli._project import resolve_db_path
+from runa import db
 from runa.cli.eval import has_case, traced_input
-from runa.tracing import Trace, get_trace
+from runa.tracing import Trace
 from runa.tracing.spans import Span
 from runa.tracing.traces import _TYPE_LABELS, _fmt_duration, _fmt_tokens
 from runa.web._html import chip, empty, escape, page, pre
@@ -22,7 +22,7 @@ __all__ = ["TraceNotFound", "render_detail"]
 
 
 class TraceNotFound(Exception):
-    """Raised when `render_detail` names a trace id `db/runa.db` has no record of."""
+    """Raised when `render_detail` names a trace id this deployment has no record of."""
 
 
 def _children_map(spans: list[Span]) -> dict[str | None, list[Span]]:
@@ -35,7 +35,7 @@ def _children_map(spans: list[Span]) -> dict[str | None, list[Span]]:
 def _format_value(value: Any) -> str:
     """Pretty-print a span's `input`/`output` for display.
 
-    `tracing/storage.py` round-trips a dict/list `input`/`output` through SQLite as compact JSON
+    `tracing/sqlite.py` round-trips a dict/list `input`/`output` through SQLite as compact JSON
     text (only `attributes` comes back as a real dict, see `_row_to_trace`), so a string value
     here may itself be JSON worth re-indenting -- attempted first, falling back to the raw text
     for a value that was always a plain string.
@@ -157,7 +157,7 @@ def render_detail(trace_id: str, *, root: Path) -> str:
     No nav tab is active here: this page is reached from a session's trace card ("open trace"), an
     evaluation case, or a direct link, not browsed from a list, so nothing in `NAV_ITEMS` does.
     """
-    trace = get_trace(trace_id, db_path=resolve_db_path(root))
+    trace = db.traces(root).get(trace_id)
     if trace is None:
         raise TraceNotFound(f"no trace found with id {trace_id!r}")
     status = "ok" if trace.status == "ok" else "error"

@@ -35,12 +35,7 @@ from pydantic import BaseModel, Field
 
 from runa import db
 from runa.agent import Agent
-from runa.cli._project import (
-    iter_agent_classes,
-    loaded_app,
-    require_agents_dir,
-    resolve_db_path,
-)
+from runa.cli._project import iter_agent_classes, loaded_app, require_agents_dir
 from runa.lifecycle import logger
 from runa.run import Run
 
@@ -111,7 +106,6 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     assuming `cwd`, so a test (or an app embedding this) can be explicit.
     """
     agents_dir = require_agents_dir(root)
-    db_path = resolve_db_path(root)
 
     def _agent_classes() -> dict[str, type[Agent]]:
         """Resolve the app's agents by declared `name`, importing `main.py` first.
@@ -166,7 +160,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         """Run one turn and return the whole `Run`."""
         agent = _build(agent_name)
         session = (
-            db.session(body.session_id, user_id=body.user_id, db_path=db_path)
+            db.session(body.session_id, user_id=body.user_id, root=root)
             if body.session_id
             else None
         )
@@ -183,7 +177,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         """
         agent = _build(agent_name)
         session = (
-            db.session(body.session_id, user_id=body.user_id, db_path=db_path)
+            db.session(body.session_id, user_id=body.user_id, root=root)
             if body.session_id
             else None
         )

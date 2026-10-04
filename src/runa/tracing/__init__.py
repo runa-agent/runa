@@ -4,18 +4,23 @@ The public surface is deliberately small: `Trace` and `Span` are the only two co
 `result.trace`. Nothing here needs to be called for tracing to happen, `runa.runner.Runner`
 builds and exports a `Trace` for every run itself, with no separate registration step. `trace`/
 `span` and `observe` are the advanced, optional API described in the design.
+
+Reading history back is `runa.db.traces()`, not a function here: it hands over a `TraceStore`
+(`tracing/store.py`) already pointed at whichever backend this deployment has, so nothing that
+queries traces names a file or a URL.
 """
 
 from runa.tracing.config import (
     ConsoleExporter,
     SQLiteExporter,
+    StoreExporter,
     TraceExporter,
     add_exporter,
     observe,
 )
 from runa.tracing.manual import span, trace
 from runa.tracing.spans import Span, SpanStatus, SpanType
-from runa.tracing.storage import get_errors, get_recent_traces, get_trace, list_traces
+from runa.tracing.store import TraceStore
 from runa.tracing.traces import Trace
 
 __all__ = [
@@ -24,13 +29,11 @@ __all__ = [
     "Span",
     "SpanStatus",
     "SpanType",
+    "StoreExporter",
     "Trace",
     "TraceExporter",
+    "TraceStore",
     "add_exporter",
-    "get_errors",
-    "get_recent_traces",
-    "get_trace",
-    "list_traces",
     "observe",
     "span",
     "trace",

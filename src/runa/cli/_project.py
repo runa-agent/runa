@@ -4,6 +4,10 @@
 `load_dotenv()`, or whatever else it does, runs, same as `python main.py`
 would) before they can do anything; factored out so no command duplicates
 the sys.path / sys.modules bookkeeping.
+
+Where a project's data lives is not here: that is `runa.db.sqlite_path(root)`'s answer. It used
+to be, which is why `runa.web` and `runa.serve` both imported this private CLI module for a path
+they then had to thread through every reader they called.
 """
 
 import importlib
@@ -22,18 +26,6 @@ class NotARunaProject(Exception):
     Shared across `generate.py`, `run.py`, `eval.py`, and `test.py` so `cli/main.py` can catch
     it once, regardless of which command's directory check failed.
     """
-
-
-def resolve_db_path(root: Path) -> Path:
-    """The project's `db/runa.db`, creating `db/` first if it isn't there yet.
-
-    Centralizes the convention `cli/new.py` scaffolds, so `chat.py`, `sessions.py`, and
-    `traces.py` all agree on where a project's SQLite data lives, and it still works if `db/`
-    was never committed (it's gitignored) or was deleted.
-    """
-    db_dir = root / "db"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    return db_dir / "runa.db"
 
 
 class AppLoadError(Exception):

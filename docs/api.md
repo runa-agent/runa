@@ -144,6 +144,32 @@ signature-level reference.
 
 ::: runa.SQLiteExporter
 
+::: runa.StoreExporter
+
+::: runa.tracing.TraceStore
+
+## Storage
+
+::: runa.db.traces
+
+::: runa.db.sessions
+
+::: runa.db.evals
+
+::: runa.db.session
+
+::: runa.db.cache
+
+::: runa.db.shared_url
+
+::: runa.db.sqlite_path
+
+::: runa.db.ephemeral
+
+::: runa.session.store.SessionStore
+
+::: runa.eval.store.EvalStore
+
 ## Exceptions
 
 ::: runa.exceptions.RunaError

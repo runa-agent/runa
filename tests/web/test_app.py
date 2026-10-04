@@ -7,16 +7,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from runa import db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
-from runa.eval.storage import save_report
 from runa.eval.tracing.adapter import AgentRun
-from runa.session import SQLiteSession
 from runa.tracing.spans import Span
-from runa.tracing.storage import save_trace
 from runa.tracing.traces import Trace
 from runa.web.app import _trace_url, create_app
 
@@ -26,9 +24,8 @@ def project(tmp_path: Path) -> Path:
     """A scaffolded project with one agent, one session, two traces, and one eval run."""
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("SupportAgent", root=project_dir)
-    db_path = project_dir / "db" / "runa.db"
 
-    session = SQLiteSession("support_agent-1", db_path=db_path)
+    session = db.session("support_agent-1", root=project_dir)
     asyncio.run(session.add_items([{"role": "user", "content": "hi there"}]))
 
     trace = Trace(
@@ -61,7 +58,7 @@ def project(tmp_path: Path) -> Path:
             end_time=1.0,
         ),
     ]
-    save_trace(trace, db_path=db_path)
+    db.traces(project_dir).save(trace)
 
     trace2 = Trace(
         id="trace_2",
@@ -81,9 +78,9 @@ def project(tmp_path: Path) -> Path:
             end_time=2.5,
         )
     ]
-    save_trace(trace2, db_path=db_path)
+    db.traces(project_dir).save(trace2)
 
-    save_report(
+    db.evals(project_dir).save(
         Report(
             agent_name="support_agent",
             cases=[
@@ -98,8 +95,7 @@ def project(tmp_path: Path) -> Path:
                     ],
                 )
             ],
-        ),
-        db_path=db_path,
+        )
     )
     return project_dir
 
@@ -245,10 +241,7 @@ def test_evaluation_detail_links_cases_to_traces_and_flags_regressions(
         ),
         results=[EvaluationResult(metric="task_completion", status=Status.FAIL, reason="bad")],
     )
-    run_id = save_report(
-        Report(agent_name="support_agent", cases=[failing]),
-        db_path=project / "db" / "runa.db",
-    )
+    run_id = db.evals(project).save(Report(agent_name="support_agent", cases=[failing]))
 
     detail = client.get(f"/evaluations/{run_id}").text
 
@@ -258,7 +251,7 @@ def test_evaluation_detail_links_cases_to_traces_and_flags_regressions(
 
 
 def test_trace_detail_404s_for_an_unknown_trace(client: TestClient) -> None:
-    """`/traces/{id}` returns 404 for a trace id `db/runa.db` has no record of."""
+    """`/traces/{id}` returns 404 for a trace id the store has no record of."""
     assert client.get("/traces/nope").status_code == 404
 
 

@@ -5,7 +5,8 @@ Which implementation a deployment gets is `runa.db`'s decision, not the call sit
 database. `runa serve`, `runa chat` and `Agent.run` all take whatever `db.session(...)` hands
 them, so moving a deployment to Postgres is one environment variable rather than an edit.
 
-`session/storage.py` is the read side of the same tables, for `runa sessions` and `runa ui`.
+`session/store.py` is the read side of the same tables, a `SessionStore` per backend, for
+`runa sessions` and `runa ui`. `runa.db.sessions(...)` resolves that one the same way.
 """
 
 from abc import ABC, abstractmethod

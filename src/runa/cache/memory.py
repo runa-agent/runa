@@ -44,4 +44,26 @@ class MemoryCache:
         self._entries.clear()
 
 
-__all__ = ["MemoryCache"]
+_shared: MemoryCache | None = None
+
+
+def shared() -> MemoryCache:
+    """The one process-wide `MemoryCache`, which is what `memory://` resolves `db.cache()` to.
+
+    A fresh dict per `db.cache()` call would make that backend a no-op, since a `set` and the
+    `get` after it are usually two separate resolutions. The other ephemeral adapters keep their
+    tables at module level for the same reason.
+    """
+    global _shared
+    if _shared is None:
+        _shared = MemoryCache()
+    return _shared
+
+
+def reset() -> None:
+    """Empty the shared cache. `runa.db.reset_ephemeral()` is how a test reaches this."""
+    if _shared is not None:
+        _shared._entries.clear()
+
+
+__all__ = ["MemoryCache", "reset", "shared"]

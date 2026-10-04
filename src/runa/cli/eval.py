@@ -14,12 +14,13 @@ import json
 from collections.abc import Iterable
 from pathlib import Path
 
+from runa import db
 from runa.agent import Agent
-from runa.cli._project import NotARunaProject, loaded_app, require_agents_dir, resolve_db_path
+from runa.cli._project import NotARunaProject, loaded_app, require_agents_dir
 from runa.cli.chat import AgentNotFound, find_agent_class
 from runa.cli.traces import TraceNotFound
 from runa.eval import Case, Dataset, Report
-from runa.tracing import Trace, get_trace
+from runa.tracing import Trace
 
 
 class InvalidEvalModule(Exception):
@@ -68,7 +69,7 @@ def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None
     An input already in the file raises `CaseAlreadyInEvals` rather than adding it twice.
     """
     evals_dir = _require_evals_dir(root)
-    trace = get_trace(trace_id, db_path=resolve_db_path(root))
+    trace = db.traces(root).get(trace_id)
     if trace is None:
         raise TraceNotFound(f"no trace found with id {trace_id!r}")
     traced = traced_input(trace)
