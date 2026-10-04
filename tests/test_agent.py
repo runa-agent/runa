@@ -329,7 +329,7 @@ def test_memory_defaults_to_none() -> None:
 def test_memory_auto_gives_a_default_memory_instance_and_no_tool() -> None:
     """`memory="auto"` builds a default `Memory` for the run lifecycle to use, with no tool.
 
-    Automatic retrieval/persistence is the run lifecycle's job (see `test_runner.py`), not
+    Automatic retrieval/persistence is the run lifecycle's job (see `test_run_loop.py`), not
     something `Agent.__init__` does.
     """
 
@@ -434,7 +434,7 @@ def test_knowledge_defaults_to_none() -> None:
 def test_knowledge_auto_gives_a_default_knowledge_instance_and_no_tool() -> None:
     """`knowledge="auto"` builds a default `Knowledge` for the run lifecycle to use, with no tool.
 
-    Automatic retrieval is the run lifecycle's job (see `test_runner.py`), not something
+    Automatic retrieval is the run lifecycle's job (see `test_run_loop.py`), not something
     `Agent.__init__` does.
     """
 

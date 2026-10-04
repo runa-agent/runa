@@ -1,12 +1,12 @@
 """multi_provider.py: `ModelProvider`, routing a model name to one of two backends by its prefix."""
 
-import asyncio
 import os
 from dataclasses import dataclass
 
 import httpx2 as httpx
 from anthropic import AsyncAnthropic
 
+from runa._loop import LoopCache
 from runa._models.anthropic import AnthropicModel
 from runa._models.interface import Model
 from runa._models.openai_chatcompletions import OpenAICompatibleModel
@@ -37,6 +37,24 @@ _BACKENDS: tuple[_Backend, ...] = (
 )
 
 
+def _client_for(backend: _Backend) -> httpx.AsyncClient:
+    """An HTTP client pointed at `backend`, carrying the key its env var holds.
+
+    Raises `UserError` when that variable is unset, which is why the client is built lazily: an
+    app that never asks for a `gemini-*` model should not need `GEMINI_API_KEY`.
+    """
+    api_key = os.environ.get(backend.api_key_env)
+    if api_key is None:
+        raise UserError(
+            f"{backend.api_key_env} is not set. Set it to use a {backend.prefix}-* model."
+        )
+    return httpx.AsyncClient(
+        base_url=backend.base_url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=600.0,
+    )
+
+
 class ModelProvider:
     """Routes a model name to one of two backends by its prefix.
 
@@ -48,20 +66,14 @@ class ModelProvider:
     def __init__(self) -> None:
         """Start with no clients; each is created lazily, on first use, and then reused.
 
-        A client's connections are bound to the event loop running when it first makes a
-        request, so each is cached alongside that loop; `run_sync` opens a fresh loop per
-        call (`asyncio.run`), and a client left over from a now-closed loop would crash the
-        next call trying to reuse it. A loop mismatch discards the stale client and builds a
-        new one instead. `get_model` itself has no async requirement (it does no I/O), so
-        this also has to tolerate being called with no running loop at all, e.g. at `Agent`
-        construction time; the loop is then simply left unrecorded until first real use.
+        A client's connections are bound to the event loop running when it first makes a request,
+        so each is held per loop by a `LoopCache`: `Agent.run_sync` opens a fresh loop per call,
+        and a client left over from a closed one would crash the next call trying to reuse it.
+        `get_model` does no I/O and is called at `Agent` construction time, with no loop running
+        at all, which `LoopCache` treats as a client the first loop to use it adopts.
         """
-        self._http_clients: dict[
-            str, tuple[asyncio.AbstractEventLoop | None, httpx.AsyncClient]
-        ] = {}
-        self._anthropic_client: tuple[asyncio.AbstractEventLoop | None, AsyncAnthropic] | None = (
-            None
-        )
+        self._http_clients: LoopCache[str, httpx.AsyncClient] = LoopCache()
+        self._anthropic_clients: LoopCache[str, AsyncAnthropic] = LoopCache()
 
     def get_model(self, model_name: str | None) -> Model:
         """Return the `Model` for `model_name` (or Runa's own default, if `None`)."""
@@ -74,38 +86,11 @@ class ModelProvider:
         backend = next((b for b in _BACKENDS if lower.startswith(b.prefix)), _OPENAI)
         return OpenAICompatibleModel(name, self._get_http_client(backend))
 
-    @staticmethod
-    def _running_loop() -> asyncio.AbstractEventLoop | None:
-        try:
-            return asyncio.get_running_loop()
-        except RuntimeError:
-            return None
-
     def _get_http_client(self, backend: _Backend) -> httpx.AsyncClient:
-        loop = self._running_loop()
-        cached = self._http_clients.get(backend.prefix)
-        if cached is not None and (loop is None or cached[0] is None or cached[0] is loop):
-            return cached[1]
-        api_key = os.environ.get(backend.api_key_env)
-        if api_key is None:
-            raise UserError(
-                f"{backend.api_key_env} is not set. Set it to use a {backend.prefix}-* model."
-            )
-        client = httpx.AsyncClient(
-            base_url=backend.base_url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=600.0,
-        )
-        self._http_clients[backend.prefix] = (loop, client)
-        return client
+        return self._http_clients.get(backend.prefix, lambda: _client_for(backend))
 
     def _get_anthropic_client(self) -> AsyncAnthropic:
-        loop = self._running_loop()
-        cached = self._anthropic_client
-        if cached is None or (loop is not None and cached[0] is not None and cached[0] is not loop):
-            cached = (loop, AsyncAnthropic())
-            self._anthropic_client = cached
-        return cached[1]
+        return self._anthropic_clients.get("claude", AsyncAnthropic)
 
 
 __all__ = ["DEFAULT_MODEL", "ModelProvider"]

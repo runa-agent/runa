@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from runa.memory import MemoryMatch
+from runa.memory.store import MemoryMatch
 
 
 @dataclass

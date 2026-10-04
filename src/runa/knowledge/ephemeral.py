@@ -9,7 +9,7 @@ Application-scoped rather than `user_id`-scoped, like every other `KnowledgeStor
 
 from dataclasses import dataclass
 
-from runa.knowledge import KnowledgeMatch
+from runa.knowledge.store import KnowledgeMatch
 from runa.memory.ephemeral import distance
 
 

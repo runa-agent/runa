@@ -1,8 +1,9 @@
 """`runa.memory`: `Memory`, durable semantic facts, scoped by `user_id`.
 
 Layered as `Memory` (embeds text, hides vectors) over `MemoryStore` (persists/searches vectors).
-Which store a bare `Memory()` gets is `runa.db`'s decision, not this module's: `memory/sqlite.py`
-locally, `memory/postgres.py` when `RUNA_DATABASE_URL` points at a shared database.
+The store contract and its `MemoryMatch` live in `memory/store.py`, re-exported here; which store
+a bare `Memory()` gets is `runa.db`'s decision, not this module's: `memory/sqlite.py` locally,
+`memory/postgres.py` when `RUNA_DATABASE_URL` points at a shared database.
 
 `remember_from_conversation` is what `run_internal.run_loop._run_async` calls after a run to turn
 the turn's exchange into zero or more remembered facts; `MemoryLike` is the contract (it and
@@ -12,27 +13,18 @@ narrower escape hatch of swapping just the storage backend.
 
 import json
 import re
-from dataclasses import dataclass
 from typing import Any, Protocol
 
 from runa import db
 from runa._types import ModelSettings
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
+from runa.memory.sqlite import SQLiteMemoryStore
+from runa.memory.store import MemoryMatch, MemoryStore
 from runa.tool import FunctionTool, tool
 
 # L2 distance over the ~unit-norm vectors OpenAI's embedding models return: only a near-verbatim
 # restatement falls under this, not a merely related fact -- see `Memory.remember`.
 _DUPLICATE_DISTANCE = 0.1
-
-
-@dataclass
-class MemoryMatch:
-    """One `Memory.search` result: its id, stored text, metadata, and distance to the query."""
-
-    id: int
-    text: str
-    metadata: dict[str, Any] | None
-    distance: float
 
 
 class MemoryLike(Protocol):
@@ -56,36 +48,6 @@ class MemoryLike(Protocol):
         Returns the texts stored, empty if none were worth it. `model` is the agent's own
         resolved `Model`, handed back in case extraction wants an LLM call of its own.
         """
-        ...
-
-
-class MemoryStore(Protocol):
-    """The storage a `Memory` needs: add/search/delete already-embedded text, scoped by user.
-
-    The escape hatch for `Memory(store=...)`: any object with these three async methods works,
-    no inheritance required. `SQLiteMemoryStore` and `PostgresMemoryStore` satisfy it by matching
-    shape; swapping in a hosted vector DB needs no change to `Memory`, `Agent`, or the lifecycle.
-    """
-
-    async def add(
-        self,
-        *,
-        user_id: str | None,
-        text: str,
-        embedding: list[float],
-        metadata: dict[str, Any] | None,
-    ) -> int:
-        """Store one already-embedded item for `user_id`, returning its new id."""
-        ...
-
-    async def search(
-        self, *, user_id: str | None, embedding: list[float], k: int
-    ) -> list[MemoryMatch]:
-        """Return `user_id`'s `k` items closest to `embedding`, nearest first."""
-        ...
-
-    async def delete(self, *, user_id: str | None, memory_id: int) -> None:
-        """Delete `user_id`'s item `memory_id`, if it exists."""
         ...
 
 
@@ -206,9 +168,6 @@ class Memory:
         return stored
 
 
-# Below `MemoryMatch`, not above: `memory/sqlite.py` returns them, so the name has to exist
-# first. Re-exported because the local adapter is always importable, where
+# `SQLiteMemoryStore` is re-exported because the local adapter is always importable, where
 # `PostgresMemoryStore` needs the `postgres` extra.
-from runa.memory.sqlite import SQLiteMemoryStore  # noqa: E402
-
 __all__ = ["Memory", "MemoryLike", "MemoryMatch", "MemoryStore", "SQLiteMemoryStore"]

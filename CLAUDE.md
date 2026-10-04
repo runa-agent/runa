@@ -1,50 +1,27 @@
 # CLAUDE.md
 
-Runa is an opinionated Python framework for agentic AI.
-
-Conventions: [Runa.md](./RUNA.md)
+Runa is an opinionated, Rails-inspired Python framework for agentic AI.
+Conventions: @RUNA.md
 
 ## Commands
+- `make install`: uv sync
+- `make format` / `make lint-fix`: ruff
+- `make typecheck`: pyright
+- `make test`: pytest (single test: `uv run pytest path/to/test.py::test_name`)
+- `make check`: format + lint + typecheck + test
 
-* `make install`: uv sync
-* `make format`: ruff format
-* `make lint` / `make lint-fix`: ruff check
-* `make typecheck`: pyright
-* `make test`: pytest
-* `make check`: format + lint + test
+## Workflow
+- Run `make check` before calling anything done.
+- Commits: one line, `<type>: <summary>`. Type is feat, fix, docs, refactor, or test.
 
-## Zen of Python
+## Design rules
+- Convention over configuration: a feature must work with zero config. Add an option only when no convention can cover the case.
+- Every convention has an explicit override. Example: <one real case from Runa>.
+- Omakase: use the chosen stack (uv, ruff, pyright, pytest). Ask before adding a dependency.
+- Design from the call site: write the usage you want first, then the implementation.
+- Organize code by responsability.
+- Few deep modules over many shallow ones. No pass-through wrappers.
+- Build only what the current task needs.
 
-- `uv run python -c "import this"`
-- Less is more.
-- Important things come first.
-- Let Ruff keep code simple.
-- Let types speak for themselves.
-- Let docstrings explain what types cannot.
-- Code that does not pass test is not done.
-- Give oneliner commit message: `feat`, `fix`, `docs`, `refactor`, `test`
-- Lint rules: `E`, `F`, `I`, `B`, `SIM`, `UP`, `D`
-
-## Development principles
-
-- Optimize for Developer Happiness
-- Convention Over Configuration
-- Don't Repeat Yourself
-- Keep it Simple
-- You Aren't Gonna Need it
-- Give Escape Hatch
-- Organize code by conventions and responsibility
-
-## Agent skills
-
-### Issue tracker
-
-GitHub Issues on `runa-agent/runa`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-The five canonical roles, unchanged: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context: `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+## Code style
+- Types carry the contract. Docstrings are one summary line, plus only what types cannot say.

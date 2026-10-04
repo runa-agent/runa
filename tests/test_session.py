@@ -1,4 +1,11 @@
-"""Tests for `runa.session.SQLiteSession`."""
+"""What `SQLiteSession` promises beyond the session contract every backend answers.
+
+The round-trip, `limit`, `pop_item`, `set_items`, `clear_session` and isolation behavior is
+`tests/contracts/session.py`, driven over this adapter (among others) by
+`tests/test_session_store.py`. What is left here is this adapter's own: that clearing a session
+removes its `agent_sessions` row rather than just its messages, and that a hand-written
+`SessionABC` gets `set_items` without implementing it.
+"""
 
 import asyncio
 import sqlite3
@@ -6,59 +13,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from runa.session import SQLiteSession
-
-
-def test_add_items_then_get_items_round_trips_in_order(tmp_path: Path) -> None:
-    """Items come back oldest-first, matching the order they were added in."""
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
-
-    async def _run():
-        await session.add_items([{"role": "user", "content": "hi"}])
-        await session.add_items([{"role": "assistant", "content": "hello"}])
-        return await session.get_items()
-
-    items = asyncio.run(_run())
-    assert items == [
-        {"role": "user", "content": "hi"},
-        {"role": "assistant", "content": "hello"},
-    ]
-
-
-def test_get_items_with_limit_returns_the_latest_n_in_order(tmp_path: Path) -> None:
-    """`limit` returns the most recent items, still oldest-first."""
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
-
-    async def _run() -> list[Any]:
-        for i in range(3):
-            await session.add_items([{"role": "user", "content": str(i)}])
-        return await session.get_items(limit=2)
-
-    items = asyncio.run(_run())
-    assert [item["content"] for item in items] == ["1", "2"]
-
-
-def test_pop_item_removes_and_returns_the_most_recent_item(tmp_path: Path) -> None:
-    """`pop_item` removes the last item added and returns it."""
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
-
-    async def _run():
-        await session.add_items([{"role": "user", "content": "first"}])
-        await session.add_items([{"role": "user", "content": "second"}])
-        popped = await session.pop_item()
-        remaining = await session.get_items()
-        return popped, remaining
-
-    popped, remaining = asyncio.run(_run())
-    assert popped == {"role": "user", "content": "second"}
-    assert remaining == [{"role": "user", "content": "first"}]
-
-
-def test_pop_item_on_empty_session_returns_none(tmp_path: Path) -> None:
-    """Popping from a session with no history returns `None`, not an error."""
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
-
-    assert asyncio.run(session.pop_item()) is None
+from runa.session import SessionABC, SQLiteSession
 
 
 def test_clear_session_drops_its_items_and_row(tmp_path: Path) -> None:
@@ -77,27 +32,12 @@ def test_clear_session_drops_its_items_and_row(tmp_path: Path) -> None:
     assert row is None
 
 
-def test_set_items_replaces_the_entire_history(tmp_path: Path) -> None:
-    """`set_items` drops whatever was stored and writes `items` in its place."""
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
-
-    async def _run() -> list[Any]:
-        await session.add_items(
-            [{"role": "user", "content": "old"}, {"role": "assistant", "content": "reply"}]
-        )
-        await session.set_items([{"role": "user", "content": "new"}])
-        return await session.get_items()
-
-    assert asyncio.run(_run()) == [{"role": "user", "content": "new"}]
-
-
 def test_sessionabc_default_set_items_works_without_an_override(tmp_path: Path) -> None:
     """A custom `SessionABC` gets `set_items` for free from `clear_session`/`add_items`.
 
     No new abstract method to implement -- an existing subclass that predates `set_items` still
     gets correct (if not transactional) behavior for it, unlike `SQLiteSession`'s own override.
     """
-    from runa.session import SessionABC
 
     class PlainSession(SessionABC):
         def __init__(self) -> None:
@@ -125,19 +65,3 @@ def test_sessionabc_default_set_items_works_without_an_override(tmp_path: Path) 
         return await session.get_items()
 
     assert asyncio.run(_run()) == [{"role": "user", "content": "new"}]
-
-
-def test_sessions_are_isolated_by_session_id(tmp_path: Path) -> None:
-    """Items added under one `session_id` don't leak into another sharing the same `runa.db`."""
-    db_path = tmp_path / "runa.db"
-    session_a = SQLiteSession("a", db_path=db_path)
-    session_b = SQLiteSession("b", db_path=db_path)
-
-    async def _run():
-        await session_a.add_items([{"role": "user", "content": "from a"}])
-        await session_b.add_items([{"role": "user", "content": "from b"}])
-        return await session_a.get_items(), await session_b.get_items()
-
-    items_a, items_b = asyncio.run(_run())
-    assert items_a == [{"role": "user", "content": "from a"}]
-    assert items_b == [{"role": "user", "content": "from b"}]

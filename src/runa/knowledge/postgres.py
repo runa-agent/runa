@@ -9,7 +9,7 @@ each ingesting its own. Distance is `<->` (Euclidean/L2), matching `sqlite-vec`'
 import asyncpg
 
 from runa.db.pool import connect as _connect
-from runa.knowledge import KnowledgeMatch
+from runa.knowledge.store import KnowledgeMatch
 
 ITEMS_TABLE = "knowledge_items"
 

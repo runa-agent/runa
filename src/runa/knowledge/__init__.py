@@ -1,9 +1,9 @@
 """`runa.knowledge`: `Knowledge`, the application's own documents, retrieved by meaning.
 
 Layered like `runa.memory`: `Knowledge` (discovers/chunks/embeds text, hides vectors) over a
-`KnowledgeStore` (persists/searches vectors). Which store a bare `Knowledge()` gets is
-`runa.db`'s decision: `knowledge/sqlite.py` locally, `knowledge/postgres.py` when
-`RUNA_DATABASE_URL` points at a shared database.
+`KnowledgeStore` (persists/searches vectors, in `knowledge/store.py` and re-exported here). Which
+store a bare `Knowledge()` gets is `runa.db`'s decision: `knowledge/sqlite.py` locally,
+`knowledge/postgres.py` when `RUNA_DATABASE_URL` points at a shared database.
 
 Unlike `Memory`, `Knowledge` is application-scoped rather than `user_id`-scoped, and its source
 of truth is a directory of files on disk (`app/knowledge/` by default), not calls to `remember`.
@@ -16,12 +16,13 @@ Kept deliberately separate: `Memory` is durable facts about a user, learned from
 swapping just the storage backend.
 """
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from runa import db
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
+from runa.knowledge.sqlite import SQLiteKnowledgeStore
+from runa.knowledge.store import KnowledgeMatch, KnowledgeStore
 from runa.tool import FunctionTool, tool
 
 DEFAULT_KNOWLEDGE_DIR = Path("app/knowledge")
@@ -29,16 +30,6 @@ DEFAULT_KNOWLEDGE_DIR = Path("app/knowledge")
 _SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt", ".csv", ".pdf"}
 _CHUNK_SIZE = 1000
 _CHUNK_OVERLAP = 200
-
-
-@dataclass
-class KnowledgeMatch:
-    """One `Knowledge.search` result: its id, stored text, source file, and distance."""
-
-    id: int
-    text: str
-    source: str
-    distance: float
 
 
 class KnowledgeLike(Protocol):
@@ -52,27 +43,6 @@ class KnowledgeLike(Protocol):
 
     async def search(self, query: str, *, k: int = 5) -> list[Any]:
         """Return up to `k` items relevant to `query`, most relevant first."""
-        ...
-
-
-class KnowledgeStore(Protocol):
-    """The storage a `Knowledge` needs: add/search already-embedded chunks, and clear them all.
-
-    The escape hatch for `Knowledge(store=...)`: any object with these three async methods works,
-    no inheritance required. `SQLiteKnowledgeStore` and `PostgresKnowledgeStore` satisfy it by
-    matching shape.
-    """
-
-    async def add(self, *, text: str, source: str, embedding: list[float]) -> int:
-        """Store one already-embedded chunk, returning its new id."""
-        ...
-
-    async def search(self, *, embedding: list[float], k: int) -> list[KnowledgeMatch]:
-        """Return the `k` chunks closest to `embedding`, nearest first."""
-        ...
-
-    async def clear(self) -> None:
-        """Delete every stored chunk, ahead of a fresh `Knowledge.ingest()`."""
         ...
 
 
@@ -191,11 +161,8 @@ class Knowledge:
         return search_knowledge
 
 
-# Below `KnowledgeMatch`, not above: `knowledge/sqlite.py` returns them, so the name has to
-# exist first. Re-exported because the local adapter is always importable, where
+# `SQLiteKnowledgeStore` is re-exported because the local adapter is always importable, where
 # `PostgresKnowledgeStore` needs the `postgres` extra.
-from runa.knowledge.sqlite import SQLiteKnowledgeStore  # noqa: E402
-
 __all__ = [
     "DEFAULT_KNOWLEDGE_DIR",
     "Knowledge",

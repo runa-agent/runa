@@ -1,15 +1,12 @@
-"""tests/cache_contract.py: the one `Cache` contract, so every backend is held to it.
+"""contracts/cache.py: the one `Cache` contract, so every backend is held to it.
 
 `runa.cache` is a Protocol with four backends behind it, and `runa.db.cache()` hands back whichever
-one `RUNA_DATABASE_URL` resolved. A deployment that moves to Postgres is relying on the new
-backend behaving like the old one, so what is worth testing is the contract rather than each
-adapter's SQL: a miss returns `None`, a second `set` overwrites, an expired entry reads as a miss.
+one `RUNA_DATABASE_URL` resolved. What is worth testing is the contract rather than each adapter's
+SQL: a miss returns `None`, a second `set` overwrites, an expired entry reads as a miss.
 
-Each check takes the cache and one key prefix it is free to write under. The prefix is what lets
-the same checks run against a live shared Postgres, where every test in a session shares one
-`cache_entries` table and a fixed `"key"` would collide. `test_cache.py` drives these over the
-local backends on every `make test`; `test_postgres.py` drives them over `PostgresCache` when a
-live database is reachable.
+Each check takes the cache and one key prefix it is free to write under. `test_cache.py` drives
+these over the local backends on every `make test`; `test_postgres.py` drives them over
+`PostgresCache` when a live database is reachable.
 """
 
 from collections.abc import Callable, Coroutine

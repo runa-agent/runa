@@ -1,17 +1,48 @@
-"""Tests for `runa.memory.Memory`."""
+"""Tests for `runa.memory.Memory`, over the `MemoryStore` contract every backend answers.
+
+The store contract lives in `tests/contracts/memory.py` and is driven here over the backends
+`runa.db` can resolve without a live Postgres; `tests/test_postgres.py` drives the same checks
+against `PostgresMemoryStore`. Everything below that is `Memory`'s own: embedding, near-duplicate
+detection, the search tool it hands a model, and extraction from a conversation.
+"""
 
 import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
+from contracts.memory import CONTRACT, DIMENSIONS, Check
 from helpers import run as run_awaitable
 
+from runa import db
 from runa import memory as memory_module
 from runa._types import RunContextWrapper
 from runa.memory import Memory, MemoryMatch, MemoryStore, SQLiteMemoryStore
 
-_DIMENSIONS = 4
+_DIMENSIONS = DIMENSIONS
+
+
+@pytest.fixture(params=["sqlite", "ephemeral"])
+def store(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> MemoryStore:
+    """A `MemoryStore`, resolved by `runa.db` the way a bare `Memory()` gets one.
+
+    Through the environment variable rather than by naming an adapter, since that is the only
+    thing that decides: `sqlite://` with four slashes is an absolute path, which is how a test
+    keeps the local backend's file in its own `tmp_path`.
+    """
+    if request.param == "ephemeral":
+        monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
+    else:
+        monkeypatch.setenv(db.DATABASE_URL_ENV, f"sqlite:///{tmp_path / 'runa.db'}")
+    return db.memory_store(dimensions=DIMENSIONS)
+
+
+@pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
+def test_memory_store_contract(store: MemoryStore, check: Check) -> None:
+    """Every local backend answers the `MemoryStore` contract the same way."""
+    asyncio.run(check(store, "user-1"))
 
 
 @pytest.fixture(autouse=True)

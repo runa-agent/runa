@@ -1,17 +1,49 @@
-"""Tests for `runa.knowledge.Knowledge`."""
+"""Tests for `runa.knowledge.Knowledge`, over the `KnowledgeStore` contract every backend answers.
+
+The store contract lives in `tests/contracts/knowledge.py` and is driven here over the backends
+`runa.db` can resolve without a live Postgres; `tests/test_postgres.py` drives the same checks
+against `PostgresKnowledgeStore`. Everything below that is `Knowledge`'s own: discovery, chunking,
+PDF extraction, lazy ingest, and the search tool it hands a model.
+"""
 
 import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
+from contracts.knowledge import CONTRACT, DIMENSIONS, Check
 from helpers import run as run_awaitable
 
+from runa import db
 from runa import knowledge as knowledge_module
 from runa._types import RunContextWrapper
-from runa.knowledge import DEFAULT_KNOWLEDGE_DIR, Knowledge, KnowledgeMatch, SQLiteKnowledgeStore
+from runa.knowledge import (
+    DEFAULT_KNOWLEDGE_DIR,
+    Knowledge,
+    KnowledgeMatch,
+    KnowledgeStore,
+    SQLiteKnowledgeStore,
+)
 
-_DIMENSIONS = 4
+_DIMENSIONS = DIMENSIONS
+
+
+@pytest.fixture(params=["sqlite", "ephemeral"])
+def store(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> KnowledgeStore:
+    """A `KnowledgeStore`, resolved by `runa.db` the way a bare `Knowledge()` gets one."""
+    if request.param == "ephemeral":
+        monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
+    else:
+        monkeypatch.setenv(db.DATABASE_URL_ENV, f"sqlite:///{tmp_path / 'runa.db'}")
+    return db.knowledge_store(dimensions=DIMENSIONS)
+
+
+@pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
+def test_knowledge_store_contract(store: KnowledgeStore, check: Check) -> None:
+    """Every local backend answers the `KnowledgeStore` contract the same way."""
+    asyncio.run(check(store, "doc"))
 
 
 @pytest.fixture(autouse=True)

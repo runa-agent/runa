@@ -8,7 +8,9 @@ the same database; this only hands out the pool and applies each caller's DDL.
 One pool per URL, cached at module level and shared by every adapter built from it, so a session,
 a memory store and an exporter on the same database reuse one pool instead of each opening their
 own -- the same "just works" ergonomics as `db/sqlite.py`'s shared file, here applied to pool
-reuse instead of file reuse.
+reuse instead of file reuse. Per *loop* as well as per URL, because a pool's connections belong
+to the loop that opened them; that lifetime rule is `runa._loop.LoopCache`, shared with the other
+two resources in Runa that have it.
 """
 
 import asyncio
@@ -17,6 +19,8 @@ from collections.abc import Coroutine
 from typing import Any
 
 import asyncpg
+
+from runa._loop import LoopCache
 
 _loop: asyncio.AbstractEventLoop | None = None
 _loop_lock = threading.Lock()
@@ -28,7 +32,7 @@ def _background_loop() -> asyncio.AbstractEventLoop:
     `TraceExporter.export` and the whole `runa traces`/`runa ui` read path are synchronous, and
     a trace is exported from inside a finishing run, so `asyncio.run()` (which demands there be
     no running loop) is not available. One long-lived loop on its own thread serves them all,
-    and `get_pool`'s per-loop keying gives it its own pool, as it would any other loop.
+    and `LoopCache` gives it its own pool, as it would any other loop.
     """
     global _loop
     if _loop is not None and not _loop.is_closed():
@@ -50,37 +54,41 @@ def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
     return future.result(timeout)
 
 
-_pools: dict[tuple[int, str], asyncpg.Pool] = {}
-_pools_lock = asyncio.Lock()
+_pools: LoopCache[str, asyncpg.Pool] = LoopCache()
 
 
-async def get_pool(url: str) -> asyncpg.Pool:
-    """Return `url`'s shared pool on the *current* event loop, creating it on first use.
-
-    Keyed by `(id(loop), url)`, not just `url`: an `asyncpg.Pool`'s connections belong to the
-    loop that created them, so reusing a pool from a since-closed loop (e.g. a second
-    `asyncio.run()` call in the same process, as every test in `tests/test_postgres.py` makes)
-    would hang forever acquiring a connection tied to a dead loop. One long-lived event loop
-    (a real deployment's) still gets exactly one pool per `url`, same as before.
+async def _create_pool(url: str) -> asyncpg.Pool:
+    """Open a pool on `url`, with `pgvector`'s codec registered on every connection.
 
     `vector` has to exist as a type before any connection can register its codec, so a bare
     bootstrap connection creates the extension first -- `init=register_vector` on the pool itself
     would otherwise run on a database that doesn't have the type yet.
     """
-    key = (id(asyncio.get_running_loop()), url)
-    if key in _pools:
-        return _pools[key]
-    async with _pools_lock:
-        if key not in _pools:
-            from pgvector.asyncpg import register_vector
+    from pgvector.asyncpg import register_vector
 
-            bootstrap = await asyncpg.connect(url)
-            try:
-                await bootstrap.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            finally:
-                await bootstrap.close()
-            _pools[key] = await asyncpg.create_pool(url, init=register_vector)
-    return _pools[key]
+    bootstrap = await asyncpg.connect(url)
+    try:
+        await bootstrap.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    finally:
+        await bootstrap.close()
+    return await asyncpg.create_pool(url, init=register_vector)
+
+
+async def get_pool(url: str) -> asyncpg.Pool:
+    """Return `url`'s shared pool on the *current* event loop, creating it on first use."""
+    return await _pools.aget(url, lambda: _create_pool(url))
+
+
+async def close_pool(url: str) -> None:
+    """Close and forget `url`'s pool on the current loop, if it has one.
+
+    A deployment never needs this: its loop and its pool live as long as the process. A caller
+    that closes its own loop does, since the pool would otherwise hold that database's
+    connections until the loop is garbage collected.
+    """
+    pool = _pools.pop(url)
+    if pool is not None:
+        await pool.close()
 
 
 async def connect(url: str, ddl: str) -> asyncpg.Pool:
@@ -91,4 +99,4 @@ async def connect(url: str, ddl: str) -> asyncpg.Pool:
     return pool
 
 
-__all__ = ["connect", "get_pool", "run_sync"]
+__all__ = ["close_pool", "connect", "get_pool", "run_sync"]

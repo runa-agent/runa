@@ -1,8 +1,8 @@
 """Tests for the local `Cache` backends: `MemoryCache`, `SQLiteCache`, and `memory://`'s shared one.
 
-The contract itself lives in `cache_contract.py` and is driven here over every backend a plain
-`make test` can reach. `PostgresCache` is held to the same checks in `test_postgres.py`, which
-needs a live database.
+The contract itself lives in `tests/contracts/cache.py` and is driven here over every backend a
+plain `make test` can reach. `PostgresCache` is held to the same checks in `test_postgres.py`,
+which needs a live database.
 
 What stays here is each backend's own promise, the part the contract deliberately says nothing
 about: whether a value outlives the object that wrote it.
@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from cache_contract import CONTRACT, Check
+from contracts.cache import CONTRACT, Check
 
 from runa import db
 from runa.cache import Cache, MemoryCache, SQLiteCache

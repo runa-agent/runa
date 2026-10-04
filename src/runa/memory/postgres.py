@@ -15,7 +15,7 @@ from typing import Any
 import asyncpg
 
 from runa.db.pool import connect as _connect
-from runa.memory import MemoryMatch
+from runa.memory.store import MemoryMatch
 
 ITEMS_TABLE = "memory_items"
 

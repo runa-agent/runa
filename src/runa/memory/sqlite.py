@@ -12,7 +12,7 @@ from typing import Any
 
 from runa.db import DEFAULT_DB_PATH
 from runa.db.vectors import VectorTable
-from runa.memory import MemoryMatch
+from runa.memory.store import MemoryMatch
 
 
 class SQLiteMemoryStore:

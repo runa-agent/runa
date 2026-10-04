@@ -11,7 +11,7 @@ from pathlib import Path
 
 from runa.db import DEFAULT_DB_PATH
 from runa.db.vectors import VectorTable
-from runa.knowledge import KnowledgeMatch
+from runa.knowledge.store import KnowledgeMatch
 
 
 class SQLiteKnowledgeStore:

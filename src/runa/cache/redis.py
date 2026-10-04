@@ -10,11 +10,12 @@ only JSON-serializable values are cacheable. Unlike them, expiry is Redis's own 
 than lazy-on-read: an expired key is simply gone, not evicted by the next `get`.
 """
 
-import asyncio
 import json
 from typing import Any
 
 import redis.asyncio as redis
+
+from runa._loop import LoopCache
 
 
 class RedisCache:
@@ -23,21 +24,18 @@ class RedisCache:
     def __init__(self, url: str) -> None:
         """Store which Redis instance this cache's entries live in; connected lazily."""
         self.url = url
-        self._client: tuple[asyncio.AbstractEventLoop, redis.Redis] | None = None
+        self._clients: LoopCache[str, redis.Redis] = LoopCache()
 
     def _connect(self) -> redis.Redis:
         """Return this cache's client on the *current* event loop, (re)creating it if stale.
 
-        A `redis.asyncio.Redis`'s connections belong to the loop running when it first
-        connects, so a client left over from a now-closed loop (e.g. a second `asyncio.run()`
-        call reusing this same `RedisCache`, as `Agent.run_sync` makes easy to hit) would
-        crash with "Event loop is closed" instead of reconnecting; same fix as
-        `ModelProvider`'s HTTP clients and `db/pool.py`'s pools.
+        A `redis.asyncio.Redis`'s connections belong to the loop running when it first connects,
+        so a client left over from a now-closed loop (e.g. a second `asyncio.run()` call reusing
+        this same `RedisCache`, as `Agent.run_sync` makes easy to hit) would crash with "Event
+        loop is closed" instead of reconnecting. `LoopCache` is that lifetime, shared with
+        `db/pool.py`'s pools and `ModelProvider`'s HTTP clients.
         """
-        loop = asyncio.get_running_loop()
-        if self._client is None or self._client[0] is not loop:
-            self._client = (loop, redis.from_url(self.url))
-        return self._client[1]
+        return self._clients.get(self.url, lambda: redis.from_url(self.url))
 
     async def get(self, key: str) -> Any:
         """Return the value stored for `key`, or `None` if it's missing or expired."""
