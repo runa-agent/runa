@@ -16,3 +16,17 @@ Conventions: @RUNA.md
 - Few deep modules over many shallow ones. No pass-through wrappers.
 - Build only what the task needs.
 - Commits: one line, `<type>: <summary>`. Type is feat, fix, docs, refactor, or test.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues in `runa-agent/runa`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles, used verbatim as label strings. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` plus `docs/adr/` at the repo root. See `docs/agents/domain.md`.
