@@ -1,4 +1,4 @@
-"""Tests for the Postgres adapters: session, memory and knowledge stores.
+"""Tests for the Postgres adapters: session, memory, knowledge and cache stores.
 
 Needs a live Postgres with the `pgvector` extension reachable at `RUNA_TEST_POSTGRES_DSN`
 (defaults to a local one); the whole module is skipped if it isn't reachable,
@@ -23,8 +23,10 @@ from typing import Any
 
 import asyncpg
 import pytest
+from cache_contract import CONTRACT, Check
 
 import runa.db.pool as pool_module
+from runa.cache.postgres import PostgresCache
 from runa.knowledge.postgres import PostgresKnowledgeStore
 from runa.memory.postgres import PostgresMemoryStore
 from runa.session.postgres import PostgresSession
@@ -261,3 +263,16 @@ def test_knowledge_store_clear_removes_every_chunk() -> None:
         return await store.search(embedding=[1.0, 0.0, 0.0, 0.0], k=5)
 
     assert run(_run()) == []
+
+
+@pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
+def test_cache_contract(unique_id: str, check: Check) -> None:
+    """`PostgresCache` answers the same `Cache` contract the local backends do.
+
+    The same checks `test_cache.py` runs over `MemoryCache` and `SQLiteCache`, which is the point:
+    a deployment moving to `RUNA_DATABASE_URL=postgresql://...` is relying on the cache behaving
+    the way it did on the file it had before. Lazy expiry, the `ON CONFLICT` upsert and `clear`
+    are only ever exercised here, so a plain `make test` without a live Postgres does not cover
+    them and CI does.
+    """
+    run(check(PostgresCache(_DSN), unique_id))

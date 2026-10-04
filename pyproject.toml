@@ -65,9 +65,6 @@ addopts = "--cov=runa --cov-report=term:skip-covered --cov-fail-under=90"
 # line counting, so `make check` means the same thing with or without those services and a
 # developer is never asked to install Postgres to see a green run.
 omit = [
-    "*/runa/db/postgres.py",
-    "*/runa/db/prune_postgres.py",
-    "*/runa/db/redis.py",
     "*/runa/tracing/postgres.py",
     "*/runa/eval/postgres.py",
 ]
