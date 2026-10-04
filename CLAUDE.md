@@ -15,7 +15,7 @@ Conventions: [Runa.md](./RUNA.md)
 
 ## Zen of Python
 
-- `import this`
+- `uv run python -c "import this"`
 - Less is more.
 - Important things come first.
 - Let Ruff keep code simple.
