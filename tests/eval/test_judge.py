@@ -5,23 +5,23 @@ from typing import Any
 
 import pytest
 
+from runa._types import Usage
+from runa.agent import Agent
 from runa.eval.judge import extract_json, judge_model
+from runa.exceptions import ModelBehaviorError
+from runa.run import Run
 
 
 def test_judge_model_asks_through_the_named_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`judge_model(...).ask(...)` runs the prompt through an SDK Agent using that model."""
+    """`judge_model(...).ask(...)` runs the prompt through a bare `Agent` using that model."""
     captured: dict[str, Any] = {}
 
-    async def fake_run(agent: Any, input: Any, **kwargs: Any) -> Any:
-        captured["model"] = agent.model
-        captured["input"] = input
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        captured["model"] = self.model
+        captured["input"] = message
+        return Run(output="PASS", trace=None, usage=Usage())
 
-        class _Result:
-            final_output = "PASS"
-
-        return _Result()
-
-    monkeypatch.setattr("runa.eval.judge.Runner.run", staticmethod(fake_run))
+    monkeypatch.setattr(Agent, "run", fake_run)
 
     output = asyncio.run(judge_model("gpt-5.4-nano").ask("grade this"))
 
@@ -57,3 +57,17 @@ def test_extract_json_raises_on_unrepairable_json() -> None:
     """Malformed JSON that isn't just a trailing comma still raises."""
     with pytest.raises(ValueError):
         extract_json('{"score": }')
+
+
+def test_judge_model_raises_when_the_run_did_not_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A judge run reported as `status="error"` raises, rather than returning its empty output."""
+
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        return Run(output=None, trace=None, usage=Usage(), status="error", error="no API key")
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+
+    with pytest.raises(ModelBehaviorError, match="no API key"):
+        asyncio.run(judge_model("gpt-5.4-nano").ask("grade this"))

@@ -1,18 +1,22 @@
 """eval/tracing/adapter.py: run one `Case` through an `Agent` and normalize the result.
 
-`Runner.run()`'s own `RunResult.trace` is used directly: evaluation and observability read the
-same `Trace`/`Span` data instead of two parallel execution-history models: `AgentRun.tool_calls`
-is derived straight from `AgentRun.trace.spans`.
+`Run.trace` is used directly: evaluation and observability read the same `Trace`/`Span` data
+instead of two parallel execution-history models, so `AgentRun.tool_calls` is derived straight
+from `AgentRun.trace.spans`.
+
+A case runs through `Agent.run`, the same door an application's own call uses, so an agent is
+evaluated with the wiring it actually ships with: its guardrails, its memory and knowledge, its
+`max_turns`/`max_tokens`/`timeout`. Each case gets a `_fresh()` copy of the agent for the same
+reason `agent_as_tool` does: a dataset's cases are independent, and `evaluate_agent` runs up to
+`concurrency` of them at once, so sharing one instance would let one case's conversation leak
+into the next.
 """
 
 import time
 from dataclasses import dataclass, field
 
-from runa.agent import _MODEL_PROVIDER, Agent
+from runa.agent import Agent
 from runa.eval.case import Case
-from runa.exceptions import RunaError
-from runa.run_config import RunConfig
-from runa.runner import Runner
 from runa.tracing import Trace
 
 _EMPTY_TRACE = Trace(id="", name="", start_time=0.0, end_time=0.0, spans=[], metadata={})
@@ -42,23 +46,20 @@ class AgentRun:
 async def run_agent_for_eval(agent: Agent, case: Case) -> AgentRun:
     """Run `case.input` through `agent` and capture an `AgentRun`.
 
-    A run that raises (a guardrail tripwire, `MaxTurnsExceeded`, ...) is
-    captured as an `AgentRun` with `error` set rather than propagating, so a
-    bad case doesn't stop the rest of a dataset from evaluating.
+    A run that fails (a guardrail tripwire, `MaxTurnsExceeded`, ...) is captured as an `AgentRun`
+    with `error` set rather than propagating, so a bad case doesn't stop the rest of a dataset
+    from evaluating. `Agent.run` already reports those as `status="error"`, which is what this
+    reads instead of catching `RunaError` a second time.
     """
     start = time.monotonic()
-    run_config = RunConfig(model_provider=_MODEL_PROVIDER, workflow_name=type(agent).__name__)
-    try:
-        result = await Runner.run(agent, case.input, run_config=run_config)
-    except RunaError as exc:
-        latency = time.monotonic() - start
-        trace = (
-            exc.run_data.trace if exc.run_data and exc.run_data.trace is not None else _EMPTY_TRACE
-        )
-        return AgentRun(
-            input=case.input, final_output=None, error=str(exc), latency=latency, trace=trace
-        )
+    run = await agent._fresh().run(case.input)
     latency = time.monotonic() - start
+    trace = run.trace if run.trace is not None else _EMPTY_TRACE
+
+    if run.status == "error":
+        return AgentRun(
+            input=case.input, final_output=None, error=run.error, latency=latency, trace=trace
+        )
 
     tool_calls = [
         ToolCallRecord(
@@ -66,13 +67,13 @@ async def run_agent_for_eval(agent: Agent, case: Case) -> AgentRun:
             arguments=str(span.input) if span.input is not None else "",
             output=str(span.output) if span.output is not None else None,
         )
-        for span in result.trace.spans
+        for span in trace.spans
         if span.type == "tool"
     ]
     return AgentRun(
         input=case.input,
-        final_output=result.final_output,
+        final_output=run.output,
         tool_calls=tool_calls,
         latency=latency,
-        trace=result.trace,
+        trace=trace,
     )

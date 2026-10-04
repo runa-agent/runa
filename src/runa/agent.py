@@ -1,4 +1,12 @@
-"""Class-based Agent, built on Runa's own runtime (`runa.runner`/`runa.run_internal`)."""
+"""Class-based Agent, built on Runa's own runtime (`runa.run_internal`).
+
+`run`/`run_sync`/`run_streamed` are the only way to run an Agent, and `Run` the only thing they
+return. The turn loop under them (`run_internal/run_loop._run_async`) is this class's
+implementation, not a second entry point: a `Runner` that forwarded to it used to sit here, which
+is how `eval/judge.py` and `eval/tracing/adapter.py` came to run agents without an Agent's own
+wiring -- its guardrail flattening, its memory and knowledge resolution, its `RunConfig`, its
+refusal of two concurrent session-less runs. One door, so there is nothing to go around.
+"""
 
 import asyncio
 import copy
@@ -19,11 +27,10 @@ from runa.handoff import agent_as_tool
 from runa.knowledge import Knowledge
 from runa.lifecycle import RunHooks
 from runa.memory import Memory
-from runa.result import RunResult
 from runa.run import Run, RunStream
 from runa.run_config import DEFAULT_MAX_TURNS, RunConfig
+from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
-from runa.runner import Runner
 from runa.session import SessionABC
 from runa.stream_events import StreamEvent
 from runa.tool import FunctionTool
@@ -80,7 +87,7 @@ def _turn_input(
     history: list[TResponseInputItem],
     session: SessionABC | None,
 ) -> str | list[TResponseInputItem] | RunState:
-    """Build the `input` for `Runner.run` from this turn's `message`.
+    """Build the `input` for the turn loop from this turn's `message`.
 
     A paused `RunState` passes straight through, to be resumed. A list `message` goes through
     `runa.content.parts` first, classifying each item as text or an image (and rejecting a list
@@ -88,7 +95,7 @@ def _turn_input(
     With no `session`, the result joins `history` as a new user message. With a `session`, only
     the new turn is ever sent (prior turns come back from the session itself): a plain string
     passes straight through, a multimodal one is wrapped in a single-item message list instead,
-    since `Runner.run`'s session path only wraps a bare string into `{"role": "user", ...}`
+    since the loop's session path only wraps a bare string into `{"role": "user", ...}`
     itself.
     """
     if isinstance(message, RunState):
@@ -205,7 +212,7 @@ class Agent:
 
     `usage` accumulates token usage across every `run`/`run_sync`/`run_streamed` call made on
     this instance; `last_usage` holds just the most recent call's usage. Both are read from
-    `RunContextWrapper.usage`, which `Runner` populates regardless of `hooks`.
+    `RunContextWrapper.usage`, which the turn loop populates regardless of `hooks`.
 
     One run is bounded three ways, each `None`/unset meaning "no ceiling of that kind":
     `max_turns` (model calls, default 10), `max_tokens` (total tokens the run may spend), and
@@ -234,8 +241,8 @@ class Agent:
 
         `memory` opts this agent into long-term memory, one of:
           - `"auto"` (or a `Memory(...)` instance, or any object shaped like `runa.memory`'s
-            `MemoryLike`): `Runner` retrieves relevant memories before each run and persists new
-            ones after -- no manual `memory.search`/`.remember` calls.
+            `MemoryLike`): the turn loop retrieves relevant memories before each run and
+            persists new ones after -- no manual `memory.search`/`.remember` calls.
           - `"llm"`: the model gets a `search_memory` tool and decides itself when to call it;
             no automatic retrieval/persistence.
           - `None` (the default): the agent behaves exactly as if `runa.memory` didn't exist.
@@ -349,24 +356,19 @@ class Agent:
             timeout=self.timeout,
         )
 
-    def _completed(self, result: RunResult, session: SessionABC | None) -> Run:
-        """Record `result`'s usage (and, unless paused or session-backed, history) as a `Run`."""
-        self.last_usage = result.context_wrapper.usage
+    def _completed(self, run: Run, session: SessionABC | None) -> Run:
+        """Record `run`'s usage (and, unless paused or session-backed, its history), and return it.
+
+        The loop builds the `Run` itself, so all that is left here is the bookkeeping only an
+        Agent instance can do: which conversation this run belongs to, and what it has spent
+        across every run so far. A paused run's history is not written back: the turn is not over,
+        and `to_state()` already carries what resuming it needs.
+        """
+        self.last_usage = run.usage
         self.usage.add(self.last_usage)
-        audit = guardrail_results(result.context_wrapper)
-        if result.interruptions:
-            return Run(
-                output=None,
-                trace=result.trace,
-                usage=self.last_usage,
-                status="paused",
-                interruptions=result.interruptions,
-                _state=result.to_state(),
-                **audit,
-            )
-        if session is None:
-            self.history = result.to_input_list()
-        return Run(output=result.final_output, trace=result.trace, usage=self.last_usage, **audit)
+        if run.status != "paused" and session is None:
+            self.history = run._history()
+        return run
 
     def _failed(self, exc: RunaError) -> Run:
         """Record what a run that `exc` stopped had used, and ran, as an `"error"` `Run`."""
@@ -473,7 +475,7 @@ class Agent:
         """
         with self._exclusive(session):
             try:
-                result = await Runner.run(
+                run = await _run_async(
                     self,
                     _turn_input(message, self.history, session),
                     context=context,
@@ -484,7 +486,7 @@ class Agent:
                 )
             except RunaError as exc:
                 return self._failed(exc)
-            return self._completed(result, session)
+            return self._completed(run, session)
 
     def run_sync(
         self,
@@ -511,24 +513,42 @@ class Agent:
         History and usage are recorded only once the stream is fully consumed, so a caller that
         stops iterating early leaves them unchanged.
         """
-        result = Runner.run_streamed(
-            self,
-            _turn_input(message, self.history, session),
-            context=context,
-            hooks=hooks,
-            run_config=self._run_config(session),
-            session=session,
+        turn_input = _turn_input(message, self.history, session)
+        context_wrapper = (
+            turn_input.context_wrapper
+            if isinstance(turn_input, RunState)
+            else RunContextWrapper(context=context)
         )
+        run_config = self._run_config(session)
 
         async def events() -> AsyncIterator[StreamEvent]:
+            # The loop is a task writing into a queue, rather than an async generator, because it
+            # has to keep running between a consumer's `__anext__` calls: a tool call and the
+            # model request after it are the loop's work, not the caller's, and a caller that
+            # stops iterating must not leave a turn half-executed. `task.result()` re-raises
+            # whatever the run raised, on this side of the seam, where `_failed` turns it into
+            # the same `Run` the non-streamed path returns.
+            queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+            task = asyncio.ensure_future(
+                _run_async(
+                    self,
+                    turn_input,
+                    hooks=hooks,
+                    run_config=run_config,
+                    session=session,
+                    _context_wrapper=context_wrapper,
+                    emit=queue.put_nowait,
+                )
+            )
+            task.add_done_callback(lambda _: queue.put_nowait(None))
             try:
-                async for event in result:
+                while (event := await queue.get()) is not None:
                     yield event
+                stream.run = self._completed(task.result(), session)
             except RunaError as exc:
                 stream.run = self._failed(exc)
-                return
-            assert result.result is not None  # set once the stream is exhausted
-            stream.run = self._completed(result.result, session)
+            finally:
+                task.cancel()
 
         stream = RunStream(events())
         return stream

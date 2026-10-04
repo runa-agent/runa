@@ -3,7 +3,7 @@
 `new` and `generate` are scaffolding: they write files following the app/
 convention and never touch the runtime. `chat`, `eval`, and `test` do
 touch it, but only by calling existing library functions
-(`Runner.run_sync()`, `agent.evaluate()`, `run_project_tests()`) against
+(`agent.run_sync()`, `agent.evaluate()`, `run_project_tests()`) against
 the app in `cwd`; no logic lives here that doesn't already exist elsewhere.
 """
 

@@ -1,10 +1,18 @@
-"""`Run`: the result of `Agent.run()`/`run_sync()`, and `RunStream`, of `Agent.run_streamed()`."""
+"""`Run`: the result of `Agent.run()`/`run_sync()`, and `RunStream`, of `Agent.run_streamed()`.
+
+One result shape, built once by the turn loop (`run_internal/run_loop._finish`) and handed back
+unchanged. The loop used to return a `RunResult` of its own that the Agent translated field by
+field into this one, which meant two dataclasses carrying the same ten values and a translator
+that had to be kept honest between them. What the loop needs and a caller doesn't -- the context
+wrapper, the input it started from, the items it generated -- is here too, underscore-prefixed:
+private fields on the one result, rather than a second result shape to convert from.
+"""
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from runa._types import Usage
+from runa._types import RunContextWrapper, TResponseInputItem, Usage
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailResult
 from runa.run_state import Interruption, RunState
@@ -44,12 +52,24 @@ class Run:
     tool_input_guardrail_results: list[GuardrailResult] = field(default_factory=list)
     tool_output_guardrail_results: list[GuardrailResult] = field(default_factory=list)
     _state: RunState | None = field(default=None, repr=False)
+    _context_wrapper: RunContextWrapper | None = field(default=None, repr=False)
+    _original_input: list[TResponseInputItem] = field(default_factory=list, repr=False)
+    _generated_items: list[TResponseInputItem] = field(default_factory=list, repr=False)
 
     def to_state(self) -> RunState:
         """The paused run's `RunState`: approve or reject its `interruptions`, then resume."""
         if self._state is None:
             raise UserError(f"to_state() needs a paused run, this one is {self.status!r}")
         return self._state
+
+    def _history(self) -> list[TResponseInputItem]:
+        """`original_input + generated_items`: the conversation as it stands after this run.
+
+        What `Agent.run` writes back to `self.history` on a session-less run. Private because a
+        session-backed run's history lives in the session, and `Agent.history` is the supported
+        way to read the other kind.
+        """
+        return [*self._original_input, *self._generated_items]
 
 
 class RunStream:

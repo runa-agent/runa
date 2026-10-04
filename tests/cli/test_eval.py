@@ -37,25 +37,21 @@ def _eval_module_source(class_name: str, agent_name: str) -> str:
 
 
 def _patch_runner(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run(agent: Any, input: Any, **kwargs: Any) -> Any:
-        from dataclasses import dataclass, field
-
+    async def fake_run(self: Any, message: Any, *args: Any, **kwargs: Any) -> Any:
+        from runa._types import Usage
+        from runa.run import Run
         from runa.tracing import Trace
 
-        @dataclass
-        class _FakeResult:
-            final_output: Any = input
-            new_items: list[Any] = field(default_factory=list)
-            trace: Trace = field(
-                default_factory=lambda: Trace(id="t", name="t", start_time=0.0, spans=[])
-            )
-
-        return _FakeResult()
+        return Run(
+            output=message,
+            trace=Trace(id="t", name="t", start_time=0.0, spans=[]),
+            usage=Usage(),
+        )
 
     async def fake_evaluate_semantic(*args: Any, **kwargs: Any) -> list[Any]:
         return []
 
-    monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
+    monkeypatch.setattr("runa.agent.Agent.run", fake_run)
     monkeypatch.setattr("runa.eval.evaluate.evaluate_semantic", fake_evaluate_semantic)
     monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
 

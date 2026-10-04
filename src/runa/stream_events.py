@@ -1,4 +1,4 @@
-"""stream_events.py: the events `Runner.run_streamed`/`Agent.run_streamed` yield."""
+"""stream_events.py: the events `Agent.run_streamed` yields."""
 
 from dataclasses import dataclass
 from typing import Any, Literal

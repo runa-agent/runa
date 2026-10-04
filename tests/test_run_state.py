@@ -10,13 +10,14 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from helpers import context_of
 
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.exceptions import UserError
 from runa.handoff import Handoff
 from runa.run_config import RunConfig
+from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
-from runa.runner import Runner
 from runa.tool import tool
 
 
@@ -91,7 +92,7 @@ def _paused_result_and_agent() -> tuple[Any, Any]:
         tools=[dangerous],
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
     return result, agent
 
 
@@ -116,8 +117,8 @@ def test_to_json_then_from_json_round_trips_a_paused_run() -> None:
     blob = state.to_json()
     restored = asyncio.run(RunState.from_json(_fresh_agent_like(agent), blob))
 
-    resumed = asyncio.run(Runner.run(agent, restored, run_config=_run_config()))
-    assert resumed.final_output == "all done"
+    resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
+    assert resumed.output == "all done"
 
 
 def test_to_string_then_from_string_round_trips_the_same_way() -> None:
@@ -130,8 +131,8 @@ def test_to_string_then_from_string_round_trips_the_same_way() -> None:
     assert isinstance(blob, str)
     restored = asyncio.run(RunState.from_string(_fresh_agent_like(agent), blob))
 
-    resumed = asyncio.run(Runner.run(agent, restored, run_config=_run_config()))
-    assert resumed.final_output == "all done"
+    resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
+    assert resumed.output == "all done"
 
 
 def test_from_json_rejects_an_unknown_schema_version() -> None:
@@ -178,7 +179,7 @@ def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_p
         model=_ScriptedModel([_tool_call_response(handoff.tool_name, "{}")]),
     )
 
-    result = asyncio.run(Runner.run(main, "please transfer", run_config=_run_config()))
+    result = asyncio.run(_run_async(main, "please transfer", run_config=_run_config()))
     state = result.to_state()
     state.approve(state.pending[0])
 
@@ -189,8 +190,8 @@ def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_p
     restored = asyncio.run(RunState.from_json(fresh_main, blob))
     assert restored.agent.name == "Target"
 
-    resumed = asyncio.run(Runner.run(target, restored, run_config=_run_config()))
-    assert resumed.final_output == "done"
+    resumed = asyncio.run(_run_async(target, restored, run_config=_run_config()))
+    assert resumed.output == "done"
 
 
 def test_from_json_resolves_the_paused_interruptions_tool_from_its_name() -> None:
@@ -218,6 +219,6 @@ def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> N
     restored = asyncio.run(RunState.from_json(_fresh_agent_like(agent), blob))
     assert restored.context_wrapper.approval_ledger == {"dangerous": True}
 
-    resumed = asyncio.run(Runner.run(agent, restored, run_config=_run_config()))
-    assert resumed.final_output == "all done"
-    assert "call_1" in resumed.context_wrapper.executed_call_ids
+    resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
+    assert resumed.output == "all done"
+    assert "call_1" in context_of(resumed).executed_call_ids

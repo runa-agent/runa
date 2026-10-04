@@ -1,16 +1,21 @@
-"""Tests for `runa.eval.tracing.adapter`: `run_agent_for_eval`."""
+"""Tests for `runa.eval.tracing.adapter`: `run_agent_for_eval`.
+
+`run_agent_for_eval` goes through `Agent.run`, so these fake that one method rather than the turn
+loop under it: what the adapter is responsible for is reading a `Run` into an `AgentRun`, and
+giving each case an agent of its own. Whether a `RunaError` becomes `status="error"` in the first
+place is `Agent.run`'s contract, covered in `tests/test_agent.py`.
+"""
 
 import asyncio
 from typing import Any
 
 import pytest
 
-from runa._types import RunContextWrapper, Usage
+from runa._types import Usage
 from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.tracing.adapter import run_agent_for_eval
-from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
-from runa.result import RunResult
+from runa.run import Run
 from runa.tracing import Span, Trace
 
 
@@ -23,24 +28,18 @@ class _TestAgent(Agent):
 _AGENT = _TestAgent()
 
 
-def _result(final_output: Any, trace: Trace) -> RunResult:
-    return RunResult(
-        final_output=final_output,
-        context_wrapper=RunContextWrapper(context=None),
-        trace=trace,
-        _original_input=[],
-        _generated_items=[],
-    )
+def _run(output: Any, trace: Trace | None, **overrides: Any) -> Run:
+    return Run(output=output, trace=trace, usage=Usage(), **overrides)
 
 
 def test_run_agent_for_eval_captures_final_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A successful run's `final_output` and latency are captured, with no error."""
+    """A successful run's output and latency are captured, with no error."""
     trace = Trace(id="t1", name="UnderTest", start_time=0.0, end_time=0.0, spans=[])
 
-    async def fake_run(agent: Any, input: Any, **kwargs: Any) -> RunResult:
-        return _result("the answer", trace)
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        return _run("the answer", trace)
 
-    monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
+    monkeypatch.setattr(Agent, "run", fake_run)
 
     run = asyncio.run(run_agent_for_eval(_AGENT, Case(input="hi")))
 
@@ -52,7 +51,7 @@ def test_run_agent_for_eval_captures_final_output(monkeypatch: pytest.MonkeyPatc
 def test_run_agent_for_eval_pairs_tool_calls_with_their_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A `"tool"` span in `RunResult.trace` becomes a `ToolCallRecord`, read straight off it."""
+    """A `"tool"` span in `Run.trace` becomes a `ToolCallRecord`, read straight off it."""
     tool_span = Span(
         id="s1",
         trace_id="t1",
@@ -66,10 +65,10 @@ def test_run_agent_for_eval_pairs_tool_calls_with_their_output(
     )
     trace = Trace(id="t1", name="UnderTest", start_time=0.0, end_time=0.0, spans=[tool_span])
 
-    async def fake_run(agent: Any, input: Any, **kwargs: Any) -> RunResult:
-        return _result("done", trace)
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        return _run("done", trace)
 
-    monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
+    monkeypatch.setattr(Agent, "run", fake_run)
 
     run = asyncio.run(run_agent_for_eval(_AGENT, Case(input="cancel order 123")))
 
@@ -79,27 +78,60 @@ def test_run_agent_for_eval_pairs_tool_calls_with_their_output(
     assert any(span.type == "tool" for span in run.trace.spans)
 
 
-def test_run_agent_for_eval_captures_a_run_exception_as_an_error(
+def test_run_agent_for_eval_captures_a_failed_run_as_an_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A run that raises a `RunaError` (guardrail tripwire, `MaxTurnsExceeded`, ...) is captured."""
+    """A run `Agent.run` reported as `status="error"` becomes an `AgentRun` with `error` set."""
 
-    async def fake_run(agent: Any, input: Any, **kwargs: Any) -> RunResult:
-        exc = MaxTurnsExceeded("too many turns")
-        exc.run_data = RunErrorDetails(
-            input="hi",
-            new_items=[],
-            raw_responses=[],
-            last_agent=_AGENT,
-            context_wrapper=RunContextWrapper(context=None, usage=Usage()),
-            input_guardrail_results=[],
-            output_guardrail_results=[],
-        )
-        raise exc
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        return _run(None, None, status="error", error="too many turns")
 
-    monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
+    monkeypatch.setattr(Agent, "run", fake_run)
 
     run = asyncio.run(run_agent_for_eval(_AGENT, Case(input="hi")))
 
     assert run.final_output is None
     assert run.error is not None and "too many turns" in run.error
+
+
+def test_run_agent_for_eval_falls_back_to_an_empty_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run that never got as far as a `Trace` still yields a readable `AgentRun`."""
+
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        return _run(None, None, status="error", error="no trace")
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+
+    run = asyncio.run(run_agent_for_eval(_AGENT, Case(input="hi")))
+
+    assert run.trace.spans == []
+
+
+def test_run_agent_for_eval_runs_each_case_on_its_own_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each case gets a `_fresh()` copy, so one case's history never reaches the next.
+
+    `evaluate_agent` runs up to `concurrency` cases at once over one `Agent`, which is exactly
+    what `Agent._exclusive` refuses for session-less runs and what would otherwise let two cases
+    overwrite each other's conversation.
+    """
+    ran_on: list[Agent] = []
+
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        ran_on.append(self)
+        return _run("ok", None)
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+
+    async def _both() -> None:
+        await asyncio.gather(
+            run_agent_for_eval(_AGENT, Case(input="one")),
+            run_agent_for_eval(_AGENT, Case(input="two")),
+        )
+
+    asyncio.run(_both())
+
+    assert len(ran_on) == 2
+    assert ran_on[0] is not ran_on[1]
+    assert _AGENT not in ran_on

@@ -1,4 +1,4 @@
-"""streaming.py: assembling a streamed model response, for `Runner.run_streamed`.
+"""streaming.py: assembling a streamed model response, for `Agent.run_streamed`.
 
 `run_streamed` runs the same turn loop as `run` (`run_loop._run_async`, with an `emit` callback),
 so guardrails, approvals, tracing, hooks and sessions behave identically. The only

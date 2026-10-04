@@ -30,7 +30,7 @@ class RedisCache:
 
         A `redis.asyncio.Redis`'s connections belong to the loop running when it first
         connects, so a client left over from a now-closed loop (e.g. a second `asyncio.run()`
-        call reusing this same `RedisCache`, as `Runner.run_sync` makes easy to hit) would
+        call reusing this same `RedisCache`, as `Agent.run_sync` makes easy to hit) would
         crash with "Event loop is closed" instead of reconnecting; same fix as
         `ModelProvider`'s HTTP clients and `db/pool.py`'s pools.
         """

@@ -591,23 +591,41 @@ def test_string_instructions_pass_through_unchanged() -> None:
     assert Researcher().instructions == "You research topics."
 
 
-class _FakeResult:
-    """A stand-in for `RunResult`, just enough for `Agent.run`/`run_sync` to consume."""
+def _loop_run(**overrides: Any) -> Run:
+    """The `Run` the turn loop hands back, for a test that fakes the loop out.
 
-    final_output = "ok"
-    context_wrapper = RunContextWrapper(context=None, usage=Usage(input_tokens=1, output_tokens=2))
-    interruptions: list[Any] = []
-    trace = None
-
-    def to_input_list(self) -> list[Any]:
-        return []
+    There is one result shape now, so a stand-in for the loop's output is the real `Run` a caller
+    receives rather than a second class shaped approximately like it. What `Agent.run` still does
+    on top of this is the bookkeeping these tests are about: `last_usage`, `usage`, `history`.
+    """
+    defaults: dict[str, Any] = dict(
+        output="ok", trace=None, usage=Usage(input_tokens=1, output_tokens=2)
+    )
+    defaults.update(overrides)
+    return Run(**defaults)
 
 
 def _async(fake: Any) -> Any:
-    """Wrap a sync `Runner.run` stand-in as the coroutine function `Agent.run` awaits."""
+    """Wrap a sync `_run_async` stand-in as the coroutine function `Agent.run` awaits."""
 
     async def run(*args: Any, **kwargs: Any) -> Any:
         return fake(*args, **kwargs)
+
+    return run
+
+
+def _streaming(*events: Any, **overrides: Any) -> Any:
+    """A `_run_async` stand-in that emits `events`, then finishes as `_loop_run(**overrides)`.
+
+    `Agent.run_streamed` drives the loop through its `emit` callback and turns that into an async
+    iterator itself, so faking the loop (rather than a second streaming result class) is what
+    puts the Agent's own queue plumbing under test.
+    """
+
+    async def run(agent: Any, turn_input: Any, *, emit: Any, **kwargs: Any) -> Run:
+        for event in events:
+            emit(event)
+        return _loop_run(**overrides)
 
     return run
 
@@ -646,11 +664,11 @@ def test_run_sync_explicit_hooks_override_the_default(monkeypatch: pytest.Monkey
     captured: dict[str, Any] = {}
     custom_hooks = LoggingRunHooks()
 
-    def fake_run_sync(*args: Any, hooks: Any, **kwargs: Any) -> _FakeResult:
+    def fake_run_sync(*args: Any, hooks: Any, **kwargs: Any) -> Run:
         captured["hooks"] = hooks
-        return _FakeResult()
+        return _loop_run()
 
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     Researcher().run_sync("hi", hooks=custom_hooks)
 
@@ -660,10 +678,10 @@ def test_run_sync_explicit_hooks_override_the_default(monkeypatch: pytest.Monkey
 def test_run_sync_records_and_accumulates_usage(monkeypatch: pytest.MonkeyPatch) -> None:
     """`run_sync` records the call's usage to `last_usage` and adds it to `usage`."""
 
-    def fake_run_sync(*args: Any, **kwargs: Any) -> _FakeResult:
-        return _FakeResult()
+    def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
+        return _loop_run()
 
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     agent = Researcher()
     agent.run_sync("hi")
@@ -678,10 +696,10 @@ def test_run_sync_records_and_accumulates_usage(monkeypatch: pytest.MonkeyPatch)
 def test_run_sync_returns_a_completed_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """`run_sync` returns a `Run` with the final output, status, and this call's usage."""
 
-    def fake_run_sync(*args: Any, **kwargs: Any) -> _FakeResult:
-        return _FakeResult()
+    def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
+        return _loop_run()
 
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     run = Researcher().run_sync("hi")
 
@@ -699,11 +717,11 @@ def test_run_sync_passes_multimodal_message_content_through(
 
     captured: dict[str, Any] = {}
 
-    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> _FakeResult:
+    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> Run:
         captured["turn_input"] = turn_input
-        return _FakeResult()
+        return _loop_run()
 
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     parts = [content.text("what's in this image?"), content.image("https://example.test/cat.png")]
     Researcher().run_sync(parts)
@@ -717,11 +735,11 @@ def test_run_sync_auto_detects_images_in_a_plain_string_list(
     """A plain `list[str]` message auto-detects each item as text or an image by extension."""
     captured: dict[str, Any] = {}
 
-    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> _FakeResult:
+    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> Run:
         captured["turn_input"] = turn_input
-        return _FakeResult()
+        return _loop_run()
 
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     Researcher().run_sync(["what's in this image?", "https://example.test/cat.jpg"])
 
@@ -741,18 +759,18 @@ def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
 ) -> None:
     """With a `session`, a multimodal message is wrapped in a one-item message list.
 
-    Unlike a plain string (sent as-is, since `Runner.run`'s session path wraps it itself), a
+    Unlike a plain string (sent as-is, since the loop's session path wraps it itself), a
     parts list isn't a valid top-level `input` for the session path, so `Agent` must wrap it.
     """
     from runa import content
 
     captured: dict[str, Any] = {}
 
-    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> _FakeResult:
+    def fake_run_sync(agent: Any, turn_input: Any, **kwargs: Any) -> Run:
         captured["turn_input"] = turn_input
-        return _FakeResult()
+        return _loop_run()
 
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     parts = [content.image("https://example.test/cat.png")]
     Researcher().run_sync(parts, session=cast(Any, object()))
@@ -778,10 +796,10 @@ def test_run_sync_catches_runa_error_as_error_run(monkeypatch: pytest.MonkeyPatc
         output_guardrail_results=[],
     )
 
-    def fake_run_sync(*args: Any, **kwargs: Any) -> _FakeResult:
+    def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
         raise exc
 
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     agent = Researcher()
     run = agent.run_sync("hi")
@@ -795,18 +813,15 @@ def test_run_sync_catches_runa_error_as_error_run(monkeypatch: pytest.MonkeyPatc
 
 
 def test_run_sync_trace_populated_regardless_of_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`Run.trace` is whatever `Runner.run_sync()` produced, independent of a custom `hooks=`."""
+    """`Run.trace` is whatever the turn loop produced, independent of a custom `hooks=`."""
     from runa.tracing import Trace
 
     fake_trace = Trace(id="t1", name="Researcher", start_time=0.0)
 
-    class _ResultWithTrace(_FakeResult):
-        trace = fake_trace
+    def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
+        return _loop_run(trace=fake_trace)
 
-    def fake_run_sync(*args: Any, **kwargs: Any) -> _ResultWithTrace:
-        return _ResultWithTrace()
-
-    monkeypatch.setattr("runa.agent.Runner.run", staticmethod(_async(fake_run_sync)))
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     run = Researcher().run_sync("hi", hooks=LoggingRunHooks())
 
@@ -931,33 +946,16 @@ def test_run_sync_trace_records_a_tool_error_span() -> None:
 
 def test_run_streamed_yields_events_and_updates_history(monkeypatch: pytest.MonkeyPatch) -> None:
     """`run_streamed` yields every event, then appends the turn to history and records usage."""
-
-    class _FakeStreaming:
-        context_wrapper = RunContextWrapper(
-            context=None, usage=Usage(input_tokens=3, output_tokens=4)
-        )
-        interruptions: list[Any] = []
-        final_output = "ok"
-        trace = None
-
-        @property
-        def result(self) -> Any:
-            return self
-
-        def __aiter__(self) -> AsyncIterator[Any]:
-            async def _events() -> AsyncIterator[Any]:
-                yield "event-1"
-                yield "event-2"
-
-            return _events()
-
-        def to_input_list(self) -> list[Any]:
-            return [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "ok"}]
-
-    def fake_run_streamed(*args: Any, **kwargs: Any) -> _FakeStreaming:
-        return _FakeStreaming()
-
-    monkeypatch.setattr("runa.agent.Runner.run_streamed", staticmethod(fake_run_streamed))
+    monkeypatch.setattr(
+        "runa.agent._run_async",
+        _streaming(
+            "event-1",
+            "event-2",
+            usage=Usage(input_tokens=3, output_tokens=4),
+            _original_input=[{"role": "user", "content": "hi"}],
+            _generated_items=[{"role": "assistant", "content": "ok"}],
+        ),
+    )
 
     agent = Researcher()
 
@@ -981,31 +979,13 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
     """With a `session`, `run_streamed` passes it through and leaves `self.history` alone."""
     captured: dict[str, Any] = {}
 
-    class _FakeStreaming:
-        context_wrapper = RunContextWrapper(context=None)
-        interruptions: list[Any] = []
-        final_output = "ok"
-        trace = None
-
-        @property
-        def result(self) -> Any:
-            return self
-
-        def __aiter__(self) -> AsyncIterator[Any]:
-            async def _events() -> AsyncIterator[Any]:
-                yield "event"
-
-            return _events()
-
-        def to_input_list(self) -> list[Any]:
-            return [{"role": "user", "content": "hi"}]
-
-    def fake_run_streamed(*args: Any, session: Any, **kwargs: Any) -> _FakeStreaming:
-        captured["input"] = args[1]
+    async def fake_run(agent: Any, turn_input: Any, *, session: Any, emit: Any, **kwargs: Any):
+        captured["input"] = turn_input
         captured["session"] = session
-        return _FakeStreaming()
+        emit("event")
+        return _loop_run(_original_input=[{"role": "user", "content": "hi"}])
 
-    monkeypatch.setattr("runa.agent.Runner.run_streamed", staticmethod(fake_run_streamed))
+    monkeypatch.setattr("runa.agent._run_async", fake_run)
     agent = Researcher()
     agent.history = [{"role": "user", "content": "earlier"}]
     session = object()

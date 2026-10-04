@@ -1,4 +1,4 @@
-"""run_config.py: `RunConfig`, per-call configuration for `Runner.run`/`run_sync`/`run_streamed`."""
+"""run_config.py: `RunConfig`, per-call configuration for one `Agent` run."""
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,7 +10,7 @@ DEFAULT_MAX_TURNS = 10
 
 @dataclass
 class RunConfig:
-    """Per-call configuration for `Runner.run`/`run_sync`/`run_streamed`.
+    """Per-call configuration for `Agent.run`/`run_sync`/`run_streamed`.
 
     `workflow_name` names the `Trace` this run produces; `group_id`/`trace_metadata` are recorded
     on it verbatim. `model_provider` resolves an `Agent.model` string to a `Model`, irrelevant

@@ -3,7 +3,7 @@
 A server's tools are listed once (cached from then on) and exposed as ordinary `FunctionTool`s.
 `run_internal` never needs to know a tool came from an MCP server rather than a `@tool` function.
 The connection itself is opened lazily, on first use, and kept open across an `Agent`'s whole
-lifetime (not per `Runner.run()` call): an MCP server is meant to be a persistent, reusable
+lifetime (not per `Agent.run()` call): an MCP server is meant to be a persistent, reusable
 connection, not something reopened every turn.
 """
 

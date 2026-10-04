@@ -9,7 +9,7 @@ import pytest
 from runa import db
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.run_config import RunConfig
-from runa.runner import Runner
+from runa.run_internal.run_loop import _run_async
 from runa.tool import tool
 from runa.tracing import ConsoleExporter, Trace, config, observe
 
@@ -200,8 +200,9 @@ def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:
     """`observe(capture_inputs=False)` means a captured tool span's `input` stays `None`."""
     agent = _agent_with_tool()
     with observe(capture_inputs=False):
-        result = asyncio.run(Runner.run(agent, "hi", run_config=RunConfig(workflow_name="T")))
+        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
 
+    assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
     assert tool_span.input is None
     assert tool_span.output == "ok"
@@ -228,8 +229,9 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
     )
 
     with observe(redact=["email"]):
-        result = asyncio.run(Runner.run(agent, "hi", run_config=RunConfig(workflow_name="T")))
+        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
 
+    assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
     assert tool_span.output["email"] == "[REDACTED]"
     assert tool_span.output["id"] == 1
@@ -257,8 +259,9 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
     )
 
     with observe(max_input_bytes=10):
-        result = asyncio.run(Runner.run(agent, "hi", run_config=RunConfig(workflow_name="T")))
+        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
 
+    assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
     assert len(tool_span.input) < 100
     assert tool_span.input.endswith("[truncated]")

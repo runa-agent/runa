@@ -1,16 +1,17 @@
 """Tests for `runa.eval.evaluate`: `evaluate_agent`, behind `agent.evaluate()`."""
 
 import asyncio
-from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
 from runa import db
+from runa._types import Usage
 from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.evaluate import evaluate_agent
 from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.run import Run
 from runa.tracing import Trace
 
 
@@ -24,11 +25,13 @@ class _TestAgent(Agent):
 _AGENT = _TestAgent()
 
 
-@dataclass
-class _FakeResult:
-    final_output: Any = "ok"
-    new_items: list[Any] = field(default_factory=list)
-    trace: Trace = field(default_factory=lambda: Trace(id="t", name="t", start_time=0.0, spans=[]))
+def _run(output: Any) -> Run:
+    """The `Run` a faked `Agent.run` hands `run_agent_for_eval`."""
+    return Run(
+        output=output,
+        trace=Trace(id="t", name="t", start_time=0.0, spans=[]),
+        usage=Usage(),
+    )
 
 
 def _patch_run_and_storage(monkeypatch: pytest.MonkeyPatch, outputs: dict[str, Any]) -> None:
@@ -39,12 +42,13 @@ def _patch_run_and_storage(monkeypatch: pytest.MonkeyPatch, outputs: dict[str, A
     meant nothing here exercised the path from a finished `Report` to stored history.
     """
 
-    async def fake_run(agent: Any, input: Any, **kwargs: Any) -> Any:
-        if input in outputs and isinstance(outputs[input], Exception):
-            raise outputs[input]
-        return _FakeResult(final_output=outputs.get(input, input))
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        if message in outputs and isinstance(outputs[message], Exception):
+            exc = outputs[message]
+            return Run(output=None, trace=None, usage=Usage(), status="error", error=str(exc))
+        return _run(outputs.get(message, message))
 
-    monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(fake_run))
+    monkeypatch.setattr(Agent, "run", fake_run)
     monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
 
 
@@ -228,15 +232,15 @@ def test_evaluate_agent_runs_cases_concurrently_in_dataset_order(
     _stub_semantic(monkeypatch)
     running, peak = 0, 0
 
-    async def slow_run(agent: Any, input: Any, **kwargs: Any) -> Any:
+    async def slow_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
         nonlocal running, peak
         running += 1
         peak = max(peak, running)
-        await asyncio.sleep(0.01 if input == "a" else 0)
+        await asyncio.sleep(0.01 if message == "a" else 0)
         running -= 1
-        return _FakeResult(final_output=input)
+        return _run(message)
 
-    monkeypatch.setattr("runa.eval.tracing.adapter.Runner.run", staticmethod(slow_run))
+    monkeypatch.setattr(Agent, "run", slow_run)
     dataset = [Case(input="a"), Case(input="b"), Case(input="c")]
 
     report = asyncio.run(evaluate_agent(_AGENT, dataset, concurrency=concurrency))

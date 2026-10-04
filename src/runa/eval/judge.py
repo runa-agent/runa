@@ -1,9 +1,10 @@
 """eval/judge.py: the judge model `eval/evaluation/semantic.py`'s metrics grade with.
 
-`ask()` runs a prompt through the same `runa._models.ModelProvider` every `runa.Agent` uses (see
-`runa.agent`), so semantic metrics grade with whatever model an app already talks to instead of
-requiring a separate client or API key. `extract_json()` pulls a JSON object out of a judge's
-reply, tolerating the odd trailing comma a model sometimes emits.
+`ask()` runs a prompt through a bare `runa.Agent`, so semantic metrics grade with whatever model
+an app already talks to instead of requiring a separate client or API key, and through the same
+one door as everything else: the provider, the `RunConfig` and the tracing are the Agent's, not a
+second copy assembled here. `extract_json()` pulls a JSON object out of a judge's reply,
+tolerating the odd trailing comma a model sometimes emits.
 """
 
 import json
@@ -11,9 +12,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from runa.agent import _MODEL_PROVIDER, Agent
-from runa.run_config import RunConfig
-from runa.runner import Runner
+from runa.agent import Agent
+from runa.exceptions import ModelBehaviorError
 
 _TRAILING_COMMA = re.compile(r",\s*([\]}])")
 
@@ -43,12 +43,18 @@ class Judge:
     model: str
 
     async def ask(self, prompt: str) -> str:
-        """Send `prompt` to `self.model` through a bare, tool-less `Agent`."""
+        """Send `prompt` to `self.model` through a bare, tool-less `Agent`.
+
+        A judge run that didn't complete raises rather than returning its empty `output`:
+        `semantic.py`'s `_grade` turns a raised exception into an `ERROR` metric carrying the
+        reason, which is the difference between "the judge model is unreachable" and a
+        `NoneType` error three frames later.
+        """
         judge_agent = _JudgeAgent(model=self.model, tools=[])
-        result = await Runner.run(
-            judge_agent, prompt, run_config=RunConfig(model_provider=_MODEL_PROVIDER)
-        )
-        return result.final_output
+        run = await judge_agent.run(prompt)
+        if run.status != "completed":
+            raise ModelBehaviorError(f"judge model {self.model!r} did not answer: {run.error}")
+        return run.output
 
 
 def judge_model(model: str) -> Judge:

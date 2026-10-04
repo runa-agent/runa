@@ -1,12 +1,13 @@
 """Tests for tracing's fail-open guarantee: a broken exporter must never break an agent run."""
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
 from runa import Trace
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.run_config import RunConfig
-from runa.runner import Runner
+from runa.run_internal.run_loop import _run_async
 from runa.tracing import observe
 
 
@@ -41,9 +42,12 @@ def _agent() -> Any:
 
 
 def test_agent_run_sync_completes_even_when_the_exporter_fails() -> None:
-    """`Runner.run_sync` still returns a completed result when the tracing exporter raises."""
+    """A run still returns a completed result when the tracing exporter raises."""
     with observe(exporter=_BrokenExporter()):
-        result = Runner.run_sync(_agent(), "hi", run_config=RunConfig(workflow_name="Researcher"))
+        result = asyncio.run(
+            _run_async(_agent(), "hi", run_config=RunConfig(workflow_name="Researcher"))
+        )
 
-    assert result.final_output == "ok"
+    assert result.output == "ok"
+    assert result.trace is not None
     assert result.trace.spans

@@ -1,8 +1,9 @@
 """run_loop.py: the turn loop (`_run_turns`), and run/resume orchestration.
 
-The public `Runner` that calls into this lives in `runa.runner`, matching openaisdk's own
-`run_internal/run_loop.py` docstring: only execution-time utilities belong here; public-facing
-APIs belong at the top level.
+`Agent.run`/`run_streamed` are the only public way in: this is the Agent's implementation, not a
+seam of its own, which is why everything here is underscore-prefixed. `_finish` returns the same
+`Run` the caller gets, so there is one result shape from the loop's last line to the caller's
+hands and nothing in between translating one into another.
 """
 
 import asyncio
@@ -23,7 +24,7 @@ from runa.exceptions import (
 )
 from runa.guardrail import guardrail_results
 from runa.lifecycle import LoggingRunHooks, RunHooks, logger
-from runa.result import RunResult
+from runa.run import Run
 from runa.run_config import RunConfig
 from runa.run_internal.agent_runner_helpers import (
     _agent_tools,
@@ -356,11 +357,15 @@ async def _extract_memory(run: _Run, final_output: Any, run_config: RunConfig) -
 
 async def _finish(
     run: _Run, outcome: _TurnOutcome, hooks: RunHooks[Any], run_config: RunConfig
-) -> RunResult:
-    """Turn the loop's outcome into a `RunResult`: a paused `RunState`, or a completed turn.
+) -> Run:
+    """Turn the loop's outcome into the caller's `Run`: a paused `RunState`, or a completed turn.
 
     A session-backed run persists nothing while paused: the whole turn is saved once it
     completes, whether that's straight away or after one or more resumes.
+
+    `usage` is the context wrapper's, which is where every turn (and every delegate's) has been
+    accumulating it all along; `Agent.run` records that same value to `last_usage` rather than
+    recomputing it.
     """
     _close_span(run.span, output=outcome.final_output)
     run.trace.end_time = time.time()
@@ -382,14 +387,16 @@ async def _finish(
         for interruption in outcome.interruptions:
             interruption.owner = interruption.owner or state  # a delegate's keeps its own
         _export(run.trace)
-        return RunResult(
-            final_output=None,
-            context_wrapper=context_wrapper,
+        return Run(
+            output=None,
             trace=run.trace,
-            _original_input=run.original_input,
-            _generated_items=list(run.generated),
+            usage=context_wrapper.usage,
+            status="paused",
             interruptions=outcome.interruptions,
             _state=state,
+            _context_wrapper=context_wrapper,
+            _original_input=run.original_input,
+            _generated_items=list(run.generated),
             **guardrail_results(context_wrapper),
         )
 
@@ -412,10 +419,11 @@ async def _finish(
 
     await hooks.on_agent_end(context_wrapper, outcome.current_agent, outcome.final_output)
     _export(run.trace)
-    return RunResult(
-        final_output=outcome.final_output,
-        context_wrapper=context_wrapper,
+    return Run(
+        output=outcome.final_output,
         trace=run.trace,
+        usage=context_wrapper.usage,
+        _context_wrapper=context_wrapper,
         _original_input=run.original_input,
         _generated_items=list(run.generated),
         **guardrail_results(context_wrapper),
@@ -432,7 +440,7 @@ async def _run_async(
     session: SessionABC | None = None,
     _context_wrapper: RunContextWrapper[Any] | None = None,
     emit: Emit | None = None,
-) -> RunResult:
+) -> Run:
     run_config = run_config or RunConfig()
     hooks = hooks or LoggingRunHooks()
 
@@ -528,7 +536,7 @@ async def _resume(
     run_config: RunConfig,
     session: SessionABC | None,
     emit: Emit | None = None,
-) -> RunResult:
+) -> Run:
     """Continue a paused run once its interruptions are resolved."""
     run = _Run(
         agent=state.agent,

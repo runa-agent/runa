@@ -1,13 +1,22 @@
-"""Tests for `runa.runner`: the in-house agent loop that replaces `agents.Runner`."""
+"""Tests for `run_internal.run_loop`: the turn loop behind every `Agent.run`.
+
+These drive `_run_async` directly, over a `SimpleNamespace` stand-in for an agent, which is
+what lets one test isolate one loop behaviour (a handoff, a tripwire, a token budget) without
+standing up a real `Agent` and its wiring. The flip side is that nothing here can catch an
+`Agent` that wires itself wrong -- the stand-in is exactly what replaces that wiring -- so
+`tests/test_agent.py` owns the real-`Agent` side of the same loop, and that is where a test
+about `Agent.run`'s own behaviour belongs.
+"""
 
 import asyncio
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from helpers import context_of, trace_of
 
 from runa._models import StreamDelta
-from runa._types import ModelResponse, ModelSettings, Usage
+from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
 from runa.exceptions import (
     DuplicateToolCallError,
     InputGuardrailTripwireTriggered,
@@ -17,10 +26,70 @@ from runa.exceptions import (
 )
 from runa.guardrail import GuardrailFunctionOutput, InputGuardrail, OutputGuardrail
 from runa.handoff import Handoff
+from runa.run import Run
 from runa.run_config import RunConfig
-from runa.runner import Runner
+from runa.run_internal.run_loop import _run_async
+from runa.run_state import RunState
+from runa.stream_events import StreamEvent
 from runa.tool import tool
 from runa.tracing.util import gen_trace_id
+
+
+class _Stream:
+    """What `Agent.run_streamed` does with `_run_async`'s `emit`, for the loop's own tests.
+
+    The loop's streaming contract is one callback: hand it an `emit` and it reports every step as
+    it happens. Turning that into an async iterator, and holding the finished `Run` afterward, is
+    the Agent's job (see `Agent.run_streamed`). These tests drive the loop under a
+    `SimpleNamespace` agent the real one would never accept, so they need the same handful of
+    lines here rather than a second streaming result shape in `src/`.
+    """
+
+    def __init__(self, agent: Any, input: Any, **kwargs: Any) -> None:
+        """Prepare the run; nothing starts until the first `__anext__`."""
+        self.context_wrapper = (
+            input.context_wrapper if isinstance(input, RunState) else RunContextWrapper()
+        )
+        self.run: Run | None = None
+        self._events = self._stream(agent, input, kwargs)
+
+    async def _stream(self, agent: Any, input: Any, kwargs: dict[str, Any]) -> Any:
+        queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+        task = asyncio.ensure_future(
+            _run_async(
+                agent,
+                input,
+                _context_wrapper=self.context_wrapper,
+                emit=queue.put_nowait,
+                **kwargs,
+            )
+        )
+        task.add_done_callback(lambda _: queue.put_nowait(None))
+        try:
+            while (event := await queue.get()) is not None:
+                yield event
+            self.run = task.result()
+        finally:
+            task.cancel()
+
+    def __aiter__(self) -> Any:
+        """Iterate the run's `StreamEvent`s."""
+        return self._events
+
+    @property
+    def output(self) -> Any:
+        """The run's final output, once the stream is fully consumed."""
+        return self.run.output if self.run is not None else None
+
+    @property
+    def interruptions(self) -> list[Any]:
+        """Tool calls the run paused on, once the stream is fully consumed."""
+        return self.run.interruptions if self.run is not None else []
+
+    def to_state(self) -> RunState:
+        """The paused run's `RunState`, once the stream is fully consumed."""
+        assert self.run is not None, "to_state() needs a fully consumed stream"
+        return self.run.to_state()
 
 
 def _agent(**overrides: Any) -> Any:
@@ -127,20 +196,20 @@ def test_plain_text_turn_returns_final_output() -> None:
     """A model reply with no tool calls becomes the run's final output directly."""
     agent = _agent(model=_ScriptedModel([_text_response("hello there")]))
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.final_output == "hello there"
+    assert result.output == "hello there"
     assert result.interruptions == []
-    assert result.context_wrapper.usage.input_tokens == 1
+    assert context_of(result).usage.input_tokens == 1
 
 
 def test_run_sync_matches_run() -> None:
     """`run_sync` is a synchronous wrapper with identical behavior to `run`."""
     agent = _agent(model=_ScriptedModel([_text_response("ok")]))
 
-    result = Runner.run_sync(agent, "hi", run_config=_run_config())
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
 
 def test_tool_call_then_final_text() -> None:
@@ -158,14 +227,14 @@ def test_tool_call_then_final_text() -> None:
         ),
     )
 
-    result = asyncio.run(Runner.run(agent, "what time is it?", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "what time is it?", run_config=_run_config()))
 
-    assert result.final_output == "it is 2024-01-01"
-    tool_spans = [s for s in result.trace.spans if s.type == "tool"]
+    assert result.output == "it is 2024-01-01"
+    tool_spans = [s for s in trace_of(result).spans if s.type == "tool"]
     assert len(tool_spans) == 1
     assert tool_spans[0].name == "now"
     assert tool_spans[0].status == "ok"
-    agent_spans = [s for s in result.trace.spans if s.type == "agent"]
+    agent_spans = [s for s in trace_of(result).spans if s.type == "agent"]
     assert agent_spans[0].name == "TestAgent"
 
 
@@ -182,10 +251,10 @@ def test_tool_error_is_fed_back_and_run_continues() -> None:
         model=_ScriptedModel([_tool_call_response("boom", "{}"), _text_response("handled it")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
-    assert result.final_output == "handled it"
-    (tool_span,) = [s for s in result.trace.spans if s.type == "tool"]
+    assert result.output == "handled it"
+    (tool_span,) = [s for s in trace_of(result).spans if s.type == "tool"]
     assert tool_span.status == "error"
     assert "boom" in (tool_span.error or "")
 
@@ -201,9 +270,9 @@ def test_malformed_tool_arguments_are_fed_back_and_run_continues() -> None:
     model = _ScriptedModel([_tool_call_response("lookup", "{not json"), _text_response("sorry")])
     agent = _agent(tools=[lookup], model=model)
 
-    result = asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
-    assert result.final_output == "sorry"
+    assert result.output == "sorry"
     assert model.calls[1][-1]["content"].startswith("error: invalid JSON arguments")
 
 
@@ -218,7 +287,7 @@ def test_non_object_tool_arguments_are_fed_back_as_an_error() -> None:
     model = _ScriptedModel([_tool_call_response("lookup", "[1]"), _text_response("sorry")])
     agent = _agent(tools=[lookup], model=model)
 
-    asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+    asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
     assert model.calls[1][-1]["content"] == "error: tool arguments must be a JSON object"
 
@@ -233,10 +302,10 @@ def test_handoff_switches_current_agent() -> None:
         model=_ScriptedModel([_tool_call_response(handoff.tool_name, "{}")]),
     )
 
-    result = asyncio.run(Runner.run(main, "please transfer", run_config=_run_config()))
+    result = asyncio.run(_run_async(main, "please transfer", run_config=_run_config()))
 
-    assert result.final_output == "handled by target"
-    handoff_spans = [s for s in result.trace.spans if s.type == "handoff"]
+    assert result.output == "handled by target"
+    handoff_spans = [s for s in trace_of(result).spans if s.type == "handoff"]
     assert len(handoff_spans) == 1
 
 
@@ -265,12 +334,12 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
         ),
     )
 
-    result = asyncio.run(Runner.run(caller, "what's the policy?", run_config=_run_config()))
+    result = asyncio.run(_run_async(caller, "what's the policy?", run_config=_run_config()))
 
-    assert result.final_output == "it's 30 days"
-    (delegate_span,) = [s for s in result.trace.spans if s.name == "researcher"]
+    assert result.output == "it's 30 days"
+    (delegate_span,) = [s for s in trace_of(result).spans if s.name == "researcher"]
     assert delegate_span.type == "delegate"
-    assert not [s for s in result.trace.spans if s.type == "tool"]
+    assert not [s for s in trace_of(result).spans if s.type == "tool"]
 
 
 def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
@@ -283,7 +352,7 @@ def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
     model = _ScriptedModel([_text_response("hi")])
     main = _agent(name="Main", handoffs=[target], model=model)
 
-    asyncio.run(Runner.run(main, "hello", run_config=_run_config()))
+    asyncio.run(_run_async(main, "hello", run_config=_run_config()))
 
     assert len(model.received_handoffs) == 1
     (received,) = model.received_handoffs
@@ -303,7 +372,7 @@ def test_input_guardrail_tripwire_halts_the_run() -> None:
     )
 
     with pytest.raises(InputGuardrailTripwireTriggered):
-        asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
 
 def test_output_guardrail_tripwire_halts_the_run() -> None:
@@ -318,7 +387,7 @@ def test_output_guardrail_tripwire_halts_the_run() -> None:
     )
 
     with pytest.raises(OutputGuardrailTripwireTriggered):
-        asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
 
 def test_tool_input_guardrail_tripwire_halts_the_run() -> None:
@@ -341,7 +410,7 @@ def test_tool_input_guardrail_tripwire_halts_the_run() -> None:
     )
 
     with pytest.raises(ToolInputGuardrailTripwireTriggered):
-        asyncio.run(Runner.run(agent, "search for x", run_config=_run_config()))
+        asyncio.run(_run_async(agent, "search for x", run_config=_run_config()))
 
 
 def test_max_turns_exceeded() -> None:
@@ -356,7 +425,7 @@ def test_max_turns_exceeded() -> None:
     agent = _agent(tools=[loop_tool], model=_ScriptedModel(responses))
 
     with pytest.raises(MaxTurnsExceeded):
-        asyncio.run(Runner.run(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=3)))
+        asyncio.run(_run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=3)))
 
 
 def test_a_run_error_reports_the_items_generated_before_it() -> None:
@@ -371,7 +440,7 @@ def test_a_run_error_reports_the_items_generated_before_it() -> None:
     agent = _agent(tools=[loop_tool], model=_ScriptedModel(responses))
 
     with pytest.raises(MaxTurnsExceeded) as caught:
-        asyncio.run(Runner.run(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=2)))
+        asyncio.run(_run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=2)))
 
     assert caught.value.run_data is not None
     assert [item["role"] for item in caught.value.run_data.new_items] == [
@@ -395,18 +464,18 @@ def test_needs_approval_pauses_then_resumes_on_approve() -> None:
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
 
-    assert result.final_output is None
+    assert result.output is None
     assert len(result.interruptions) == 1
     interruption = result.interruptions[0]
     assert interruption.name == "dangerous"
 
     state = result.to_state()
     state.approve(interruption)
-    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
-    assert resumed.final_output == "all done"
+    assert resumed.output == "all done"
 
 
 def test_needs_approval_rejected_feeds_back_and_continues() -> None:
@@ -424,12 +493,12 @@ def test_needs_approval_rejected_feeds_back_and_continues() -> None:
         ),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
     state = result.to_state()
     state.reject(result.interruptions[0])
-    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
-    assert resumed.final_output == "okay, skipped it"
+    assert resumed.output == "okay, skipped it"
 
 
 def test_needs_approval_always_approve_skips_future_prompts_for_the_same_tool() -> None:
@@ -451,14 +520,14 @@ def test_needs_approval_always_approve_skips_future_prompts_for_the_same_tool() 
         ),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
     state = result.to_state()
     state.approve(result.interruptions[0], always=True)
 
-    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
     assert resumed.interruptions == []
-    assert resumed.final_output == "all done"
+    assert resumed.output == "all done"
 
 
 def test_reject_with_a_custom_rejection_message_feeds_the_custom_text_back() -> None:
@@ -476,14 +545,12 @@ def test_reject_with_a_custom_rejection_message_feeds_the_custom_text_back() -> 
         ),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
     state = result.to_state()
     state.reject(result.interruptions[0], rejection_message="not allowed today")
-    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
-    tool_messages = [
-        item["content"] for item in resumed.to_input_list() if item.get("role") == "tool"
-    ]
+    tool_messages = [item["content"] for item in resumed._history() if item.get("role") == "tool"]
     assert "not allowed today" in tool_messages
 
 
@@ -506,16 +573,14 @@ def test_needs_approval_always_reject_feeds_back_the_sticky_message_for_later_ca
         ),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
     state = result.to_state()
     state.reject(result.interruptions[0], always=True, rejection_message="not allowed, ever")
 
-    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
     assert resumed.interruptions == []
-    tool_messages = [
-        item["content"] for item in resumed.to_input_list() if item.get("role") == "tool"
-    ]
+    tool_messages = [item["content"] for item in resumed._history() if item.get("role") == "tool"]
     assert tool_messages.count("not allowed, ever") == 2
 
 
@@ -566,16 +631,16 @@ def test_resume_runs_the_approved_call_and_reuses_the_ready_result_from_the_same
     model = _ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")])
     agent = _agent(tools=_safe_and_gated_tools(ran), model=model)
 
-    result = asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
     state = result.to_state()
     state.approve(result.interruptions[0])
-    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
     assert ran == ["safe", "gated"]
-    assert resumed.final_output == "all done"
+    assert resumed.output == "all done"
     assert [item["role"] for item in model.calls[1]] == ["user", "assistant", "tool", "tool"]
     assert [item["content"] for item in model.calls[1][2:]] == ["safe done", "gated done"]
-    assert resumed.to_input_list() == [
+    assert resumed._history() == [
         {"role": "user", "content": "go"},
         _safe_and_gated_calls_response().output[0],
         {"role": "tool", "tool_call_id": "c1", "content": "safe done"},
@@ -595,12 +660,12 @@ def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
         model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "go", session=session, run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "go", session=session, run_config=_run_config()))
     assert asyncio.run(session.get_items()) == []
 
     state = result.to_state()
     state.approve(result.interruptions[0])
-    asyncio.run(Runner.run(agent, state, session=session, run_config=_run_config()))
+    asyncio.run(_run_async(agent, state, session=session, run_config=_run_config()))
 
     assert asyncio.run(session.get_items()) == [
         {"role": "user", "content": "go"},
@@ -623,11 +688,11 @@ def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
         model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "go", session=session, run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "go", session=session, run_config=_run_config()))
     blob = result.to_state().to_json()
     state = asyncio.run(RunState.from_json(agent, blob))
     state.approve(state.pending[0])
-    asyncio.run(Runner.run(agent, state, session=session, run_config=_run_config()))
+    asyncio.run(_run_async(agent, state, session=session, run_config=_run_config()))
 
     assert ran == ["safe", "gated"]
     items = asyncio.run(session.get_items())
@@ -682,9 +747,9 @@ def test_tool_calls_in_one_message_run_concurrently_and_keep_call_order() -> Non
     model = _ScriptedModel([_two_calls_response("ping", "pong"), _text_response("both done")])
     agent = _agent(tools=[ping, pong], model=model)
 
-    result = asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
-    assert result.final_output == "both done"
+    assert result.output == "both done"
     assert [item["content"] for item in model.calls[1][2:]] == ["ping done", "pong done"]
 
 
@@ -725,7 +790,7 @@ def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
         observe(exporter=[_Capture()]),
         pytest.raises(ToolInputGuardrailTripwireTriggered),
     ):
-        asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+        asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
     # As exported, not after `asyncio.run` tidied up leftover tasks.
     assert exported["slow"] == "CancelledError"
@@ -756,7 +821,7 @@ def test_parallel_tool_calls_false_runs_calls_one_at_a_time() -> None:
         model_settings=ModelSettings(parallel_tool_calls=False),
     )
 
-    asyncio.run(Runner.run(agent, "go", run_config=_run_config()))
+    asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
     assert log == ["first start", "first end", "second start"]
 
@@ -774,14 +839,14 @@ def test_resuming_the_same_state_twice_raises_duplicate_call_id_error() -> None:
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
     state = result.to_state()
     state.approve(result.interruptions[0])
 
-    asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
     with pytest.raises(DuplicateToolCallError):
-        asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+        asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
 
 def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> None:
@@ -795,7 +860,7 @@ def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> 
         model=_ScriptedModel([_text_response("hi")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert len(result.input_guardrail_results) == 1
     assert result.input_guardrail_results[0].tripped is False
@@ -819,7 +884,7 @@ def test_a_tripped_input_guardrail_still_records_the_guardrails_that_passed_befo
     )
 
     with pytest.raises(InputGuardrailTripwireTriggered) as exc_info:
-        asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     run_data = exc_info.value.run_data
     assert run_data is not None
@@ -848,7 +913,7 @@ def test_tool_input_guardrail_results_are_recorded_even_when_they_pass() -> None
         ),
     )
 
-    result = asyncio.run(Runner.run(agent, "search for x", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "search for x", run_config=_run_config()))
 
     assert len(result.tool_input_guardrail_results) == 1
     assert result.tool_input_guardrail_results[0].tripped is False
@@ -875,7 +940,7 @@ def test_a_paused_run_states_guardrail_results_reflect_what_ran_before_the_pause
         ),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
 
     # The tool input guardrail only runs once the call is actually executed (i.e. after
     # approval), so pausing on `needs_approval` records nothing yet.
@@ -883,7 +948,7 @@ def test_a_paused_run_states_guardrail_results_reflect_what_ran_before_the_pause
 
     state = result.to_state()
     state.approve(result.interruptions[0])
-    resumed = asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
     assert len(resumed.tool_input_guardrail_results) == 1
 
@@ -897,7 +962,7 @@ def test_stream_response_yields_text_and_final_message() -> None:
     )
 
     async def collect() -> list[Any]:
-        return [event async for event in Runner.run_streamed(agent, "hi", run_config=_run_config())]
+        return [event async for event in _Stream(agent, "hi", run_config=_run_config())]
 
     events = asyncio.run(collect())
 
@@ -935,7 +1000,7 @@ def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
         ),
     )
 
-    result = Runner.run_streamed(agent, "do it", run_config=_run_config())
+    result = _Stream(agent, "do it", run_config=_run_config())
     result.context_wrapper.approval_ledger["dangerous"] = True
 
     async def collect() -> list[Any]:
@@ -971,7 +1036,7 @@ def test_stream_response_feeds_back_malformed_tool_arguments() -> None:
         ),
     )
 
-    result = Runner.run_streamed(agent, "go", run_config=_run_config())
+    result = _Stream(agent, "go", run_config=_run_config())
 
     async def collect() -> list[Any]:
         return [event async for event in result]
@@ -1011,20 +1076,20 @@ def test_stream_pauses_for_approval_and_resumes_streaming() -> None:
         ),
     )
 
-    paused = Runner.run_streamed(agent, "do it", run_config=_run_config())
+    paused = _Stream(agent, "do it", run_config=_run_config())
     _consume(paused)
 
     assert ran == []
-    assert paused.final_output is None
+    assert paused.output is None
     assert [item.name for item in paused.interruptions] == ["dangerous"]
 
     state = paused.to_state()
     state.approve(paused.interruptions[0])
-    resumed = Runner.run_streamed(agent, state, run_config=_run_config())
+    resumed = _Stream(agent, state, run_config=_run_config())
     events = _consume(resumed)
 
     assert ran == ["dangerous"]
-    assert resumed.final_output == "all done"
+    assert resumed.output == "all done"
     items = [(e.name, e.item.get("content")) for e in events if isinstance(e, RunItemStreamEvent)]
     assert items == [("tool_output", "done"), ("message_output_created", "all done")]
 
@@ -1045,10 +1110,7 @@ def test_stream_response_raises_duplicate_call_id_error_on_a_replayed_call_id() 
 
     async def collect() -> list[Any]:
         return [
-            event
-            async for event in Runner.run_streamed(
-                agent, "what time is it?", run_config=_run_config()
-            )
+            event async for event in _Stream(agent, "what time is it?", run_config=_run_config())
         ]
 
     with pytest.raises(DuplicateToolCallError):
@@ -1074,23 +1136,24 @@ def test_stream_runs_input_guardrails() -> None:
     )
 
     with pytest.raises(InputGuardrailTripwireTriggered):
-        _consume(Runner.run_streamed(agent, "hi", run_config=_run_config()))
+        _consume(_Stream(agent, "hi", run_config=_run_config()))
 
 
 def test_stream_exposes_the_finished_result_with_a_trace() -> None:
-    """Once consumed, a stream carries `final_output`, the full history, and a traced run."""
+    """Once consumed, a stream carries its `Run`: the output, the full history, a trace."""
     agent = _agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
 
-    streamed = Runner.run_streamed(agent, "hello", run_config=_run_config())
+    streamed = _Stream(agent, "hello", run_config=_run_config())
     _consume(streamed)
 
-    assert streamed.final_output == "Hi"
-    assert streamed.to_input_list() == [
+    assert streamed.run is not None
+    assert streamed.output == "Hi"
+    assert streamed.run._history() == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "Hi", "tool_calls": None},
     ]
-    assert streamed.result is not None
-    assert {span.type for span in streamed.result.trace.spans} >= {"agent", "llm"}
+    assert streamed.run.trace is not None
+    assert {span.type for span in streamed.run.trace.spans} >= {"agent", "llm"}
 
 
 def test_stream_persists_the_turn_to_the_session(tmp_path: Any) -> None:
@@ -1100,7 +1163,7 @@ def test_stream_persists_the_turn_to_the_session(tmp_path: Any) -> None:
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
     agent = _agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
 
-    _consume(Runner.run_streamed(agent, "hello", session=session, run_config=_run_config()))
+    _consume(_Stream(agent, "hello", session=session, run_config=_run_config()))
 
     assert asyncio.run(session.get_items()) == [
         {"role": "user", "content": "hello"},
@@ -1125,7 +1188,7 @@ def test_stopping_a_stream_early_cancels_the_run() -> None:
     agent = _agent(model=_SlowModel())
 
     async def first_event_then_stop() -> None:
-        stream = Runner.run_streamed(agent, "hi", run_config=_run_config())
+        stream = _Stream(agent, "hi", run_config=_run_config())
         events = aiter(stream)
         await anext(events)
         await events.aclose()
@@ -1149,10 +1212,10 @@ def test_to_input_list_does_not_duplicate_generated_items() -> None:
     agent = _agent(model=_ScriptedModel([_text_response("hi there")]))
 
     result = asyncio.run(
-        Runner.run(agent, [{"role": "user", "content": "hi"}], run_config=_run_config())
+        _run_async(agent, [{"role": "user", "content": "hi"}], run_config=_run_config())
     )
 
-    assert result.to_input_list() == [
+    assert result._history() == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hi there", "tool_calls": None},
     ]
@@ -1171,13 +1234,14 @@ def test_compact_drops_history_before_the_latest_user_message_once_over_budget()
         {"role": "user", "content": "new question"},
     ]
 
-    result = asyncio.run(Runner.run(agent, history, run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
-    assert result.to_input_list() == [
+    assert result._history() == [
         {"role": "user", "content": "new question"},
         {"role": "assistant", "content": "ok", "tool_calls": None},
     ]
-    compact_spans = [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
+    spans = trace_of(result).spans
+    compact_spans = [s for s in spans if s.type == "custom" and s.name == "compact"]
     assert compact_spans
     assert all(s.output == {"dropped": 2} for s in compact_spans)
 
@@ -1204,11 +1268,11 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
         {"role": "user", "content": "new question"},
     ]
 
-    result = asyncio.run(Runner.run(agent, history, run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
-    assert result.context_wrapper.usage.total_tokens > 200_000
-    assert result.to_input_list()[:3] == history
-    assert not [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
+    assert context_of(result).usage.total_tokens > 200_000
+    assert result._history()[:3] == history
+    assert not [s for s in trace_of(result).spans if s.type == "custom" and s.name == "compact"]
 
 
 def test_compact_defaults_to_off() -> None:
@@ -1220,13 +1284,13 @@ def test_compact_defaults_to_off() -> None:
         {"role": "user", "content": "new question"},
     ]
 
-    result = asyncio.run(Runner.run(agent, history, run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
-    assert result.to_input_list() == [
+    assert result._history() == [
         *history,
         {"role": "assistant", "content": "ok", "tool_calls": None},
     ]
-    assert not [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
+    assert not [s for s in trace_of(result).spans if s.type == "custom" and s.name == "compact"]
 
 
 def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
@@ -1244,7 +1308,7 @@ def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
     )
     agent = _agent(model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]), compact=True)
 
-    asyncio.run(Runner.run(agent, "new question", session=session, run_config=_run_config()))
+    asyncio.run(_run_async(agent, "new question", session=session, run_config=_run_config()))
 
     assert asyncio.run(session.get_items()) == [
         {"role": "user", "content": "new question"},
@@ -1272,10 +1336,10 @@ def test_compact_accepts_a_custom_compactor_callable() -> None:
         {"role": "user", "content": "new question"},
     ]
 
-    result = asyncio.run(Runner.run(agent, history, run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
     assert calls == [2, 2]  # consulted twice: mid-run on `items`, again on `original_input`
-    assert result.to_input_list() == [
+    assert result._history() == [
         {"role": "assistant", "content": "old answer", "tool_calls": None},
         {"role": "user", "content": "new question"},
         {"role": "assistant", "content": "ok", "tool_calls": None},
@@ -1314,15 +1378,15 @@ def test_memory_is_searched_before_the_turn_and_injected_as_a_labeled_block() ->
     model = _ScriptedModel([_text_response("ok")])
     agent = _agent(model=model, memory=memory)
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert memory.search_calls == [("hi", None)]
     sent = [(item.get("role"), item.get("content")) for item in model.calls[0]]
     assert ("system", "Relevant memories:\n- User prefers Japanese.") in sent
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
-    (agent_span,) = [s for s in result.trace.spans if s.type == "agent"]
-    (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
+    (agent_span,) = [s for s in trace_of(result).spans if s.type == "agent"]
+    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
     assert retrieval_span.name == "memory"
     assert retrieval_span.parent_id == agent_span.id
     assert retrieval_span.status == "ok"
@@ -1344,12 +1408,12 @@ def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "do it", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "do it", run_config=_run_config()))
     assert memory.remembered == []
 
     state = result.to_state()
     state.approve(result.interruptions[0])
-    asyncio.run(Runner.run(agent, state, run_config=_run_config()))
+    asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
     assert [conversation for conversation, _, _ in memory.remembered] == [
         "User: do it\nAssistant: all done"
@@ -1364,7 +1428,7 @@ def test_retrieved_blocks_go_right_before_the_message_they_were_retrieved_for() 
     note = {"role": "system", "content": "Answer briefly."}
 
     asyncio.run(
-        Runner.run(agent, [{"role": "user", "content": "hi"}, note], run_config=_run_config())
+        _run_async(agent, [{"role": "user", "content": "hi"}, note], run_config=_run_config())
     )
 
     assert model.calls[0] == [
@@ -1380,7 +1444,7 @@ def test_memory_with_no_matches_injects_nothing() -> None:
     model = _ScriptedModel([_text_response("ok")])
     agent = _agent(model=model, memory=memory)
 
-    asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert model.calls[0] == [{"role": "user", "content": "hi"}]
 
@@ -1391,7 +1455,7 @@ def test_memory_extraction_runs_after_the_turn_with_the_exchange_and_resolved_mo
     model = _ScriptedModel([_text_response("sure, noted")])
     agent = _agent(model=model, memory=memory)
 
-    result = asyncio.run(Runner.run(agent, "I prefer Japanese", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "I prefer Japanese", run_config=_run_config()))
 
     assert len(memory.remembered) == 1
     conversation, user_id, resolved_model = memory.remembered[0]
@@ -1400,7 +1464,7 @@ def test_memory_extraction_runs_after_the_turn_with_the_exchange_and_resolved_mo
     assert user_id is None
     assert resolved_model is model
 
-    (extraction_span,) = [s for s in result.trace.spans if s.type == "custom"]
+    (extraction_span,) = [s for s in trace_of(result).spans if s.type == "custom"]
     assert extraction_span.name == "memory"
     assert extraction_span.status == "ok"
     assert extraction_span.output == {"stored": 0}
@@ -1414,7 +1478,7 @@ def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db", user_id="u1")
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=memory)
 
-    asyncio.run(Runner.run(agent, "hi", session=session, run_config=_run_config()))
+    asyncio.run(_run_async(agent, "hi", session=session, run_config=_run_config()))
 
     assert memory.search_calls == [("hi", "u1")]
     assert memory.remembered[0][1] == "u1"
@@ -1427,18 +1491,18 @@ def test_trace_session_id_is_derived_from_the_session(tmp_path: Any) -> None:
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
     agent = _agent(model=_ScriptedModel([_text_response("ok")]))
 
-    result = asyncio.run(Runner.run(agent, "hi", session=session, run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", session=session, run_config=_run_config()))
 
-    assert result.trace.session_id == "s1"
+    assert trace_of(result).session_id == "s1"
 
 
 def test_trace_session_id_is_none_without_a_session() -> None:
     """A one-off run with no `session=` leaves `Trace.session_id` unset."""
     agent = _agent(model=_ScriptedModel([_text_response("ok")]))
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.trace.session_id is None
+    assert trace_of(result).session_id is None
 
 
 def test_memory_retrieval_failure_degrades_gracefully() -> None:
@@ -1450,11 +1514,11 @@ def test_memory_retrieval_failure_degrades_gracefully() -> None:
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
-    (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
+    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
     assert retrieval_span.status == "error"
     assert retrieval_span.error == "boom"
 
@@ -1471,11 +1535,11 @@ def test_memory_extraction_failure_degrades_gracefully() -> None:
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
-    (extraction_span,) = [s for s in result.trace.spans if s.type == "custom"]
+    (extraction_span,) = [s for s in trace_of(result).spans if s.type == "custom"]
     assert extraction_span.status == "error"
     assert extraction_span.error == "boom"
 
@@ -1505,14 +1569,14 @@ def test_knowledge_is_searched_before_the_turn_and_injected_as_a_labeled_block()
     model = _ScriptedModel([_text_response("ok")])
     agent = _agent(model=model, knowledge=knowledge)
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert knowledge.search_calls == ["hi"]
     sent = [(item.get("role"), item.get("content")) for item in model.calls[0]]
     assert ("system", "Relevant knowledge:\n- Refunds take 5 business days.") in sent
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
-    (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
+    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
     assert retrieval_span.name == "knowledge"
     assert retrieval_span.status == "ok"
     assert retrieval_span.output == {"count": 1}
@@ -1524,7 +1588,7 @@ def test_knowledge_with_no_matches_injects_nothing() -> None:
     model = _ScriptedModel([_text_response("ok")])
     agent = _agent(model=model, knowledge=knowledge)
 
-    asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert model.calls[0] == [{"role": "user", "content": "hi"}]
 
@@ -1536,7 +1600,7 @@ def test_knowledge_and_memory_can_both_inject_blocks_before_the_final_message() 
     model = _ScriptedModel([_text_response("ok")])
     agent = _agent(model=model, memory=memory, knowledge=knowledge)
 
-    asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     contents = [item.get("content") for item in model.calls[0]]
     assert contents == [
@@ -1555,9 +1619,9 @@ def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BoomKnowledge())
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
 
 def test_agent_without_knowledge_behaves_exactly_as_before() -> None:
@@ -1565,9 +1629,9 @@ def test_agent_without_knowledge_behaves_exactly_as_before() -> None:
     agent = _agent(model=_ScriptedModel([_text_response("ok")]))
     assert not hasattr(agent, "knowledge")
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
 
 def test_agent_without_memory_behaves_exactly_as_before() -> None:
@@ -1575,9 +1639,9 @@ def test_agent_without_memory_behaves_exactly_as_before() -> None:
     agent = _agent(model=_ScriptedModel([_text_response("ok")]))
     assert not hasattr(agent, "memory")
 
-    result = asyncio.run(Runner.run(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert result.final_output == "ok"
+    assert result.output == "ok"
 
 
 def test_mcp_server_tools_are_merged_in_and_callable() -> None:
@@ -1603,8 +1667,8 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
         model=_ScriptedModel([_tool_call_response("answer", "{}"), _text_response("it's 42")]),
     )
 
-    result = asyncio.run(Runner.run(agent, "what's the answer?", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "what's the answer?", run_config=_run_config()))
 
-    assert result.final_output == "it's 42"
-    (tool_span,) = [s for s in result.trace.spans if s.type == "tool"]
+    assert result.output == "it's 42"
+    (tool_span,) = [s for s in trace_of(result).spans if s.type == "tool"]
     assert tool_span.name == "answer"
