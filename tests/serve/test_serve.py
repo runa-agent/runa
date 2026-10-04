@@ -174,7 +174,7 @@ def test_separate_sessions_stay_separate(client: TestClient) -> None:
 
 
 def test_a_session_is_persisted_to_the_projects_database(client: TestClient, project: Path) -> None:
-    """Sessions land in the app's own `db/runa.db`, where `runa ui` and `runa prune` find them."""
+    """Sessions land in the app's own `db/runa.db`, where `runa ui` and `runa chat` find them."""
     client.post(
         "/agents/support_agent/runs",
         json={"message": "one", "session_id": "conv-x"},

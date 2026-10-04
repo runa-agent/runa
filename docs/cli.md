@@ -81,22 +81,6 @@ Requires `RUNA_API_KEY` and refuses to start without it, unless `--no-auth` is p
 `GET /health` (unauthenticated), `GET /agents`, `POST /agents/{name}/runs` and
 `POST /agents/{name}/runs/stream`.
 
-## `runa prune`
-
-Delete traces, sessions and eval runs this app has outgrown. Everything Runa persists is
-append-only, so without this the database grows without bound. See
-[Deployment](deployment.md#retention).
-
-```bash
-runa prune                            # older than 30 days (the default)
-runa prune --older-than 90            # older than 90 days
-runa prune --older-than 30 --dry-run  # report what would go, delete nothing
-```
-
-One cutoff covers traces, sessions and eval runs together, because "how far back do we care?" is
-one decision rather than three. Prunes the shared Postgres when `RUNA_DATABASE_URL` is set, the
-local `db/runa.db` otherwise.
-
 ## `runa ui`
 
 Serve a local, read-only dashboard over `runa.db`: Agents, Sessions, Traces, and Evaluations.

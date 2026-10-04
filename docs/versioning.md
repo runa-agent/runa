@@ -14,7 +14,6 @@ from runa.tracing import observe, trace, list_traces                    # public
 from runa.memory import Memory
 from runa.knowledge import Knowledge
 from runa.eval import Case, Report
-from runa.db.prune import prune
 from runa.serve import create_app
 ```
 

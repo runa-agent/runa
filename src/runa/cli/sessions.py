@@ -1,8 +1,8 @@
 """cli/sessions.py: `runa chat --list`/`--show`.
 
-Thin formatting over `runa.session.storage`, the same way `cli/prune.py` only formats what
-`runa.db.prune` already exposes. Which store the history comes from is `runa.db`'s decision, so
-these commands read a shared Postgres and a local `db/runa.db` with the same code.
+Thin formatting over `runa.session.storage`, the same way `cli/traces.py` only formats what
+`runa.tracing.storage` already exposes. Which store the history comes from is `runa.db`'s
+decision, so these commands read a shared Postgres and a local `db/runa.db` with the same code.
 """
 
 from pathlib import Path

@@ -21,8 +21,7 @@ Conventions: [Runa.md](./RUNA.md)
 - Let Ruff keep code simple.
 - Let types speak for themselves.
 - Let docstrings explain what types cannot.
-- Code that does not pass Test is not done.
-- Python 3.14+, managed with `uv`. Annotations are lazy (PEP 649), so no `from __future__` import.
+- Code that does not pass test is not done.
 - Give oneliner commit message: `feat`, `fix`, `docs`, `refactor`, `test`
 - Lint rules: `E`, `F`, `I`, `B`, `SIM`, `UP`, `D`
 
@@ -35,4 +34,3 @@ Conventions: [Runa.md](./RUNA.md)
 - You Aren't Gonna Need it
 - Give Escape Hatch
 - Organize code by conventions and responsibility
-- Don't use em dash

@@ -535,7 +535,6 @@ class GreeterAgent(Agent):
 
 ```bash
 export RUNA_DATABASE_URL=postgresql://...  # share state across replicas
-runa prune --older-than 30                 # on a schedule, so the database stays bounded
 ```
 
 [Deployment](deployment.md) covers all of it, plus authentication, the one-agent-per-conversation

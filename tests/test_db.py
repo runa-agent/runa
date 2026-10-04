@@ -126,3 +126,59 @@ def test_memory_follows_the_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     from runa.memory.postgres import PostgresMemoryStore
 
     assert isinstance(Memory()._store, PostgresMemoryStore)
+
+
+def test_a_local_connection_enforces_foreign_keys(tmp_path: Path) -> None:
+    """SQLite ignores every `REFERENCES` clause unless the per-connection pragma is on.
+
+    Retention is a `DELETE` on the parent table and nothing else (see `docs/deployment.md`), so
+    the cascades have to actually fire.
+    """
+    from contextlib import closing
+
+    from runa.db.sqlite import connect
+
+    ddl = """
+    CREATE TABLE IF NOT EXISTS parent (id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS child (
+        id TEXT PRIMARY KEY,
+        parent_id TEXT NOT NULL REFERENCES parent(id) ON DELETE CASCADE
+    );
+    """
+    with closing(connect(tmp_path / "runa.db", ddl)) as conn:
+        conn.execute("INSERT INTO parent VALUES ('p')")
+        conn.execute("INSERT INTO child VALUES ('c', 'p')")
+        conn.execute("DELETE FROM parent WHERE id = 'p'")
+
+        assert conn.execute("SELECT COUNT(*) FROM child").fetchone()[0] == 0
+
+
+def test_deleting_a_trace_takes_its_spans(tmp_path: Path) -> None:
+    """The retention pass documented for `traces` reaches `spans` without naming them."""
+    import sqlite3
+    from contextlib import closing
+
+    from runa.tracing import Span, Trace
+    from runa.tracing.storage import save_trace
+
+    db_path = tmp_path / "runa.db"
+    span = Span(
+        id="s1",
+        trace_id="t1",
+        parent_id=None,
+        name="SupportAgent",
+        type="agent",
+        start_time=0.0,
+        end_time=1.0,
+        status="ok",
+    )
+    save_trace(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[span]), db_path=db_path)
+
+    from runa.db.sqlite import connect
+
+    with closing(connect(db_path, "")) as conn:
+        conn.execute("DELETE FROM traces WHERE id = 't1'")
+        conn.commit()
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM spans WHERE trace_id = 't1'").fetchone()[0] == 0

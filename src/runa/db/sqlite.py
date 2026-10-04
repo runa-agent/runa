@@ -32,6 +32,10 @@ def connect(db_path: Path, ddl: str, *, load_vec: bool = False) -> sqlite3.Conne
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
+    # Off by default in SQLite, and per-connection: without it every `REFERENCES ... ON DELETE
+    # CASCADE` in an adapter's DDL is decorative, and deleting a trace or an eval run leaves its
+    # spans and cases behind as orphans.
+    conn.execute("PRAGMA foreign_keys = ON")
     if load_vec:
         import sqlite_vec
 

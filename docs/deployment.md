@@ -202,20 +202,24 @@ observe(capture_outputs=False)            # keep outputs out of traces and logs 
 
 Everything Runa persists is append-only: every run adds a trace and its spans, every turn adds
 session messages, every eval adds a run. Without a retention pass the database grows until the
-disk does not. `runa prune` is that pass:
+disk does not. Runa ships no retention command, on purpose: deciding when to delete your data is
+your database's job, and yours. Every child table cascades from its parent, so deleting the
+parent rows is the whole pass:
 
-```bash
-runa prune --older-than 30 --dry-run   # what would go
-runa prune --older-than 30             # traces, sessions and eval runs older than 30 days
-runa prune --older-than 90 --only traces
+```sql
+DELETE FROM traces     WHERE start_time < extract(epoch FROM now() - interval '30 days');
+DELETE FROM agent_sessions WHERE updated_at < now() - interval '30 days';
+DELETE FROM eval_runs  WHERE created_at < (now() - interval '30 days')::text;
 ```
 
-A session ages out by when it was last used, so an active conversation is never pruned out from
-under a user. On SQLite the freed pages are reclaimed with `VACUUM`; on Postgres autovacuum
-handles it, and no exclusive lock is ever taken on a database other replicas are writing to.
+Spans, `agent_messages` and `eval_cases` go with their parents via `ON DELETE CASCADE`. A session
+ages out by when it was last used, so an active conversation is never deleted out from under a
+user. Autovacuum reclaims the space, and no exclusive lock is taken on a database other replicas
+are writing to.
 
-Wire it into whatever already runs on a schedule. There is no background thread doing this for
-you, on purpose: a framework should not decide when to delete your data.
+Wire that into whatever already runs on a schedule: pg_cron, a Kubernetes CronJob, or your
+existing migration tooling. For the local `db/runa.db`, deleting the file is the honest
+equivalent.
 
 ## Containers
 
@@ -245,5 +249,5 @@ A deployment checklist, in the order things tend to go wrong:
 - [ ] `RUNA_DATABASE_URL` set if more than one replica
 - [ ] `/health` wired to the liveness probe
 - [ ] `max_tokens` and `timeout` set on agents that face the public
-- [ ] `runa prune` on a schedule
+- [ ] A retention job on a schedule (see [Retention](#retention))
 - [ ] Log level at INFO, not DEBUG, unless you mean to record user content

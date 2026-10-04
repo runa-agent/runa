@@ -100,12 +100,6 @@ signature-level reference.
 
 ::: runa.serve.RunRequest
 
-## Retention
-
-::: runa.db.prune.prune
-
-::: runa.db.prune.Pruned
-
 ## Hooks
 
 ::: runa.RunHooks

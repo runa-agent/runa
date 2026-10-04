@@ -138,15 +138,14 @@ variable, so a trace written by one replica is readable from any of them.
 ## Retention
 
 Traces and spans are append-only, so a long-lived deployment's database grows until the disk
-does. `runa prune` is the retention pass:
+does. Spans cascade from their trace, so one `DELETE` past a cutoff is the whole retention pass:
 
-```bash
-runa prune --older-than 30 --dry-run   # what would go
-runa prune --older-than 30             # traces, sessions and eval runs older than 30 days
+```sql
+DELETE FROM traces WHERE start_time < extract(epoch FROM now() - interval '30 days');
 ```
 
-There is no background thread doing this on its own, on purpose: when to delete your data is your
-decision, not the framework's. See [Deployment](deployment.md#retention).
+Runa ships no retention command and runs no background thread, on purpose: when to delete your
+data is your decision, not the framework's. See [Deployment](deployment.md#retention).
 
 ## Logs and the Privacy Policy
 
