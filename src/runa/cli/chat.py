@@ -15,27 +15,10 @@ from uuid import uuid4
 
 from runa import db
 from runa.agent import Agent
-from runa.cli._project import iter_agent_classes, loaded_app, require_agents_dir
+from runa.project import find_agent_class, loaded_app, require_agents_dir
 from runa.session import SessionABC
 
 _BLOCK = '"""'
-
-
-class AgentNotFound(Exception):
-    """Raised when no Agent under `app/agents/` declares the given `name`."""
-
-
-def find_agent_class(agent_name: str, *, agents_dir: Path) -> type[Agent]:
-    """Find the Agent subclass under `agents_dir` whose declared `name` is `agent_name`.
-
-    Matches the `name` class attribute (e.g. `class SupportAgent(Agent): name = "Support"`),
-    not the Python class name  `name` is the identity the SDK itself uses for traces,
-    instructions, and handoffs, so it's what an operator should type too.
-    """
-    for agent_cls in iter_agent_classes(agents_dir):
-        if getattr(agent_cls, "name", None) == agent_name:
-            return agent_cls
-    raise AgentNotFound(f"no Agent named {agent_name!r} found under {agents_dir}")
 
 
 def _new_session_id(agent_name: str) -> str:

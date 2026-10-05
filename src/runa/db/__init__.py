@@ -22,8 +22,8 @@ variable but sessions don't is worse than one where neither does.
 and whatever `create_app(root)`/`main(cwd=...)` was handed for an embedder or a test. It only
 changes where the *local* file is looked for; a shared deployment has one database and no such
 choice to make, so it goes unread. That convention -- `root/db/runa.db` -- lives here rather than
-in `cli/`, which is why `runa.web` and `runa.serve` no longer reach into a private CLI module to
-find a path they then had to thread through every reader.
+in `cli/`, which is why `runa.web` and `runa.serve` no longer thread a path through every reader
+they call.
 
 Every adapter import is deferred into the function that needs it: an app without the `postgres`
 extra has to be able to ask the question and get the SQLite answer.

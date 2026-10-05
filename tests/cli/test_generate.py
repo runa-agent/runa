@@ -4,8 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from runa.cli._project import NotARunaProject
-from runa.cli.chat import AgentNotFound
 from runa.cli.generate import (
     AgentAlreadyExists,
     AmbiguousComponent,
@@ -23,6 +21,7 @@ from runa.cli.generate import (
 )
 from runa.cli.new import scaffold_project
 from runa.eval import Dataset
+from runa.project import AgentNotFound, NotARunaProject
 
 
 def test_generate_agent_writes_a_runa_agent_subclass(tmp_path: Path) -> None:

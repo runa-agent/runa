@@ -8,11 +8,7 @@ backend that is never appears here: `root` names a project directory, not a file
 from pathlib import Path
 
 from runa import db
-from runa.tracing import Trace
-
-
-class TraceNotFound(Exception):
-    """Raised when `runa traces show` names a trace id this deployment has no record of."""
+from runa.tracing import Trace, TraceNotFound
 
 
 def _summary(trace: Trace) -> str:

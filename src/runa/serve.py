@@ -35,8 +35,8 @@ from pydantic import BaseModel, Field
 
 from runa import db
 from runa.agent import Agent
-from runa.cli._project import iter_agent_classes, loaded_app, require_agents_dir
 from runa.lifecycle import logger
+from runa.project import iter_agent_classes, loaded_app, require_agents_dir
 from runa.run import Run
 
 

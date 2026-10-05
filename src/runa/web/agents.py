@@ -1,11 +1,11 @@
 """web/agents.py: the Agents page -- every declared `Agent` subclass, read-only.
 
-All data comes from `runa.cli.agents.list_agents`; this module only turns `AgentInfo`s into HTML.
+All data comes from `runa.project.list_agents`; this module only turns `AgentInfo`s into HTML.
 """
 
 from pathlib import Path
 
-from runa.cli.agents import AgentInfo, list_agents
+from runa.project import AgentInfo, list_agents
 from runa.web._html import chip, chips, empty_hint, escape, page
 
 

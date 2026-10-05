@@ -1,0 +1,45 @@
+# CONTEXT.md
+
+Runa's domain language. The 14 primitives an application names are defined in
+[RUNA.md](RUNA.md) and are not repeated here. What this file holds is the
+internal vocabulary: terms that appear in module names, docstrings and commit
+messages but that an application never writes.
+
+Use these words as defined. Where a term says "not", that synonym is one
+previous code or docs drifted to, so it is worth avoiding deliberately.
+
+## Storage
+
+**Backend.** One of the three answers `RUNA_DATABASE_URL` can give about where
+state lives: a local SQLite file, a shared Postgres database, or nothing beyond
+this process (`memory://`). Chosen once, in `runa.db`, so nothing above it names
+one. _Not_: driver, database (a backend is the choice, not the server).
+
+**Adapter.** The concrete module implementing one concern on one backend, for
+example `session/postgres.py`. Every concern has three. _Not_: provider, which
+is the model-side word.
+
+**Concern.** One kind of state `runa.db` resolves: sessions, memory, knowledge,
+the cache, traces, eval history. A concern has one interface and three adapters.
+_Not_: service, store (a store is the object, not the kind).
+
+**Vector store.** The storage `Memory` and `Knowledge` share: embeddings, the
+payload row beside each one, and nearest-neighbor search over them. It is
+plumbing, not a [primitive](RUNA.md), and it is app-private: an application
+holds a `Memory` or a `Knowledge`, never a `VectorStore`, and `Memory(store=...)`
+still takes a `MemoryStore`. See [ADR-0001](docs/adr/0001-vector-store-is-app-private.md).
+
+**Spec.** What one concern's vector storage is called, holds, and is scoped by
+(`VectorSpec`). It is the whole of what `Memory` and `Knowledge` differ by, once
+the storage is shared: a name, its payload columns, and its partition.
+
+**Payload.** The columns stored beside an embedding, and what comes back from a
+search as a `dict` before a concern maps it to its own match type. A memory's
+payload is its user, text and metadata; a knowledge chunk's is its text and
+source. _Not_: metadata, which is one specific memory payload column.
+
+**Partition.** A payload column that scopes vector search rather than filtering
+it: a partitioned search returns that partition's `k` nearest rows, never a
+global top-k another partition's rows could crowd out. `Memory` partitions by
+`user_id`; `Knowledge` is application-scoped and declares none. `None` is a
+partition of its own, not "any". _Not_: tenant, filter, scope key.

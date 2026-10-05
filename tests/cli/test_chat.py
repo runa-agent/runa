@@ -1,4 +1,4 @@
-"""Tests for `runa.cli.chat`: `find_agent_class`/`run_agent_repl`."""
+"""Tests for `runa.cli.chat`: `run_agent_repl`."""
 
 import asyncio
 from dataclasses import dataclass, field
@@ -8,9 +8,9 @@ from typing import Any, cast
 import pytest
 
 from runa.agent import Agent
-from runa.cli._project import NotARunaProject, loaded_app
-from runa.cli.chat import AgentNotFound, find_agent_class, run_agent_repl
+from runa.cli.chat import run_agent_repl
 from runa.cli.new import scaffold_project
+from runa.project import NotARunaProject
 from runa.run_state import Interruption
 from runa.session import SQLiteSession
 
@@ -23,44 +23,6 @@ class _SupportAgentStub(Agent):
     """A stand-in for an `Interruption.agent`; never actually run."""
 
     name = "SupportAgent"
-
-
-def test_find_agent_class_matches_the_declared_name(tmp_path: Path) -> None:
-    """`find_agent_class` finds an Agent subclass by its declared `name` attribute."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-    _write_agent(
-        project_dir,
-        "support_agent.py",
-        "from runa import Agent\n\n\nclass SupportAgent(Agent):\n    name = 'Support'\n",
-    )
-
-    with loaded_app(project_dir):
-        agent_cls = find_agent_class("Support", agents_dir=project_dir / "app" / "agents")
-
-    assert agent_cls.__name__ == "SupportAgent"
-
-
-def test_find_agent_class_ignores_the_python_class_name(tmp_path: Path) -> None:
-    """A class whose Python name differs from its declared `name` is still found by `name`."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-    _write_agent(
-        project_dir,
-        "weird_agent.py",
-        "from runa import Agent\n\n\nclass WeirdlyNamedClass(Agent):\n    name = 'Support'\n",
-    )
-
-    with loaded_app(project_dir):
-        agent_cls = find_agent_class("Support", agents_dir=project_dir / "app" / "agents")
-
-    assert agent_cls.__name__ == "WeirdlyNamedClass"
-
-
-def test_find_agent_class_raises_when_nothing_matches(tmp_path: Path) -> None:
-    """`find_agent_class` raises `AgentNotFound` when no Agent subclass matches."""
-    project_dir = scaffold_project("demo", root=tmp_path)
-
-    with pytest.raises(AgentNotFound):
-        find_agent_class("Nope", agents_dir=project_dir / "app" / "agents")
 
 
 def test_run_agent_repl_raises_outside_a_runa_project(tmp_path: Path) -> None:

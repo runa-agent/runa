@@ -12,17 +12,13 @@ from typing import Any
 from urllib.parse import quote
 
 from runa import db
-from runa.cli.eval import has_case, traced_input
-from runa.tracing import Trace
+from runa.eval.corpus import has_case, traced_input
+from runa.tracing import Trace, TraceNotFound
 from runa.tracing.spans import Span
 from runa.tracing.traces import _TYPE_LABELS, _fmt_duration, _fmt_tokens
 from runa.web._html import chip, empty, escape, page, pre
 
-__all__ = ["TraceNotFound", "render_detail"]
-
-
-class TraceNotFound(Exception):
-    """Raised when `render_detail` names a trace id this deployment has no record of."""
+__all__ = ["render_detail"]
 
 
 def _children_map(spans: list[Span]) -> dict[str | None, list[Span]]:
@@ -131,7 +127,7 @@ def _tree(trace: Trace) -> str:
 def _add_to_evals(trace: Trace, *, root: Path) -> str:
     """The "Add to evals" form, or where the case already is once it's been added.
 
-    Nothing to add when the trace recorded no user input (see `cli/eval.py`'s `traced_input`).
+    Nothing to add when the trace recorded no user input (see `eval/corpus.py`'s `traced_input`).
     """
     traced = traced_input(trace)
     if traced is None:

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from runa.cli._project import NotARunaProject, loaded_app
+from runa.project import NotARunaProject, loaded_app
 
 
 @dataclass

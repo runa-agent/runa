@@ -20,7 +20,7 @@ from runa.tracing.config import (
 )
 from runa.tracing.manual import span, trace
 from runa.tracing.spans import Span, SpanStatus, SpanType
-from runa.tracing.store import TraceStore
+from runa.tracing.store import TraceNotFound, TraceStore
 from runa.tracing.traces import Trace
 
 __all__ = [
@@ -32,6 +32,7 @@ __all__ = [
     "StoreExporter",
     "Trace",
     "TraceExporter",
+    "TraceNotFound",
     "TraceStore",
     "add_exporter",
     "observe",

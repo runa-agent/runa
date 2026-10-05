@@ -17,9 +17,9 @@ from urllib.parse import parse_qs, quote, urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from runa.cli._project import AppLoadError, NotARunaProject
-from runa.cli.eval import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
-from runa.cli.traces import TraceNotFound
+from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
+from runa.project import AppLoadError, NotARunaProject
+from runa.tracing import TraceNotFound
 from runa.web import agents as agents_page
 from runa.web import evaluations as evaluations_page
 from runa.web import sessions as sessions_page
@@ -70,7 +70,7 @@ def create_app(root: Path) -> FastAPI:
     def trace_detail(trace_id: str) -> HTMLResponse:
         try:
             return HTMLResponse(traces_page.render_detail(trace_id, root=root))
-        except traces_page.TraceNotFound:
+        except TraceNotFound:
             return HTMLResponse(_error_page("", "Trace not found."), status_code=404)
 
     @app.post("/traces/{trace_id}/eval", include_in_schema=False, response_model=None)

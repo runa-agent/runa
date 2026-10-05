@@ -121,8 +121,8 @@ def test_a_shared_deployment_ignores_root(monkeypatch: pytest.MonkeyPatch) -> No
 def test_root_locates_another_projects_file(monkeypatch: pytest.MonkeyPatch) -> None:
     """What reading another project's history depends on: `root/db/runa.db`.
 
-    The convention used to live in `cli/_project.resolve_db_path`, which is why `runa.web` and
-    `runa.serve` both imported a private CLI module to find it.
+    The convention used to live in `resolve_db_path`, under what is now `runa.project`, which is
+    why `runa.web` and `runa.serve` once imported a CLI module to find it.
     """
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
     root = Path("other/project")

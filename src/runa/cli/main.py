@@ -12,15 +12,8 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from runa.cli._project import AppLoadError, NotARunaProject
-from runa.cli.chat import AgentNotFound, run_agent_repl
-from runa.cli.eval import (
-    CaseAlreadyInEvals,
-    InvalidEvalModule,
-    TraceHasNoInput,
-    add_trace_to_evals,
-    run_project_evals,
-)
+from runa.cli.chat import run_agent_repl
+from runa.cli.eval import InvalidEvalModule, run_project_evals
 from runa.cli.generate import (
     AgentAlreadyExists,
     AmbiguousComponent,
@@ -40,9 +33,16 @@ from runa.cli.new import ProjectAlreadyExists, scaffold_project
 from runa.cli.serve import MissingAPIKey, serve_agents
 from runa.cli.sessions import SessionNotFound, list_sessions, show_session
 from runa.cli.test import run_project_tests
-from runa.cli.traces import TraceNotFound, list_errors_cli, list_traces_cli, show_trace
+from runa.cli.traces import list_errors_cli, list_traces_cli, show_trace
 from runa.cli.ui import serve_ui
 from runa.db import InvalidDatabaseURL
+from runa.eval.corpus import (
+    CaseAlreadyInEvals,
+    TraceHasNoInput,
+    add_trace_to_evals,
+)
+from runa.project import AgentNotFound, AppLoadError, NotARunaProject
+from runa.tracing import TraceNotFound
 
 _EXTRA_FOR_MODULE = {
     "fastapi": "serve",

@@ -17,8 +17,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from runa.agent import _PROMPT_TEMPLATE
-from runa.cli._project import NotARunaProject
-from runa.cli.chat import AgentNotFound
+from runa.project import AgentNotFound, NotARunaProject
 
 _TOOL_IMPORT = "from runa import tool"
 

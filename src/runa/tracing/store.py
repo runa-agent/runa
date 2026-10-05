@@ -38,6 +38,16 @@ SPAN_COLUMNS = (
 )
 
 
+class TraceNotFound(Exception):
+    """Raised when a caller names a trace id this deployment has no record of.
+
+    `TraceStore.get` returns `None` for a missing trace, since "is it there" is a question with
+    an answer; this is for the surfaces above it -- `runa traces show`, `runa ui`'s trace page,
+    `runa eval --add` -- where a missing trace is the end of the request. It lives with the store
+    rather than in each of them, so all three raise the same type for the same situation.
+    """
+
+
 class TraceStore(Protocol):
     """One deployment's trace history: write one, read one, read the recent ones.
 

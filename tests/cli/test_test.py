@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from runa.cli._project import NotARunaProject
 from runa.cli.new import scaffold_project
 from runa.cli.test import run_project_tests
+from runa.project import NotARunaProject
 
 
 def _write_test_module(project_dir: Path, filename: str, source: str) -> None:
