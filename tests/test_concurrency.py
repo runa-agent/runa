@@ -6,11 +6,13 @@ leak between users, so it is refused rather than allowed to happen quietly.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
 from runa import Agent
+from runa._models import StreamDelta
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
 from runa.session import SQLiteSession
@@ -44,6 +46,24 @@ class _YieldingModel:
     async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
         await asyncio.sleep(0.01)
         return ModelResponse(output=[self._messages.pop(0)], usage=Usage(total_tokens=1))
+
+
+class _YieldingStreamModel:
+    """`_YieldingModel` for the streamed shape: suspends, then answers with one text delta."""
+
+    def __init__(self, texts: list[str]) -> None:
+        self._texts = list(texts)
+
+    async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
+        await asyncio.sleep(0.01)
+        yield StreamDelta(text=self._texts.pop(0))
+
+
+async def _consume(agent: Agent, message: Any, session: Any = None) -> Any:
+    stream = agent.run_streamed(message, session=session)
+    async for _ in stream:
+        pass
+    return stream.run
 
 
 def test_overlapping_session_less_runs_are_refused() -> None:
@@ -151,6 +171,107 @@ def test_the_latch_is_released_after_a_failed_run() -> None:
     agent = Broken()
     assert agent.run_sync("one").status == "error"
     assert agent.run_sync("two").status in {"completed", "error"}  # not a UserError about locking
+
+
+def test_overlapping_session_less_streams_are_refused() -> None:
+    """`run_streamed` shares the latch: consuming a second stream raises, as `run` does."""
+
+    class Solo(Agent):
+        name = "Solo"
+        instructions = "Answer."
+
+    agent = Solo()
+    agent.model = _YieldingStreamModel(["a", "b"])
+
+    async def both() -> Any:
+        return await asyncio.gather(_consume(agent, "one"), _consume(agent, "two"))
+
+    with pytest.raises(UserError, match="cannot run concurrently"):
+        asyncio.run(both())
+
+
+def test_a_stream_overlapping_a_run_on_one_instance_is_refused() -> None:
+    """One guard behind both doors: the two shapes race over the same `self.history`."""
+
+    class Mixed:
+        async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
+            await asyncio.sleep(0.01)
+            return ModelResponse(output=[_final_message("a")], usage=Usage(total_tokens=1))
+
+        async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
+            await asyncio.sleep(0.01)
+            yield StreamDelta(text="b")
+
+    class Solo(Agent):
+        name = "Solo"
+        instructions = "Answer."
+
+    agent = Solo()
+    agent.model = Mixed()
+
+    async def both() -> Any:
+        return await asyncio.gather(agent.run("one"), _consume(agent, "two"))
+
+    with pytest.raises(UserError, match="cannot run concurrently"):
+        asyncio.run(both())
+
+
+def test_concurrent_streams_with_a_session_are_allowed(tmp_path: Any) -> None:
+    """With a `session` a stream's history is its own, so overlapping streams stay permitted."""
+
+    class Shared(Agent):
+        name = "Shared"
+        instructions = "Answer."
+
+    agent = Shared()
+    agent.model = _YieldingStreamModel(["a", "b"])
+    db = tmp_path / "runa.db"
+
+    async def both() -> Any:
+        return await asyncio.gather(
+            _consume(agent, "one", SQLiteSession("s1", db)),
+            _consume(agent, "two", SQLiteSession("s2", db)),
+        )
+
+    runs = asyncio.run(both())
+
+    assert [r.status for r in runs] == ["completed", "completed"]
+    assert agent.history == []
+
+
+def test_sequential_streams_on_one_instance_still_accumulate_history() -> None:
+    """The latch is released when the stream ends, so the normal streamed loop is untouched."""
+
+    class Chatty(Agent):
+        name = "Chatty"
+        instructions = "Answer."
+
+    agent = Chatty()
+    agent.model = _YieldingStreamModel(["a", "b"])
+    asyncio.run(_consume(agent, "one"))
+    asyncio.run(_consume(agent, "two"))
+
+    assert [m.get("content") for m in agent.history if m.get("role") == "user"] == ["one", "two"]
+
+
+def test_a_stream_that_is_never_consumed_holds_nothing() -> None:
+    """The latch follows the turn, not the `RunStream`: an unconsumed stream ran nothing."""
+
+    class Solo(Agent):
+        name = "Solo"
+        instructions = "Answer."
+
+    agent = Solo()
+    agent.model = _YieldingStreamModel(["a"])
+
+    async def abandon_then_run() -> Any:
+        agent.run_streamed("one")  # built and dropped, never iterated
+        return await _consume(agent, "two")
+
+    run = asyncio.run(abandon_then_run())
+
+    assert run.status == "completed"
+    assert run.output == "a"
 
 
 def test_a_delegate_does_not_accumulate_history_across_calls() -> None:

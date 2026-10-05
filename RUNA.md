@@ -127,7 +127,9 @@ tool (by name, not just this one call id), such as an operator answering "always
 a custom `rejection_message`, fed back to the model instead of the default text; with
 `always=True` it's reused for every later rejected call to that tool too. A `call_id` that
 already executed once can't be submitted again: resuming the same `RunState` twice raises
-`DuplicateToolCallError` rather than silently re-running the tool.
+`DuplicateToolCallError` rather than silently re-running the tool. A state carries the `context`
+of the run it paused, so passing `context=` alongside one raises `UserError` instead of being
+dropped: pass it to the first run.
 
 `run_streamed` pauses the same way: once the stream ends, its `.run` is the paused `Run`,
 resumed with `agent.run_streamed(state)` (or `run`/`run_sync`).

@@ -1070,6 +1070,25 @@ def test_run_sync_pauses_for_approval_and_resumes_from_its_state() -> None:
     assert agent.history[-1]["content"] == "refunded"
 
 
+def test_resuming_with_a_context_is_refused() -> None:
+    """A `RunState` carries the context of the run it paused, so a second one is a mistake."""
+    from runa.exceptions import UserError
+
+    class Support(Agent):
+        name = "Support"
+        instructions = "Refund when asked."
+        tools = [_refund_tool([])]
+        model = _ScriptedModel(
+            [_tool_call_message("refund", '{"amount": 75}'), _final_message("refunded")]
+        )
+
+    agent = Support()
+    state = agent.run_sync("refund $75").to_state()
+
+    with pytest.raises(UserError, match="context"):
+        agent.run_sync(state, context={"user": "42"})
+
+
 def test_to_state_on_a_run_that_did_not_pause_raises() -> None:
     """Only a paused `Run` has a state to resume."""
     from runa.exceptions import UserError

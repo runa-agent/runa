@@ -86,10 +86,13 @@ def _turn_input(
     message: MessageContent | RunState,
     history: list[TResponseInputItem],
     session: SessionABC | None,
+    context: Any = None,
 ) -> str | list[TResponseInputItem] | RunState:
     """Build the `input` for the turn loop from this turn's `message`.
 
-    A paused `RunState` passes straight through, to be resumed. A list `message` goes through
+    A paused `RunState` passes straight through, to be resumed, carrying the `context` of the
+    run it paused: a `context=` passed alongside one would be dropped, so it is refused here
+    instead. A list `message` goes through
     `runa.content.parts` first, classifying each item as text or an image (and rejecting a list
     of past messages, which belongs in `history`/`session`); a plain string is left untouched.
     With no `session`, the result joins `history` as a new user message. With a `session`, only
@@ -99,6 +102,11 @@ def _turn_input(
     itself.
     """
     if isinstance(message, RunState):
+        if context is not None:
+            raise UserError(
+                "a RunState already carries the context of the run it paused, so `context=` "
+                "would be ignored when resuming it: pass `context=` to the first run instead."
+            )
         return message
     resolved = message if isinstance(message, str) else content.parts(message)
     if session is not None:
@@ -473,11 +481,12 @@ class Agent:
         a forked `RunContextWrapper` with the caller instead of building a fresh one; `context`
         is ignored when it's given. Don't pass it directly.
         """
+        turn_input = _turn_input(message, self.history, session, context)
         with self._exclusive(session):
             try:
                 run = await _run_async(
                     self,
-                    _turn_input(message, self.history, session),
+                    turn_input,
                     context=context,
                     hooks=hooks,
                     run_config=self._run_config(session),
@@ -512,43 +521,49 @@ class Agent:
         its `.run` holds the `Run` that `run` would have returned, paused, completed or errored.
         History and usage are recorded only once the stream is fully consumed, so a caller that
         stops iterating early leaves them unchanged.
+
+        One instance still runs one conversation at a time: a stream shares `run`'s latch, so
+        starting to consume a second session-less stream on the same instance while one is in
+        flight raises `UserError` rather than interleaving the two histories.
         """
-        turn_input = _turn_input(message, self.history, session)
-        context_wrapper = (
-            turn_input.context_wrapper
-            if isinstance(turn_input, RunState)
-            else RunContextWrapper(context=context)
-        )
+        turn_input = _turn_input(message, self.history, session, context)
         run_config = self._run_config(session)
 
         async def events() -> AsyncIterator[StreamEvent]:
-            # The loop is a task writing into a queue, rather than an async generator, because it
-            # has to keep running between a consumer's `__anext__` calls: a tool call and the
-            # model request after it are the loop's work, not the caller's, and a caller that
-            # stops iterating must not leave a turn half-executed. `task.result()` re-raises
-            # whatever the run raised, on this side of the seam, where `_failed` turns it into
-            # the same `Run` the non-streamed path returns.
-            queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
-            task = asyncio.ensure_future(
-                _run_async(
-                    self,
-                    turn_input,
-                    hooks=hooks,
-                    run_config=run_config,
-                    session=session,
-                    _context_wrapper=context_wrapper,
-                    emit=queue.put_nowait,
+            # The latch is held here rather than in `run_streamed` because that is where the
+            # turn runs: nothing is executed and `self.history` is untouched until a consumer
+            # iterates, so a stream built and dropped holds nothing, and the generator's own
+            # teardown releases one abandoned mid-flight. It sits outside the `except RunaError`
+            # below so the refusal reaches the caller the way `run`'s does, as a raise rather
+            # than an error `Run`.
+            with self._exclusive(session):
+                # The loop is a task writing into a queue, rather than an async generator,
+                # because it has to keep running between a consumer's `__anext__` calls: a tool
+                # call and the model request after it are the loop's work, not the caller's, and
+                # a caller that stops iterating must not leave a turn half-executed.
+                # `task.result()` re-raises whatever the run raised, on this side of the seam,
+                # where `_failed` turns it into the same `Run` the non-streamed path returns.
+                queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
+                task = asyncio.ensure_future(
+                    _run_async(
+                        self,
+                        turn_input,
+                        context=context,
+                        hooks=hooks,
+                        run_config=run_config,
+                        session=session,
+                        emit=queue.put_nowait,
+                    )
                 )
-            )
-            task.add_done_callback(lambda _: queue.put_nowait(None))
-            try:
-                while (event := await queue.get()) is not None:
-                    yield event
-                stream.run = self._completed(task.result(), session)
-            except RunaError as exc:
-                stream.run = self._failed(exc)
-            finally:
-                task.cancel()
+                task.add_done_callback(lambda _: queue.put_nowait(None))
+                try:
+                    while (event := await queue.get()) is not None:
+                        yield event
+                    stream.run = self._completed(task.result(), session)
+                except RunaError as exc:
+                    stream.run = self._failed(exc)
+                finally:
+                    task.cancel()
 
         stream = RunStream(events())
         return stream
