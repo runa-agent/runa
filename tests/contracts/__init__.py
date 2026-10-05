@@ -10,14 +10,15 @@ Each module here exports a `CONTRACT` list of checks and the `Check` type they s
 the store under test plus one unique tag it is free to write under, and nothing else: no `tmp_path`,
 no fixture, no knowledge of which backend it got. That tag is what lets the same checks run against
 a live shared Postgres, where every test in a session shares one set of tables and a fixed id
-would collide with the run before it.
+would collide with the run before it. `vector.py` is handed a `build` in place of a store, since
+two of its promises are about the spec a store was built from rather than about one store.
 
 Who drives them:
 
 - `tests/test_cache.py`, `tests/test_session_store.py`, `tests/test_memory.py`,
-  `tests/test_knowledge.py`, `tests/tracing/test_store.py` and `tests/eval/test_store.py` drive
-  every contract over the backends a plain `make test` can reach: the SQLite adapters and the
-  `memory://` ones.
+  `tests/test_knowledge.py`, `tests/test_vectors.py`, `tests/tracing/test_store.py` and
+  `tests/eval/test_store.py` drive every contract over the backends a plain `make test` can reach:
+  the SQLite adapters and the `memory://` ones.
 - `tests/test_postgres.py` and `tests/test_postgres_observability.py` drive the same checks over
   the Postgres adapters, which need a live server, and are skipped without one.
 

@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from runa.cache import Cache
+    from runa.db.vectors import VectorSpec, VectorStore
     from runa.eval.store import EvalStore
     from runa.knowledge import KnowledgeStore
     from runa.memory import MemoryStore
@@ -208,6 +209,26 @@ def knowledge_store(*, dimensions: int) -> KnowledgeStore:
     return SQLiteKnowledgeStore(sqlite_path(), dimensions=dimensions)
 
 
+def vector_store(spec: VectorSpec) -> VectorStore:
+    """This deployment's `VectorStore` for `spec`: the storage `Memory` and `Knowledge` share.
+
+    Plumbing rather than a concern, which is why there is no `Agent` attribute that reaches it:
+    `memory_store()` and `knowledge_store()` above are the two callers, and each wraps what this
+    returns in the typed store its own concern promises.
+    """
+    if ephemeral():
+        from runa.db.vectors.ephemeral import EphemeralVectorStore
+
+        return EphemeralVectorStore(spec)
+    if (url := shared_url()) is not None:
+        from runa.db.vectors.postgres import PostgresVectorStore
+
+        return PostgresVectorStore(spec, url)
+    from runa.db.vectors.sqlite import SQLiteVectorStore
+
+    return SQLiteVectorStore(spec, sqlite_path())
+
+
 def cache() -> Cache:
     """This deployment's persistent `Cache`: a table in whichever database it already has.
 
@@ -236,23 +257,16 @@ def reset_ephemeral() -> None:
     The ephemeral adapters keep their tables at module level, the way a database keeps them on
     disk: two `db.traces()` calls have to see each other's writes, so a fresh object per call
     would make the whole backend a no-op. That makes emptying them an explicit step, and this is
-    it -- one call, all six concerns, which is the point of resolving them in one place.
+    it -- one call, all six concerns, which is the point of resolving them in one place. Memory
+    and knowledge are emptied by the one vector reset, since they share that backend.
     """
     from runa.cache.memory import reset as reset_cache
+    from runa.db.vectors.ephemeral import reset as reset_vectors
     from runa.eval.ephemeral import reset as reset_evals
-    from runa.knowledge.ephemeral import reset as reset_knowledge
-    from runa.memory.ephemeral import reset as reset_memory
     from runa.session.ephemeral import reset as reset_sessions
     from runa.tracing.ephemeral import reset as reset_traces
 
-    for reset in (
-        reset_cache,
-        reset_evals,
-        reset_knowledge,
-        reset_memory,
-        reset_sessions,
-        reset_traces,
-    ):
+    for reset in (reset_cache, reset_evals, reset_sessions, reset_traces, reset_vectors):
         reset()
 
 
@@ -271,4 +285,5 @@ __all__ = [
     "shared_url",
     "sqlite_path",
     "traces",
+    "vector_store",
 ]

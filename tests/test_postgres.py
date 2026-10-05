@@ -32,9 +32,12 @@ from contracts import cache as cache_contract
 from contracts import knowledge as knowledge_contract
 from contracts import memory as memory_contract
 from contracts import session as session_contract
+from contracts import vector as vector_contract
 
 import runa.db.pool as pool_module
 from runa.cache.postgres import PostgresCache
+from runa.db.vectors import VectorSpec
+from runa.db.vectors.postgres import PostgresVectorStore
 from runa.knowledge.postgres import PostgresKnowledgeStore
 from runa.memory.postgres import PostgresMemoryStore
 from runa.session.postgres import PostgresSession, PostgresSessionStore
@@ -92,6 +95,21 @@ def test_session_contract(unique_id: str, check: session_contract.Check) -> None
     )
 
     run(check(pair))
+
+
+@pytest.mark.parametrize("check", vector_contract.CONTRACT, ids=lambda check: check.__name__)
+def test_vector_store_contract(unique_id: str, check: vector_contract.Check) -> None:
+    """`PostgresVectorStore` answers the same `VectorStore` contract the local backends do.
+
+    Its `pgvector` DDL, its `<->` ordering and its `IS NOT DISTINCT FROM` partition filter are
+    only ever exercised here, so a divergence from the two local adapters would otherwise surface
+    first in a deployment that had set `RUNA_DATABASE_URL`.
+    """
+
+    def build(spec: VectorSpec) -> PostgresVectorStore:
+        return PostgresVectorStore(spec, _DSN)
+
+    run(check(build, unique_id))
 
 
 @pytest.mark.parametrize("check", memory_contract.CONTRACT, ids=lambda check: check.__name__)

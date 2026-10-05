@@ -9,12 +9,8 @@ Conventions: @RUNA.md
 - Other targets: see the Makefile.
 
 ## Rules
-- A feature must work with zero config. Add an option only when no convention can cover the case.
-- Every convention has an explicit override. Example: <one real case from Runa>.
-- Ask before adding a dependency or a top-level module.
-- Write the call site first, then the implementation.
+- Conventions over configurations.
 - Few deep modules over many shallow ones. No pass-through wrappers.
-- Build only what the task needs.
 - Commits: one line, `<type>: <summary>`. Type is feat, fix, docs, refactor, or test.
 
 ## Agent skills

@@ -2,7 +2,7 @@
 
 `db/pool.py`'s counterpart for the local side of `runa.db`'s one decision. Every SQLite adapter
 (`session/sqlite.py`, `cache/sqlite.py`, `tracing/sqlite.py`, `eval/sqlite.py`, and the two
-vector stores through `db/vectors.py`) owns a different set of tables in the same file; this
+vector stores through `db/vectors/sqlite.py`) owns a different set of tables in the same file; this
 only opens the connection and applies each caller's DDL, so the file (and its parent `db/`, which
 `sqlite3.connect` won't create on its own) gets created lazily regardless of which module writes
 to it first.
@@ -18,7 +18,7 @@ from pathlib import Path
 def pack_vector(vector: list[float]) -> bytes:
     """Pack `vector` as the little-endian `float[]` blob a `vec0` column expects.
 
-    `db/vectors.py` is the only caller, on behalf of both local vector stores.
+    `db/vectors/sqlite.py` is the only caller, on behalf of both local vector stores.
     """
     return struct.pack(f"{len(vector)}f", *vector)
 
@@ -27,7 +27,7 @@ def connect(db_path: Path, ddl: str, *, load_vec: bool = False) -> sqlite3.Conne
     """Open `db_path`, creating its parent directory if needed, applying `ddl`.
 
     `load_vec=True` loads the `sqlite-vec` extension first, for callers whose `ddl` declares a
-    `vec0` virtual table (`db/vectors.py`) -- everyone else pays nothing for it.
+    `vec0` virtual table (`db/vectors/sqlite.py`) -- everyone else pays nothing for it.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
