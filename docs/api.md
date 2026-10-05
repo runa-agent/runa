@@ -136,6 +136,8 @@ signature-level reference.
 
 ::: runa.Span
 
+::: runa.tracing.SpanRow
+
 ::: runa.Trace
 
 ::: runa.TraceExporter

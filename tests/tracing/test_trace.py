@@ -1,4 +1,4 @@
-"""Tests for `runa.tracing.Trace`: `duration`, `status`, `errors`, and `__str__`."""
+"""Tests for `runa.tracing.Trace`: `duration`, `status`, `errors`, `walk`, and `__str__`."""
 
 from runa.tracing import Span, Trace
 
@@ -91,3 +91,75 @@ def test_trace_str_shows_error_glyph_and_message_for_a_failing_span() -> None:
 
     assert "✗" in rendered
     assert "tool exploded" in rendered
+
+
+def test_walk_nests_spans_under_their_parent_in_start_order() -> None:
+    """`walk` recovers the tree from the flat `spans` list, ordering siblings by start time."""
+    root = _span("agent1", None, type="agent")
+    second = _span("llm2", "agent1", type="llm")
+    second.start_time = 2.0
+    first = _span("llm1", "agent1", type="llm")
+    first.start_time = 1.0
+    trace = Trace(id="t1", name="A", start_time=0.0, end_time=1.0, spans=[root, second, first])
+
+    (row,) = trace.walk()
+
+    assert row.span is root
+    assert [kid.span.id for kid in row.children] == ["llm1", "llm2"]
+
+
+def test_walk_labels_each_row_the_way_a_person_reads_it() -> None:
+    """A row carries the type's label, the formatted duration, and no tokens off an llm span."""
+    trace = Trace(
+        id="t1", name="A", start_time=0.0, end_time=1.0, spans=[_span("call", None, type="tool")]
+    )
+
+    (row,) = trace.walk()
+
+    assert (row.label, row.name, row.duration, row.tokens) == ("Tool", "call", "1.00s", None)
+
+
+def test_walk_strips_the_handoff_tool_name_prefix() -> None:
+    """A handoff row is named for the target agent, not the `transfer_to_` tool the model calls.
+
+    The prefix is the one the model sees; `span.name` still carries it, so a renderer that wants
+    the raw tool name can still reach it.
+    """
+    span = _span("transfer_to_billing_agent", None, type="handoff")
+    trace = Trace(id="t1", name="A", start_time=0.0, end_time=1.0, spans=[span])
+
+    (row,) = trace.walk()
+
+    assert row.name == "billing_agent"
+    assert row.span.name == "transfer_to_billing_agent"
+
+
+def test_only_a_handoff_row_hands_off() -> None:
+    """`hands_off` marks the boundary after which siblings belong to the agent handed to."""
+    handoff = _span("transfer_to_billing_agent", None, type="handoff")
+    tool = _span("lookup", None, type="tool")
+    trace = Trace(id="t1", name="A", start_time=0.0, end_time=1.0, spans=[handoff, tool])
+
+    assert [row.hands_off for row in trace.walk()] == [True, False]
+
+
+def test_trace_str_names_a_handoff_for_its_target_and_marks_the_takeover() -> None:
+    """The text tree knows the same two handoff facts the HTML one does.
+
+    Both render from `walk`, so `runa traces show` cannot drift back into printing the raw
+    `transfer_to_` tool name or leaving the takeover boundary invisible.
+    """
+    handoff = _span("transfer_to_billing_agent", "agent1", type="handoff")
+    trace = Trace(
+        id="t1",
+        name="A",
+        start_time=0.0,
+        end_time=1.0,
+        spans=[_span("agent1", None, type="agent"), handoff],
+    )
+
+    rendered = str(trace)
+
+    assert "transfer_to_billing_agent" not in rendered
+    assert "Handoff billing_agent" in rendered
+    assert "→ billing_agent takes over" in rendered

@@ -138,6 +138,24 @@ store.get("trace_abc123")                    # one trace with its full span tree
 store.save(trace)                            # what an exporter does
 ```
 
+`print(trace)` renders the span tree as text. To render it yourself -- a different format, your
+own dashboard -- walk it rather than re-deriving its shape from the flat `spans` list:
+
+```python
+def show(rows, depth=0):
+    for row in rows:
+        print("  " * depth, row.label, row.name, row.duration, row.tokens or "")
+        show(row.children, depth + 1)
+
+
+show(trace.walk())
+```
+
+`walk` returns the root `SpanRow`s, each with its `children` already ordered by start time. A row
+carries what a person reads -- `label`, `name`, `duration`, `tokens` -- plus the raw `span` for
+everything else, and `hands_off` to mark the row after which the remaining siblings are the work
+of the agent that was handed to. Both `runa traces show` and `runa ui` render from this.
+
 Pass a project directory to read another app's local history:
 
 ```python

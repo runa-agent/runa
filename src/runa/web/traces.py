@@ -13,19 +13,11 @@ from urllib.parse import quote
 
 from runa import db
 from runa.eval.corpus import has_case, traced_input
-from runa.tracing import Trace, TraceNotFound
+from runa.tracing import SpanRow, Trace, TraceNotFound
 from runa.tracing.spans import Span
-from runa.tracing.traces import _TYPE_LABELS, _fmt_duration, _fmt_tokens
 from runa.web._html import chip, empty, escape, page, pre
 
 __all__ = ["render_detail"]
-
-
-def _children_map(spans: list[Span]) -> dict[str | None, list[Span]]:
-    children: dict[str | None, list[Span]] = {}
-    for span in sorted(spans, key=lambda s: s.start_time):
-        children.setdefault(span.parent_id, []).append(span)
-    return children
 
 
 def _format_value(value: Any) -> str:
@@ -64,64 +56,48 @@ def _span_body(span: Span) -> str:
     return "".join(fields)
 
 
-def _span_display_name(span: Span) -> str:
-    """`span.name`, minus the `"transfer_to_"` a `Handoff.tool_name` always carries for the model.
-
-    That prefix is real and stays on the wire (the model calls it by that name), it's just noise
-    once you're looking at a person-readable span row -- the target agent's name says enough.
-    """
-    if span.type == "handoff" and span.name.startswith("transfer_to_"):
-        return span.name.removeprefix("transfer_to_")
-    return span.name
-
-
-def _render_span(span: Span, children: dict[str | None, list[Span]]) -> str:
-    dot = "ok" if span.status == "ok" else "error"
-    label = _TYPE_LABELS.get(span.type, span.type)
-    tokens = _fmt_tokens(span.output) if span.type == "llm" else None
-    tokens_html = f'<span class="span-tokens">{escape(tokens)}</span>' if tokens else ""
+def _render_row(row: SpanRow) -> str:
+    dot = "ok" if row.span.status == "ok" else "error"
+    tokens_html = f'<span class="span-tokens">{escape(row.tokens)}</span>' if row.tokens else ""
     row_content = (
         f'<span class="dot {dot}"></span>'
-        f'<span class="span-type">{escape(label)}</span>'
-        f'<span class="span-name">{escape(_span_display_name(span))}</span>'
-        f'<span class="span-duration">{escape(_fmt_duration(span.duration))}</span>'
+        f'<span class="span-type">{escape(row.label)}</span>'
+        f'<span class="span-name">{escape(row.name)}</span>'
+        f'<span class="span-duration">{escape(row.duration)}</span>'
         f"{tokens_html}"
     )
-    body = _span_body(span)
-    row = (
+    body = _span_body(row.span)
+    rendered = (
         f'<details><summary class="span-row">{row_content}</summary>'
         f'<div class="span-body">{body}</div></details>'
         if body
         else f'<div class="span-row">{row_content}</div>'
     )
-    error = f'<div class="error-text">{escape(span.error)}</div>' if span.error else ""
-    kids = children.get(span.id, [])
-    kids_html = f"<ul>{_siblings_html(kids, children)}</ul>" if kids else ""
-    return f'<div class="span-node">{row}{error}{kids_html}</div>'
+    error = f'<div class="error-text">{escape(row.span.error)}</div>' if row.span.error else ""
+    kids = f"<ul>{_siblings_html(row.children)}</ul>" if row.children else ""
+    return f'<div class="span-node">{rendered}{error}{kids}</div>'
 
 
-def _siblings_html(spans: list[Span], children: dict[str | None, list[Span]]) -> str:
-    """Render `spans` (one span's children, or the trace's roots) in order.
+def _siblings_html(rows: tuple[SpanRow, ...]) -> str:
+    """Render one row's children, or the trace's roots, in order.
 
-    A handoff span gets a divider right after it: every span until the next handoff (if any) is
-    the target agent's, not a child of the handoff itself -- `run_loop.py` parents them all to the
-    same turn-level span, handoff or not, so this is the one place that distinction is visible.
+    A row that `hands_off` gets a divider right after it, because everything following it belongs
+    to the agent it handed to (see `SpanRow.hands_off`); drawing that boundary is this page's
+    choice, knowing which rows have one is not.
     """
     items = []
-    for span in spans:
-        items.append(f"<li>{_render_span(span, children)}</li>")
-        if span.type == "handoff":
-            name = escape(_span_display_name(span))
-            items.append(f'<li class="handoff-divider">Handoff &middot; {name}</li>')
+    for row in rows:
+        items.append(f"<li>{_render_row(row)}</li>")
+        if row.hands_off:
+            items.append(f'<li class="handoff-divider">Handoff &middot; {escape(row.name)}</li>')
     return "".join(items)
 
 
 def _tree(trace: Trace) -> str:
-    children = _children_map(trace.spans)
-    roots = children.get(None, [])
+    roots = trace.walk()
     if not roots:
         return empty("no spans recorded")
-    return f'<ul class="span-tree">{_siblings_html(roots, children)}</ul>'
+    return f'<ul class="span-tree">{_siblings_html(roots)}</ul>'
 
 
 def _add_to_evals(trace: Trace, *, root: Path) -> str:
@@ -164,7 +140,7 @@ def render_detail(trace_id: str, *, root: Path) -> str:
     )
     header = (
         f"<h1>{escape(trace.name)} {chip(trace.status, status)}</h1>"
-        f'<p class="subtitle">{escape(trace.id)} · {escape(_fmt_duration(trace.duration))}'
+        f'<p class="subtitle">{escape(trace.id)} · {escape(trace.elapsed)}'
         f"{session_link}</p>"
     )
     body = header + _add_to_evals(trace, root=root) + _tree(trace)

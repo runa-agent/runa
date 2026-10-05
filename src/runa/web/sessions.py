@@ -14,7 +14,6 @@ from pathlib import Path
 from runa import db
 from runa.session.store import SessionMessage, SessionNotFound
 from runa.tracing import Trace
-from runa.tracing.traces import _fmt_duration
 from runa.web._html import back_link, empty, empty_hint, escape, page
 from runa.web.traces import _tree
 
@@ -68,7 +67,7 @@ def _trace_card(trace: Trace, turn: int) -> str:
     span_count = len(trace.spans)
     return (
         f'<details class="trace-card"><summary><span class="dot {dot}"></span> trace &middot; '
-        f"turn {turn} &middot; {escape(_fmt_duration(trace.duration))} &middot; "
+        f"turn {turn} &middot; {escape(trace.elapsed)} &middot; "
         f"{span_count} span{'' if span_count == 1 else 's'}</summary>"
         f'<div class="trace-card-tree">{_tree(trace)}</div></details>'
     )
