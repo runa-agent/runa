@@ -221,6 +221,12 @@ class SupportAgent(Agent):
 `AgentHooks` fires `on_start`, `on_end`, `on_handoff`, `on_tool_start`, `on_tool_end`,
 `on_llm_start`, and `on_llm_end`.
 
+The two scopes are not alternatives: both fire for the same event, the run's hooks first, so a
+run-wide audit log records an event before any one agent's callback can raise out of it. The one
+place they disagree is direction. `RunHooks.on_handoff` watches the run, so it is told
+`(from_agent, to_agent)`; `AgentHooks.on_handoff` belongs to the agent being handed *to*, so it is
+told `(agent, source)` and fires only on the target's hooks, never the sender's.
+
 `LoggingRunHooks`/`LoggingAgentHooks` are the framework's defaults, logging each event through
 the standard `logging` module under the `"runa"` logger name. Don't subclass them to add
 behavior; subclass `RunHooks`/`AgentHooks` directly and pass your own instance instead.

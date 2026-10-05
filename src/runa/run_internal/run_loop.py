@@ -23,7 +23,7 @@ from runa.exceptions import (
     RunTimeout,
 )
 from runa.guardrail import guardrail_results
-from runa.lifecycle import LoggingRunHooks, RunHooks, logger
+from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
 from runa.run import Run
 from runa.run_config import RunConfig
 from runa.run_internal.agent_runner_helpers import (
@@ -181,7 +181,7 @@ async def _run_turns(
     current_agent: Any,
     items: list[TResponseInputItem],
     context_wrapper: RunContextWrapper,
-    hooks: RunHooks[Any],
+    hooks: _Dispatch[Any],
     run_config: RunConfig,
     trace: Trace,
     agent_span_id: str,
@@ -224,6 +224,7 @@ async def _run_turns(
         if switched is not None:
             current_agent = switched
             notify(AgentUpdatedStreamEvent(new_agent=current_agent))
+            await hooks.on_agent_start(context_wrapper, current_agent)
 
     for _turn in range(max_turns):
         model = _resolve_model(current_agent, run_config.model_provider)
@@ -356,7 +357,7 @@ async def _extract_memory(run: _Run, final_output: Any, run_config: RunConfig) -
 
 
 async def _finish(
-    run: _Run, outcome: _TurnOutcome, hooks: RunHooks[Any], run_config: RunConfig
+    run: _Run, outcome: _TurnOutcome, hooks: _Dispatch[Any], run_config: RunConfig
 ) -> Run:
     """Turn the loop's outcome into the caller's `Run`: a paused `RunState`, or a completed turn.
 
@@ -442,10 +443,10 @@ async def _run_async(
     emit: Emit | None = None,
 ) -> Run:
     run_config = run_config or RunConfig()
-    hooks = hooks or LoggingRunHooks()
+    dispatch = _Dispatch(hooks or LoggingRunHooks())
 
     if isinstance(input, RunState):
-        return await _resume(input, hooks, run_config, session, emit)
+        return await _resume(input, dispatch, run_config, session, emit)
 
     context_wrapper = (
         _context_wrapper if _context_wrapper is not None else RunContextWrapper(context=context)
@@ -516,7 +517,7 @@ async def _run_async(
             agent,
             items,
             context_wrapper,
-            hooks,
+            dispatch,
             run_config,
             trace,
             run.span.id,
@@ -525,19 +526,23 @@ async def _run_async(
             emit=emit,
         )
 
-    await hooks.on_agent_start(context_wrapper, agent)
+    await dispatch.on_agent_start(context_wrapper, agent)
     outcome = await _guarded(run, turns(), run_config.timeout)
-    return await _finish(run, outcome, hooks, run_config)
+    return await _finish(run, outcome, dispatch, run_config)
 
 
 async def _resume(
     state: RunState,
-    hooks: RunHooks[Any],
+    dispatch: _Dispatch[Any],
     run_config: RunConfig,
     session: SessionABC | None,
     emit: Emit | None = None,
 ) -> Run:
-    """Continue a paused run once its interruptions are resolved."""
+    """Continue a paused run once its interruptions are resolved.
+
+    The agent starts again here, so it gets its own `on_agent_start`: `_finish` always fires
+    `on_agent_end`, and a resumed run that skipped the start would emit an unpaired end.
+    """
     run = _Run(
         agent=state.agent,
         input=state.original_input,
@@ -550,11 +555,12 @@ async def _resume(
         session_input=state.session_input,
         generated=list(state.new_items),
     )
+    await dispatch.on_agent_start(state.context_wrapper, state.agent)
     turns = _run_turns(
         state.agent,
         run.items,
         state.context_wrapper,
-        hooks,
+        dispatch,
         run_config,
         state.trace,
         run.span.id,
@@ -569,7 +575,7 @@ async def _resume(
         ),
     )
     outcome = await _guarded(run, turns, run_config.timeout)
-    return await _finish(run, outcome, hooks, run_config)
+    return await _finish(run, outcome, dispatch, run_config)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]

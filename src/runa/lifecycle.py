@@ -145,6 +145,80 @@ class AgentHooks[TContext]:
         """Called once the model call has returned `response`."""
 
 
+class _Dispatch[TContext]:
+    """Fires one lifecycle event at both scopes: the run's hooks, then the agent's own.
+
+    `runa.run_internal` holds one of these for a whole run and calls it exactly where it used
+    to call `RunHooks`, so the eight points that fire an event stay ignorant of there being two
+    scopes. Pairing them is knowledge rather than a loop over method names: the two classes name
+    the same event differently (`on_agent_start` against `on_start`), and `on_handoff` points
+    opposite ways -- the run is told `(from_agent, to_agent)`, while the agent notified is the
+    target, told who handed off to it.
+
+    Run-scoped hooks fire first, so a run-wide audit log records an event before any one agent's
+    callback can raise out of it.
+    """
+
+    def __init__(self, run_hooks: RunHooks[TContext]) -> None:
+        self.run_hooks = run_hooks
+
+    @staticmethod
+    def _own(agent: Any) -> AgentHooks[Any] | None:
+        """The `AgentHooks` assigned to `agent`; `None` covers both unset and a duck-typed agent."""
+        return getattr(agent, "hooks", None)
+
+    async def on_agent_start(self, context: RunContextWrapper[TContext], agent: Any) -> None:
+        await self.run_hooks.on_agent_start(context, agent)
+        if (own := self._own(agent)) is not None:
+            await own.on_start(context, agent)
+
+    async def on_agent_end(
+        self, context: RunContextWrapper[TContext], agent: Any, output: Any
+    ) -> None:
+        await self.run_hooks.on_agent_end(context, agent, output)
+        if (own := self._own(agent)) is not None:
+            await own.on_end(context, agent, output)
+
+    async def on_handoff(
+        self, context: RunContextWrapper[TContext], from_agent: Any, to_agent: Any
+    ) -> None:
+        await self.run_hooks.on_handoff(context, from_agent, to_agent)
+        if (own := self._own(to_agent)) is not None:
+            await own.on_handoff(context, to_agent, from_agent)
+
+    async def on_tool_start(
+        self, context: RunContextWrapper[TContext], agent: Any, tool: FunctionTool
+    ) -> None:
+        await self.run_hooks.on_tool_start(context, agent, tool)
+        if (own := self._own(agent)) is not None:
+            await own.on_tool_start(context, agent, tool)
+
+    async def on_tool_end(
+        self, context: RunContextWrapper[TContext], agent: Any, tool: FunctionTool, result: object
+    ) -> None:
+        await self.run_hooks.on_tool_end(context, agent, tool, result)
+        if (own := self._own(agent)) is not None:
+            await own.on_tool_end(context, agent, tool, result)
+
+    async def on_llm_start(
+        self,
+        context: RunContextWrapper[TContext],
+        agent: Any,
+        system_prompt: str | None,
+        input_items: list[TResponseInputItem],
+    ) -> None:
+        await self.run_hooks.on_llm_start(context, agent, system_prompt, input_items)
+        if (own := self._own(agent)) is not None:
+            await own.on_llm_start(context, agent, system_prompt, input_items)
+
+    async def on_llm_end(
+        self, context: RunContextWrapper[TContext], agent: Any, response: Any
+    ) -> None:
+        await self.run_hooks.on_llm_end(context, agent, response)
+        if (own := self._own(agent)) is not None:
+            await own.on_llm_end(context, agent, response)
+
+
 class LoggingRunHooks(RunHooks[Any]):
     """Logs each lifecycle event of a run through the standard `logging` module.
 

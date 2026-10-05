@@ -313,6 +313,10 @@ which one is "newer":
   fires only for that one agent. Use this for a concern that belongs to
   one agent's identity, not the run as a whole.
 
+Both scopes fire for the same event, the run's first. `AgentHooks.on_handoff`
+is the one that differs: it fires on the target's hooks, not the sender's,
+and is told `(agent, source)` rather than `(from_agent, to_agent)`.
+
 Don't subclass `LoggingRunHooks`/`LoggingAgentHooks` to add behavior;
 subclass `RunHooks`/`AgentHooks` directly and pass your own: the
 `Logging*` classes are the framework's default, not a base to build on.

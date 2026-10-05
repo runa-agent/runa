@@ -9,7 +9,7 @@ from typing import Any
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.exceptions import DuplicateToolCallError
 from runa.handoff import DelegatePaused
-from runa.lifecycle import RunHooks
+from runa.lifecycle import _Dispatch
 from runa.run_internal.agent_runner_helpers import (
     _agent_tools,
     _find_tool,
@@ -30,7 +30,7 @@ async def _run_tool_call(
     call: dict[str, Any],
     context_wrapper: RunContextWrapper,
     agent: Any,
-    hooks: RunHooks[Any],
+    hooks: _Dispatch[Any],
     trace: Trace,
     parent_id: str,
 ) -> TResponseInputItem | DelegatePaused:
@@ -87,7 +87,7 @@ async def _run_message_tool_calls(
     message: dict[str, Any],
     current_agent: Any,
     context_wrapper: RunContextWrapper,
-    hooks: RunHooks[Any],
+    hooks: _Dispatch[Any],
     trace: Trace,
     parent_id: str,
     approvals: dict[str, bool] | None,
