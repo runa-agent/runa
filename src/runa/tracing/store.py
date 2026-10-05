@@ -9,32 +9,54 @@ Asked once is the point. The exporter used to decide twice on a single write -- 
 picked an exporter by reading the environment, and the `save_trace` it called then read the
 environment again -- so the two could disagree.
 
-The marshalling lives here too, not in each adapter: `to_trace`/`trace_values`/`span_values` are
-the one mapping between a row and a `Trace`, so a column read out of order or a `json.dumps`
-left off is a mistake there is only one place to make.
+The two tables live here too, and so does the marshalling: `TRACES`/`SPANS` state what a row is
+(`db/schema.py` renders them for whichever dialect an adapter speaks) and
+`to_trace`/`trace_values`/`span_values` are the one mapping between such a row and a `Trace`, so
+a column read out of order or a `json.dumps` left off is a mistake there is only one place to
+make.
 """
 
 import json
 from typing import Any, Protocol
 
+from runa.db.schema import Column, Index, Table
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
-TRACE_COLUMNS = ("id", "name", "start_time", "end_time", "status", "session_id", "metadata_json")
+TRACES = Table(
+    "traces",
+    columns=(
+        Column("id", "text", primary_key=True),
+        Column("name", "text"),
+        Column("start_time", "float"),
+        Column("end_time", "float", null=True),
+        Column("status", "text"),
+        Column("session_id", "text", null=True),
+        Column("metadata_json", "text"),
+    ),
+    indexes=(
+        Index("session_id", "session_id"),
+        Index("start_time", "start_time DESC"),
+    ),
+)
 
-SPAN_COLUMNS = (
-    "id",
-    "trace_id",
-    "parent_id",
-    "name",
-    "type",
-    "start_time",
-    "end_time",
-    "status",
-    "attributes_json",
-    "input",
-    "output",
-    "error",
+SPANS = Table(
+    "spans",
+    columns=(
+        Column("id", "text", primary_key=True),
+        Column("trace_id", "text", references=f"{TRACES.name}(id)"),
+        Column("parent_id", "text", null=True),
+        Column("name", "text"),
+        Column("type", "text"),
+        Column("start_time", "float"),
+        Column("end_time", "float", null=True),
+        Column("status", "text"),
+        Column("attributes_json", "text"),
+        Column("input", "text", null=True),
+        Column("output", "text", null=True),
+        Column("error", "text", null=True),
+    ),
+    indexes=(Index("trace_id", "trace_id"),),
 )
 
 
@@ -94,7 +116,7 @@ def as_text(value: object) -> str | None:
 
 
 def trace_values(trace: Trace) -> tuple[Any, ...]:
-    """`trace`'s column values, in `TRACE_COLUMNS` order."""
+    """`trace`'s column values, in `TRACES.column_names` order."""
     return (
         trace.id,
         trace.name,
@@ -107,7 +129,7 @@ def trace_values(trace: Trace) -> tuple[Any, ...]:
 
 
 def span_values(span: Span) -> tuple[Any, ...]:
-    """`span`'s column values, in `SPAN_COLUMNS` order."""
+    """`span`'s column values, in `SPANS.column_names` order."""
     return (
         span.id,
         span.trace_id,
@@ -160,8 +182,9 @@ def to_trace(row: Any, span_rows: list[Any]) -> Trace:
 
 
 __all__ = [
-    "SPAN_COLUMNS",
-    "TRACE_COLUMNS",
+    "SPANS",
+    "TRACES",
+    "TraceNotFound",
     "TraceStore",
     "as_text",
     "span_values",

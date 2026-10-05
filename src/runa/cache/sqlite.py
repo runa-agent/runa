@@ -12,18 +12,12 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from runa.cache import ENTRIES
 from runa.db import DEFAULT_DB_PATH
+from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
 
-_TABLE = "cache_entries"
-
-_DDL = f"""
-CREATE TABLE IF NOT EXISTS {_TABLE} (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    expires_at REAL
-);
-"""
+_DDL = ddl(SQLITE, ENTRIES)
 
 
 class SQLiteCache:
@@ -40,13 +34,13 @@ class SQLiteCache:
         """Return the value stored for `key`, or `None` if it's missing or expired."""
         with closing(self._connect()) as conn:
             row = conn.execute(
-                f"SELECT value, expires_at FROM {_TABLE} WHERE key = ?", (key,)
+                f"SELECT value, expires_at FROM {ENTRIES.name} WHERE key = ?", (key,)
             ).fetchone()
             if row is None:
                 return None
             value, expires_at = row
             if expires_at is not None and expires_at <= time.time():
-                conn.execute(f"DELETE FROM {_TABLE} WHERE key = ?", (key,))
+                conn.execute(f"DELETE FROM {ENTRIES.name} WHERE key = ?", (key,))
                 conn.commit()
                 return None
         return json.loads(value)
@@ -59,7 +53,7 @@ class SQLiteCache:
         expires_at = time.time() + ttl if ttl is not None else None
         with closing(self._connect()) as conn:
             conn.execute(
-                f"INSERT INTO {_TABLE} (key, value, expires_at) VALUES (?, ?, ?) "
+                f"INSERT INTO {ENTRIES.name} (key, value, expires_at) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
                 "expires_at = excluded.expires_at",
                 (key, json.dumps(value), expires_at),
@@ -69,13 +63,13 @@ class SQLiteCache:
     async def delete(self, key: str) -> None:
         """Remove `key`, if present."""
         with closing(self._connect()) as conn:
-            conn.execute(f"DELETE FROM {_TABLE} WHERE key = ?", (key,))
+            conn.execute(f"DELETE FROM {ENTRIES.name} WHERE key = ?", (key,))
             conn.commit()
 
     async def clear(self) -> None:
         """Remove every entry."""
         with closing(self._connect()) as conn:
-            conn.execute(f"DELETE FROM {_TABLE}")
+            conn.execute(f"DELETE FROM {ENTRIES.name}")
             conn.commit()
 
 

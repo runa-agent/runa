@@ -16,17 +16,11 @@ from typing import Any
 
 import asyncpg
 
+from runa.cache import ENTRIES
 from runa.db.pool import connect as _connect
+from runa.db.schema import POSTGRES, ddl
 
-_TABLE = "cache_entries"
-
-_DDL = f"""
-CREATE TABLE IF NOT EXISTS {_TABLE} (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    expires_at DOUBLE PRECISION
-);
-"""
+_DDL = ddl(POSTGRES, ENTRIES)
 
 
 class PostgresCache:
@@ -42,11 +36,13 @@ class PostgresCache:
     async def get(self, key: str) -> Any:
         """Return the value stored for `key`, or `None` if it's missing or expired."""
         pool = await self._pool()
-        row = await pool.fetchrow(f"SELECT value, expires_at FROM {_TABLE} WHERE key = $1", key)
+        row = await pool.fetchrow(
+            f"SELECT value, expires_at FROM {ENTRIES.name} WHERE key = $1", key
+        )
         if row is None:
             return None
         if row["expires_at"] is not None and row["expires_at"] <= time.time():
-            await pool.execute(f"DELETE FROM {_TABLE} WHERE key = $1", key)
+            await pool.execute(f"DELETE FROM {ENTRIES.name} WHERE key = $1", key)
             return None
         return json.loads(row["value"])
 
@@ -58,7 +54,7 @@ class PostgresCache:
         pool = await self._pool()
         await pool.execute(
             f"""
-            INSERT INTO {_TABLE} (key, value, expires_at) VALUES ($1, $2, $3)
+            INSERT INTO {ENTRIES.name} (key, value, expires_at) VALUES ($1, $2, $3)
             ON CONFLICT (key) DO UPDATE
             SET value = excluded.value, expires_at = excluded.expires_at
             """,
@@ -70,12 +66,12 @@ class PostgresCache:
     async def delete(self, key: str) -> None:
         """Remove `key`, if present."""
         pool = await self._pool()
-        await pool.execute(f"DELETE FROM {_TABLE} WHERE key = $1", key)
+        await pool.execute(f"DELETE FROM {ENTRIES.name} WHERE key = $1", key)
 
     async def clear(self) -> None:
         """Remove every entry."""
         pool = await self._pool()
-        await pool.execute(f"DELETE FROM {_TABLE}")
+        await pool.execute(f"DELETE FROM {ENTRIES.name}")
 
 
 __all__ = ["PostgresCache"]

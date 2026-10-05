@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from runa.eval.report import Report
-from runa.eval.store import CASE_COLUMNS, EvalRun, case_values, to_run
+from runa.eval.store import CASES, EvalRun, case_values, to_run
 
 _runs: list[dict[str, Any]] = []
 _cases: dict[int, list[dict[str, Any]]] = {}
@@ -42,7 +42,8 @@ class EphemeralEvalStore:
             }
         )
         _cases[run_id] = [
-            dict(zip(CASE_COLUMNS, case_values(run_id, case), strict=True)) for case in report.cases
+            dict(zip(CASES.column_names, case_values(run_id, case), strict=True))
+            for case in report.cases
         ]
         return run_id
 

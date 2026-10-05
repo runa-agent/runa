@@ -1,10 +1,11 @@
 """session/postgres.py: the shared session backend, both sides of it.
 
-The `runa-ai[postgres]` extra, not a core dependency. Same tables and query shapes as
-`session/sqlite.py`, minus the single-process assumption: every process on the same URL sees the
-same history, since Postgres (unlike a bare `sqlite3.connect`) tolerates concurrent writers
-without corrupting the file. `PostgresSession` is the write side a run appends to,
-`PostgresSessionStore` the read side `runa sessions` and `runa ui` query.
+The `runa-ai[postgres]` extra, not a core dependency. The same two tables `session/store.py`
+declares and the same query shapes as `session/sqlite.py`, minus the single-process assumption:
+every process on the same URL sees the same history, since Postgres (unlike a bare
+`sqlite3.connect`) tolerates concurrent writers without corrupting the file. `PostgresSession`
+is the write side a run appends to, `PostgresSessionStore` the read side `runa sessions` and
+`runa ui` query.
 
 `runa.db.session(...)`/`runa.db.sessions(...)` build these whenever `RUNA_DATABASE_URL` is a
 `postgresql://` one, so no call site has to name them. Constructing one by hand is the escape
@@ -18,8 +19,11 @@ import asyncpg
 from runa._types import TResponseInputItem
 from runa.db.pool import connect as _connect
 from runa.db.pool import run_sync
+from runa.db.schema import POSTGRES, ddl
 from runa.session import SessionABC
 from runa.session.store import (
+    MESSAGES,
+    SESSIONS,
     SessionMessage,
     SessionNotFound,
     SessionSummary,
@@ -28,25 +32,7 @@ from runa.session.store import (
     to_message,
 )
 
-SESSIONS_TABLE = "agent_sessions"
-MESSAGES_TABLE = "agent_messages"
-
-DDL = f"""
-CREATE TABLE IF NOT EXISTS {SESSIONS_TABLE} (
-    session_id TEXT PRIMARY KEY,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_{SESSIONS_TABLE}_updated_at
-    ON {SESSIONS_TABLE} (updated_at DESC, session_id DESC);
-CREATE TABLE IF NOT EXISTS {MESSAGES_TABLE} (
-    id BIGSERIAL PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES {SESSIONS_TABLE}(session_id) ON DELETE CASCADE,
-    message_data TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS idx_{MESSAGES_TABLE}_session_id ON {MESSAGES_TABLE} (session_id, id);
-"""
+DDL = ddl(POSTGRES, SESSIONS, MESSAGES)
 
 
 class PostgresSession(SessionABC):
@@ -66,13 +52,13 @@ class PostgresSession(SessionABC):
         pool = await self._pool()
         if limit is None:
             rows = await pool.fetch(
-                f"SELECT message_data FROM {MESSAGES_TABLE} WHERE session_id = $1 ORDER BY id",
+                f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = $1 ORDER BY id",
                 self.session_id,
             )
         else:
             rows = await pool.fetch(
                 f"""
-                SELECT message_data FROM {MESSAGES_TABLE} WHERE session_id = $1
+                SELECT message_data FROM {MESSAGES.name} WHERE session_id = $1
                 ORDER BY id DESC LIMIT $2
                 """,
                 self.session_id,
@@ -88,16 +74,16 @@ class PostgresSession(SessionABC):
         pool = await self._pool()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
-                f"INSERT INTO {SESSIONS_TABLE} (session_id) VALUES ($1) "
+                f"INSERT INTO {SESSIONS.name} (session_id) VALUES ($1) "
                 "ON CONFLICT (session_id) DO NOTHING",
                 self.session_id,
             )
             await conn.executemany(
-                f"INSERT INTO {MESSAGES_TABLE} (session_id, message_data) VALUES ($1, $2)",
+                f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES ($1, $2)",
                 [(self.session_id, json.dumps(item)) for item in items],
             )
             await conn.execute(
-                f"UPDATE {SESSIONS_TABLE} SET updated_at = now() WHERE session_id = $1",
+                f"UPDATE {SESSIONS.name} SET updated_at = now() WHERE session_id = $1",
                 self.session_id,
             )
 
@@ -106,20 +92,20 @@ class PostgresSession(SessionABC):
         pool = await self._pool()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
-                f"DELETE FROM {MESSAGES_TABLE} WHERE session_id = $1", self.session_id
+                f"DELETE FROM {MESSAGES.name} WHERE session_id = $1", self.session_id
             )
             if items:
                 await conn.execute(
-                    f"INSERT INTO {SESSIONS_TABLE} (session_id) VALUES ($1) "
+                    f"INSERT INTO {SESSIONS.name} (session_id) VALUES ($1) "
                     "ON CONFLICT (session_id) DO NOTHING",
                     self.session_id,
                 )
                 await conn.executemany(
-                    f"INSERT INTO {MESSAGES_TABLE} (session_id, message_data) VALUES ($1, $2)",
+                    f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES ($1, $2)",
                     [(self.session_id, json.dumps(item)) for item in items],
                 )
             await conn.execute(
-                f"UPDATE {SESSIONS_TABLE} SET updated_at = now() WHERE session_id = $1",
+                f"UPDATE {SESSIONS.name} SET updated_at = now() WHERE session_id = $1",
                 self.session_id,
             )
 
@@ -128,9 +114,9 @@ class PostgresSession(SessionABC):
         pool = await self._pool()
         row = await pool.fetchrow(
             f"""
-            DELETE FROM {MESSAGES_TABLE}
+            DELETE FROM {MESSAGES.name}
             WHERE id = (
-                SELECT id FROM {MESSAGES_TABLE} WHERE session_id = $1 ORDER BY id DESC LIMIT 1
+                SELECT id FROM {MESSAGES.name} WHERE session_id = $1 ORDER BY id DESC LIMIT 1
             )
             RETURNING message_data
             """,
@@ -143,10 +129,10 @@ class PostgresSession(SessionABC):
         pool = await self._pool()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
-                f"DELETE FROM {MESSAGES_TABLE} WHERE session_id = $1", self.session_id
+                f"DELETE FROM {MESSAGES.name} WHERE session_id = $1", self.session_id
             )
             await conn.execute(
-                f"DELETE FROM {SESSIONS_TABLE} WHERE session_id = $1", self.session_id
+                f"DELETE FROM {SESSIONS.name} WHERE session_id = $1", self.session_id
             )
 
 
@@ -180,7 +166,7 @@ class PostgresSessionStore:
             where = "WHERE session_id = $1 OR session_id LIKE $2 "
             params = (agent, agent_pattern(agent))
         rows = await pool.fetch(
-            f"SELECT session_id, updated_at FROM {SESSIONS_TABLE} {where}"
+            f"SELECT session_id, updated_at FROM {SESSIONS.name} {where}"
             "ORDER BY updated_at DESC, session_id DESC",
             *params,
         )
@@ -192,12 +178,12 @@ class PostgresSessionStore:
     async def _messages(self, session_id: str) -> list[SessionMessage]:
         pool = await _connect(self.url, DDL)
         exists = await pool.fetchval(
-            f"SELECT 1 FROM {SESSIONS_TABLE} WHERE session_id = $1", session_id
+            f"SELECT 1 FROM {SESSIONS.name} WHERE session_id = $1", session_id
         )
         if exists is None:
             raise SessionNotFound(f"no session found with id {session_id!r}")
         rows = await pool.fetch(
-            f"SELECT created_at, message_data FROM {MESSAGES_TABLE} WHERE session_id = $1 "
+            f"SELECT created_at, message_data FROM {MESSAGES.name} WHERE session_id = $1 "
             "ORDER BY id",
             session_id,
         )
@@ -206,8 +192,6 @@ class PostgresSessionStore:
 
 __all__ = [
     "DDL",
-    "MESSAGES_TABLE",
-    "SESSIONS_TABLE",
     "PostgresSession",
     "PostgresSessionStore",
 ]

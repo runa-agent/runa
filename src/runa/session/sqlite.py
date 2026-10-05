@@ -10,7 +10,8 @@ it skips the thread-local connections, WAL mode, and cross-process file locking 
 multi-process-safe store would need. That store is `session/postgres.py`, and `runa.db` picks it
 when the environment says to.
 
-Same tables, same columns and the same two indexes as `session/postgres.py`.
+The two tables are declared once in `session/store.py` and rendered here by `db/schema.py`;
+this module's own code is the SQLite query shapes, nothing about the schema.
 """
 
 import json
@@ -20,9 +21,12 @@ from pathlib import Path
 
 from runa._types import TResponseInputItem
 from runa.db import DEFAULT_DB_PATH
+from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
 from runa.session import SessionABC
 from runa.session.store import (
+    MESSAGES,
+    SESSIONS,
     SessionMessage,
     SessionNotFound,
     SessionSummary,
@@ -31,25 +35,7 @@ from runa.session.store import (
     to_message,
 )
 
-SESSIONS_TABLE = "agent_sessions"
-MESSAGES_TABLE = "agent_messages"
-
-DDL = f"""
-CREATE TABLE IF NOT EXISTS {SESSIONS_TABLE} (
-    session_id TEXT PRIMARY KEY,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_{SESSIONS_TABLE}_updated_at
-    ON {SESSIONS_TABLE} (updated_at DESC, session_id DESC);
-CREATE TABLE IF NOT EXISTS {MESSAGES_TABLE} (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL REFERENCES {SESSIONS_TABLE}(session_id) ON DELETE CASCADE,
-    message_data TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_{MESSAGES_TABLE}_session_id ON {MESSAGES_TABLE} (session_id, id);
-"""
+DDL = ddl(SQLITE, SESSIONS, MESSAGES)
 
 
 class SQLiteSession(SessionABC):
@@ -78,13 +64,13 @@ class SQLiteSession(SessionABC):
         with closing(self._connect()) as conn:
             if limit is None:
                 rows = conn.execute(
-                    f"SELECT message_data FROM {MESSAGES_TABLE} WHERE session_id = ? ORDER BY id",
+                    f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = ? ORDER BY id",
                     (self.session_id,),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     f"""
-                    SELECT message_data FROM {MESSAGES_TABLE} WHERE session_id = ?
+                    SELECT message_data FROM {MESSAGES.name} WHERE session_id = ?
                     ORDER BY id DESC LIMIT ?
                     """,
                     (self.session_id, limit),
@@ -98,15 +84,15 @@ class SQLiteSession(SessionABC):
             return
         with closing(self._connect()) as conn:
             conn.execute(
-                f"INSERT OR IGNORE INTO {SESSIONS_TABLE} (session_id) VALUES (?)",
+                f"INSERT OR IGNORE INTO {SESSIONS.name} (session_id) VALUES (?)",
                 (self.session_id,),
             )
             conn.executemany(
-                f"INSERT INTO {MESSAGES_TABLE} (session_id, message_data) VALUES (?, ?)",
+                f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES (?, ?)",
                 [(self.session_id, json.dumps(item)) for item in items],
             )
             conn.execute(
-                f"UPDATE {SESSIONS_TABLE} SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
                 (self.session_id,),
             )
             conn.commit()
@@ -114,18 +100,18 @@ class SQLiteSession(SessionABC):
     async def set_items(self, items: list[TResponseInputItem]) -> None:
         """Replace this session's entire history with `items`, in one transaction."""
         with closing(self._connect()) as conn:
-            conn.execute(f"DELETE FROM {MESSAGES_TABLE} WHERE session_id = ?", (self.session_id,))
+            conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
             if items:
                 conn.execute(
-                    f"INSERT OR IGNORE INTO {SESSIONS_TABLE} (session_id) VALUES (?)",
+                    f"INSERT OR IGNORE INTO {SESSIONS.name} (session_id) VALUES (?)",
                     (self.session_id,),
                 )
                 conn.executemany(
-                    f"INSERT INTO {MESSAGES_TABLE} (session_id, message_data) VALUES (?, ?)",
+                    f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES (?, ?)",
                     [(self.session_id, json.dumps(item)) for item in items],
                 )
             conn.execute(
-                f"UPDATE {SESSIONS_TABLE} SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
                 (self.session_id,),
             )
             conn.commit()
@@ -135,9 +121,9 @@ class SQLiteSession(SessionABC):
         with closing(self._connect()) as conn:
             row = conn.execute(
                 f"""
-                DELETE FROM {MESSAGES_TABLE}
+                DELETE FROM {MESSAGES.name}
                 WHERE id = (
-                    SELECT id FROM {MESSAGES_TABLE} WHERE session_id = ? ORDER BY id DESC LIMIT 1
+                    SELECT id FROM {MESSAGES.name} WHERE session_id = ? ORDER BY id DESC LIMIT 1
                 )
                 RETURNING message_data
                 """,
@@ -149,8 +135,8 @@ class SQLiteSession(SessionABC):
     async def clear_session(self) -> None:
         """Delete this session and all of its items."""
         with closing(self._connect()) as conn:
-            conn.execute(f"DELETE FROM {MESSAGES_TABLE} WHERE session_id = ?", (self.session_id,))
-            conn.execute(f"DELETE FROM {SESSIONS_TABLE} WHERE session_id = ?", (self.session_id,))
+            conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
+            conn.execute(f"DELETE FROM {SESSIONS.name} WHERE session_id = ?", (self.session_id,))
             conn.commit()
 
 
@@ -174,7 +160,7 @@ class SQLiteSessionStore:
             where = "WHERE session_id = ? OR session_id LIKE ? ESCAPE '\\' "
             params = (agent, agent_pattern(agent))
         rows = self._query(
-            f"SELECT session_id, updated_at FROM {SESSIONS_TABLE} {where}"
+            f"SELECT session_id, updated_at FROM {SESSIONS.name} {where}"
             "ORDER BY updated_at DESC, session_id DESC",
             params,
         )
@@ -185,10 +171,10 @@ class SQLiteSessionStore:
 
     def messages(self, session_id: str) -> list[SessionMessage]:
         """Return `session_id`'s messages, oldest first."""
-        if not self._query(f"SELECT 1 FROM {SESSIONS_TABLE} WHERE session_id = ?", (session_id,)):
+        if not self._query(f"SELECT 1 FROM {SESSIONS.name} WHERE session_id = ?", (session_id,)):
             raise SessionNotFound(f"no session found with id {session_id!r}")
         rows = self._query(
-            f"SELECT created_at, message_data FROM {MESSAGES_TABLE} WHERE session_id = ? "
+            f"SELECT created_at, message_data FROM {MESSAGES.name} WHERE session_id = ? "
             "ORDER BY id",
             (session_id,),
         )
@@ -212,8 +198,6 @@ class SQLiteSessionStore:
 
 __all__ = [
     "DDL",
-    "MESSAGES_TABLE",
-    "SESSIONS_TABLE",
     "SQLiteSession",
     "SQLiteSessionStore",
 ]

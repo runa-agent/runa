@@ -6,8 +6,9 @@ The write side is `SessionABC` itself; this is the transcript view over whatever
 One interface, three adapters: `session/sqlite.py`, `session/postgres.py`, `session/ephemeral.py`.
 Which one a caller gets is `runa.db.sessions(...)`'s decision, asked once, so no reader here or
 in `web/` branches on a backend or names a file. Nothing in this module touches a database: it
-holds the contract, the two objects a row becomes, and the three rules the adapters have to agree
-on -- how a session id matches an agent, how a timestamp is rendered, and how a stored message is
+holds the two tables both SQL adapters create (`db/schema.py` renders them per dialect), the
+contract, the two objects a row becomes, and the three rules the adapters have to agree on --
+how a session id matches an agent, how a timestamp is rendered, and how a stored message is
 flattened to text.
 """
 
@@ -15,6 +16,29 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
+
+from runa.db.schema import Column, Index, Table
+
+SESSIONS = Table(
+    "agent_sessions",
+    columns=(
+        Column("session_id", "text", primary_key=True),
+        Column("created_at", "timestamp", default_now=True),
+        Column("updated_at", "timestamp", default_now=True),
+    ),
+    indexes=(Index("updated_at", "updated_at DESC, session_id DESC"),),
+)
+
+MESSAGES = Table(
+    "agent_messages",
+    columns=(
+        Column("id", "serial"),
+        Column("session_id", "text", references=f"{SESSIONS.name}(session_id)"),
+        Column("message_data", "text"),
+        Column("created_at", "timestamp", default_now=True),
+    ),
+    indexes=(Index("session_id", "session_id, id"),),
+)
 
 
 class SessionNotFound(Exception):

@@ -5,7 +5,9 @@ one a caller gets is `runa.db.evals(...)`'s decision, asked once, so a CI job an
 compare against the baseline their deployment actually shares rather than whichever file each
 happened to open.
 
-`EvalRun`/`EvalCaseRow` are what a row becomes, declared here rather than in an adapter: both
+`RUNS`/`CASES` are the two tables both SQL adapters create, declared once here and rendered per
+dialect by `db/schema.py`. `EvalRun`/`EvalCaseRow` are what a row becomes, declared here rather
+than in an adapter: both
 backends read the same two objects back, and `web/evaluations.py` renders them without knowing
 which one it got. `case_values`/`to_case`/`to_run` are that mapping in both directions, written
 once, so `passed` cannot come back as SQLite's `0`/`1` from one store and a `bool` from the other.
@@ -15,16 +17,33 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
+from runa.db.schema import Column, Index, Table
 from runa.eval.report import CaseReport, Report
 
-CASE_COLUMNS = (
-    "run_id",
-    "case_index",
-    "input",
-    "output",
-    "passed",
-    "results_json",
-    "trace_id",
+RUNS = Table(
+    "eval_runs",
+    columns=(
+        Column("id", "serial"),
+        Column("agent_name", "text"),
+        Column("created_at", "text"),
+        Column("score", "float"),
+        Column("pass_rate", "float"),
+    ),
+    indexes=(Index("agent", "agent_name, id DESC"),),
+)
+
+CASES = Table(
+    "eval_cases",
+    columns=(
+        Column("run_id", "bigint", references=f"{RUNS.name}(id)"),
+        Column("case_index", "int"),
+        Column("input", "text"),
+        Column("output", "text", null=True),
+        Column("passed", "bool"),
+        Column("results_json", "text"),
+        Column("trace_id", "text", null=True),
+    ),
+    primary_key=("run_id", "case_index"),
 )
 
 
@@ -81,7 +100,7 @@ class EvalStore(Protocol):
 
 
 def case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
-    """One graded `case`'s column values, in `CASE_COLUMNS` order."""
+    """One graded `case`'s column values, in `CASES.column_names` order."""
     return (
         run_id,
         case.index,
@@ -122,7 +141,8 @@ def to_run(row: Any, case_rows: list[Any]) -> EvalRun:
 
 
 __all__ = [
-    "CASE_COLUMNS",
+    "CASES",
+    "RUNS",
     "EvalCaseRow",
     "EvalRun",
     "EvalStore",

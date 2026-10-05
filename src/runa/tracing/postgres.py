@@ -7,60 +7,28 @@ same two tables (`traces`/`spans`) in Postgres instead, and `runa.db.traces()` p
 automatically whenever `RUNA_DATABASE_URL` is a `postgresql://` one.
 
 Optional: part of the `runa[postgres]` extra, like `db/pool.py`, which this builds on for its
-pool and for the background loop that lets a synchronous exporter talk to `asyncpg`. The row
-marshalling is `tracing/store.py`'s, shared with the SQLite adapter; what is genuinely this
-backend's own is the async driver, the `ON CONFLICT` upsert, and the batched span fetch.
+pool and for the background loop that lets a synchronous exporter talk to `asyncpg`. The two
+tables and the row marshalling are `tracing/store.py`'s, shared with the SQLite adapter; what is
+genuinely this backend's own is the async driver, the `ON CONFLICT` upsert, and the batched span
+fetch.
 """
 
 from typing import Any
 
 from runa.db.pool import connect as _connect
 from runa.db.pool import run_sync
+from runa.db.schema import POSTGRES, ddl
 from runa.tracing.config import StoreExporter
 from runa.tracing.store import (
-    SPAN_COLUMNS,
-    TRACE_COLUMNS,
+    SPANS,
+    TRACES,
     span_values,
     to_trace,
     trace_values,
 )
 from runa.tracing.traces import Trace
 
-_TRACES_TABLE = "traces"
-_SPANS_TABLE = "spans"
-
-_DDL = f"""
-CREATE TABLE IF NOT EXISTS {_TRACES_TABLE} (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    start_time DOUBLE PRECISION NOT NULL,
-    end_time DOUBLE PRECISION,
-    status TEXT NOT NULL,
-    session_id TEXT,
-    metadata_json TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_{_TRACES_TABLE}_session_id ON {_TRACES_TABLE} (session_id);
-CREATE INDEX IF NOT EXISTS idx_{_TRACES_TABLE}_start_time ON {_TRACES_TABLE} (start_time DESC);
-CREATE TABLE IF NOT EXISTS {_SPANS_TABLE} (
-    id TEXT PRIMARY KEY,
-    trace_id TEXT NOT NULL REFERENCES {_TRACES_TABLE}(id) ON DELETE CASCADE,
-    parent_id TEXT,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL,
-    start_time DOUBLE PRECISION NOT NULL,
-    end_time DOUBLE PRECISION,
-    status TEXT NOT NULL,
-    attributes_json TEXT NOT NULL,
-    input TEXT,
-    output TEXT,
-    error TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_{_SPANS_TABLE}_trace_id ON {_SPANS_TABLE} (trace_id);
-"""
-
-
-def _placeholders(columns: tuple[str, ...]) -> str:
-    return ", ".join(f"${index}" for index in range(1, len(columns) + 1))
+_DDL = ddl(POSTGRES, TRACES, SPANS)
 
 
 def _assignments(columns: tuple[str, ...], *, keep: str = "id") -> str:
@@ -103,29 +71,29 @@ class PostgresTraceStore:
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 f"""
-                INSERT INTO {_TRACES_TABLE} ({", ".join(TRACE_COLUMNS)})
-                VALUES ({_placeholders(TRACE_COLUMNS)})
-                ON CONFLICT (id) DO UPDATE SET {_assignments(TRACE_COLUMNS)}
+                INSERT INTO {TRACES.name} ({", ".join(TRACES.column_names)})
+                VALUES ({TRACES.placeholders(POSTGRES)})
+                ON CONFLICT (id) DO UPDATE SET {_assignments(TRACES.column_names)}
                 """,
                 *trace_values(trace),
             )
             if trace.spans:
                 await conn.executemany(
                     f"""
-                    INSERT INTO {_SPANS_TABLE} ({", ".join(SPAN_COLUMNS)})
-                    VALUES ({_placeholders(SPAN_COLUMNS)})
-                    ON CONFLICT (id) DO UPDATE SET {_assignments(SPAN_COLUMNS)}
+                    INSERT INTO {SPANS.name} ({", ".join(SPANS.column_names)})
+                    VALUES ({SPANS.placeholders(POSTGRES)})
+                    ON CONFLICT (id) DO UPDATE SET {_assignments(SPANS.column_names)}
                     """,
                     [span_values(span) for span in trace.spans],
                 )
 
     async def _get(self, trace_id: str) -> Trace | None:
         pool = await _connect(self.url, _DDL)
-        row = await pool.fetchrow(f"SELECT * FROM {_TRACES_TABLE} WHERE id = $1", trace_id)
+        row = await pool.fetchrow(f"SELECT * FROM {TRACES.name} WHERE id = $1", trace_id)
         if row is None:
             return None
         spans = await pool.fetch(
-            f"SELECT * FROM {_SPANS_TABLE} WHERE trace_id = $1 ORDER BY start_time", trace_id
+            f"SELECT * FROM {SPANS.name} WHERE trace_id = $1 ORDER BY start_time", trace_id
         )
         return to_trace(row, list(spans))
 
@@ -142,7 +110,7 @@ class PostgresTraceStore:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         rows = await pool.fetch(
-            f"SELECT * FROM {_TRACES_TABLE} {where} ORDER BY start_time DESC LIMIT ${len(params)}",
+            f"SELECT * FROM {TRACES.name} {where} ORDER BY start_time DESC LIMIT ${len(params)}",
             *params,
         )
         if not rows:
@@ -151,7 +119,7 @@ class PostgresTraceStore:
         # shared database is a network round trip, so N+1 of them is the cost worth avoiding.
         ids = [row["id"] for row in rows]
         spans = await pool.fetch(
-            f"SELECT * FROM {_SPANS_TABLE} WHERE trace_id = ANY($1::text[]) ORDER BY start_time",
+            f"SELECT * FROM {SPANS.name} WHERE trace_id = ANY($1::text[]) ORDER BY start_time",
             ids,
         )
         by_trace: dict[str, list[Any]] = {trace_id: [] for trace_id in ids}

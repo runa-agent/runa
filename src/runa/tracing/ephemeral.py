@@ -14,8 +14,8 @@ reach into the history behind it.
 from typing import Any
 
 from runa.tracing.store import (
-    SPAN_COLUMNS,
-    TRACE_COLUMNS,
+    SPANS,
+    TRACES,
     span_values,
     to_trace,
     trace_values,
@@ -41,9 +41,9 @@ class EphemeralTraceStore:
 
     def save(self, trace: Trace) -> None:
         """Persist `trace` and every span in it, replacing any existing one with the same id."""
-        _traces[trace.id] = dict(zip(TRACE_COLUMNS, trace_values(trace), strict=True))
+        _traces[trace.id] = dict(zip(TRACES.column_names, trace_values(trace), strict=True))
         _spans[trace.id] = [
-            dict(zip(SPAN_COLUMNS, span_values(span), strict=True)) for span in trace.spans
+            dict(zip(SPANS.column_names, span_values(span), strict=True)) for span in trace.spans
         ]
 
     def get(self, trace_id: str) -> Trace | None:
