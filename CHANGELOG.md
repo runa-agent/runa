@@ -2,6 +2,91 @@
 
 All notable changes to Runa are documented here.
 
+## [0.5.0] - 2026-10-06
+
+### Bug Fixes
+
+- A user's message is never a path to read off disk ([3093d17](https://github.com/runa-agent/runa/commit/3093d1767af50abc20c5cb3b174da5af6da6069d))
+
+- Keep the add-to-evals redirect on this app's own path (CWE-601) ([9cc665b](https://github.com/runa-agent/runa/commit/9cc665bba02c907a2e26bf1f9ef3d3fddaaba79e))
+
+- Send add-to-evals back to its trace, not the sessions list ([8350927](https://github.com/runa-agent/runa/commit/83509276940627c5d4f8d90e164541ec1a9cf973))
+
+- Keep exception detail out of the streaming error event (CWE-209) ([ef5aeb7](https://github.com/runa-agent/runa/commit/ef5aeb724da717e48da4143c0518041229ca7e6d))
+
+- Fire AgentHooks through one dispatch that pairs both hook scopes ([ac06a7e](https://github.com/runa-agent/runa/commit/ac06a7ea68a1bd347ccb6db9f35f490949d408c2))
+
+- Hold the one-conversation latch across run_streamed too ([d3008bf](https://github.com/runa-agent/runa/commit/d3008bf3769ea28c4081db1a83f5bdae2490d2a4))
+
+
+### Refactor
+
+- Require python 3.14+ and drop the __future__ annotations import ([77d6852](https://github.com/runa-agent/runa/commit/77d6852d20225ef1549d5c02d0536dea3a5c798f))
+
+- Resolve every storage backend from one RUNA_DATABASE_URL ([853d39c](https://github.com/runa-agent/runa/commit/853d39c8d374a68f812feee555ca699a6b61e994))
+
+- Delete runa prune in favor of ON DELETE CASCADE and a documented SQL pass ([dcdafab](https://github.com/runa-agent/runa/commit/dcdafabf4b3ba654ed4c11f4eb15d0db541180d0))
+
+- Delete runa prune in favor of ON DELETE CASCADE and a documented SQL pass ([aac9f6d](https://github.com/runa-agent/runa/commit/aac9f6d7e2908035e813c88156193a72b0f47851))
+
+- Resolve every store once in runa.db, behind one interface per concern ([dc34e36](https://github.com/runa-agent/runa/commit/dc34e36455734ae92f40bee8a299b1e2c2dd626d))
+
+- Delete Runner and RunResult, leaving Agent.run the only seam and Run the only result ([8c6f0ea](https://github.com/runa-agent/runa/commit/8c6f0ea7820b56afcede660baebbfe14fe48e454))
+
+- Hold every loop-bound resource in one LoopCache, keyed per event loop ([91b62b5](https://github.com/runa-agent/runa/commit/91b62b5c720c1fdf06743f73c64f5833900fd7ef))
+
+- Collapse the six vector adapters onto one VectorStore seam ([e1340dd](https://github.com/runa-agent/runa/commit/e1340dd2abd9ef5b3d6c35bd339020873bfcaf9f))
+
+- Vectrostore ([40c45d4](https://github.com/runa-agent/runa/commit/40c45d487c4d5498f0ef189fadd47ce02cd65b81))
+
+- Lift the project module out of cli/ into runa.project ([50690ec](https://github.com/runa-agent/runa/commit/50690ecf44b6a6771981efac8a1a322e03707b85))
+
+- Declare each table once and render it per dialect ([8ad96ad](https://github.com/runa-agent/runa/commit/8ad96ad9d77ba8e2d3138ed7f348888110528374))
+
+- Give Trace one walk() and render both trace views from it ([a135a8f](https://github.com/runa-agent/runa/commit/a135a8fcbdd3ec56b90829a89b0a3ba3d72daaeb))
+
+- Dissolve agent_runner_helpers into its callers, behind one AgentLike ([9330906](https://github.com/runa-agent/runa/commit/93309060813fc5d49f896ff4c71877cc249be8d2))
+
+- Run every guardrail through one runner, and name the tool it's checking ([36efc28](https://github.com/runa-agent/runa/commit/36efc28c72e496d1a05a23ad2fa9d9050bdd97f5))
+
+- Give every Postgres adapter one (url, ddl) base and one @sync pairing ([d6e14a4](https://github.com/runa-agent/runa/commit/d6e14a457b09bb0bc065c57319116a3a5d08fb5f))
+
+- Put the five generators behind one scaffold() and one ScaffoldExists ([a0994ed](https://github.com/runa-agent/runa/commit/a0994ed5553402391c869c93acf1763ed10791b0))
+
+- Pair the in-process memory and knowledge stores in runa.db ([199cc8c](https://github.com/runa-agent/runa/commit/199cc8c9add26463d84b130cd56d137b39ddbda0))
+
+
+### Documentation
+
+- Scaffold agent skill config for issue tracker, triage labels, and domain docs ([7eee26f](https://github.com/runa-agent/runa/commit/7eee26ff3b04d28a85f00f52378313eea5e70a2c))
+
+- Fill the override example in CLAUDE.md and record the rules its hooks assume ([166db11](https://github.com/runa-agent/runa/commit/166db1157d2f84271464127e9902afc0c7268c1d))
+
+- Point the engineering skills at docs/agents via CLAUDE.md ([1f0e8f2](https://github.com/runa-agent/runa/commit/1f0e8f25b5050b8b37e32d1bbdbdfe6875a61496))
+
+
+### Testing
+
+- Hold every Cache backend to one contract, and collapse the vec0 pairing into db/vectors.py ([42a9c17](https://github.com/runa-agent/runa/commit/42a9c17c5965687a80298937d87a49f493c632a5))
+
+
+### Other
+
+- *(deps)* Bump pyjwt from 2.13.0 to 2.15.0 ([2dad2dc](https://github.com/runa-agent/runa/commit/2dad2dc468927fac79fe7e2309028d2e866a1dc4))
+
+- *(deps-dev)* Bump the dev-dependencies group across 1 directory with 3 updates ([27d0651](https://github.com/runa-agent/runa/commit/27d0651a0dcb558ae132e45c940154c3edfa83ef))
+
+- *(deps)* Bump pydantic from 2.13.4 to 2.13.5 ([f74c4fe](https://github.com/runa-agent/runa/commit/f74c4feb95e2870d4de44e5ae6399d86d3696afa))
+
+- *(deps)* Bump anthropic from 1.4.0 to 1.7.0 ([d07b666](https://github.com/runa-agent/runa/commit/d07b6660052cfdeb04ce86d26171ce0d03af7895))
+
+- *(deps)* Bump pypdf from 6.18.0 to 6.19.0 ([5196419](https://github.com/runa-agent/runa/commit/5196419b9b09ba7125979bc5fb4fc89a976c133f))
+
+- *(deps)* Bump mcp from 2.1.1 to 2.2.0 ([8cb7e46](https://github.com/runa-agent/runa/commit/8cb7e468a005026a9d23783a7b70b4cc0a449b53))
+
+- *(deps)* Bump the actions group across 1 directory with 4 updates ([3769472](https://github.com/runa-agent/runa/commit/37694725aba59474f8623e5511c0ce6c33eaaae0))
+
+
 ## [0.4.0] - 2026-09-24
 
 ### Features
