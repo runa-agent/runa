@@ -1,22 +1,20 @@
 """Tests for `runa.cli.generate`."""
 
+import shutil
 from pathlib import Path
 
 import pytest
 
 from runa.cli.generate import (
-    AgentAlreadyExists,
     AmbiguousComponent,
-    EvaluationAlreadyExists,
-    GuardrailAlreadyExists,
     InvalidAgentName,
-    PromptAlreadyExists,
-    ToolAlreadyExists,
+    ScaffoldExists,
     generate_agent,
     generate_evaluation,
     generate_guardrail,
     generate_prompt,
     generate_tool,
+    scaffold,
     split_tool_name,
 )
 from runa.cli.new import scaffold_project
@@ -90,7 +88,7 @@ def test_generate_agent_raises_if_the_file_already_exists(tmp_path: Path) -> Non
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("SupportAgent", root=project_dir)
 
-    with pytest.raises(AgentAlreadyExists):
+    with pytest.raises(ScaffoldExists):
         generate_agent("SupportAgent", root=project_dir)
 
 
@@ -101,7 +99,7 @@ def test_generate_agent_raises_if_the_derived_name_already_exists(tmp_path: Path
         'from runa import Agent\n\n\nclass Legacy(Agent):\n    name = "support_agent"\n'
     )
 
-    with pytest.raises(AgentAlreadyExists):
+    with pytest.raises(ScaffoldExists):
         generate_agent("SupportAgent", root=project_dir)
 
 
@@ -344,7 +342,7 @@ def test_generate_tool_raises_if_the_file_already_exists(tmp_path: Path) -> None
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_tool("search", root=project_dir)
 
-    with pytest.raises(ToolAlreadyExists):
+    with pytest.raises(ScaffoldExists):
         generate_tool("search", root=project_dir)
 
 
@@ -355,7 +353,7 @@ def test_generate_tool_raises_if_the_function_exists_in_a_different_module(
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_tool("research:search_web", root=project_dir)
 
-    with pytest.raises(ToolAlreadyExists):
+    with pytest.raises(ScaffoldExists):
         generate_tool("research:search_web", root=project_dir)
 
 
@@ -386,7 +384,7 @@ def test_generate_guardrail_raises_if_the_file_already_exists(tmp_path: Path) ->
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_guardrail("block_empty", root=project_dir)
 
-    with pytest.raises(GuardrailAlreadyExists):
+    with pytest.raises(ScaffoldExists):
         generate_guardrail("block_empty", root=project_dir)
 
 
@@ -411,7 +409,7 @@ def test_generate_prompt_raises_if_the_file_already_exists(tmp_path: Path) -> No
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_prompt("MyAgent", root=project_dir)
 
-    with pytest.raises(PromptAlreadyExists):
+    with pytest.raises(ScaffoldExists):
         generate_prompt("MyAgent", root=project_dir)
 
 
@@ -450,7 +448,7 @@ def test_generate_evaluation_raises_if_the_file_already_exists(tmp_path: Path) -
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("SupportAgent", root=project_dir, instructions="Help.")
 
-    with pytest.raises(EvaluationAlreadyExists):
+    with pytest.raises(ScaffoldExists):
         generate_evaluation("support_agent", root=project_dir)
 
 
@@ -462,3 +460,47 @@ def test_generate_evaluation_raises_for_an_unknown_agent(tmp_path: Path) -> None
         generate_evaluation("ghost_agent", root=project_dir)
 
     assert not (project_dir / "evals" / "ghost_agent.jsonl").exists()
+
+
+def test_scaffold_with_exist_ok_leaves_an_existing_file_alone(tmp_path: Path) -> None:
+    """The companion-stub policy: already there means nothing to do, not an error."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+    written = scaffold(project_dir, "app", "prompts", stem="greeter", suffix=".md", template="mine")
+
+    again = scaffold(
+        project_dir,
+        "app",
+        "prompts",
+        stem="greeter",
+        suffix=".md",
+        template="replaced",
+        exist_ok=True,
+    )
+
+    assert again == written
+    assert written.read_text() == "mine"
+
+
+def test_scaffold_with_exist_ok_skips_a_missing_directory(tmp_path: Path) -> None:
+    """A companion stub with nowhere to go is skipped, where a command would raise."""
+    path = scaffold(
+        tmp_path, "evals", stem="support_agent", suffix=".jsonl", template="{}\n", exist_ok=True
+    )
+
+    assert path == tmp_path / "evals" / "support_agent.jsonl"
+    assert not path.exists()
+
+    with pytest.raises(NotARunaProject):
+        scaffold(tmp_path, "evals", stem="support_agent", suffix=".jsonl", template="{}\n")
+
+
+def test_generate_agent_tolerates_a_project_without_prompts_or_evals(tmp_path: Path) -> None:
+    """Both companion stubs are optional: a hand-rolled project still gets its agent file."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+    shutil.rmtree(project_dir / "app" / "prompts")
+    shutil.rmtree(project_dir / "evals")
+
+    agent_file = generate_agent("SupportAgent", root=project_dir)
+
+    assert agent_file.exists()
+    assert not (project_dir / "evals").exists()

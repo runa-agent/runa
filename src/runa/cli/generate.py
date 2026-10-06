@@ -10,6 +10,11 @@ eval`/`runa test` succeed against a freshly generated file (0 cases, an
 inert stub Agent/tool) the same way they do against an empty
 `evals/`/`app/tests/`, rather than crashing until the developer fills in
 the TODOs.
+
+Writing one of those files is a single recipe, `scaffold`, which the
+`generate_*` functions parameterize; `generate_agent` reaches its
+companion prompt and dataset by calling their own generators, so where
+each convention lives is stated once.
 """
 
 import re
@@ -43,24 +48,13 @@ class InvalidAgentName(Exception):
     """Raised when the given class name isn't UpperCamelCase ending in `Agent`."""
 
 
-class AgentAlreadyExists(Exception):
-    """Raised when the target agent file, or its `name` identity, already exists."""
+class ScaffoldExists(Exception):
+    """Raised when what a `runa generate` command would write is already there.
 
-
-class ToolAlreadyExists(Exception):
-    """Raised when the target tool file already exists."""
-
-
-class GuardrailAlreadyExists(Exception):
-    """Raised when the target guardrail file already exists."""
-
-
-class PromptAlreadyExists(Exception):
-    """Raised when the target prompt file already exists."""
-
-
-class EvaluationAlreadyExists(Exception):
-    """Raised when the target evaluation file already exists."""
+    One type for every kind, because the message already names the file (or the colliding
+    `name` identity) and `cli/main.py` prints all of them the same way. Which kind of thing
+    collided is in the path, not in the class.
+    """
 
 
 class AmbiguousComponent(Exception):
@@ -93,6 +87,47 @@ def _require_dir(root: Path, *parts: str) -> Path:
             "project created with `runa new`"
         )
     return target_dir
+
+
+def scaffold(
+    root: Path,
+    *parts: str,
+    stem: str,
+    suffix: str,
+    template: str,
+    exist_ok: bool = False,
+) -> Path:
+    """Write `template` to `root/*parts/<stem><suffix>`, and return that path.
+
+    The one recipe every `runa generate` command follows: find the conventional directory,
+    refuse to overwrite, write the template. The four things that vary are the directory, the
+    filename, the template, and whether a file already being there is an error.
+
+    `exist_ok=True` makes the call a companion stub rather than a command: an existing file is
+    left as it is, and a missing directory is skipped rather than raised. Either way the path
+    is returned, so a caller that only wants the file to exist afterwards doesn't branch.
+    That's what `generate_agent` wants from `generate_prompt`/`generate_evaluation`, where the
+    agent is the thing being generated and the prompt and dataset come along with it.
+
+    `generate_tool` is the one generator that doesn't come through here: it appends to a module
+    shared by every tool in its group, so its write isn't "create this file" (see
+    `split_tool_name`).
+    """
+    target_dir = root.joinpath(*parts)
+    file = target_dir / f"{stem}{suffix}"
+    if not target_dir.is_dir():
+        if exist_ok:
+            return file
+        raise NotARunaProject(
+            f"{target_dir} does not exist, run this from inside a Runa "
+            "project created with `runa new`"
+        )
+    if file.exists():
+        if exist_ok:
+            return file
+        raise ScaffoldExists(f"{file} already exists")
+    file.write_text(template)
+    return file
 
 
 def _prompt_yes_no(message: str) -> bool:
@@ -240,7 +275,7 @@ def generate_agent(
     snake_case (`SupportAgent` -> `app/agents/support_agent.py`, `name = "support_agent"`).
     There's no separate identity to pass in, and nothing that can drift out of sync with the
     class name. That derived identity must also be unique across `app/agents/`: generating a
-    second agent that derives a `name` already declared elsewhere raises `AgentAlreadyExists`,
+    second agent that derives a `name` already declared elsewhere raises `ScaffoldExists`,
     since `runa chat <name>` couldn't tell the two apart, the same error a plain filename
     collision already raises.
 
@@ -274,11 +309,11 @@ def generate_agent(
     agent_name = file_stem
     agent_file = agents_dir / f"{file_stem}.py"
     if agent_file.exists():
-        raise AgentAlreadyExists(f"{agent_file} already exists")
+        raise ScaffoldExists(f"{agent_file} already exists")
 
     duplicate = _find_agent_name(agents_dir, agent_name)
     if duplicate is not None:
-        raise AgentAlreadyExists(f"an agent named '{agent_name}' already exists in {duplicate}")
+        raise ScaffoldExists(f"an agent named '{agent_name}' already exists in {duplicate}")
 
     tool_imports, tool_refs = _resolve_components(
         tools,
@@ -314,14 +349,8 @@ def generate_agent(
     )
 
     if instructions is None:
-        prompts_dir = _require_dir(root, "app", "prompts")
-        prompt_file = prompts_dir / f"{file_stem}.md"
-        if not prompt_file.exists():
-            prompt_file.write_text(_PROMPT_TEMPLATE.format(name=file_stem))
-
-    eval_file = root / "evals" / f"{file_stem}.jsonl"
-    if eval_file.parent.is_dir() and not eval_file.exists():
-        eval_file.write_text(_EVALUATION_TEMPLATE)
+        generate_prompt(file_stem, root=root, exist_ok=True)
+    generate_evaluation(file_stem, root=root, exist_ok=True)
 
     _export_agent(agents_dir, file_stem, class_name)
 
@@ -346,7 +375,7 @@ def generate_tool(name: str, *, root: Path, description: str | None = None) -> P
     tool_file = tools_dir / f"{module_name}.py"
     existing_source = tool_file.read_text() if tool_file.exists() else ""
     if re.search(rf"(?m)^def {re.escape(func_name)}\(", existing_source):
-        raise ToolAlreadyExists(f"'{func_name}' already exists in {tool_file}")
+        raise ScaffoldExists(f"'{func_name}' already exists in {tool_file}")
 
     function_source = _TOOL_FUNCTION_TEMPLATE.format(
         func_name=func_name,
@@ -359,39 +388,44 @@ def generate_tool(name: str, *, root: Path, description: str | None = None) -> P
 
 def generate_guardrail(name: str, *, root: Path) -> Path:
     """Write a new `@guardrail`-decorated function into `root/app/guardrails/`."""
-    guardrails_dir = _require_dir(root, "app", "guardrails")
-
     func_name = _snake_case(name)
-    guardrail_file = guardrails_dir / f"{func_name}.py"
-    if guardrail_file.exists():
-        raise GuardrailAlreadyExists(f"{guardrail_file} already exists")
+    return scaffold(
+        root,
+        "app",
+        "guardrails",
+        stem=func_name,
+        suffix=".py",
+        template=_GUARDRAIL_TEMPLATE.format(func_name=func_name),
+    )
 
-    guardrail_file.write_text(_GUARDRAIL_TEMPLATE.format(func_name=func_name))
-    return guardrail_file
 
-
-def generate_prompt(name: str, *, root: Path) -> Path:
+def generate_prompt(name: str, *, root: Path, exist_ok: bool = False) -> Path:
     """Write a new prompt file into `root/app/prompts/`.
 
     Plain markdown, not Python: a prompt is text an agent's `instructions` can load, kept out
     of source the same way a query lives outside application code.
+
+    The one place the prompt-file convention lives: `generate_agent` calls this with
+    `exist_ok=True` for the stub it writes alongside a new agent, rather than restating where
+    the file goes and what it starts out saying.
     """
-    prompts_dir = _require_dir(root, "app", "prompts")
-
     file_stem = _snake_case(name)
-    prompt_file = prompts_dir / f"{file_stem}.md"
-    if prompt_file.exists():
-        raise PromptAlreadyExists(f"{prompt_file} already exists")
+    return scaffold(
+        root,
+        "app",
+        "prompts",
+        stem=file_stem,
+        suffix=".md",
+        template=_PROMPT_TEMPLATE.format(name=file_stem),
+        exist_ok=exist_ok,
+    )
 
-    prompt_file.write_text(_PROMPT_TEMPLATE.format(name=file_stem))
-    return prompt_file
 
-
-def generate_evaluation(name: str, *, root: Path) -> Path:
+def generate_evaluation(name: str, *, root: Path, exist_ok: bool = False) -> Path:
     """Write a new eval dataset into `root/evals/<name>.jsonl`.
 
-    `generate_agent` already writes this file for every agent it creates, so this is for an
-    agent written by hand, or to start over after deleting the file.
+    `generate_agent` calls this with `exist_ok=True` for every agent it creates, so running it
+    directly is for an agent written by hand, or to start over after deleting the file.
 
     `name` is the agent's snake_case identity, the same one `runa chat <name>` takes (e.g.
     `support_agent`), not the class name: `runa eval` resolves the Agent from the filename
@@ -399,14 +433,14 @@ def generate_evaluation(name: str, *, root: Path) -> Path:
     starts with a single input-only case, graded on task completion and answer relevance. The
     Agent must already exist, checked by scanning source rather than importing the app.
     """
-    evals_dir = _require_dir(root, "evals")
-
     file_stem = _snake_case(name)
     if _find_agent_name(_require_dir(root, "app", "agents"), file_stem) is None:
         raise AgentNotFound(f"no Agent named {file_stem!r} found under app/agents/")
-    eval_file = evals_dir / f"{file_stem}.jsonl"
-    if eval_file.exists():
-        raise EvaluationAlreadyExists(f"{eval_file} already exists")
-
-    eval_file.write_text(_EVALUATION_TEMPLATE)
-    return eval_file
+    return scaffold(
+        root,
+        "evals",
+        stem=file_stem,
+        suffix=".jsonl",
+        template=_EVALUATION_TEMPLATE,
+        exist_ok=exist_ok,
+    )

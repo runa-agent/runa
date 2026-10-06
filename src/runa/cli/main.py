@@ -15,13 +15,9 @@ from pathlib import Path
 from runa.cli.chat import run_agent_repl
 from runa.cli.eval import InvalidEvalModule, run_project_evals
 from runa.cli.generate import (
-    AgentAlreadyExists,
     AmbiguousComponent,
-    EvaluationAlreadyExists,
-    GuardrailAlreadyExists,
     InvalidAgentName,
-    PromptAlreadyExists,
-    ToolAlreadyExists,
+    ScaffoldExists,
     generate_agent,
     generate_evaluation,
     generate_guardrail,
@@ -249,14 +245,10 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
     except (
         SessionNotFound,
         ProjectAlreadyExists,
-        AgentAlreadyExists,
+        ScaffoldExists,
         AgentNotFound,
         AmbiguousComponent,
         InvalidAgentName,
-        ToolAlreadyExists,
-        GuardrailAlreadyExists,
-        PromptAlreadyExists,
-        EvaluationAlreadyExists,
         NotARunaProject,
         InvalidEvalModule,
         CaseAlreadyInEvals,
