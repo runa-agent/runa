@@ -24,7 +24,15 @@ from runa.exceptions import (
     OutputGuardrailTripwireTriggered,
     ToolInputGuardrailTripwireTriggered,
 )
-from runa.guardrail import GuardrailFunctionOutput, InputGuardrail, OutputGuardrail
+from runa.guardrail import (
+    GuardrailFunctionOutput,
+    InputGuardrail,
+    OutputGuardrail,
+    ToolGuardrailFunctionOutput,
+    ToolInputGuardrail,
+    ToolInputGuardrailData,
+    ToolOutputGuardrail,
+)
 from runa.handoff import Handoff
 from runa.lifecycle import AgentHooks, RunHooks
 from runa.run import Run
@@ -922,6 +930,40 @@ def test_tool_input_guardrail_results_are_recorded_even_when_they_pass() -> None
 
     assert len(result.tool_input_guardrail_results) == 1
     assert result.tool_input_guardrail_results[0].tripped is False
+
+
+def test_a_tool_guardrail_is_told_which_tool_and_call_it_is_checking() -> None:
+    """Both sides of a tool's guardrails see the call: its tool name, id, arguments, output."""
+    seen: list[ToolInputGuardrailData] = []
+
+    async def _record(data: ToolInputGuardrailData) -> ToolGuardrailFunctionOutput:
+        seen.append(data)
+        return ToolGuardrailFunctionOutput.allow()
+
+    @tool
+    def search(query: str) -> str:
+        """Search for something."""
+        return "results"
+
+    search.tool_input_guardrails = [ToolInputGuardrail(guardrail_function=_record)]
+    search.tool_output_guardrails = [ToolOutputGuardrail(guardrail_function=_record)]
+
+    agent = _agent(
+        tools=[search],
+        model=_ScriptedModel(
+            [_tool_call_response("search", '{"query": "x"}'), _text_response("ok")]
+        ),
+    )
+
+    asyncio.run(_run_async(agent, "search for x", run_config=_run_config()))
+
+    # The output side is the same context plus what the tool returned; neither side may be
+    # handed a nameless call, which is what two separate construction sites used to do.
+    assert [(d.context.tool_name, d.context.call_id, d.output) for d in seen] == [
+        ("search", "call_1", None),
+        ("search", "call_1", "results"),
+    ]
+    assert {d.context.tool_arguments for d in seen} == {'{"query": "x"}'}
 
 
 def test_a_paused_run_states_guardrail_results_reflect_what_ran_before_the_pause() -> None:

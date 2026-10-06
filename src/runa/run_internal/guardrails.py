@@ -1,5 +1,6 @@
 """guardrails.py: running an agent's or tool's guardrails, raising on a tripwire."""
 
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any
 
 from runa._types import RunContextWrapper
@@ -10,37 +11,85 @@ from runa.exceptions import (
     ToolOutputGuardrailTripwireTriggered,
 )
 from runa.guardrail import GuardrailResult, ToolInputGuardrailContext, ToolInputGuardrailData
+from runa.run_internal.agent_shape import AgentLike
 from runa.run_internal.spans import _close_span, _new_span
 from runa.tool import FunctionTool
 from runa.tracing.traces import Trace
 
 
-async def _run_input_guardrails(
-    agent: Any, context_wrapper: RunContextWrapper, turn_input: Any, trace: Trace, parent_id: str
+async def _run_guardrails(
+    entries: Iterable[Any],
+    *,
+    invoke: Callable[[Any], Awaitable[Any]],
+    record_to: list[GuardrailResult],
+    raise_as: Callable[[GuardrailResult], Exception],
+    trace: Trace,
+    parent_id: str,
 ) -> None:
-    for guardrail in agent.input_guardrails:
-        span = _new_span(trace, parent_id, guardrail.name or "guardrail", "guardrail")
-        result = await guardrail.guardrail_function(context_wrapper, agent, turn_input)
-        tripped = result.tripwire_triggered
-        _close_span(span, error="tripwire triggered" if tripped else None)
-        guardrail_result = GuardrailResult(guardrail, result, tripped)
-        context_wrapper.input_guardrail_results.append(guardrail_result)
-        if tripped:
-            raise InputGuardrailTripwireTriggered(guardrail_result)
+    """Run `entries` in list order, span and record each verdict, raise on the first that trips.
+
+    The ordering rule is stated here and nowhere else: the first tripwire stops the entries after
+    it, but every entry that did run is already appended to `record_to`, so a tripped run's audit
+    trail is complete up to the stop. The four lists differ only in what the caller binds:
+    `invoke` adapts the two guardrail call shapes (an agent's `(context, agent, value)`, a tool's
+    `(data)`) to one call, and `raise_as` names which tripwire exception this list raises.
+    """
+    for entry in entries:
+        span = _new_span(trace, parent_id, entry.get_name(), "guardrail")
+        result = await invoke(entry)
+        _close_span(span, error="tripwire triggered" if result.tripped else None)
+        guardrail_result = GuardrailResult(entry, result, result.tripped)
+        record_to.append(guardrail_result)
+        if result.tripped:
+            raise raise_as(guardrail_result)
+
+
+def _tool_data(
+    tool: FunctionTool, args_json: str, call_id: str, output: Any = None
+) -> ToolInputGuardrailData:
+    """Build the `data` a tool's guardrails see: which tool, the call, its arguments, its output.
+
+    The only place a `ToolInputGuardrailContext` is constructed, so a field it carries can't be
+    populated on one side of the call and forgotten on the other.
+    """
+    return ToolInputGuardrailData(
+        context=ToolInputGuardrailContext(
+            tool_arguments=args_json, tool_name=tool.name, call_id=call_id
+        ),
+        output=output,
+    )
+
+
+async def _run_input_guardrails(
+    agent: AgentLike,
+    context_wrapper: RunContextWrapper,
+    turn_input: Any,
+    trace: Trace,
+    parent_id: str,
+) -> None:
+    """Run the agent's input guardrails against this turn's input, before the model sees it."""
+    await _run_guardrails(
+        agent.input_guardrails,
+        invoke=lambda entry: entry.guardrail_function(context_wrapper, agent, turn_input),
+        record_to=context_wrapper.input_guardrail_results,
+        raise_as=InputGuardrailTripwireTriggered,
+        trace=trace,
+        parent_id=parent_id,
+    )
 
 
 async def _run_output_guardrails(
-    agent: Any, context_wrapper: RunContextWrapper, output: Any, trace: Trace, parent_id: str
+    agent: AgentLike, context_wrapper: RunContextWrapper, output: Any, trace: Trace, parent_id: str
 ) -> None:
-    for guardrail in agent.output_guardrails:
-        span = _new_span(trace, parent_id, guardrail.name or "guardrail", "guardrail")
-        result = await guardrail.guardrail_function(context_wrapper, agent, output)
-        tripped = result.tripwire_triggered
-        _close_span(span, error="tripwire triggered" if tripped else None)
-        guardrail_result = GuardrailResult(guardrail, result, tripped)
-        context_wrapper.output_guardrail_results.append(guardrail_result)
-        if tripped:
-            raise OutputGuardrailTripwireTriggered(guardrail_result)
+    """Run the agent's output guardrails against its final output, before the run returns it."""
+    await _run_guardrails(
+        agent.output_guardrails,
+        invoke=lambda entry: entry.guardrail_function(context_wrapper, agent, output),
+        record_to=context_wrapper.output_guardrail_results,
+        raise_as=OutputGuardrailTripwireTriggered,
+        trace=trace,
+        parent_id=parent_id,
+    )
 
 
 async def _run_tool_input_guardrails(
@@ -51,19 +100,18 @@ async def _run_tool_input_guardrails(
     trace: Trace,
     parent_id: str,
 ) -> None:
-    for guardrail in tool.tool_input_guardrails or []:
-        span = _new_span(trace, parent_id, guardrail.get_name(), "guardrail")
-        data = ToolInputGuardrailData(
-            context=ToolInputGuardrailContext(tool_arguments=args_json, call_id=call_id)
-        )
-        result = await guardrail.guardrail_function(data)
-        tripped = result.behavior["type"] == "raise_exception"
-        _close_span(span, error="tripwire triggered" if tripped else None)
-        context_wrapper.tool_input_guardrail_results.append(
-            GuardrailResult(guardrail, result, tripped)
-        )
-        if tripped:
-            raise ToolInputGuardrailTripwireTriggered(guardrail, result)
+    """Run the tool's input guardrails against the call's raw arguments, before it runs."""
+    data = _tool_data(tool, args_json, call_id)
+    await _run_guardrails(
+        tool.tool_input_guardrails or [],
+        invoke=lambda entry: entry.guardrail_function(data),
+        record_to=context_wrapper.tool_input_guardrail_results,
+        raise_as=lambda result: ToolInputGuardrailTripwireTriggered(
+            result.guardrail, result.output
+        ),
+        trace=trace,
+        parent_id=parent_id,
+    )
 
 
 async def _run_tool_output_guardrails(
@@ -75,20 +123,18 @@ async def _run_tool_output_guardrails(
     trace: Trace,
     parent_id: str,
 ) -> None:
-    for guardrail in tool.tool_output_guardrails or []:
-        span = _new_span(trace, parent_id, guardrail.get_name(), "guardrail")
-        data = ToolInputGuardrailData(
-            context=ToolInputGuardrailContext(tool_arguments=args_json, call_id=call_id),
-            output=output,
-        )
-        result = await guardrail.guardrail_function(data)
-        tripped = result.behavior["type"] == "raise_exception"
-        _close_span(span, error="tripwire triggered" if tripped else None)
-        context_wrapper.tool_output_guardrail_results.append(
-            GuardrailResult(guardrail, result, tripped)
-        )
-        if tripped:
-            raise ToolOutputGuardrailTripwireTriggered(guardrail, result)
+    """Run the tool's output guardrails against what it returned, before the model sees it."""
+    data = _tool_data(tool, args_json, call_id, output=output)
+    await _run_guardrails(
+        tool.tool_output_guardrails or [],
+        invoke=lambda entry: entry.guardrail_function(data),
+        record_to=context_wrapper.tool_output_guardrail_results,
+        raise_as=lambda result: ToolOutputGuardrailTripwireTriggered(
+            result.guardrail, result.output
+        ),
+        trace=trace,
+        parent_id=parent_id,
+    )
 
 
 __all__ = [

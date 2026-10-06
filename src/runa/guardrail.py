@@ -21,6 +21,11 @@ class GuardrailFunctionOutput:
     output_info: Any
     tripwire_triggered: bool
 
+    @property
+    def tripped(self) -> bool:
+        """Whether this verdict stops the run; the one question the runner asks a verdict."""
+        return self.tripwire_triggered
+
 
 @dataclass
 class GuardrailResult:
@@ -61,6 +66,10 @@ class InputGuardrail[TContext]:
     guardrail_function: _GuardrailFunction
     name: str | None = None
 
+    def get_name(self) -> str:
+        """Return this guardrail's name; `@guardrail` always sets one, a hand-built one may not."""
+        return self.name or "guardrail"
+
 
 @dataclass
 class OutputGuardrail[TContext]:
@@ -68,6 +77,10 @@ class OutputGuardrail[TContext]:
 
     guardrail_function: _GuardrailFunction
     name: str | None = None
+
+    def get_name(self) -> str:
+        """Return this guardrail's name; `@guardrail` always sets one, a hand-built one may not."""
+        return self.name or "guardrail"
 
 
 @dataclass
@@ -86,6 +99,11 @@ class ToolGuardrailFunctionOutput:
     def allow(cls, output_info: Any = None) -> ToolGuardrailFunctionOutput:
         """Build a verdict that lets the tool call proceed."""
         return cls(output_info=output_info, behavior={"type": "allow"})
+
+    @property
+    def tripped(self) -> bool:
+        """Whether this verdict stops the tool call; `behavior` is the only place that says so."""
+        return self.behavior["type"] == "raise_exception"
 
 
 @dataclass
