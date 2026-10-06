@@ -12,7 +12,6 @@ from runa._types import RunContextWrapper, TResponseInputItem
 from runa.exceptions import DuplicateToolCallError
 from runa.handoff import DelegatePaused
 from runa.run_internal.active_run import _Pending, _Run
-from runa.run_internal.agent_shape import _agent_tools, _find_tool, _normalized_handoffs
 from runa.run_internal.guardrails import _run_tool_input_guardrails, _run_tool_output_guardrails
 from runa.run_internal.spans import _close_span
 from runa.run_state import Interruption
@@ -147,10 +146,10 @@ async def _run_message_tool_calls(
     order either way. `resume` carries a paused run's decisions, including results it already
     computed for calls in `message`: those are reused as is, never executed a second time.
     """
-    agent = run.current_agent
+    shape = run.shape
+    agent = shape.agent
     context_wrapper = run.context_wrapper
-    handoff_map = _normalized_handoffs(agent.handoffs)
-    tools = await _agent_tools(agent)
+    handoff_map = shape.handoffs
     results: list[TResponseInputItem] = []
     interruptions: list[Interruption] = []
     switched_agent: Any = None
@@ -183,7 +182,7 @@ async def _run_message_tool_calls(
         if call_id in ready:
             results.append(ready[call_id])
             continue
-        tool = _find_tool(tools, name)
+        tool = shape.find_tool(name)
         if tool is None:
             results.append(
                 {"role": "tool", "tool_call_id": call_id, "content": f"error: unknown tool {name}"}
@@ -212,7 +211,7 @@ async def _run_message_tool_calls(
         runs[len(results)] = partial(_run_tool_call, run, tool, call)
         results.append({})  # filled in once the approved calls have run
 
-    parallel = agent.model_settings.parallel_tool_calls is not False
+    parallel = shape.model_settings.parallel_tool_calls is not False
     paused: list[int] = []
     for index, result in zip(runs, await _execute(list(runs.values()), parallel), strict=True):
         if isinstance(result, DelegatePaused):

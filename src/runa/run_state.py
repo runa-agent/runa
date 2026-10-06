@@ -15,7 +15,7 @@ from runa._types import (
     Usage,
 )
 from runa.exceptions import UserError
-from runa.run_internal.agent_shape import _agent_tools, _find_tool, _normalized_handoffs
+from runa.run_internal.agent_shape import AgentShape, _normalized_handoffs
 from runa.tool import FunctionTool
 from runa.tracing.traces import Trace
 
@@ -326,7 +326,7 @@ class RunState:
         )
         for item in schema.pending:
             item_agent = _find_agent_by_name(initial_agent, item.agent_name)
-            tool = _find_tool(await _agent_tools(item_agent), item.name)
+            tool = (await AgentShape.of(item_agent)).find_tool(item.name)
             if tool is None:
                 raise UserError(
                     f"tool {item.name!r} not found on agent {item_agent.name!r} while resuming"

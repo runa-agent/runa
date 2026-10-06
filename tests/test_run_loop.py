@@ -37,6 +37,7 @@ from runa.handoff import Handoff
 from runa.lifecycle import AgentHooks, RunHooks
 from runa.run import Run
 from runa.run_config import RunConfig
+from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.stream_events import StreamEvent
@@ -102,23 +103,17 @@ class _Stream:
 
 
 def _agent(**overrides: Any) -> Any:
-    defaults = dict(
-        name="TestAgent",
-        instructions="be helpful",
-        model=None,
-        tools=[],
-        handoffs=[],
-        input_guardrails=[],
-        output_guardrails=[],
-        output_type=None,
-        mcp_servers=[],
-        memory=None,
-        knowledge=None,
-        compact=False,
-        model_settings=ModelSettings(),
-    )
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+    """A stand-in agent for the loop: an `AgentShape` with everything else defaulted."""
+    return AgentShape(**{"name": "TestAgent", "instructions": "be helpful", **overrides})
+
+
+def _unresolved(*, mcp_servers: list[Any], **overrides: Any) -> Any:
+    """What `AgentShape.of` resolves, for the one test about it resolving MCP servers.
+
+    `_agent` hands back an already-resolved shape, and the one thing such a shape cannot carry is
+    `mcp_servers`: folding those servers' tools into `tools` is what resolving an agent does.
+    """
+    return SimpleNamespace(**vars(_agent(**overrides)), mcp_servers=mcp_servers)
 
 
 def _text_response(text: str, usage: Usage | None = None) -> ModelResponse:
@@ -1709,7 +1704,7 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
         async def list_tools(self) -> list[FunctionTool]:
             return [mcp_tool]
 
-    agent = _agent(
+    agent = _unresolved(
         mcp_servers=[_FakeMCPServer()],
         model=_ScriptedModel([_tool_call_response("answer", "{}"), _text_response("it's 42")]),
     )

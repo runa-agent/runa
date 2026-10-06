@@ -358,7 +358,7 @@ class Agent:
         return RunConfig(
             model_provider=_MODEL_PROVIDER,
             workflow_name=type(self).__name__,
-            group_id=outer.id if outer else getattr(session, "session_id", None),
+            group_id=outer.id if outer else (session.session_id if session is not None else None),
             max_turns=self.max_turns,
             max_tokens=self.max_tokens,
             timeout=self.timeout,

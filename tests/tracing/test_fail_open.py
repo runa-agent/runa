@@ -1,12 +1,12 @@
 """Tests for tracing's fail-open guarantee: a broken exporter must never break an agent run."""
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 
 from runa import Trace
-from runa._types import ModelResponse, ModelSettings, Usage
+from runa._types import ModelResponse, Usage
 from runa.run_config import RunConfig
+from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_loop import _run_async
 from runa.tracing import observe
 
@@ -28,21 +28,7 @@ class _TextModel:
 
 
 def _agent() -> Any:
-    return SimpleNamespace(
-        name="Researcher",
-        instructions="You research topics.",
-        model=_TextModel(),
-        tools=[],
-        handoffs=[],
-        input_guardrails=[],
-        output_guardrails=[],
-        output_type=None,
-        mcp_servers=[],
-        memory=None,
-        knowledge=None,
-        compact=False,
-        model_settings=ModelSettings(),
-    )
+    return AgentShape(name="Researcher", instructions="You research topics.", model=_TextModel())
 
 
 def test_agent_run_sync_completes_even_when_the_exporter_fails() -> None:

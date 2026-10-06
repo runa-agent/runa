@@ -2,6 +2,8 @@
 
 Runa is an opinionated, Rails-inspired Python framework for agentic AI.
 
+conventions: @RUNA.md
+
 ## Rules
 - `make check` (format, lint, typecheck, test) must pass before work is done.
 - Commits: one line, `<type>: <summary>`. Type is feat, fix, docs, refactor, or test.

@@ -1,14 +1,14 @@
 """Tests for `runa.tracing.observe`: the privacy/size policy and its `with`/bare-call forms."""
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from runa import db
-from runa._types import ModelResponse, ModelSettings, Usage
+from runa._types import ModelResponse, Usage
 from runa.run_config import RunConfig
+from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_loop import _run_async
 from runa.tool import tool
 from runa.tracing import ConsoleExporter, Trace, config, observe
@@ -64,20 +64,11 @@ def _agent_with_tool() -> Any:
         """Return a fixed time, ignoring `x`."""
         return "ok"
 
-    return SimpleNamespace(
+    return AgentShape(
         name="TestAgent",
         instructions="hi",
         model=_ScriptedModel(_tool_call_then_text("now", '{"x": 1}', "done")),
         tools=[now],
-        handoffs=[],
-        input_guardrails=[],
-        output_guardrails=[],
-        output_type=None,
-        mcp_servers=[],
-        memory=None,
-        knowledge=None,
-        compact=False,
-        model_settings=ModelSettings(),
     )
 
 
@@ -220,20 +211,11 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
         """Return a dict containing an email."""
         return {"email": "a@b.com", "id": 1}
 
-    agent: Any = SimpleNamespace(
+    agent: Any = AgentShape(
         name="TestAgent",
         instructions="hi",
         model=_ScriptedModel(_tool_call_then_text("lookup", "{}", "done")),
         tools=[lookup],
-        handoffs=[],
-        input_guardrails=[],
-        output_guardrails=[],
-        output_type=None,
-        mcp_servers=[],
-        memory=None,
-        knowledge=None,
-        compact=False,
-        model_settings=ModelSettings(),
     )
 
     with observe(redact=["email"]):
@@ -254,20 +236,11 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
         return "ok"
 
     long_arg = "x" * 100
-    agent: Any = SimpleNamespace(
+    agent: Any = AgentShape(
         name="TestAgent",
         instructions="hi",
         model=_ScriptedModel(_tool_call_then_text("now", f'{{"x": "{long_arg}"}}', "done")),
         tools=[now],
-        handoffs=[],
-        input_guardrails=[],
-        output_guardrails=[],
-        output_type=None,
-        mcp_servers=[],
-        memory=None,
-        knowledge=None,
-        compact=False,
-        model_settings=ModelSettings(),
     )
 
     with observe(max_input_bytes=10):

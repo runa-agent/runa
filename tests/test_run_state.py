@@ -6,39 +6,24 @@ preserved (agent/tool identity by name, the sticky approval ledger, usage) and w
 """
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from helpers import context_of
 
-from runa._types import ModelResponse, ModelSettings, Usage
+from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
 from runa.handoff import Handoff
 from runa.run_config import RunConfig
+from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.tool import tool
 
 
 def _agent(**overrides: Any) -> Any:
-    defaults = dict(
-        name="TestAgent",
-        instructions="be helpful",
-        model=None,
-        tools=[],
-        handoffs=[],
-        input_guardrails=[],
-        output_guardrails=[],
-        output_type=None,
-        mcp_servers=[],
-        memory=None,
-        knowledge=None,
-        compact=False,
-        model_settings=ModelSettings(),
-    )
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+    """A stand-in agent for the loop: an `AgentShape` with everything else defaulted."""
+    return AgentShape(**{"name": "TestAgent", "instructions": "be helpful", **overrides})
 
 
 def _text_response(text: str) -> ModelResponse:
@@ -108,7 +93,7 @@ def _fresh_agent_like(agent: Any) -> Any:
     under test, not needing to independently reconstruct the model too.
     """
     return _agent(
-        name=agent.name, tools=list(agent.tools), handoffs=list(agent.handoffs), model=agent.model
+        name=agent.name, tools=list(agent.tools), handoffs=dict(agent.handoffs), model=agent.model
     )
 
 

@@ -22,6 +22,7 @@ from runa.lifecycle import LoggingRunHooks
 from runa.memory import Memory
 from runa.run import Run
 from runa.run_state import RunState
+from runa.session.ephemeral import EphemeralSession
 from runa.tool import FunctionTool, tool
 
 
@@ -556,9 +557,17 @@ def _two_arg_instructions(context: RunContextWrapper[_Ctx], agent: Any) -> str:
     return f"{agent.name}:{context.context.label}"
 
 
+async def _prompt_of(agent: Any, label: str) -> str | None:
+    """`agent.instructions` as the loop resolves it: through the agent's `AgentShape`."""
+    from runa.run_internal.agent_shape import AgentShape
+    from runa.run_internal.run_loop import _resolve_instructions
+
+    shape = await AgentShape.of(agent)
+    return await _resolve_instructions(shape, RunContextWrapper(context=_Ctx(label=label)))
+
+
 def test_single_arg_instructions_resolves_from_run_context() -> None:
     """A one-parameter `(context) -> str` `instructions` is adapted to the runner's 2-arg shape."""
-    from runa.run_internal.run_loop import _resolve_instructions
 
     class Dynamic(Agent):
         name = "Dynamic"
@@ -566,14 +575,13 @@ def test_single_arg_instructions_resolves_from_run_context() -> None:
 
     agent = Dynamic()
 
-    prompt = asyncio.run(_resolve_instructions(agent, RunContextWrapper(context=_Ctx(label="hi"))))
+    prompt = asyncio.run(_prompt_of(agent, "hi"))
 
     assert prompt == "context=hi"
 
 
 def test_two_arg_instructions_still_supported() -> None:
     """A native runner-style `(context, agent) -> str` `instructions` passes through unadapted."""
-    from runa.run_internal.run_loop import _resolve_instructions
 
     class Dynamic(Agent):
         name = "Dynamic"
@@ -581,7 +589,7 @@ def test_two_arg_instructions_still_supported() -> None:
 
     agent = Dynamic()
 
-    prompt = asyncio.run(_resolve_instructions(agent, RunContextWrapper(context=_Ctx(label="hi"))))
+    prompt = asyncio.run(_prompt_of(agent, "hi"))
 
     assert prompt == "Dynamic:hi"
 
@@ -773,7 +781,7 @@ def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     parts = [content.image("https://example.test/cat.png")]
-    Researcher().run_sync(parts, session=cast(Any, object()))
+    Researcher().run_sync(parts, session=EphemeralSession("s"))
 
     assert captured["turn_input"] == [{"role": "user", "content": parts}]
 
@@ -988,10 +996,10 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
     monkeypatch.setattr("runa.agent._run_async", fake_run)
     agent = Researcher()
     agent.history = [{"role": "user", "content": "earlier"}]
-    session = object()
+    session = EphemeralSession("s")
 
     async def _consume() -> None:
-        async for _ in agent.run_streamed("hi", session=session):  # type: ignore[arg-type]
+        async for _ in agent.run_streamed("hi", session=session):
             pass
 
     asyncio.run(_consume())

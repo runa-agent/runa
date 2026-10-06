@@ -29,12 +29,7 @@ from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
 from runa.run import Run
 from runa.run_config import RunConfig
 from runa.run_internal.active_run import _Pending, _Run
-from runa.run_internal.agent_shape import (
-    AgentLike,
-    _agent_tools,
-    _normalized_handoffs,
-    _resolve_model,
-)
+from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.guardrails import _run_input_guardrails, _run_output_guardrails
 from runa.run_internal.spans import _close_span, _export, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
@@ -46,18 +41,20 @@ from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 
 
-async def _resolve_instructions(agent: AgentLike, context_wrapper: RunContextWrapper) -> str | None:
+async def _resolve_instructions(
+    shape: AgentShape, context_wrapper: RunContextWrapper
+) -> str | None:
     """Resolve `agent.instructions`: a string passes through, a callable is called and awaited."""
-    instructions = agent.instructions
+    instructions = shape.instructions
     if not callable(instructions):
         return instructions
-    resolved: Any = instructions(context_wrapper, agent)
+    resolved: Any = instructions(context_wrapper, shape.agent)
     return await resolved if inspect.isawaitable(resolved) else resolved
 
 
-def _parse_output(agent: AgentLike, text: str) -> Any:
+def _parse_output(shape: AgentShape, text: str) -> Any:
     """The model's final `text`, validated into `agent.output_type` when it declares one."""
-    output_type = agent.output_type
+    output_type = shape.output_type
     if output_type is None or output_type is str:
         return text
     try:
@@ -124,21 +121,21 @@ async def _retrieve(
         return []
 
 
-def _resolve_compactor(agent: AgentLike) -> Compactor | None:
+def _resolve_compactor(shape: AgentShape) -> Compactor | None:
     """`agent.compact` to the `Compactor` to run, or `None` if compaction is off.
 
     `True` means Runa's own `default_compactor`; anything else truthy is trusted as already
     being a `Compactor` -- `Agent(compact=...)`'s escape hatch, the same shape as
     `memory=`/`knowledge=` accepting an instance instead of `"auto"`.
     """
-    compact = agent.compact
+    compact = shape.compact
     if not compact:
         return None
     return default_compactor if compact is True else compact
 
 
 def _maybe_compact(
-    agent: AgentLike, items: list[TResponseInputItem], usage_tokens: int, spans: _Spans
+    shape: AgentShape, items: list[TResponseInputItem], usage_tokens: int, spans: _Spans
 ) -> None:
     """Run `agent.compact`'s `Compactor`, if any, and replace `items` in place if it trims them.
 
@@ -147,7 +144,7 @@ def _maybe_compact(
     finishes (on `original_input` for a no-session run, or in `_save_to_session` on the session's
     full history) so the *next* call's history reflects the same cut too.
     """
-    compactor = _resolve_compactor(agent)
+    compactor = _resolve_compactor(shape)
     if compactor is None:
         return
     replacement = compactor(items, usage_tokens)
@@ -160,7 +157,7 @@ def _maybe_compact(
 
 
 async def _save_to_session(
-    agent: AgentLike,
+    shape: AgentShape,
     session: SessionABC,
     new_tail: list[TResponseInputItem],
     context_tokens: int,
@@ -169,7 +166,7 @@ async def _save_to_session(
     """Append `new_tail` to `session`, rewriting its history instead if compaction trimmed it."""
     history = await session.get_items()
     full_history = [*history, *new_tail]
-    _maybe_compact(agent, full_history, context_tokens, spans)
+    _maybe_compact(shape, full_history, context_tokens, spans)
     if len(full_history) == len(history) + len(new_tail):
         await session.add_items(new_tail)
     else:
@@ -204,7 +201,7 @@ async def _record_tool_results(run: _Run, results: list[TResponseInputItem], swi
     for result in results:
         run.notify(RunItemStreamEvent(name="tool_output", item=result))
     if switched is not None:
-        run.current_agent = switched
+        run.shape = await AgentShape.of(switched)
         run.notify(AgentUpdatedStreamEvent(new_agent=switched))
         await run.hooks.on_agent_start(run.context_wrapper, switched)
 
@@ -228,18 +225,19 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         await _record_tool_results(run, results, switched)
 
     for _turn in range(run_config.max_turns):
-        agent = run.current_agent
-        model = _resolve_model(agent, run_config.model_provider)
-        llm_span = run.span(str(agent.model), "llm", input=list(items))
-        system_instructions = await _resolve_instructions(agent, context_wrapper)
+        shape = run.shape
+        agent = shape.agent
+        model = shape.resolve_model(run_config.model_provider)
+        llm_span = run.span(str(shape.model), "llm", input=list(items))
+        system_instructions = await _resolve_instructions(shape, context_wrapper)
         await hooks.on_llm_start(context_wrapper, agent, system_instructions, items)
         request = (
             system_instructions,
             items,
-            agent.model_settings,
-            await _agent_tools(agent),
-            agent.output_type,
-            list(_normalized_handoffs(agent.handoffs).values()),
+            shape.model_settings,
+            shape.tools,
+            shape.output_type,
+            list(shape.handoffs.values()),
         )
         if run.emit is None:
             response = await model.get_response(*request)
@@ -250,7 +248,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         _close_span(llm_span, output={"usage": response.usage.__dict__})
         await hooks.on_llm_end(context_wrapper, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
-        _maybe_compact(agent, items, context_tokens, run.spans)
+        _maybe_compact(shape, items, context_tokens, run.spans)
 
         if not response.output:
             raise ModelBehaviorError("model returned no output items")
@@ -261,8 +259,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
 
         if not message.get("tool_calls"):
             text = message.get("content") or ""
-            await _run_output_guardrails(agent, context_wrapper, text, run.spans)
-            return _TurnOutcome(_parse_output(agent, text), [], [], context_tokens)
+            await _run_output_guardrails(shape, context_wrapper, text, run.spans)
+            return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
 
         for call in message["tool_calls"]:
             run.notify(RunItemStreamEvent(name="tool_called", item=call))
@@ -301,7 +299,7 @@ async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
             input=run.input,
             new_items=list(run.generated),
             raw_responses=[],
-            last_agent=run.agent,
+            last_agent=run.start.agent,
             context_wrapper=run.context_wrapper,
             trace=run.trace,
             **guardrail_results(run.context_wrapper),
@@ -311,7 +309,7 @@ async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
 
 async def _extract_memory(run: _Run, final_output: Any) -> None:
     """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
-    memory = run.agent.memory
+    memory = run.start.memory
     query = _latest_user_text([*run.original_input, *run.session_input])
     if memory is None or query is None:
         return
@@ -319,13 +317,13 @@ async def _extract_memory(run: _Run, final_output: Any) -> None:
     try:
         stored = await memory.remember_from_conversation(
             f"User: {query}\nAssistant: {final_output}",
-            user_id=getattr(run.session, "user_id", None),
-            model=_resolve_model(run.agent, run.run_config.model_provider),
+            user_id=run.session.user_id if run.session is not None else None,
+            model=run.start.resolve_model(run.run_config.model_provider),
         )
         _close_span(span, output={"stored": len(stored)})
     except Exception as exc:
         _close_span(span, error=str(exc))
-        logger.warning("memory extraction failed for agent %s", run.agent.name, exc_info=True)
+        logger.warning("memory extraction failed for agent %s", run.start.name, exc_info=True)
 
 
 async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
@@ -375,14 +373,14 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     # stored history, or `original_input` (what `to_input_list()` returns) without one.
     if run.session is not None:
         await _save_to_session(
-            run.agent,
+            run.start,
             run.session,
             [*run.session_input, *run.generated],
             outcome.context_tokens,
             run.spans,
         )
     else:
-        _maybe_compact(run.agent, run.original_input, outcome.context_tokens, run.spans)
+        _maybe_compact(run.start, run.original_input, outcome.context_tokens, run.spans)
     await _extract_memory(run, outcome.final_output)
 
     await run.hooks.on_agent_end(context_wrapper, run.current_agent, outcome.final_output)
@@ -399,7 +397,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
 
 
 async def _run_async(
-    agent: AgentLike,
+    agent: Any,
     input: str | list[TResponseInputItem] | RunState,
     *,
     context: Any = None,
@@ -431,13 +429,14 @@ async def _run_async(
     history = await session.get_items() if session is not None else []
     items = [*history, *turn_input]
     query = _latest_user_text(turn_input)
+    shape = await AgentShape.of(agent)
     run = _Run(
-        agent=agent,
+        shape=shape,
         input=input if isinstance(input, str) else list(input),
         items=items,
         context_wrapper=context_wrapper,
         trace=trace,
-        agent_span=_Spans(trace).open(agent.name, "agent", input=query),
+        agent_span=_Spans(trace).open(shape.name, "agent", input=query),
         original_input=[] if session is not None else list(turn_input),
         session=session,
         session_input=turn_input if session is not None else [],
@@ -447,21 +446,21 @@ async def _run_async(
         emit=emit,
     )
 
-    memory = agent.memory
-    knowledge = agent.knowledge
+    memory = shape.memory
+    knowledge = shape.knowledge
     if query is not None and (memory is not None or knowledge is not None):
         memory_matches, knowledge_matches = await asyncio.gather(
             _retrieve(
                 memory,
                 query,
                 label="memory",
-                agent_name=agent.name,
+                agent_name=shape.name,
                 spans=run.spans,
-                user_id=getattr(session, "user_id", None),
+                user_id=session.user_id if session is not None else None,
             )
             if memory is not None
             else _no_matches(),
-            _retrieve(knowledge, query, label="knowledge", agent_name=agent.name, spans=run.spans)
+            _retrieve(knowledge, query, label="knowledge", agent_name=shape.name, spans=run.spans)
             if knowledge is not None
             else _no_matches(),
         )
@@ -474,10 +473,10 @@ async def _run_async(
             items.insert(at, _memory_block(memory_matches))
 
     async def turns() -> _TurnOutcome:
-        await _run_input_guardrails(agent, context_wrapper, input, run.spans)
+        await _run_input_guardrails(shape, context_wrapper, input, run.spans)
         return await _run_turns(run)
 
-    await dispatch.on_agent_start(context_wrapper, agent)
+    await dispatch.on_agent_start(context_wrapper, shape.agent)
     outcome = await _guarded(run, turns())
     return await _finish(run, outcome)
 
@@ -494,13 +493,14 @@ async def _resume(
     The agent starts again here, so it gets its own `on_agent_start`: `_finish` always fires
     `on_agent_end`, and a resumed run that skipped the start would emit an unpaired end.
     """
+    shape = await AgentShape.of(state.agent)
     run = _Run(
-        agent=state.agent,
+        shape=shape,
         input=state.original_input,
         items=list(state.generated_items),
         context_wrapper=state.context_wrapper,
         trace=state.trace,
-        agent_span=_Spans(state.trace).open(state.agent.name, "agent"),
+        agent_span=_Spans(state.trace).open(shape.name, "agent"),
         original_input=state.original_input,
         session=session,
         session_input=state.session_input,
