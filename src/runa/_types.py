@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from runa.guardrail import GuardrailResults
+
 TResponseInputItem = dict[str, Any]
 """One turn of conversation history: a `{"role": ..., "content": ...}` message, a tool call, or a
 tool result. Plain JSON, never a provider SDK type, an output item becomes tomorrow's input item
@@ -133,8 +135,8 @@ class RunContextWrapper[TContext]:
     per-tool-name decisions; `executed_call_ids` guards against executing the same tool-call id
     twice (e.g. from resuming a stale `RunState`). `paused_delegates` maps a delegate tool call's
     id to the nested `RunState` it paused on, so resuming the caller resumes the delegate too.
-    The four `*_guardrail_results` lists are every `GuardrailResult` produced this run, tripped
-    or not -- an audit trail, not just the one that stopped the run.
+    `guardrail_results` is every `GuardrailResult` produced this run, tripped or not, keyed by
+    the `Phase` it ran in -- an audit trail, not just the one that stopped the run.
     """
 
     context: TContext = None  # pyright: ignore[reportAssignmentType]
@@ -143,10 +145,7 @@ class RunContextWrapper[TContext]:
     approval_ledger_messages: dict[str, str] = field(default_factory=dict)
     executed_call_ids: set[str] = field(default_factory=set)
     paused_delegates: dict[str, Any] = field(default_factory=dict)
-    input_guardrail_results: list[Any] = field(default_factory=list)
-    output_guardrail_results: list[Any] = field(default_factory=list)
-    tool_input_guardrail_results: list[Any] = field(default_factory=list)
-    tool_output_guardrail_results: list[Any] = field(default_factory=list)
+    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
 
     def fork(self) -> RunContextWrapper[TContext]:
         """Build a child context for a nested delegate-agent call (`agent_as_tool`).
@@ -164,10 +163,7 @@ class RunContextWrapper[TContext]:
             approval_ledger_messages=self.approval_ledger_messages,
             executed_call_ids=self.executed_call_ids,
             paused_delegates=self.paused_delegates,
-            input_guardrail_results=self.input_guardrail_results,
-            output_guardrail_results=self.output_guardrail_results,
-            tool_input_guardrail_results=self.tool_input_guardrail_results,
-            tool_output_guardrail_results=self.tool_output_guardrail_results,
+            guardrail_results=self.guardrail_results,
         )
 
 

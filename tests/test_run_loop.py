@@ -19,19 +19,15 @@ from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
 from runa.exceptions import (
     DuplicateToolCallError,
-    InputGuardrailTripwireTriggered,
+    GuardrailTripwireTriggered,
     MaxTurnsExceeded,
-    OutputGuardrailTripwireTriggered,
-    ToolInputGuardrailTripwireTriggered,
 )
 from runa.guardrail import (
+    BoundGuardrail,
     GuardrailFunctionOutput,
-    InputGuardrail,
-    OutputGuardrail,
+    Phase,
     ToolGuardrailFunctionOutput,
-    ToolInputGuardrail,
     ToolInputGuardrailData,
-    ToolOutputGuardrail,
 )
 from runa.handoff import Handoff
 from runa.lifecycle import AgentHooks, RunHooks
@@ -112,8 +108,12 @@ def _unresolved(*, mcp_servers: list[Any], **overrides: Any) -> Any:
 
     `_agent` hands back an already-resolved shape, and the one thing such a shape cannot carry is
     `mcp_servers`: folding those servers' tools into `tools` is what resolving an agent does.
+    An `Agent` spells the resolved guardrails `bound_guardrails`, keeping `guardrails` for the
+    list a subclass declares; the shape, which only ever holds the resolved form, doesn't.
     """
-    return SimpleNamespace(**vars(_agent(**overrides)), mcp_servers=mcp_servers)
+    fields = vars(_agent(**overrides))
+    fields["bound_guardrails"] = fields.pop("guardrails")
+    return SimpleNamespace(**fields, mcp_servers=mcp_servers)
 
 
 def _text_response(text: str, usage: Usage | None = None) -> ModelResponse:
@@ -375,11 +375,11 @@ def test_input_guardrail_tripwire_halts_the_run() -> None:
         return GuardrailFunctionOutput(output_info="blocked", tripwire_triggered=True)
 
     agent = _agent(
-        input_guardrails=[InputGuardrail(guardrail_function=_trip, name="block_all")],
+        guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},
         model=_ScriptedModel([_text_response("should not be reached")]),
     )
 
-    with pytest.raises(InputGuardrailTripwireTriggered):
+    with pytest.raises(GuardrailTripwireTriggered):
         asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
 
@@ -390,11 +390,11 @@ def test_output_guardrail_tripwire_halts_the_run() -> None:
         return GuardrailFunctionOutput(output_info="too long", tripwire_triggered=len(value) > 3)
 
     agent = _agent(
-        output_guardrails=[OutputGuardrail(guardrail_function=_trip, name="block_long")],
+        guardrails={Phase.OUTPUT: [BoundGuardrail(_trip, Phase.OUTPUT, "block_long")]},
         model=_ScriptedModel([_text_response("way too long")]),
     )
 
-    with pytest.raises(OutputGuardrailTripwireTriggered):
+    with pytest.raises(GuardrailTripwireTriggered):
         asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
 
@@ -417,7 +417,7 @@ def test_tool_input_guardrail_tripwire_halts_the_run() -> None:
         model=_ScriptedModel([_tool_call_response("search", '{"query": "x"}')]),
     )
 
-    with pytest.raises(ToolInputGuardrailTripwireTriggered):
+    with pytest.raises(GuardrailTripwireTriggered):
         asyncio.run(_run_async(agent, "search for x", run_config=_run_config()))
 
 
@@ -796,13 +796,13 @@ def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
 
     with (
         observe(exporter=[_Capture()]),
-        pytest.raises(ToolInputGuardrailTripwireTriggered),
+        pytest.raises(GuardrailTripwireTriggered),
     ):
         asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
     # As exported, not after `asyncio.run` tidied up leftover tasks.
     assert exported["slow"] == "CancelledError"
-    assert (exported["blocked"] or "").startswith("ToolInputGuardrailTripwireTriggered")
+    assert (exported["blocked"] or "").startswith("GuardrailTripwireTriggered")
 
 
 def test_parallel_tool_calls_false_runs_calls_one_at_a_time() -> None:
@@ -864,7 +864,7 @@ def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> 
         return GuardrailFunctionOutput(output_info="ok", tripwire_triggered=False)
 
     agent = _agent(
-        input_guardrails=[InputGuardrail(guardrail_function=_pass, name="check")],
+        guardrails={Phase.INPUT: [BoundGuardrail(_pass, Phase.INPUT, "check")]},
         model=_ScriptedModel([_text_response("hi")]),
     )
 
@@ -884,14 +884,16 @@ def test_a_tripped_input_guardrail_still_records_the_guardrails_that_passed_befo
         return GuardrailFunctionOutput(output_info="blocked", tripwire_triggered=True)
 
     agent = _agent(
-        input_guardrails=[
-            InputGuardrail(guardrail_function=_pass, name="first"),
-            InputGuardrail(guardrail_function=_trip, name="second"),
-        ],
+        guardrails={
+            Phase.INPUT: [
+                BoundGuardrail(_pass, Phase.INPUT, "first"),
+                BoundGuardrail(_trip, Phase.INPUT, "second"),
+            ]
+        },
         model=_ScriptedModel([_text_response("should not be reached")]),
     )
 
-    with pytest.raises(InputGuardrailTripwireTriggered) as exc_info:
+    with pytest.raises(GuardrailTripwireTriggered) as exc_info:
         asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     run_data = exc_info.value.run_data
@@ -940,8 +942,10 @@ def test_a_tool_guardrail_is_told_which_tool_and_call_it_is_checking() -> None:
         """Search for something."""
         return "results"
 
-    search.tool_input_guardrails = [ToolInputGuardrail(guardrail_function=_record)]
-    search.tool_output_guardrails = [ToolOutputGuardrail(guardrail_function=_record)]
+    search.guardrails = {
+        Phase.TOOL_INPUT: [BoundGuardrail(_record, Phase.TOOL_INPUT)],
+        Phase.TOOL_OUTPUT: [BoundGuardrail(_record, Phase.TOOL_OUTPUT)],
+    }
 
     agent = _agent(
         tools=[search],
@@ -1173,11 +1177,11 @@ def test_stream_runs_input_guardrails() -> None:
         return GuardrailFunctionOutput(output_info="blocked", tripwire_triggered=True)
 
     agent = _agent(
-        input_guardrails=[InputGuardrail(guardrail_function=_trip, name="block_all")],
+        guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},
         model=_ScriptedStreamingModel([StreamDelta(text="should not be reached")]),
     )
 
-    with pytest.raises(InputGuardrailTripwireTriggered):
+    with pytest.raises(GuardrailTripwireTriggered):
         _consume(_Stream(agent, "hi", run_config=_run_config()))
 
 

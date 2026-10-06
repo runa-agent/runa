@@ -89,6 +89,10 @@ the ones that passed before it, a paused one (and its `RunState`) what ran befor
 [delegate](subagents.md)'s guardrails are included in its caller's lists. Each guardrail is also
 a span in `run.trace`.
 
+Those four lists are views over one `run.guardrail_results`, keyed by the `Phase` each guardrail
+ran in (`Phase.INPUT`, `Phase.OUTPUT`, `Phase.TOOL_INPUT`, `Phase.TOOL_OUTPUT`) -- the same phase
+a tripped run's `GuardrailTripwireTriggered` reports.
+
 ## Human Approval
 
 Some tool calls should not run without a person saying yes. That is a different mechanism from a

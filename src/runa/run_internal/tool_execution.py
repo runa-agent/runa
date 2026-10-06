@@ -10,9 +10,10 @@ from typing import Any, Literal
 
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.exceptions import DuplicateToolCallError
+from runa.guardrail import Phase, ToolInputGuardrailData
 from runa.handoff import DelegatePaused
 from runa.run_internal.active_run import _Pending, _Run
-from runa.run_internal.guardrails import _run_tool_input_guardrails, _run_tool_output_guardrails
+from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.spans import _close_span
 from runa.run_state import Interruption
 from runa.tool import FunctionTool
@@ -37,9 +38,10 @@ async def _run_tool_call(
     span_type = "delegate" if tool.delegate is not None else "tool"
     span = run.span(tool.name, span_type, input=args_json)
     inside = run.spans.under(span)  # this call's guardrails belong under the call
+    data = ToolInputGuardrailData.of(tool.name, args_json, call_id)
     await run.hooks.on_tool_start(context_wrapper, run.current_agent, tool)
     try:
-        await _run_tool_input_guardrails(tool, args_json, call_id, context_wrapper, inside)
+        await _run_guardrails(run, Phase.TOOL_INPUT, data, tool=tool, spans=inside)
         try:
             result = await tool.on_invoke_tool(context_wrapper, args_json, call_id)
             error: str | None = None
@@ -50,7 +52,9 @@ async def _run_tool_call(
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
             result = f"error: {exc}"
             error = str(exc)
-        await _run_tool_output_guardrails(tool, args_json, call_id, result, context_wrapper, inside)
+        await _run_guardrails(
+            run, Phase.TOOL_OUTPUT, data.returning(result), tool=tool, spans=inside
+        )
     except BaseException as exc:  # a tripwire, a cancelled sibling call, ...: say which
         detail = str(exc)
         _close_span(span, error=f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)

@@ -800,8 +800,6 @@ def test_run_sync_catches_runa_error_as_error_run(monkeypatch: pytest.MonkeyPatc
         context_wrapper=RunContextWrapper(
             context=None, usage=Usage(input_tokens=5, output_tokens=6)
         ),
-        input_guardrail_results=[],
-        output_guardrail_results=[],
     )
 
     def fake_run_sync(*args: Any, **kwargs: Any) -> Run:

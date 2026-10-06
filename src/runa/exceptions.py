@@ -7,16 +7,14 @@ model behaving unexpectedly, or a `UserError` in how the framework itself was us
 """
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from runa._types import RunContextWrapper
-
-if TYPE_CHECKING:
-    from runa.guardrail import ToolGuardrailFunctionOutput, ToolInputGuardrail, ToolOutputGuardrail
+from runa.guardrail import GuardrailAudit, GuardrailResult, GuardrailResults
 
 
 @dataclass
-class RunErrorDetails:
+class RunErrorDetails(GuardrailAudit):
     """Whatever a run had accumulated when a `RunaError` cut it short.
 
     `context_wrapper.usage` is what `Agent.run`/`run_sync` read to still record token usage for a
@@ -29,10 +27,7 @@ class RunErrorDetails:
     raw_responses: list[Any]
     last_agent: Any
     context_wrapper: RunContextWrapper
-    input_guardrail_results: list[Any]
-    output_guardrail_results: list[Any]
-    tool_input_guardrail_results: list[Any] = field(default_factory=list)
-    tool_output_guardrail_results: list[Any] = field(default_factory=list)
+    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     trace: Any = None
 
 
@@ -106,46 +101,24 @@ class UserError(RunaError):
         super().__init__(message)
 
 
-class InputGuardrailTripwireTriggered(RunaError):
-    """Raised when an `Agent.guardrails` input guardrail's tripwire trips."""
+class GuardrailTripwireTriggered(RunaError):
+    """Raised when a guardrail's tripwire trips, whichever `Phase` it ran in.
 
-    def __init__(self, guardrail_result: Any) -> None:
-        """Store the triggering `guardrail_result` and build a message from its guardrail's name."""
+    One exception for the 2x2 rather than four classes that differed only in which phase they
+    named in their message: `phase` says where it tripped, and `guardrail`/`output` are the entry
+    and the verdict `guardrail_result` pairs up.
+    """
+
+    def __init__(self, guardrail_result: GuardrailResult) -> None:
+        """Store the triggering result, and name its phase and guardrail in the message."""
         self.guardrail_result = guardrail_result
-        super().__init__(f"Guardrail {guardrail_result.guardrail.name} triggered tripwire")
-
-
-class OutputGuardrailTripwireTriggered(RunaError):
-    """Raised when an `Agent.guardrails` output guardrail's tripwire trips."""
-
-    def __init__(self, guardrail_result: Any) -> None:
-        """Store the triggering `guardrail_result` and build a message from its guardrail's name."""
-        self.guardrail_result = guardrail_result
-        super().__init__(f"Guardrail {guardrail_result.guardrail.name} triggered tripwire")
-
-
-class ToolInputGuardrailTripwireTriggered(RunaError):
-    """Raised when a `@tool(guardrails=...)` input guardrail's tripwire trips."""
-
-    def __init__(
-        self, guardrail: ToolInputGuardrail[Any], output: ToolGuardrailFunctionOutput
-    ) -> None:
-        """Store the triggering `guardrail`/`output` and build a message from its name."""
-        self.guardrail = guardrail
-        self.output = output
-        super().__init__(f"Tool input guardrail {guardrail.name} triggered tripwire")
-
-
-class ToolOutputGuardrailTripwireTriggered(RunaError):
-    """Raised when a `@tool(guardrails=...)` output guardrail's tripwire trips."""
-
-    def __init__(
-        self, guardrail: ToolOutputGuardrail[Any], output: ToolGuardrailFunctionOutput
-    ) -> None:
-        """Store the triggering `guardrail`/`output` and build a message from its name."""
-        self.guardrail = guardrail
-        self.output = output
-        super().__init__(f"Tool output guardrail {guardrail.name} triggered tripwire")
+        self.phase = guardrail_result.phase
+        self.guardrail = guardrail_result.guardrail
+        self.output = guardrail_result.output
+        super().__init__(
+            f"{guardrail_result.phase.title} "
+            f"{guardrail_result.guardrail.get_name()} triggered tripwire"
+        )
 
 
 class DuplicateToolCallError(RunaError):
@@ -164,15 +137,12 @@ class DuplicateToolCallError(RunaError):
 
 __all__ = [
     "DuplicateToolCallError",
-    "InputGuardrailTripwireTriggered",
+    "GuardrailTripwireTriggered",
     "MaxTokensExceeded",
     "MaxTurnsExceeded",
     "ModelBehaviorError",
-    "OutputGuardrailTripwireTriggered",
     "RunErrorDetails",
     "RunTimeout",
     "RunaError",
-    "ToolInputGuardrailTripwireTriggered",
-    "ToolOutputGuardrailTripwireTriggered",
     "UserError",
 ]

@@ -7,13 +7,11 @@ import pytest
 from helpers import run as run_awaitable
 
 from runa import guardrail, tool
-from runa.guardrail import ToolGuardrailFunctionOutput, ToolInputGuardrail, ToolOutputGuardrail
+from runa.guardrail import BoundGuardrail, Phase, ToolGuardrailFunctionOutput
 from runa.tool import FunctionTool
 
 
-def _run(
-    g: ToolInputGuardrail[Any] | ToolOutputGuardrail[Any], data: Any
-) -> ToolGuardrailFunctionOutput:
+def _run(g: BoundGuardrail, data: Any) -> ToolGuardrailFunctionOutput:
     """Call a wrapped tool guardrail's function directly, awaiting its always-async wrapper."""
     coro = cast(Awaitable[ToolGuardrailFunctionOutput], g.guardrail_function(data))
     return run_awaitable(coro)
@@ -53,21 +51,21 @@ def bare() -> str:
 def test_bare_tool_has_no_guardrails_or_approval() -> None:
     """`@tool` with no args produces a plain `FunctionTool`."""
     assert isinstance(bare, FunctionTool)
-    assert bare.tool_input_guardrails is None
-    assert bare.tool_output_guardrails is None
+    assert bare.guardrails[Phase.TOOL_INPUT] == []
+    assert bare.guardrails[Phase.TOOL_OUTPUT] == []
     assert bare.needs_approval is False
 
 
 def test_guardrail_list_splits_by_binding() -> None:
-    """`.input`/`.output`-bound entries land in their matching SDK tool-guardrail list."""
+    """`.input`/`.output`-bound entries land in their matching tool phase."""
 
     @tool(guardrails=[block_args.input, block_long.output])
     def now() -> str:
         """Return a constant string."""
         return "now"
 
-    assert [g.get_name() for g in now.tool_input_guardrails or []] == ["block_args"]
-    assert [g.get_name() for g in now.tool_output_guardrails or []] == ["block_long"]
+    assert [g.get_name() for g in now.guardrails[Phase.TOOL_INPUT]] == ["block_args"]
+    assert [g.get_name() for g in now.guardrails[Phase.TOOL_OUTPUT]] == ["block_long"]
 
 
 def test_bare_guardrail_wires_both_sides() -> None:
@@ -78,8 +76,8 @@ def test_bare_guardrail_wires_both_sides() -> None:
         """Return a constant string."""
         return "now"
 
-    assert [g.get_name() for g in now.tool_input_guardrails or []] == ["block_args"]
-    assert [g.get_name() for g in now.tool_output_guardrails or []] == ["block_args"]
+    assert [g.get_name() for g in now.guardrails[Phase.TOOL_INPUT]] == ["block_args"]
+    assert [g.get_name() for g in now.guardrails[Phase.TOOL_OUTPUT]] == ["block_args"]
 
 
 def test_dict_guardrails_wire_by_key() -> None:
@@ -90,13 +88,13 @@ def test_dict_guardrails_wire_by_key() -> None:
         """Return a constant string."""
         return "now"
 
-    assert [g.get_name() for g in now.tool_input_guardrails or []] == ["block_args"]
-    assert [g.get_name() for g in now.tool_output_guardrails or []] == ["block_long"]
+    assert [g.get_name() for g in now.guardrails[Phase.TOOL_INPUT]] == ["block_args"]
+    assert [g.get_name() for g in now.guardrails[Phase.TOOL_OUTPUT]] == ["block_long"]
 
 
 def test_invalid_guardrail_entry_raises() -> None:
     """A `guardrail` entry not bound via `.input`/`.output` is rejected."""
-    with pytest.raises(TypeError, match="guardrail entries must be"):
+    with pytest.raises(TypeError, match="guardrails entries must be"):
 
         @tool(guardrails=cast(Any, [lambda value: False]))
         def now() -> str:
@@ -123,7 +121,7 @@ def test_tool_input_guardrail_sees_parsed_arguments() -> None:
         """Return a constant string."""
         return "now"
 
-    (bound,) = now.tool_input_guardrails or []
+    (bound,) = now.guardrails[Phase.TOOL_INPUT]
     assert _tripped(_run(bound, _Data(tool_arguments='{"x": 1}')))
     assert not _tripped(_run(bound, _Data(tool_arguments="{}")))
 
@@ -136,6 +134,6 @@ def test_tool_output_guardrail_sees_return_value() -> None:
         """Return a constant string."""
         return "now"
 
-    (bound,) = now.tool_output_guardrails or []
+    (bound,) = now.guardrails[Phase.TOOL_OUTPUT]
     assert _tripped(_run(bound, _Data(tool_arguments="{}", output="x" * 101)))
     assert not _tripped(_run(bound, _Data(tool_arguments="{}", output="short")))

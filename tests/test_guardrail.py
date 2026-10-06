@@ -7,13 +7,13 @@ import pytest
 from helpers import run as run_awaitable
 
 from runa import Agent, guardrail
-from runa.guardrail import GuardrailFunctionOutput, InputGuardrail, OutputGuardrail
+from runa.guardrail import BoundGuardrail, GuardrailFunctionOutput, Phase
 
 _CTX = cast(Any, None)
 _AGENT = cast(Any, None)
 
 
-def _run(g: InputGuardrail[Any] | OutputGuardrail[Any], value: Any) -> GuardrailFunctionOutput:
+def _run(g: BoundGuardrail, value: Any) -> GuardrailFunctionOutput:
     """Call a wrapped guardrail's function directly, awaiting its always-async wrapper."""
     coro = cast(Awaitable[GuardrailFunctionOutput], g.guardrail_function(_CTX, _AGENT, value))
     return run_awaitable(coro)
@@ -32,7 +32,7 @@ def block_long(output: str) -> bool:
 
 
 def test_guardrails_split_into_input_and_output() -> None:
-    """A `guardrails` list is sorted into `input_guardrails`/`output_guardrails` by binding."""
+    """A `guardrails` list is sorted into `Phase.INPUT`/`Phase.OUTPUT` entries by binding."""
     bound_input, bound_output = block_empty.input, block_long.output
 
     class Support(Agent):
@@ -42,8 +42,8 @@ def test_guardrails_split_into_input_and_output() -> None:
 
     agent = Support()
 
-    assert agent.input_guardrails == [bound_input]
-    assert agent.output_guardrails == [bound_output]
+    assert agent.bound_guardrails[Phase.INPUT] == [bound_input]
+    assert agent.bound_guardrails[Phase.OUTPUT] == [bound_output]
 
 
 def test_no_guardrails_leaves_both_lists_empty() -> None:
@@ -55,8 +55,8 @@ def test_no_guardrails_leaves_both_lists_empty() -> None:
 
     agent = Support()
 
-    assert agent.input_guardrails == []
-    assert agent.output_guardrails == []
+    assert agent.bound_guardrails[Phase.INPUT] == []
+    assert agent.bound_guardrails[Phase.OUTPUT] == []
 
 
 def test_invalid_guardrail_entry_raises() -> None:
@@ -81,8 +81,8 @@ def test_bare_guardrail_wires_both_input_and_output() -> None:
 
     agent = Support()
 
-    assert [g.name for g in agent.input_guardrails] == ["block_empty"]
-    assert [g.name for g in agent.output_guardrails] == ["block_empty"]
+    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
+    assert [g.name for g in agent.bound_guardrails[Phase.OUTPUT]] == ["block_empty"]
 
 
 def test_dict_guardrails_wire_by_key() -> None:
@@ -95,8 +95,8 @@ def test_dict_guardrails_wire_by_key() -> None:
 
     agent = Support()
 
-    assert [g.name for g in agent.input_guardrails] == ["block_empty"]
-    assert [g.name for g in agent.output_guardrails] == ["block_long"]
+    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
+    assert [g.name for g in agent.bound_guardrails[Phase.OUTPUT]] == ["block_long"]
 
 
 def test_input_predicate_reduces_item_list_to_latest_text() -> None:
@@ -126,8 +126,8 @@ def test_i_and_o_are_shorthand_for_input_and_output() -> None:
 
     agent = Support()
 
-    assert [g.name for g in agent.input_guardrails] == ["block_empty"]
-    assert [g.name for g in agent.output_guardrails] == ["block_long"]
+    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
+    assert [g.name for g in agent.bound_guardrails[Phase.OUTPUT]] == ["block_long"]
 
 
 def test_async_predicate_is_awaited() -> None:

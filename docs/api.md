@@ -24,9 +24,13 @@ signature-level reference.
 
 ::: runa.guardrail.Guardrail
 
+::: runa.guardrail.Phase
+
 ::: runa.guardrail.GuardrailFunctionOutput
 
 ::: runa.guardrail.GuardrailResult
+
+::: runa.guardrail.GuardrailResults
 
 ::: runa.guardrail.ToolGuardrailFunctionOutput
 
@@ -184,12 +188,6 @@ signature-level reference.
 
 ::: runa.exceptions.UserError
 
-::: runa.exceptions.InputGuardrailTripwireTriggered
-
-::: runa.exceptions.OutputGuardrailTripwireTriggered
-
-::: runa.exceptions.ToolInputGuardrailTripwireTriggered
-
-::: runa.exceptions.ToolOutputGuardrailTripwireTriggered
+::: runa.exceptions.GuardrailTripwireTriggered
 
 ::: runa.exceptions.DuplicateToolCallError

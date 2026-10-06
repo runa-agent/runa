@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from runa._types import RunContextWrapper, TResponseInputItem, Usage
 from runa.exceptions import UserError
-from runa.guardrail import GuardrailResult
+from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_state import Interruption, RunState
 from runa.stream_events import StreamEvent
 from runa.tracing import Trace
@@ -23,7 +23,7 @@ Status = Literal["completed", "paused", "error"]
 
 
 @dataclass
-class Run:
+class Run(GuardrailAudit):
     """The outcome of a single `Agent.run()`/`run_sync()` call.
 
     `output` is the agent's final output (parsed into `Agent.output_type` when it declares one),
@@ -36,9 +36,10 @@ class Run:
     message. It is `"error"` when a `RunaError` (a guardrail tripwire, `MaxTurnsExceeded`, a
     model error, ...) stopped the run; `error` then holds that exception's message.
 
-    The four `*_guardrail_results` lists are the guardrail audit trail: every guardrail that ran
-    (tripped or not, a delegate's included), by where it ran, whatever the `status`. The same
-    four are on a paused `RunState`.
+    `guardrail_results` is the guardrail audit trail: every guardrail that ran (tripped or not, a
+    delegate's included), keyed by the `Phase` it ran in, whatever the `status`. The four
+    `*_guardrail_results` lists `GuardrailAudit` reads off it are the documented way in. The same
+    trail is on a paused `RunState`.
     """
 
     output: Any
@@ -47,10 +48,7 @@ class Run:
     status: Status = "completed"
     error: str | None = None
     interruptions: list[Interruption] = field(default_factory=list)
-    input_guardrail_results: list[GuardrailResult] = field(default_factory=list)
-    output_guardrail_results: list[GuardrailResult] = field(default_factory=list)
-    tool_input_guardrail_results: list[GuardrailResult] = field(default_factory=list)
-    tool_output_guardrail_results: list[GuardrailResult] = field(default_factory=list)
+    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     _state: RunState | None = field(default=None, repr=False)
     _context_wrapper: RunContextWrapper | None = field(default=None, repr=False)
     _original_input: list[TResponseInputItem] = field(default_factory=list, repr=False)

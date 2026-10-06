@@ -1,22 +1,59 @@
-"""`@guardrail` decorator that turns a plain predicate into an input/output guardrail."""
+"""`@guardrail` decorator that turns a plain predicate into an input/output guardrail.
+
+Agent-or-tool by input-or-output is a fact about guardrails, so it lives here as data -- one
+`Phase` -- rather than as structure spread across the codebase. One entry type carries its phase,
+one runner (`run_internal.guardrails`) takes it as an argument, one exception reports it, and a
+run's audit trail is one mapping keyed by it. A fifth phase is a member of `Phase`, not a new
+field, class and list in nine modules.
+"""
 
 import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Literal
 
-from runa._types import RunContextWrapper, TResponseInputItem
+if TYPE_CHECKING:
+    from runa._types import TResponseInputItem
 
 _Predicate = Callable[[Any], bool | Awaitable[bool]]
-_GuardrailFunction = Callable[[Any, Any, Any], Awaitable["GuardrailFunctionOutput"]]
-_ToolGuardrailFunction = Callable[[Any], Awaitable["ToolGuardrailFunctionOutput"]]
+_GuardrailFunction = Callable[..., Awaitable[Any]]
+
+
+class Phase(StrEnum):
+    """Where a guardrail runs: agent-or-tool by input-or-output, the 2x2 named once.
+
+    The phase decides everything the four used to spell out separately: which list an entry
+    belongs to, which call shape its function takes (an agent's `(context, agent, value)`, a
+    tool's `(data)`), which key its results are recorded under, and how a tripwire names it.
+    """
+
+    INPUT = "input"
+    OUTPUT = "output"
+    TOOL_INPUT = "tool_input"
+    TOOL_OUTPUT = "tool_output"
+
+    @property
+    def on_tool(self) -> bool:
+        """Whether this phase guards one tool call rather than the agent's own turn."""
+        return self in (Phase.TOOL_INPUT, Phase.TOOL_OUTPUT)
+
+    @property
+    def on_output(self) -> bool:
+        """Whether this phase checks what came back rather than what is about to go in."""
+        return self in (Phase.OUTPUT, Phase.TOOL_OUTPUT)
+
+    @property
+    def title(self) -> str:
+        """How a tripwire message names this phase, e.g. `"Tool input guardrail"`."""
+        return f"{self.value.replace('_', ' ')} guardrail".capitalize()
 
 
 @dataclass
 class GuardrailFunctionOutput:
-    """What a guardrail function returns: whatever it wants recorded, plus trip/no-trip."""
+    """What an agent guardrail function returns: whatever it wants recorded, plus trip/no-trip."""
 
     output_info: Any
     tripwire_triggered: bool
@@ -25,62 +62,6 @@ class GuardrailFunctionOutput:
     def tripped(self) -> bool:
         """Whether this verdict stops the run; the one question the runner asks a verdict."""
         return self.tripwire_triggered
-
-
-@dataclass
-class GuardrailResult:
-    """A guardrail plus the verdict it returned, whether or not it tripped.
-
-    Every guardrail run this run is recorded (see `RunContextWrapper.input_guardrail_results`
-    etc.), not just the one that stopped the run; `tripped` distinguishes the two.
-    """
-
-    guardrail: Any
-    output: Any
-    tripped: bool
-
-
-class GuardrailResults(TypedDict):
-    """A run's guardrail audit trail: every guardrail that ran, by where it ran."""
-
-    input_guardrail_results: list[GuardrailResult]
-    output_guardrail_results: list[GuardrailResult]
-    tool_input_guardrail_results: list[GuardrailResult]
-    tool_output_guardrail_results: list[GuardrailResult]
-
-
-def guardrail_results(context_wrapper: RunContextWrapper) -> GuardrailResults:
-    """A snapshot of the run's four audit lists, as keyword arguments for a result or state."""
-    return GuardrailResults(
-        input_guardrail_results=list(context_wrapper.input_guardrail_results),
-        output_guardrail_results=list(context_wrapper.output_guardrail_results),
-        tool_input_guardrail_results=list(context_wrapper.tool_input_guardrail_results),
-        tool_output_guardrail_results=list(context_wrapper.tool_output_guardrail_results),
-    )
-
-
-@dataclass
-class InputGuardrail[TContext]:
-    """Checks an agent's input before the model ever sees it; trips the run if it should stop."""
-
-    guardrail_function: _GuardrailFunction
-    name: str | None = None
-
-    def get_name(self) -> str:
-        """Return this guardrail's name; `@guardrail` always sets one, a hand-built one may not."""
-        return self.name or "guardrail"
-
-
-@dataclass
-class OutputGuardrail[TContext]:
-    """Checks an agent's final output before a run returns it; trips the run if it should stop."""
-
-    guardrail_function: _GuardrailFunction
-    name: str | None = None
-
-    def get_name(self) -> str:
-        """Return this guardrail's name; `@guardrail` always sets one, a hand-built one may not."""
-        return self.name or "guardrail"
 
 
 @dataclass
@@ -107,6 +88,77 @@ class ToolGuardrailFunctionOutput:
 
 
 @dataclass
+class GuardrailResult:
+    """A guardrail plus the verdict it returned and the `Phase` it returned it in.
+
+    Every guardrail run this run is recorded (see `GuardrailResults`), not just the one that
+    stopped the run; `tripped` distinguishes the two.
+    """
+
+    guardrail: Any
+    output: Any
+    tripped: bool
+    phase: Phase
+
+
+@dataclass
+class GuardrailResults:
+    """A run's guardrail audit trail: every `GuardrailResult` it produced, keyed by `Phase`.
+
+    One mapping rather than a list per phase, so the four names RUNA.md documents are written
+    once, on `GuardrailAudit`, and a phase nothing ran in simply has no key.
+    """
+
+    by_phase: dict[Phase, list[GuardrailResult]] = field(default_factory=dict)
+
+    def record(self, result: GuardrailResult) -> None:
+        """Append `result` under its own phase, starting that phase's list on first use."""
+        self.by_phase.setdefault(result.phase, []).append(result)
+
+    def __getitem__(self, phase: Phase) -> list[GuardrailResult]:
+        """Everything that ran in `phase`, an empty list if nothing did."""
+        return self.by_phase.get(phase, [])
+
+    def snapshot(self) -> GuardrailResults:
+        """A copy, so a finished `Run` isn't still growing as a shared context records more."""
+        return GuardrailResults({phase: list(ran) for phase, ran in self.by_phase.items()})
+
+
+class GuardrailAudit:
+    """The four `*_guardrail_results` names RUNA.md documents, over one phase-keyed mapping.
+
+    Mixed into `Run`, `RunState` and `RunErrorDetails`, each of which holds the trail as a single
+    `guardrail_results` field: the four public names are written here once instead of once per
+    holder, and a fifth phase adds nothing to any of the three.
+    """
+
+    if TYPE_CHECKING:
+        # Declared for the properties to read, not contributed as a dataclass field: a base
+        # class's field sorts ahead of every field the holder declares itself.
+        guardrail_results: GuardrailResults
+
+    @property
+    def input_guardrail_results(self) -> list[GuardrailResult]:
+        """Every agent input guardrail that ran, tripped or not."""
+        return self.guardrail_results[Phase.INPUT]
+
+    @property
+    def output_guardrail_results(self) -> list[GuardrailResult]:
+        """Every agent output guardrail that ran, tripped or not."""
+        return self.guardrail_results[Phase.OUTPUT]
+
+    @property
+    def tool_input_guardrail_results(self) -> list[GuardrailResult]:
+        """Every tool input guardrail that ran, tripped or not."""
+        return self.guardrail_results[Phase.TOOL_INPUT]
+
+    @property
+    def tool_output_guardrail_results(self) -> list[GuardrailResult]:
+        """Every tool output guardrail that ran, tripped or not."""
+        return self.guardrail_results[Phase.TOOL_OUTPUT]
+
+
+@dataclass
 class ToolInputGuardrailContext:
     """What a tool input/output guardrail's `data.context` carries: the raw call it's checking."""
 
@@ -122,29 +174,43 @@ class ToolInputGuardrailData:
     context: ToolInputGuardrailContext
     output: Any = None
 
+    @classmethod
+    def of(cls, tool_name: str, args_json: str, call_id: str) -> ToolInputGuardrailData:
+        """Build what a call's guardrails see: which tool, the call, its arguments.
+
+        The only place a `ToolInputGuardrailContext` is constructed, so a field it carries can't
+        be populated for the input side and forgotten for the output side.
+        """
+        return cls(
+            context=ToolInputGuardrailContext(
+                tool_arguments=args_json, tool_name=tool_name, call_id=call_id
+            )
+        )
+
+    def returning(self, output: Any) -> ToolInputGuardrailData:
+        """The same call as the output side sees it: this context, plus what the tool returned."""
+        return ToolInputGuardrailData(context=self.context, output=output)
+
 
 @dataclass
-class ToolInputGuardrail[TContext]:
-    """Checks a tool call's arguments before the tool runs; trips the call if it should stop."""
+class BoundGuardrail:
+    """A predicate bound to one `Phase`: what an `Agent`'s or a `@tool`'s guardrail list holds.
 
-    guardrail_function: _ToolGuardrailFunction
+    One entry type for all four cells of the 2x2, which used to be four dataclasses (six, with
+    the two that added nothing but `predicate`) carrying the same two fields and the same
+    `get_name()`. `phase` is the entire difference between them. `predicate` is the raw
+    `(value) -> bool` that was wrapped, kept so the same bound object can be rebound against a
+    tool call when it's listed in `@tool(guardrails=[...])` instead of on an agent.
+    """
+
+    guardrail_function: _GuardrailFunction
+    phase: Phase
     name: str | None = None
+    predicate: _Predicate | None = None
 
     def get_name(self) -> str:
-        """Return this guardrail's name, defaulting to its wrapped function's name."""
-        return self.name or self.guardrail_function.__name__
-
-
-@dataclass
-class ToolOutputGuardrail[TContext]:
-    """Checks a tool's return value after it runs; trips the call if it should stop."""
-
-    guardrail_function: _ToolGuardrailFunction
-    name: str | None = None
-
-    def get_name(self) -> str:
-        """Return this guardrail's name, defaulting to its wrapped function's name."""
-        return self.name or self.guardrail_function.__name__
+        """This guardrail's name: the one `@guardrail` set, or its wrapped function's."""
+        return self.name or getattr(self.guardrail_function, "__name__", "guardrail")
 
 
 def _latest_text(value: str | list[TResponseInputItem]) -> str:
@@ -157,24 +223,6 @@ def _latest_text(value: str | list[TResponseInputItem]) -> str:
     return str(content)
 
 
-def _wrap(
-    func: _Predicate, *, reduce_input: bool
-) -> Callable[..., Awaitable[GuardrailFunctionOutput]]:
-    """Wrap a `(value) -> bool` predicate into the SDK's async `(ctx, agent, value)` shape."""
-
-    async def wrapper(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
-        checked = _latest_text(value) if reduce_input else value
-        if inspect.iscoroutinefunction(func):
-            result = await func(checked)
-        else:
-            # Off the event loop: a sync predicate that does blocking I/O (a moderation API
-            # call, ...) would otherwise stall every other concurrent run/tool call.
-            result = await asyncio.to_thread(func, checked)
-        return GuardrailFunctionOutput(output_info=func.__doc__, tripwire_triggered=bool(result))
-
-    return wrapper
-
-
 def _tool_args(data: ToolInputGuardrailData) -> Any:
     """Parse a tool call's raw JSON arguments into a dict, falling back to the raw string."""
     try:
@@ -183,54 +231,43 @@ def _tool_args(data: ToolInputGuardrailData) -> Any:
         return data.context.tool_arguments
 
 
-def _wrap_tool(
-    func: _Predicate, *, on_output: bool
-) -> Callable[[Any], Awaitable[ToolGuardrailFunctionOutput]]:
-    """Wrap a `(value) -> bool` predicate into a tool guardrail's async `(data)` shape."""
+def _checked(phase: Phase, args: tuple[Any, ...]) -> Any:
+    """The value `phase`'s predicate actually sees, dug out of its call shape's arguments.
 
-    async def wrapper(data: Any) -> ToolGuardrailFunctionOutput:
-        checked = data.output if on_output else _tool_args(data)
+    An agent guardrail is called `(context, agent, value)` and a tool's `(data)`; an input phase
+    checks what is going in (the latest user text, the call's parsed arguments), an output phase
+    what came back (the agent's final output, the tool's return value).
+    """
+    if not phase.on_tool:
+        value = args[-1]
+        return value if phase.on_output else _latest_text(value)
+    data = args[0]
+    return data.output if phase.on_output else _tool_args(data)
+
+
+def _verdict(phase: Phase, tripped: bool, output_info: Any) -> Any:
+    """Spell a predicate's `bool` the way `phase`'s caller expects to read it back."""
+    if not phase.on_tool:
+        return GuardrailFunctionOutput(output_info=output_info, tripwire_triggered=tripped)
+    if tripped:
+        return ToolGuardrailFunctionOutput.raise_exception(output_info=output_info)
+    return ToolGuardrailFunctionOutput.allow(output_info=output_info)
+
+
+def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:
+    """Wrap a `(value) -> bool` predicate into the call shape `phase` is invoked with."""
+
+    async def wrapper(*args: Any) -> Any:
+        checked = _checked(phase, args)
         if inspect.iscoroutinefunction(func):
-            result = await func(checked)
+            tripped = await func(checked)
         else:
             # Off the event loop: a sync predicate that does blocking I/O (a moderation API
             # call, ...) would otherwise stall every other concurrent run/tool call.
-            result = await asyncio.to_thread(func, checked)
-        return (
-            ToolGuardrailFunctionOutput.raise_exception(output_info=func.__doc__)
-            if result
-            else ToolGuardrailFunctionOutput.allow(output_info=func.__doc__)
-        )
+            tripped = await asyncio.to_thread(func, checked)
+        return _verdict(phase, bool(tripped), func.__doc__)
 
     return wrapper
-
-
-def _tool_input_guardrail(func: _Predicate) -> ToolInputGuardrail[Any]:
-    """Bind a predicate as a `ToolInputGuardrail`."""
-    return ToolInputGuardrail(
-        guardrail_function=_wrap_tool(func, on_output=False), name=func.__name__
-    )
-
-
-def _tool_output_guardrail(func: _Predicate) -> ToolOutputGuardrail[Any]:
-    """Bind a predicate as a `ToolOutputGuardrail`."""
-    return ToolOutputGuardrail(
-        guardrail_function=_wrap_tool(func, on_output=True), name=func.__name__
-    )
-
-
-@dataclass
-class _AgentInputGuardrail(InputGuardrail[Any]):
-    """An `InputGuardrail` that remembers its raw predicate, for reuse in `@tool(guardrails=)`."""
-
-    predicate: _Predicate = field(kw_only=True)
-
-
-@dataclass
-class _AgentOutputGuardrail(OutputGuardrail[Any]):
-    """An `OutputGuardrail` that remembers its raw predicate, for reuse in `@tool(guardrails=)`."""
-
-    predicate: _Predicate = field(kw_only=True)
 
 
 class Guardrail:
@@ -242,12 +279,12 @@ class Guardrail:
     binding under a shorter name, there is no third spelling. The same bound object works in
     both places it's listed:
 
-    - In an `Agent.guardrails` list, it's an `InputGuardrail`/`OutputGuardrail`: the predicate
+    - In an `Agent.guardrails` list, it's bound to `Phase.INPUT`/`Phase.OUTPUT`: the predicate
       sees the latest user message as plain text (regardless of whether the SDK passed a string
       or the running list of input items) on `.input`, or the agent's final output on `.output`.
-    - In a `@tool(guardrails=[...])` list, the same object is reinterpreted as a
-      `ToolInputGuardrail`/`ToolOutputGuardrail`: the predicate sees the tool call's arguments
-      (parsed from JSON into a dict) on `.input`, or the tool's raw return value on `.output`.
+    - In a `@tool(guardrails=[...])` list, the same object is rebound to `Phase.TOOL_INPUT`/
+      `Phase.TOOL_OUTPUT`: the predicate sees the tool call's arguments (parsed from JSON into a
+      dict) on `.input`, or the tool's raw return value on `.output`.
 
     The predicate's docstring becomes `output_info`. Listed bare (no `.input`/`.output`), it's
     wired as both sides of whichever pair applies.
@@ -257,31 +294,32 @@ class Guardrail:
         """Store the predicate to bind on `.input`/`.output` access."""
         self._func = func
 
+    def _bind(self, phase: Phase) -> BoundGuardrail:
+        """This predicate as a `phase` entry, wrapped into the call shape that phase is given."""
+        return BoundGuardrail(
+            guardrail_function=_wrap(self._func, phase),
+            phase=phase,
+            name=self._func.__name__,
+            predicate=self._func,
+        )
+
     @property
-    def input(self) -> InputGuardrail[Any]:
+    def input(self) -> BoundGuardrail:
         """Bind this predicate to the input side."""
-        return _AgentInputGuardrail(
-            guardrail_function=_wrap(self._func, reduce_input=True),
-            name=self._func.__name__,
-            predicate=self._func,
-        )
+        return self._bind(Phase.INPUT)
 
     @property
-    def output(self) -> OutputGuardrail[Any]:
+    def output(self) -> BoundGuardrail:
         """Bind this predicate to the output side."""
-        return _AgentOutputGuardrail(
-            guardrail_function=_wrap(self._func, reduce_input=False),
-            name=self._func.__name__,
-            predicate=self._func,
-        )
+        return self._bind(Phase.OUTPUT)
 
     @property
-    def i(self) -> InputGuardrail[Any]:
+    def i(self) -> BoundGuardrail:
         """Shorthand for `.input`."""
         return self.input
 
     @property
-    def o(self) -> OutputGuardrail[Any]:
+    def o(self) -> BoundGuardrail:
         """Shorthand for `.output`."""
         return self.output
 
@@ -291,11 +329,8 @@ def guardrail(func: _Predicate) -> Guardrail:
     return Guardrail(func)
 
 
-GuardrailsList = list["InputGuardrail[Any] | OutputGuardrail[Any] | Guardrail"]
+GuardrailsList = list["BoundGuardrail | Guardrail"]
 GuardrailsDict = dict[Literal["input", "output"], GuardrailsList]
-
-ToolGuardrailsList = list["InputGuardrail[Any] | OutputGuardrail[Any] | Guardrail"]
-ToolGuardrailsDict = dict[Literal["input", "output"], ToolGuardrailsList]
 
 
 def _entries(guardrails: Any) -> list[Any]:
@@ -313,65 +348,58 @@ def _entries(guardrails: Any) -> list[Any]:
     ]
 
 
-def flatten_agent_guardrails(
-    guardrails: GuardrailsList | GuardrailsDict,
-) -> tuple[list[InputGuardrail[Any]], list[OutputGuardrail[Any]]]:
-    """Split an `Agent.guardrails` list/dict into input/output lists; bare entries wire as both."""
-    input_guardrails: list[InputGuardrail[Any]] = []
-    output_guardrails: list[OutputGuardrail[Any]] = []
+def _rebound(entry: BoundGuardrail, phase: Phase) -> BoundGuardrail:
+    """`entry` as a `phase` entry: itself if it already is one, its predicate rebound if not.
+
+    Rebinding is what lets one `@guardrail` object mean "check the agent" on an agent and "check
+    the tool call" on a tool. It needs the raw predicate the entry wrapped, so a hand-built entry
+    -- which carries a function in one call shape and nothing to re-wrap -- can't cross over.
+    """
+    if entry.phase is phase:
+        return entry
+    if entry.predicate is None:
+        raise TypeError(
+            f"guardrails entries must be @guardrail predicates bound via .input/.output, "
+            f"got one bound to {entry.phase.value!r} with no predicate to rebind"
+        )
+    return Guardrail(entry.predicate)._bind(phase)
+
+
+def flatten_guardrails(
+    guardrails: GuardrailsList | GuardrailsDict, *, tool: bool = False
+) -> dict[Phase, list[BoundGuardrail]]:
+    """Sort a `guardrails=` list/dict into entries by `Phase`; a bare entry wires as both sides.
+
+    One function for both lists Runa accepts -- an `Agent`'s, checked against its input and its
+    final output, and a `@tool`'s, checked against the call's arguments and its return value --
+    because they differ only in which pair of phases they bind to, which is what `tool` picks.
+    """
+    sides = (Phase.TOOL_INPUT, Phase.TOOL_OUTPUT) if tool else (Phase.INPUT, Phase.OUTPUT)
+    bound: dict[Phase, list[BoundGuardrail]] = {phase: [] for phase in sides}
     for entry in _entries(guardrails):
         if isinstance(entry, Guardrail):
-            input_guardrails.append(entry.input)
-            output_guardrails.append(entry.output)
-        elif isinstance(entry, _AgentInputGuardrail):
-            input_guardrails.append(entry)
-        elif isinstance(entry, _AgentOutputGuardrail):
-            output_guardrails.append(entry)
+            for phase in sides:
+                bound[phase].append(entry._bind(phase))
+        elif isinstance(entry, BoundGuardrail):
+            phase = sides[1] if entry.phase.on_output else sides[0]
+            bound[phase].append(_rebound(entry, phase))
         else:
             raise TypeError(
                 f"guardrails entries must be @guardrail predicates bound via "
                 f".input/.output, got {type(entry).__name__}"
             )
-    return input_guardrails, output_guardrails
-
-
-def flatten_tool_guardrails(
-    guardrails: ToolGuardrailsList | ToolGuardrailsDict,
-) -> tuple[list[ToolInputGuardrail[Any]], list[ToolOutputGuardrail[Any]]]:
-    """Split a `@tool(guardrails=...)` list/dict into input/output lists; bare entries wire as both.
-
-    Accepts a bare `@guardrail` predicate, or the same `.input`/`.output`-bound object used for
-    `Agent.guardrails`, reused here against the tool call's arguments/return value instead of
-    the agent's input/output.
-    """
-    input_guardrails: list[ToolInputGuardrail[Any]] = []
-    output_guardrails: list[ToolOutputGuardrail[Any]] = []
-    for entry in _entries(guardrails):
-        if isinstance(entry, Guardrail):
-            input_guardrails.append(_tool_input_guardrail(entry._func))
-            output_guardrails.append(_tool_output_guardrail(entry._func))
-        elif isinstance(entry, _AgentInputGuardrail):
-            input_guardrails.append(_tool_input_guardrail(entry.predicate))
-        elif isinstance(entry, _AgentOutputGuardrail):
-            output_guardrails.append(_tool_output_guardrail(entry.predicate))
-        else:
-            raise TypeError(
-                f"guardrail entries must be @guardrail predicates bound via "
-                f".input/.output, got {type(entry).__name__}"
-            )
-    return input_guardrails, output_guardrails
+    return bound
 
 
 __all__ = [
+    "BoundGuardrail",
     "Guardrail",
+    "GuardrailAudit",
     "GuardrailResult",
     "GuardrailResults",
     "GuardrailsDict",
     "GuardrailsList",
-    "ToolGuardrailsDict",
-    "ToolGuardrailsList",
-    "flatten_agent_guardrails",
-    "flatten_tool_guardrails",
+    "Phase",
+    "flatten_guardrails",
     "guardrail",
-    "guardrail_results",
 ]

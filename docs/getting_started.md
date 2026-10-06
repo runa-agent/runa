@@ -300,7 +300,7 @@ print(run.error)
 
 ```
 error
-Guardrail block_empty triggered tripwire
+Input guardrail block_empty triggered tripwire
 ```
 
 The same `@guardrail` predicate works on a tool's arguments or return

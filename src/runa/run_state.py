@@ -15,6 +15,7 @@ from runa._types import (
     Usage,
 )
 from runa.exceptions import UserError
+from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_internal.agent_shape import AgentShape, _normalized_handoffs
 from runa.tool import FunctionTool
 from runa.tracing.traces import Trace
@@ -73,7 +74,7 @@ class _InterruptionSchema(BaseModel):
 class _RunStateSchema(BaseModel):
     """The JSON envelope a `RunState` actually serializes through.
 
-    `context` and the four guardrail-result lists (see `GuardrailResult`) aren't included: a
+    `context` and the guardrail audit trail (see `GuardrailResults`) aren't included: a
     guardrail's `output_info` isn't guaranteed JSON-safe, and a dataclass `context` loses its
     original type on the way back out (see `RunState.from_json`'s docstring).
     """
@@ -135,7 +136,7 @@ def _find_agent_by_name(root: Any, name: str) -> Any:
 
 
 @dataclass
-class RunState:
+class RunState(GuardrailAudit):
     """Enough of a paused run to resume it once its `interruptions` are approved or rejected.
 
     `generated_items` ends with the assistant message that requested the paused calls;
@@ -159,10 +160,7 @@ class RunState:
     session_input: list[TResponseInputItem] = field(default_factory=list)
     approvals: dict[str, bool] = field(default_factory=dict)
     rejection_messages: dict[str, str] = field(default_factory=dict)
-    input_guardrail_results: list[Any] = field(default_factory=list)
-    output_guardrail_results: list[Any] = field(default_factory=list)
-    tool_input_guardrail_results: list[Any] = field(default_factory=list)
-    tool_output_guardrail_results: list[Any] = field(default_factory=list)
+    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
 
     def approve(self, interruption: Interruption, *, always: bool = False) -> None:
         """Mark `interruption` approved; its tool runs when the run is resumed.
@@ -255,9 +253,9 @@ class RunState:
 
         Not included: `Interruption.tool`/`.agent` and `agent` are recorded by name and
         re-resolved by `from_json`/`from_string` against a fresh agent instance, since a
-        `FunctionTool`'s closure and a live `Agent` can't round-trip through JSON; the four
-        `*_guardrail_results` lists and trace spans aren't included either (see `RunState`'s
-        docstring and `_RunStateSchema`'s).
+        `FunctionTool`'s closure and a live `Agent` can't round-trip through JSON; the guardrail
+        audit trail and trace spans aren't included either (see `RunState`'s docstring and
+        `_RunStateSchema`'s).
         """
         return self._to_schema().model_dump(mode="json")
 

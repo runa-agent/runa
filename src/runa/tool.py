@@ -11,18 +11,18 @@ import enum
 import inspect
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
 from runa._types import RunContextWrapper
 from runa.approval import _NeedsApproval as _ApprovalPredicate
 from runa.guardrail import (
-    ToolGuardrailsDict,
-    ToolGuardrailsList,
-    ToolInputGuardrail,
-    ToolOutputGuardrail,
-    flatten_tool_guardrails,
+    BoundGuardrail,
+    GuardrailsDict,
+    GuardrailsList,
+    Phase,
+    flatten_guardrails,
 )
 
 _RESERVED_PARAMS = ("ctx", "call_id")
@@ -38,8 +38,9 @@ class FunctionTool:
     params_json_schema: dict[str, Any]
     on_invoke_tool: Callable[[RunContextWrapper, str, str], Awaitable[Any]]
     """Called with `(ctx, arguments_json, call_id)`; returns whatever the wrapped function does."""
-    tool_input_guardrails: list[ToolInputGuardrail[Any]] | None = None
-    tool_output_guardrails: list[ToolOutputGuardrail[Any]] | None = None
+    guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
+    """This tool's guardrails by `Phase`, checked against the call's arguments
+    (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
     needs_approval: _NeedsApproval = False
     delegate: Any = None
     """The sub-`Agent` behind a `.delegate` tool (set by `agent_as_tool`): traced as a
@@ -122,7 +123,7 @@ def tool(
     *,
     name_override: str | None = None,
     description_override: str | None = None,
-    guardrails: ToolGuardrailsList | ToolGuardrailsDict | None = None,
+    guardrails: GuardrailsList | GuardrailsDict | None = None,
     needs_approval: _NeedsApproval = False,
 ) -> Callable[[Callable[..., Any]], FunctionTool]: ...
 
@@ -132,7 +133,7 @@ def tool(
     *,
     name_override: str | None = None,
     description_override: str | None = None,
-    guardrails: ToolGuardrailsList | ToolGuardrailsDict | None = None,
+    guardrails: GuardrailsList | GuardrailsDict | None = None,
     needs_approval: _NeedsApproval = False,
 ) -> FunctionTool | Callable[[Callable[..., Any]], FunctionTool]:
     """Wrap a plain function as a `FunctionTool`, deriving its schema from its signature.
@@ -141,7 +142,7 @@ def tool(
     or bound via `.input`/`.output`, against the tool call's parsed arguments and its return
     value, respectively.
     """
-    input_guardrails, output_guardrails = flatten_tool_guardrails(guardrails or [])
+    bound = flatten_guardrails(guardrails or [], tool=True)
 
     def decorator(fn: Callable[..., Any]) -> FunctionTool:
         schema, _ = _schema_from_signature(fn)
@@ -162,8 +163,7 @@ def tool(
             description=description_override or (inspect.getdoc(fn) or "").strip(),
             params_json_schema=schema,
             on_invoke_tool=on_invoke_tool,
-            tool_input_guardrails=input_guardrails or None,
-            tool_output_guardrails=output_guardrails or None,
+            guardrails=bound,
             needs_approval=needs_approval,
         )
 

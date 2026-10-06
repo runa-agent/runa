@@ -22,7 +22,7 @@ from runa import content
 from runa._models import DEFAULT_MODEL, ModelProvider
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, TResponseInputItem, Usage
 from runa.exceptions import RunaError, UserError
-from runa.guardrail import flatten_agent_guardrails, guardrail_results
+from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
 from runa.handoff import agent_as_tool
 from runa.knowledge import Knowledge
 from runa.lifecycle import RunHooks
@@ -309,9 +309,7 @@ class Agent:
                 handoffs.append(agent)
                 tools.append(agent.as_tool(None, None))
 
-        new_input_guardrails, new_output_guardrails = flatten_agent_guardrails(
-            getattr(type(self), "guardrails", [])
-        )
+        bound_guardrails = flatten_guardrails(getattr(type(self), "guardrails", []))
 
         self.memory = _resolve_retrieval_setting(kwargs.get("memory"), Memory, tools)
         self.knowledge = _resolve_retrieval_setting(kwargs.get("knowledge"), Knowledge, tools)
@@ -323,8 +321,9 @@ class Agent:
         self.tools: list[FunctionTool] = tools
         self.handoffs: list[Any] = handoffs
         self.mcp_servers: list[Any] = mcp_servers
-        self.input_guardrails = new_input_guardrails
-        self.output_guardrails = new_output_guardrails
+        # Not `self.guardrails`: that name belongs to the list/dict a subclass declares, the way
+        # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
+        self.bound_guardrails: dict[Phase, list[BoundGuardrail]] = bound_guardrails
         self.output_type: type | None = kwargs.get("output_type")
         self.hooks = kwargs.get("hooks")
         self.compact: bool = kwargs.get("compact", False)
@@ -389,7 +388,7 @@ class Agent:
             usage=self.last_usage,
             status="error",
             error=str(exc),
-            **guardrail_results(context_wrapper),
+            guardrail_results=context_wrapper.guardrail_results.snapshot(),
         )
 
     def _fresh(self) -> Agent:

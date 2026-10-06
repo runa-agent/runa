@@ -25,7 +25,7 @@ from typing import Any
 
 from runa._models import Model, ModelProvider
 from runa._types import ModelSettings
-from runa.guardrail import InputGuardrail, OutputGuardrail
+from runa.guardrail import BoundGuardrail, Phase
 from runa.handoff import Handoff
 from runa.lifecycle import AgentHooks
 from runa.tool import FunctionTool
@@ -62,8 +62,7 @@ class AgentShape:
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     tools: list[FunctionTool] = field(default_factory=list)
     handoffs: dict[str, Handoff] = field(default_factory=dict)
-    input_guardrails: list[InputGuardrail[Any]] = field(default_factory=list)
-    output_guardrails: list[OutputGuardrail[Any]] = field(default_factory=list)
+    guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     output_type: type | None = None
     memory: Any = None
     knowledge: Any = None
@@ -97,8 +96,7 @@ class AgentShape:
             model_settings=agent.model_settings,
             tools=tools,
             handoffs=agent.handoffs,
-            input_guardrails=agent.input_guardrails,
-            output_guardrails=agent.output_guardrails,
+            guardrails=agent.bound_guardrails,
             output_type=agent.output_type,
             memory=agent.memory,
             knowledge=agent.knowledge,

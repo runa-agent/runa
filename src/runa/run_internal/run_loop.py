@@ -24,13 +24,13 @@ from runa.exceptions import (
     RunErrorDetails,
     RunTimeout,
 )
-from runa.guardrail import guardrail_results
+from runa.guardrail import Phase
 from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
 from runa.run import Run
 from runa.run_config import RunConfig
 from runa.run_internal.active_run import _Pending, _Run
 from runa.run_internal.agent_shape import AgentShape
-from runa.run_internal.guardrails import _run_input_guardrails, _run_output_guardrails
+from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.spans import _close_span, _export, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutcome
@@ -259,7 +259,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
 
         if not message.get("tool_calls"):
             text = message.get("content") or ""
-            await _run_output_guardrails(shape, context_wrapper, text, run.spans)
+            await _run_guardrails(run, Phase.OUTPUT, text)
             return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
 
         for call in message["tool_calls"]:
@@ -302,7 +302,7 @@ async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
             last_agent=run.start.agent,
             context_wrapper=run.context_wrapper,
             trace=run.trace,
-            **guardrail_results(run.context_wrapper),
+            guardrail_results=run.context_wrapper.guardrail_results.snapshot(),
         )
         raise
 
@@ -351,7 +351,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             trace=run.trace,
             new_items=list(run.generated),
             session_input=run.session_input,
-            **guardrail_results(context_wrapper),
+            guardrail_results=context_wrapper.guardrail_results.snapshot(),
         )
         for interruption in outcome.interruptions:
             interruption.owner = interruption.owner or state  # a delegate's keeps its own
@@ -366,7 +366,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             _context_wrapper=context_wrapper,
             _original_input=run.original_input,
             _generated_items=list(run.generated),
-            **guardrail_results(context_wrapper),
+            guardrail_results=context_wrapper.guardrail_results.snapshot(),
         )
 
     # The next call's history starts from the same cut compaction made mid-run: the session's
@@ -392,7 +392,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
         _context_wrapper=context_wrapper,
         _original_input=run.original_input,
         _generated_items=list(run.generated),
-        **guardrail_results(context_wrapper),
+        guardrail_results=context_wrapper.guardrail_results.snapshot(),
     )
 
 
@@ -473,7 +473,7 @@ async def _run_async(
             items.insert(at, _memory_block(memory_matches))
 
     async def turns() -> _TurnOutcome:
-        await _run_input_guardrails(shape, context_wrapper, input, run.spans)
+        await _run_guardrails(run, Phase.INPUT, input)
         return await _run_turns(run)
 
     await dispatch.on_agent_start(context_wrapper, shape.agent)
