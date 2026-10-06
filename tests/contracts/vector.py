@@ -197,7 +197,7 @@ async def check_delete_of_a_missing_row_does_not_raise(build: Build, tag: str) -
 async def check_an_unpartitioned_store_searches_everything(build: Build, tag: str) -> None:
     """With no partition declared, every row is in scope and `partition` goes unread."""
     store = build(flat())
-    await store.clear()
+    await store.reset()
     await store.add(payload={"text": "near", "source": f"{tag}-a.md"}, embedding=_NEAR)
     await store.add(payload={"text": "far", "source": f"{tag}-b.md"}, embedding=_FAR)
 
@@ -207,23 +207,63 @@ async def check_an_unpartitioned_store_searches_everything(build: Build, tag: st
     assert matches[0].payload["source"] == f"{tag}-a.md"
 
 
-async def check_clear_removes_every_row(build: Build, tag: str) -> None:
-    """`clear` empties the whole store, which is what a fresh `Knowledge.ingest()` needs."""
+async def check_reset_removes_every_row(build: Build, tag: str) -> None:
+    """`reset` empties the whole store, which is what a fresh `Knowledge.ingest()` needs."""
     store = build(flat())
     await store.add(payload={"text": "a", "source": f"{tag}-a.md"}, embedding=_NEAR)
     await store.add(payload={"text": "b", "source": f"{tag}-b.md"}, embedding=_FAR)
 
-    await store.clear()
+    await store.reset()
 
     assert await store.nearest(embedding=_NEAR, k=5) == []
 
 
-async def check_nearest_on_a_cleared_store_is_empty(build: Build, tag: str) -> None:
+async def check_nearest_on_a_reset_store_is_empty(build: Build, tag: str) -> None:
     """Searching a store with nothing in it returns an empty list, not an error."""
     store = build(flat())
-    await store.clear()
+    await store.reset()
 
     assert await store.nearest(embedding=_NEAR, k=5) == []
+
+
+async def check_version_round_trips_through_reset(build: Build, tag: str) -> None:
+    """`reset(version=...)` is what a later `version()` reports, so an ingest is detectable."""
+    store = build(flat())
+
+    await store.reset(version=f"{tag}-v1")
+
+    assert await store.version() == f"{tag}-v1"
+
+
+async def check_version_is_none_until_one_is_recorded(build: Build, tag: str) -> None:
+    """A store nothing has stamped reports `None`, which no fingerprint ever equals."""
+    store = build(flat())
+
+    await store.reset()
+
+    assert await store.version() is None
+
+
+async def check_reset_replaces_the_previous_version(build: Build, tag: str) -> None:
+    """A second `reset` leaves one version, not two: the store holds one corpus at a time."""
+    store = build(flat())
+
+    await store.reset(version=f"{tag}-v1")
+    await store.reset(version=f"{tag}-v2")
+
+    assert await store.version() == f"{tag}-v2"
+
+
+async def check_a_version_survives_a_new_store_over_the_same_rows(build: Build, tag: str) -> None:
+    """A second store object on the same storage sees the first one's version.
+
+    The whole point of keeping it here rather than on the caller: a per-request `Agent` builds a
+    fresh `Knowledge`, and it has to be able to tell that the corpus is already ingested.
+    """
+    spec = flat()
+    await build(spec).reset(version=f"{tag}-v1")
+
+    assert await build(spec).version() == f"{tag}-v1"
 
 
 CONTRACT: list[Check] = [
@@ -241,6 +281,10 @@ CONTRACT: list[Check] = [
     check_delete_in_another_partition_does_not_remove_it,
     check_delete_of_a_missing_row_does_not_raise,
     check_an_unpartitioned_store_searches_everything,
-    check_clear_removes_every_row,
-    check_nearest_on_a_cleared_store_is_empty,
+    check_reset_removes_every_row,
+    check_nearest_on_a_reset_store_is_empty,
+    check_version_round_trips_through_reset,
+    check_version_is_none_until_one_is_recorded,
+    check_reset_replaces_the_previous_version,
+    check_a_version_survives_a_new_store_over_the_same_rows,
 ]

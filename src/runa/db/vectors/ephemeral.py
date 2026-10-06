@@ -24,10 +24,11 @@ from runa.db.vectors import VectorMatch, VectorSpec
 
 @dataclass
 class _Table:
-    """One store's rows, and the next id to hand out."""
+    """One store's rows, the next id to hand out, and the version `reset` stamped."""
 
     rows: list[tuple[int, dict[str, Any], list[float]]] = field(default_factory=list)
     next_id: int = 1
+    version: str | None = None
 
 
 _tables: dict[str, _Table] = {}
@@ -97,9 +98,15 @@ class EphemeralVectorStore:
             if not (row[0] == item_id and self._in_scope(row[1], partition))
         ]
 
-    async def clear(self) -> None:
-        """Delete every row and every embedding, leaving the id counter where it is."""
-        self._table.rows.clear()
+    async def reset(self, *, version: str | None = None) -> None:
+        """Delete every row and embedding, recording `version`, and leave the id counter alone."""
+        table = self._table
+        table.rows.clear()
+        table.version = version
+
+    async def version(self) -> str | None:
+        """What the last `reset` recorded, or `None` if nothing has been reset or stamped."""
+        return self._table.version
 
 
 __all__ = ["EphemeralVectorStore", "distance", "reset"]

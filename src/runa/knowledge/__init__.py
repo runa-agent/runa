@@ -10,12 +10,18 @@ of truth is a directory of files on disk (`app/knowledge/` by default), not call
 Kept deliberately separate: `Memory` is durable facts about a user, learned from conversations;
 `Knowledge` is the domain documents whoever built the app put there.
 
+Whether the corpus has been ingested is the store's answer, not a flag on the `Knowledge` object:
+`Agent(knowledge="auto")` builds a fresh `Knowledge` per agent and `runa.serve` builds an agent
+per request, so instance state would have every request re-embed the whole directory into the one
+shared store. `KnowledgeStore.reset`/`.version` is where that decision lives instead.
+
 `run_internal.run_loop._run_async` is what makes retrieval automatic during `run`, see its
 `knowledge`/`_knowledge_block` handling. `KnowledgeLike` is the contract a wholesale custom
 `knowledge=` object needs, as opposed to `Knowledge(store=...)`'s narrower escape hatch of
 swapping just the storage backend.
 """
 
+import hashlib
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -106,37 +112,73 @@ class Knowledge:
         self.model = model
         self.dimensions: int = resolve_dimensions(model, dimensions)
         self._store: KnowledgeStore = store or db.knowledge_store(dimensions=self.dimensions)
-        self._ingested = False
+
+    def _fingerprint(self) -> str:
+        """A hash of everything the stored chunks would be built from, as `search` compares it.
+
+        Internal: the public surface stays `search`/`ingest`, and a version is the store's
+        vocabulary, not an application's.
+
+        Contents, not `(size, mtime)`: a container build or a fresh checkout rewrites every
+        timestamp, so a timestamp-keyed fingerprint would re-embed the whole corpus on each
+        deploy. Reading the files is milliseconds against the seconds and the bill of embedding
+        them, and `search` pays it immediately before a network call to embed its query.
+
+        The model, its dimensions and the chunk shape are in the hash too: chunks embedded by
+        another model aren't comparable to this one's query vectors, so changing `model=` has to
+        invalidate the corpus exactly the way editing a file does.
+        """
+        digest = hashlib.sha256(
+            f"{self.model}\0{self.dimensions}\0{_CHUNK_SIZE}\0{_CHUNK_OVERLAP}".encode()
+        )
+        for path in _discover(self.directory):
+            # Relative, so the same corpus checked out at another path is the same corpus.
+            digest.update(str(path.relative_to(self.directory)).encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+        return digest.hexdigest()
 
     async def ingest(self) -> int:
         """Rebuild the knowledge base from `self.directory`, returning how many chunks it stored.
 
         A full rebuild every time: discovers supported files, extracts their text, chunks it,
-        embeds every chunk, clears whatever was stored before, and stores the fresh set, so
-        editing or removing a source file and calling `ingest()` again never leaves stale chunks
+        embeds every chunk, empties whatever was stored before, and stores the fresh set under
+        this corpus's fingerprint, so editing or removing a source file never leaves stale chunks
         behind, with no file-tracking table to keep in sync. Safe to call when `self.directory`
-        doesn't exist or has no supported files: stores nothing rather than raising.
+        doesn't exist or has no supported files: stores nothing rather than raising, and an empty
+        corpus is still a fingerprinted one.
+
+        The fingerprint is taken before the files are read, so a file edited mid-ingest is stored
+        under the older fingerprint and the next `search` rebuilds. The safe direction: a corpus
+        that looks staler than it is costs one rebuild, where one that looks fresher is wrong.
         """
+        fingerprint = self._fingerprint()
         chunks = [
             (chunk, str(path))
             for path in _discover(self.directory)
             for chunk in _chunk(_extract_text(path))
         ]
-        await self._store.clear()
+        await self._store.reset(version=fingerprint)
         if chunks:
             vectors = await embed([text for text, _ in chunks], model=self.model)
             for (text, source), vector in zip(chunks, vectors, strict=True):
                 await self._store.add(text=text, source=source, embedding=vector)
-        self._ingested = True
         return len(chunks)
 
     async def search(self, query: str, *, k: int = 5) -> list[KnowledgeMatch]:
         """Return the `k` chunks closest in meaning to `query`, nearest first.
 
-        Ingests `self.directory` first if this instance hasn't ingested yet, so the common case
-        (`Knowledge()` attached to an `Agent`) needs no manual `.ingest()` call.
+        Ingests first when the store doesn't already hold this corpus, so the common case
+        (`Knowledge()` attached to an `Agent`) needs no manual `.ingest()` call, and an edited
+        source file is picked up on the next search rather than on the next manual rebuild.
+
+        The question asked is "does the store hold what I would write", not "have I ingested
+        yet": the answer is the store's, so the second `Knowledge` over an already-ingested
+        corpus searches it instead of rebuilding it -- which is what a per-request `Agent`
+        (`runa.serve`) and every replica after the first are.
         """
-        if not self._ingested:
+        if await self._store.version() != self._fingerprint():
             await self.ingest()
         (vector,) = await embed([query], model=self.model)
         return await self._store.search(embedding=vector, k=k)

@@ -261,7 +261,9 @@ class SupportAgent(Agent):
 a non-default `directory`/`db_path`/`model`/`store`. `Knowledge()` means `app/knowledge/`,
 `db/runa.db` (`sqlite-vec`), OpenAI's `text-embedding-3-small` -- discovery, chunking, embeddings,
 and vector storage are entirely internal; put Markdown/PDF/text/CSV files under `app/knowledge/`
-and no manual `.ingest()` call is needed either (`.search` ingests lazily on first use). Pass
+and no manual `.ingest()` call is needed either: `.search` ingests whenever the store doesn't
+already hold the corpus it would write, so a first run ingests, an edited file re-ingests, and
+nothing else does -- not a second process, and not the next request's `Agent`. Pass
 `Knowledge("some/other/path")` for a non-default source directory.
 
 `Knowledge` is application-scoped, not `user_id`-scoped, and its source of truth is a directory

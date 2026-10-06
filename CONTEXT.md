@@ -46,3 +46,22 @@ it: a partitioned search returns that partition's `k` nearest rows, never a
 global top-k another partition's rows could crowd out. `Memory` partitions by
 `user_id`; `Knowledge` is application-scoped and declares none. `None` is a
 partition of its own, not "any". _Not_: tenant, filter, scope key.
+
+**Corpus.** The whole set of chunks one `Knowledge` would store: every supported
+file under its directory, chunked, plus the embedding model that gives those
+chunks meaning. A corpus is the unit an ingest replaces -- there is no partial
+ingest -- and the unit a version identifies. _Not_: index, which names the
+storage rather than the contents.
+
+**Fingerprint.** The hash `Knowledge` takes of its corpus's inputs -- each
+file's relative path and bytes, the model, its dimensions, the chunk shape -- to
+decide whether the store already holds what an ingest would write. Contents, not
+timestamps, so a fresh checkout or a container build is the same corpus. _Not_:
+checksum, etag.
+
+**Version.** A fingerprint as the store holds it: one opaque string per vector
+store, written by `reset` in the same transaction as the rows it describes and
+read back by `version()`. The store's word, because the store cannot know a
+version is a hash of files; `Knowledge` is the only concern that keeps one. See
+[ADR-0002](docs/adr/0002-ingest-state-belongs-to-the-store.md). _Not_: schema
+version, which is `RunState`'s unrelated `schema_version`.

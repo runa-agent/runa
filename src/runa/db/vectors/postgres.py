@@ -28,12 +28,17 @@ class PostgresVectorStore(Shared):
         """Name this store's table, from `spec.name`, and the database it lives in."""
         self.spec = spec
         self.items = f"{spec.name}_items"
-        # `ddl` reads both of the above, so it can only be handed over once they're set.
+        self.meta = f"{spec.name}_meta"
+        # `ddl` reads all three of the above, so it can only be handed over once they're set.
         super().__init__(url, self.ddl)
 
     @property
     def ddl(self) -> str:
-        """The `CREATE TABLE IF NOT EXISTS` this store needs, and its partition index if any."""
+        """The two `CREATE TABLE IF NOT EXISTS` this store needs, and its partition index if any.
+
+        `{name}_meta` holds at most one row, the version `reset` stamped; see `sqlite.py` for why
+        it is a table of its own rather than a column on `{name}_items`.
+        """
         lines = ["id BIGSERIAL PRIMARY KEY"]
         lines += [
             f"{name} TEXT NOT NULL" if column.required else f"{name} TEXT"
@@ -48,7 +53,10 @@ class PostgresVectorStore(Shared):
             if self.spec.partition_by
             else ""
         )
-        return f"CREATE TABLE IF NOT EXISTS {self.items} (\n{body}\n    );\n    {index}\n"
+        meta = f"CREATE TABLE IF NOT EXISTS {self.meta} (version TEXT NOT NULL);"
+        return (
+            f"CREATE TABLE IF NOT EXISTS {self.items} (\n{body}\n    );\n    {index}\n    {meta}\n"
+        )
 
     def _scope(self, start: int) -> str:
         """The `WHERE`/`AND` fragment scoping a query to one partition, or nothing."""
@@ -117,10 +125,24 @@ class PostgresVectorStore(Shared):
             *params,
         )
 
-    async def clear(self) -> None:
-        """Delete every row and every embedding, leaving the table in place."""
+    async def reset(self, *, version: str | None = None) -> None:
+        """Delete every row and embedding, recording `version` as what the store now holds.
+
+        One transaction, which is what every replica reading these rows needs: without it a
+        concurrent search can see the new version over the old rows.
+        """
         pool = await self._pool()
-        await pool.execute(f"DELETE FROM {self.items}")
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"DELETE FROM {self.items}")
+            await conn.execute(f"DELETE FROM {self.meta}")
+            if version is not None:
+                await conn.execute(f"INSERT INTO {self.meta} (version) VALUES ($1)", version)
+
+    async def version(self) -> str | None:
+        """What the last `reset` recorded, or `None` if nothing has been reset or stamped."""
+        pool = await self._pool()
+        row = await pool.fetchrow(f"SELECT version FROM {self.meta} LIMIT 1")
+        return row["version"] if row is not None else None
 
 
 __all__ = ["PostgresVectorStore"]

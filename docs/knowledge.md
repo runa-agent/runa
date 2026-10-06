@@ -46,26 +46,30 @@ matches = await knowledge.search("refund policy")
 `Knowledge()` means `app/knowledge/`, `db/runa.db` (the same file `SQLiteSession`/`Memory` use),
 `sqlite-vec`, and OpenAI's `text-embedding-3-small`. Discovery, chunking, embeddings, and vector
 storage are entirely internal. Put Markdown, PDF, plain text, or CSV files under
-`app/knowledge/`, and `.search` ingests them lazily on first use, so no manual `.ingest()` call
-is needed for the common case.
-
-Call `.ingest()` yourself to force a fresh rebuild, for example after editing a source file:
+`app/knowledge/`, and `.search` ingests them for you, so no manual `.ingest()` call is needed:
+not on first use, and not after an edit either. Each search compares a fingerprint of the
+directory, the embedding model and the chunk shape against the one the store recorded, and
+re-ingests only when they differ. Edit a file and the next search picks it up; change nothing and
+the corpus is embedded once, however many processes, replicas or requests search it.
 
 ```python
 await knowledge.ingest()  # returns how many chunks it stored
 ```
 
-Ingesting is always a full rebuild: it clears whatever was stored before and re-chunks and
-re-embeds every supported file currently in the directory, so an edited or deleted file never
-leaves stale chunks behind.
+Calling `.ingest()` yourself forces a rebuild, which you need only to re-embed a corpus whose
+files did not change. It is always a full rebuild: it empties whatever was stored before and
+re-chunks and re-embeds every supported file currently in the directory, so an edited or deleted
+file never leaves stale chunks behind.
 
 ## A Different Store
 
 A bare `Knowledge()` stores wherever `runa.db` resolves: the local `db/runa.db`, or the shared
 Postgres once `RUNA_DATABASE_URL` is set. Going multi-replica needs no code change.
 
-`store=` is for a backend Runa does not ship. Note `dimensions`, which must match your embedding
-model:
+`store=` is for a backend Runa does not ship: four async methods, `add`/`search`/`reset`/`version`,
+no inheritance. `reset` records the fingerprint its chunks were built from and `version` reports
+it back, which is what lets a second process tell an ingested corpus from one it has to build.
+Note `dimensions`, which must match your embedding model:
 
 ```python
 from runa import Knowledge

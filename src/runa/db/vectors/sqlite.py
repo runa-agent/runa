@@ -30,13 +30,18 @@ class SQLiteVectorStore:
         self.db_path = db_path
         self.items = f"{spec.name}_items"
         self.vectors = f"{spec.name}_vectors"
+        self.meta = f"{spec.name}_meta"
 
     @property
     def ddl(self) -> str:
-        """The two `CREATE ... IF NOT EXISTS` statements this store's tables need.
+        """The three `CREATE ... IF NOT EXISTS` statements this store's tables need.
 
         `id` and `created_at` wrap the declared payload columns, since both concerns wanted both.
         A JSON column is `TEXT` here: the value arrives already encoded.
+
+        `{name}_meta` holds at most one row, the version `reset` stamped. A one-row table rather
+        than a column on `{name}_items` because it has to survive having no rows at all: an empty
+        corpus is still an ingested one.
         """
         payload = ["id INTEGER PRIMARY KEY"]
         payload += [
@@ -52,6 +57,7 @@ class SQLiteVectorStore:
             + f"\n);\nCREATE VIRTUAL TABLE IF NOT EXISTS {self.vectors} USING vec0(\n"
             + ",\n".join(f"    {line}" for line in vectors)
             + "\n);\n"
+            + f"CREATE TABLE IF NOT EXISTS {self.meta} (\n    version TEXT NOT NULL\n);\n"
         )
 
     def _connect(self) -> sqlite3.Connection:
@@ -133,12 +139,25 @@ class SQLiteVectorStore:
             conn.execute(f"DELETE FROM {self.items} WHERE id = ? {scope}", tuple(params))
             conn.commit()
 
-    async def clear(self) -> None:
-        """Delete every row and every embedding, leaving both tables in place."""
+    async def reset(self, *, version: str | None = None) -> None:
+        """Delete every row and embedding, recording `version` as what the store now holds.
+
+        One commit for all four statements, so a reader never sees the new version over the old
+        rows, or a version with no rows behind it.
+        """
         with closing(self._connect()) as conn:
             conn.execute(f"DELETE FROM {self.vectors}")
             conn.execute(f"DELETE FROM {self.items}")
+            conn.execute(f"DELETE FROM {self.meta}")
+            if version is not None:
+                conn.execute(f"INSERT INTO {self.meta} (version) VALUES (?)", (version,))
             conn.commit()
+
+    async def version(self) -> str | None:
+        """What the last `reset` recorded, or `None` if nothing has been reset or stamped."""
+        with closing(self._connect()) as conn:
+            row = conn.execute(f"SELECT version FROM {self.meta} LIMIT 1").fetchone()
+        return row[0] if row is not None else None
 
 
 __all__ = ["SQLiteVectorStore"]

@@ -46,12 +46,17 @@ def test_knowledge_store_contract(store: KnowledgeStore, check: Check) -> None:
     asyncio.run(check(store, "doc"))
 
 
+_embedded: list[str] = []
+
+
 @pytest.fixture(autouse=True)
 def _fake_embed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the real OpenAI call with a lookup table, so tests never hit the network.
 
     Each text maps to a fixed 4-dimensional vector; unmapped text embeds to the origin, which is
-    never asserted on directly, just used to keep the call total.
+    never asserted on directly, just used to keep the call total. Every text asked for is recorded
+    in `_embedded`, which is what the tests about re-ingesting assert on: the cost an avoided
+    rebuild avoids is the embedding of every chunk.
     """
     vectors = {
         "cats are great pets": [1.0, 0.0, 0.0, 0.0],
@@ -59,8 +64,10 @@ def _fake_embed(monkeypatch: pytest.MonkeyPatch) -> None:
         "the stock market fell today": [0.0, 0.0, 0.0, 1.0],
         "query about pets": [1.0, 0.0, 0.0, 0.0],
     }
+    _embedded.clear()
 
     async def fake_embed(texts: list[str], *, model: str = "") -> list[list[float]]:
+        _embedded.extend(texts)
         return [vectors.get(text, [0.0, 0.0, 0.0, 0.0]) for text in texts]
 
     monkeypatch.setattr(knowledge_module, "embed", fake_embed)
@@ -176,18 +183,72 @@ def test_search_lazily_ingests_when_never_ingested(tmp_path: Path) -> None:
     assert [m.text for m in matches] == ["cats are great pets"]
 
 
-def test_search_does_not_reingest_on_every_call(tmp_path: Path) -> None:
-    """Once ingested, `search` doesn't rebuild again even if the source file changes underneath."""
+def test_search_does_not_reingest_an_unchanged_corpus(tmp_path: Path) -> None:
+    """An unchanged directory is ingested once, however many searches run over it.
+
+    Counted in embedding calls rather than in `ingest()` calls, because the cost this is about is
+    the embedding bill: one call for the corpus, then one per query.
+    """
     source_dir = tmp_path / "knowledge"
     source_dir.mkdir()
     (source_dir / "pets.md").write_text("cats are great pets")
     know = _knowledge(tmp_path, source_dir)
 
     asyncio.run(know.search("query about pets", k=1))
-    (source_dir / "pets.md").write_text("the stock market fell today")
-    matches = asyncio.run(know.search("query about pets", k=1))
+    before = list(_embedded)
+    asyncio.run(know.search("query about pets", k=1))
+
+    assert _embedded == before + ["query about pets"]
+
+
+def test_a_second_instance_searches_what_the_first_ingested(tmp_path: Path) -> None:
+    """A fresh `Knowledge` over an already-ingested corpus searches it instead of rebuilding.
+
+    The shape `runa.serve` has: `Agent(knowledge="auto")` builds its own `Knowledge` per agent and
+    an agent is built per request, so a per-instance "have I ingested" flag would re-embed the
+    whole directory on every call.
+    """
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    asyncio.run(_knowledge(tmp_path, source_dir).search("query about pets", k=1))
+    _embedded.clear()
+
+    matches = asyncio.run(_knowledge(tmp_path, source_dir).search("query about pets", k=1))
 
     assert [m.text for m in matches] == ["cats are great pets"]
+    assert _embedded == ["query about pets"]
+
+
+def test_search_reingests_after_a_source_file_changes(tmp_path: Path) -> None:
+    """Editing a file is picked up by the next `search`, with no manual `.ingest()` call."""
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    know = _knowledge(tmp_path, source_dir)
+    asyncio.run(know.search("query about pets", k=1))
+
+    (source_dir / "pets.md").write_text("the stock market fell today")
+    matches = asyncio.run(know.search("query about pets", k=5))
+
+    assert [m.text for m in matches] == ["the stock market fell today"]
+
+
+def test_search_reingests_after_the_embedding_model_changes(tmp_path: Path) -> None:
+    """Chunks embedded by another model aren't comparable, so the model is part of the corpus."""
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    store = SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS)
+    asyncio.run(
+        Knowledge(source_dir, dimensions=_DIMENSIONS, store=store).search("query about pets", k=1)
+    )
+
+    _embedded.clear()
+    other = Knowledge(source_dir, model="some-other-model", dimensions=_DIMENSIONS, store=store)
+    asyncio.run(other.search("query about pets", k=1))
+
+    assert "cats are great pets" in _embedded
 
 
 def test_ingest_again_reflects_edited_and_removed_files(tmp_path: Path) -> None:
@@ -242,6 +303,7 @@ def test_custom_store_can_be_injected() -> None:
     class _FakeStore:
         def __init__(self) -> None:
             self.added: list[dict[str, Any]] = []
+            self.recorded: str | None = None
 
         async def add(self, *, text: str, source: str, embedding: list[float]) -> int:
             self.added.append({"text": text, "source": source})
@@ -253,15 +315,21 @@ def test_custom_store_can_be_injected() -> None:
                 for idx, item in enumerate(self.added, start=1)
             ]
 
-        async def clear(self) -> None:
+        async def reset(self, *, version: str | None = None) -> None:
             self.added = []
+            self.recorded = version
+
+        async def version(self) -> str | None:
+            return self.recorded
 
     store = _FakeStore()
     know = Knowledge(store=store)
 
     async def _run() -> list[KnowledgeMatch]:
+        # Stamping the store with this corpus's fingerprint is what tells `search` not to
+        # rebuild, the same way an earlier process's `ingest()` would have.
+        await store.reset(version=know._fingerprint())
         await store.add(text="cats are great pets", source="manual", embedding=[0.0])
-        know._ingested = True
         return await know.search("anything")
 
     matches = asyncio.run(_run())
