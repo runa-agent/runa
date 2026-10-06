@@ -1,9 +1,13 @@
-"""exceptions.py: Runa's own run-time exception hierarchy.
+"""exceptions.py: Runa's two exception roots.
 
 `RunaError` is the base every run-ending failure raises: a tripped guardrail, `MaxTurnsExceeded`, a
 model behaving unexpectedly, or a `UserError` in how the framework itself was used. `Agent.run`/
 `run_sync` catch `RunaError` (not each subclass individually) and translate it into
 `Run(status="error", ...)`, see `runa.agent`.
+
+`OperatorError` is the other half: the person running a Runa app typed something wrong. A sibling
+of `RunaError` rather than a subclass, because a mistyped session id is not a run failure -- these
+come from the surfaces around a run (the CLI, the dashboard), mostly before one has started.
 """
 
 from dataclasses import dataclass, field
@@ -29,6 +33,22 @@ class RunErrorDetails(GuardrailAudit):
     context_wrapper: RunContextWrapper
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     trace: Any = None
+
+
+class OperatorError(Exception):
+    """Base class for a failure that is the operator's input rather than a bug.
+
+    A mistyped session id, a command run outside a Runa project, an unparseable
+    `RUNA_DATABASE_URL`. Every surface that fronts someone's app owes these a plain message
+    instead of a traceback: `cli/main.py` prints one line and exits 1, `runa ui` renders a 400
+    page. Both catch this base, so a new subclass is handled by every surface the moment it is
+    declared, rather than when each surface remembers to name it.
+
+    Subclass this, not `Exception`, whenever the module raising already knows the failure is the
+    operator's fault -- which is where that knowledge lives. Keep a bare `Exception` when it
+    isn't the operator's fault: `runa.project.AppLoadError` is a bug in the developer's own
+    `main.py`, and earns a different message for saying so.
+    """
 
 
 class RunaError(Exception):
@@ -141,6 +161,7 @@ __all__ = [
     "MaxTokensExceeded",
     "MaxTurnsExceeded",
     "ModelBehaviorError",
+    "OperatorError",
     "RunErrorDetails",
     "RunTimeout",
     "RunaError",

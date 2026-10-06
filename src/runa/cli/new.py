@@ -8,6 +8,8 @@ SQLite database, and developer docs (at the project root) without any configurat
 
 from pathlib import Path
 
+from runa.exceptions import OperatorError
+
 _APP_SUBDIRS = ("agents", "guardrails", "prompts", "tools")
 _ROOT_PACKAGE_SUBDIRS = ("tests", "evals", "config")
 _ROOT_PLAIN_SUBDIRS = ("db", "docs")
@@ -92,7 +94,7 @@ CMD ["uv", "run", "runa", "serve", "--host", "0.0.0.0", "--port", "8000"]
 """
 
 
-class ProjectAlreadyExists(Exception):
+class ProjectAlreadyExists(OperatorError):
     """Raised when `runa new` targets a directory that already exists."""
 
 

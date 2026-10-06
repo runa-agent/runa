@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from runa.db.schema import Column, Index, Table
+from runa.exceptions import OperatorError
 
 SESSIONS = Table(
     "agent_sessions",
@@ -41,7 +42,7 @@ MESSAGES = Table(
 )
 
 
-class SessionNotFound(Exception):
+class SessionNotFound(OperatorError):
     """Raised when a caller names a session id this deployment has no history for."""
 
 

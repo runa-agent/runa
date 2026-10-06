@@ -20,6 +20,7 @@ import json
 from typing import Any, Protocol
 
 from runa.db.schema import Column, Index, Table
+from runa.exceptions import OperatorError
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -60,7 +61,7 @@ SPANS = Table(
 )
 
 
-class TraceNotFound(Exception):
+class TraceNotFound(OperatorError):
     """Raised when a caller names a trace id this deployment has no record of.
 
     `TraceStore.get` returns `None` for a missing trace, since "is it there" is a question with

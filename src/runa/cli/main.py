@@ -13,11 +13,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from runa.cli.chat import run_agent_repl
-from runa.cli.eval import InvalidEvalModule, run_project_evals
+from runa.cli.eval import run_project_evals
 from runa.cli.generate import (
-    AmbiguousComponent,
-    InvalidAgentName,
-    ScaffoldExists,
     generate_agent,
     generate_evaluation,
     generate_guardrail,
@@ -25,20 +22,15 @@ from runa.cli.generate import (
     generate_tool,
     split_tool_name,
 )
-from runa.cli.new import ProjectAlreadyExists, scaffold_project
-from runa.cli.serve import MissingAPIKey, serve_agents
-from runa.cli.sessions import SessionNotFound, list_sessions, show_session
+from runa.cli.new import scaffold_project
+from runa.cli.serve import serve_agents
+from runa.cli.sessions import list_sessions, show_session
 from runa.cli.test import run_project_tests
 from runa.cli.traces import list_errors_cli, list_traces_cli, show_trace
 from runa.cli.ui import serve_ui
-from runa.db import InvalidDatabaseURL
-from runa.eval.corpus import (
-    CaseAlreadyInEvals,
-    TraceHasNoInput,
-    add_trace_to_evals,
-)
-from runa.project import AgentNotFound, AppLoadError, NotARunaProject
-from runa.tracing import TraceNotFound
+from runa.eval.corpus import add_trace_to_evals
+from runa.exceptions import OperatorError
+from runa.project import AppLoadError
 
 _EXTRA_FOR_MODULE = {
     "fastapi": "serve",
@@ -221,6 +213,11 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
     traceback. Anything else (a real bug, in Runa or in the app's own code) still propagates
     with its full traceback, since swallowing that would hide the thing a developer actually
     needs to see.
+
+    Which failures are the operator's is not decided here: each one subclasses `OperatorError`
+    where it is raised, in the module that already knows whose fault it is, so a new command's
+    new error needs nothing added to this function. The other two clauses are the failures that
+    earn a more specific message than `error: {exc}`, not a second copy of that decision.
     """
     cwd = cwd or Path.cwd()
     args = _build_parser().parse_args(argv)
@@ -242,21 +239,7 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    except (
-        SessionNotFound,
-        ProjectAlreadyExists,
-        ScaffoldExists,
-        AgentNotFound,
-        AmbiguousComponent,
-        InvalidAgentName,
-        NotARunaProject,
-        InvalidEvalModule,
-        CaseAlreadyInEvals,
-        TraceHasNoInput,
-        TraceNotFound,
-        MissingAPIKey,
-        InvalidDatabaseURL,
-    ) as exc:
+    except OperatorError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except AppLoadError as exc:

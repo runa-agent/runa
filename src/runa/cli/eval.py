@@ -18,10 +18,11 @@ from pathlib import Path
 from runa.agent import Agent
 from runa.eval import Case, Dataset, Report
 from runa.eval.corpus import require_evals_dir
+from runa.exceptions import OperatorError
 from runa.project import AgentNotFound, find_agent_class, loaded_app, require_agents_dir
 
 
-class InvalidEvalModule(Exception):
+class InvalidEvalModule(OperatorError):
     """Raised when an `evals/` module doesn't declare `agent` and `dataset`."""
 
 

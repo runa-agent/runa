@@ -11,13 +11,19 @@ from urllib.parse import quote
 
 from runa import db
 from runa.eval.store import EvalCaseRow, EvalRun
+from runa.exceptions import OperatorError
 from runa.web._html import back_link, chip, empty, empty_hint, escape, page, pre
 
 __all__ = ["EvalRunNotFound", "render_detail", "render_list"]
 
 
-class EvalRunNotFound(Exception):
-    """Raised when `render_detail` names a run id this deployment has no record of."""
+class EvalRunNotFound(OperatorError):
+    """Raised when `render_detail` names a run id this deployment has no record of.
+
+    The same shape as `SessionNotFound`/`TraceNotFound`: an id off the request names nothing.
+    Only the dashboard can reach it today, since no command takes a run id, but whose fault it
+    is doesn't depend on which surface asked.
+    """
 
 
 def _fmt_timestamp(value: str) -> str:

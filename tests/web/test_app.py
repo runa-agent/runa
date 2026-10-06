@@ -14,6 +14,7 @@ from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
 from runa.eval.tracing.adapter import AgentRun
+from runa.exceptions import OperatorError
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.web.app import _trace_url, create_app
@@ -274,3 +275,39 @@ def test_evaluations_list_and_detail(client: TestClient) -> None:
 def test_evaluation_detail_404s_for_an_unknown_run(client: TestClient) -> None:
     """`/evaluations/{id}` returns 404 for an `eval_runs.id` that doesn't exist."""
     assert client.get("/evaluations/999").status_code == 404
+
+
+def test_routes_keep_their_own_status_over_the_operator_error_fallback(
+    client: TestClient,
+) -> None:
+    """A route that names its own type still answers with that status, not the fallback 400.
+
+    `SessionNotFound`/`TraceNotFound`/`EvalRunNotFound` are `OperatorError`s, so a single
+    handler would have flattened these three 404s into 400. Unlike `cli/main.py`, this app has
+    more than one right answer for an operator error, so the specific routes stay specific.
+    """
+    assert client.get("/sessions/nope").status_code == 404
+    assert client.get("/traces/nope").status_code == 404
+    assert client.get("/evaluations/999").status_code == 404
+
+
+def test_an_unhandled_operator_error_renders_a_400_not_a_500(project: Path) -> None:
+    """An `OperatorError` no route catches renders the error page instead of crashing.
+
+    The floor under the specific handlers: a new operator error reaching this app from a
+    surface that predates its route is a bad request, not a server fault.
+    """
+
+    class _BrandNewOperatorError(OperatorError):
+        """A type `web/app.py` has never heard of."""
+
+    def _raise(**_kwargs: object) -> str:
+        raise _BrandNewOperatorError("no such thing")
+
+    app = create_app(project)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("runa.web.app.agents_page.render", _raise)
+        response = TestClient(app, raise_server_exceptions=False).get("/agents")
+
+    assert response.status_code == 400
+    assert "Error" in response.text

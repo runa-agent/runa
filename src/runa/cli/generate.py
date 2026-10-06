@@ -22,6 +22,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from runa.agent import _PROMPT_TEMPLATE
+from runa.exceptions import OperatorError
 from runa.project import AgentNotFound, NotARunaProject
 
 _TOOL_IMPORT = "from runa import tool"
@@ -44,20 +45,20 @@ def {func_name}(value: str) -> bool:
 _EVALUATION_TEMPLATE = '{"input": "Hello! What can you help me with?"}\n'
 
 
-class InvalidAgentName(Exception):
+class InvalidAgentName(OperatorError):
     """Raised when the given class name isn't UpperCamelCase ending in `Agent`."""
 
 
-class ScaffoldExists(Exception):
+class ScaffoldExists(OperatorError):
     """Raised when what a `runa generate` command would write is already there.
 
     One type for every kind, because the message already names the file (or the colliding
-    `name` identity) and `cli/main.py` prints all of them the same way. Which kind of thing
+    `name` identity) and every surface reports all of them the same way. Which kind of thing
     collided is in the path, not in the class.
     """
 
 
-class AmbiguousComponent(Exception):
+class AmbiguousComponent(OperatorError):
     """Raised when a `--tool`/`--guardrail` name matches more than one file."""
 
 

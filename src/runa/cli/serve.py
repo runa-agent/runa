@@ -8,10 +8,12 @@ uses for the dashboard.
 import os
 from pathlib import Path
 
+from runa.exceptions import OperatorError
+
 API_KEY_ENV = "RUNA_API_KEY"
 
 
-class MissingAPIKey(Exception):
+class MissingAPIKey(OperatorError):
     """Raised when `runa serve` starts with neither `RUNA_API_KEY` nor an explicit `--no-auth`."""
 
 
@@ -22,9 +24,9 @@ def resolve_api_key(*, no_auth: bool) -> str | None:
     "nobody set the variable" has to be an error rather than a silently open door. `--no-auth`
     makes the same choice explicit and is then perfectly fine for local use.
 
-    Lives here, not in `runa/serve.py`, so `cli/main.py` can catch `MissingAPIKey` without
-    importing FastAPI: a plain install has to be able to parse `runa serve --help` and to print
-    a clean error, neither of which should need the `serve` extra.
+    Lives here, not in `runa/serve.py`, so `MissingAPIKey` is raised without importing FastAPI:
+    a plain install has to be able to parse `runa serve --help` and to print a clean error,
+    neither of which should need the `serve` extra.
     """
     if no_auth:
         return None

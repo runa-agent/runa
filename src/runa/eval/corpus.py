@@ -14,15 +14,16 @@ from pathlib import Path
 
 from runa import db
 from runa.eval.dataset import Dataset
+from runa.exceptions import OperatorError
 from runa.project import NotARunaProject
 from runa.tracing import Trace, TraceNotFound
 
 
-class TraceHasNoInput(Exception):
+class TraceHasNoInput(OperatorError):
     """Raised when a trace recorded no user input to replay as an eval case."""
 
 
-class CaseAlreadyInEvals(Exception):
+class CaseAlreadyInEvals(OperatorError):
     """Raised when a trace's input is already a case in its agent's `evals/` dataset."""
 
 

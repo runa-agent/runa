@@ -22,13 +22,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from runa.agent import Agent, Subagent, _flatten_subagents
+from runa.exceptions import OperatorError
 
 
-class NotARunaProject(Exception):
+class NotARunaProject(OperatorError):
     """Raised when a caller needs a project subdirectory `root` doesn't have.
 
-    Shared across every command and both web apps so `cli/main.py` can catch it once, regardless
-    of which directory check failed.
+    Shared across every command and both web apps, so which directory check failed never changes
+    how it is reported.
     """
 
 
@@ -40,10 +41,13 @@ class AppLoadError(Exception):
     `cli/main.py` catches this and prints one clean line instead of a raw multi-frame traceback,
     and points at `python main.py` for the full one, since that traceback belongs to the
     developer's own entry point.
+
+    Deliberately not an `OperatorError`: the operator typed nothing wrong, their app is broken,
+    and the message that helps says that instead of the one every operator error shares.
     """
 
 
-class AgentNotFound(Exception):
+class AgentNotFound(OperatorError):
     """Raised when no Agent under `app/agents/` declares the given `name`."""
 
 

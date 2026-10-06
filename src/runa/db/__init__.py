@@ -33,6 +33,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from runa.exceptions import OperatorError
+
 if TYPE_CHECKING:
     from runa.cache import Cache
     from runa.db.vectors import VectorSpec, VectorStore
@@ -52,11 +54,11 @@ _SQLITE_SCHEME = "sqlite://"
 _MEMORY_SCHEME = "memory://"
 
 
-class InvalidDatabaseURL(Exception):
+class InvalidDatabaseURL(OperatorError):
     """Raised when `RUNA_DATABASE_URL` is set to something that names no supported backend.
 
-    Its own type, not a bare `ValueError`, so `cli/main.py` can turn an operator's typo into one
-    clean line like every other operator error, instead of a traceback through the storage layer.
+    An `OperatorError`, not a bare `ValueError`, so a typo in the environment surfaces as one
+    clean line like every other operator error, not as a traceback through the storage layer.
     """
 
 

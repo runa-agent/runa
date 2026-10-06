@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
+from runa.exceptions import OperatorError
 from runa.project import AppLoadError, NotARunaProject
 from runa.tracing import TraceNotFound
 from runa.web import agents as agents_page
@@ -107,5 +108,16 @@ def create_app(root: Path) -> FastAPI:
     @app.exception_handler(AppLoadError)
     def _app_load_error(_request: Request, _exc: AppLoadError) -> HTMLResponse:
         return HTMLResponse(_error_page("Agents", "Failed to load application."), status_code=500)
+
+    @app.exception_handler(OperatorError)
+    def _operator_error(_request: Request, _exc: OperatorError) -> HTMLResponse:
+        """Catch-all 400 for an operator error no route above gave a better answer.
+
+        Unlike `cli/main.py`, this app can't reduce every operator error to one response: a
+        missing session is a 404 on a page that says so, and the routes above keep naming their
+        own types to say which. This is the floor under them, so an `OperatorError` from a new
+        surface renders a page instead of a 500, not a replacement for them.
+        """
+        return HTMLResponse(_error_page("", "Bad request."), status_code=400)
 
     return app
