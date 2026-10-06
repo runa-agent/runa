@@ -187,14 +187,21 @@ one model message run concurrently unless `ModelSettings(parallel_tool_calls=Fal
 ## 6. Session
 
 **Default to no session (`agent.history`, in-memory, instance-scoped).
-Reach for `SQLiteSession` only when a conversation must survive past the
+Pass `session="<id>"` only when a conversation must survive past the
 `Agent` instance**: a new process, a different request, a resumed CLI
 chat.
 
 ```python
-session = SQLiteSession("user-42")
-agent.run_sync("...", session=session)
+agent.run_sync("...", session="user-42")
 ```
+
+**The id is the application's; the backend is `runa.db`'s.** A string is
+resolved through `db.session(...)`, so one call persists to a local
+file, a shared Postgres, or nothing at all, according to
+`RUNA_DATABASE_URL` -- a backend is never named at the call site. Pass a
+`SessionABC` instead only when a run needs more than the id:
+`db.session(id, user_id=...)` to scope automatic memory, or
+`SQLiteSession(id, "other/runa.db")` to point at one specific file.
 
 With a `session`, only the new message is ever passed to `run`/`run_sync`,
 prior turns come back from `runa.db` automatically, and `agent.history`
@@ -206,8 +213,9 @@ in-memory per agent instance, not both for the same conversation.
 earlier conversation through the seam the chosen mode already has:
 `agent.history = [...]` in memory, `await session.add_items([...])`
 before the first run with a session.
-`SQLiteSession` is the only session implementation Runa ships; a custom
-store subclasses `SessionABC`'s four methods, nothing less.
+`db.session` is how every shipped implementation is reached, so which one
+a deployment gets is never a call site's decision; a custom store
+subclasses `SessionABC`'s four methods, nothing less.
 
 ## 7. Memory
 

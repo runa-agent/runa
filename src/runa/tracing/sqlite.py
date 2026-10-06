@@ -14,7 +14,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from runa.db import DEFAULT_DB_PATH
+from runa.db import sqlite_path
 from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
 from runa.tracing.store import (
@@ -32,9 +32,12 @@ _DDL = ddl(SQLITE, TRACES, SPANS)
 class SQLiteTraceStore:
     """The local `TraceStore`: `db/runa.db`'s `traces`/`spans` tables."""
 
-    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
-        """Store which SQLite file this history lives in; the tables are created on first use."""
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        """Store which SQLite file this history lives in, defaulting to `db.sqlite_path()`.
+
+        The tables are created on first use.
+        """
+        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def _connect(self) -> sqlite3.Connection:
         conn = _connect_db(self.db_path, _DDL)

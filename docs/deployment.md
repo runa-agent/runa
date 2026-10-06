@@ -89,8 +89,8 @@ Two ways out, both cheap:
 ```python
 # A session per run: each conversation's history is its own.
 await asyncio.gather(
-    agent.run("one", session=SQLiteSession("conv-a")),
-    agent.run("two", session=SQLiteSession("conv-b")),
+    agent.run("one", session="conv-a"),
+    agent.run("two", session="conv-b"),
 )
 
 # Or an Agent per run.

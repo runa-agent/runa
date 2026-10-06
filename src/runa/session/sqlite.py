@@ -20,7 +20,7 @@ from contextlib import closing
 from pathlib import Path
 
 from runa._types import TResponseInputItem
-from runa.db import DEFAULT_DB_PATH
+from runa.db import sqlite_path
 from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
 from runa.session import SessionABC
@@ -44,16 +44,20 @@ class SQLiteSession(SessionABC):
     def __init__(
         self,
         session_id: str,
-        db_path: str | Path = DEFAULT_DB_PATH,
+        db_path: str | Path | None = None,
         *,
         user_id: str | None = None,
     ) -> None:
         """Store `session_id` and where in `runa.db` its history lives.
 
+        `db_path` defaults to `runa.db.sqlite_path()`, so this history lands in the same local
+        file as every other concern's -- including when `RUNA_DATABASE_URL` relocates it. Pass
+        one to point at some other file.
+
         `user_id` scopes this session's automatic memory, if its agent has any; see `SessionABC`.
         """
         self.session_id = session_id
-        self.db_path = Path(db_path)
+        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
         self.user_id = user_id
 
     def _connect(self) -> sqlite3.Connection:
@@ -148,9 +152,9 @@ class SQLiteSessionStore:
     behind as a side effect of answering "no sessions found".
     """
 
-    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
-        """Store which SQLite file this history lives in."""
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        """Store which SQLite file this history lives in, defaulting to `db.sqlite_path()`."""
+        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this file's sessions, most recently updated first."""

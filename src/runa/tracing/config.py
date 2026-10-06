@@ -59,10 +59,9 @@ class SQLiteExporter(StoreExporter):
 
     def __init__(self, path: Path | None = None) -> None:
         """Export to `path`, or to wherever `runa.db` says this deployment's local file is."""
-        from runa.db import sqlite_path
         from runa.tracing.sqlite import SQLiteTraceStore
 
-        super().__init__(SQLiteTraceStore(path or sqlite_path()))
+        super().__init__(SQLiteTraceStore(path))
 
 
 class ConsoleExporter:

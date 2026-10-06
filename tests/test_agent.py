@@ -1006,6 +1006,65 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
     assert agent.history == [{"role": "user", "content": "earlier"}]
 
 
+def test_a_session_id_string_resolves_through_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`session="user-42"` is the sanctioned shape: the id is the app's, the backend is `db`'s.
+
+    Under `memory://` that means an `EphemeralSession`, with no `SQLiteSession` named anywhere
+    at the call site -- the same string on a Postgres deployment resolves there instead.
+    """
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+    captured: dict[str, Any] = {}
+
+    def fake_run_sync(agent: Any, turn_input: Any, *, session: Any, **kwargs: Any) -> Run:
+        captured["session"] = session
+        return _loop_run()
+
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
+
+    Researcher().run_sync("hi", session="user-42")
+
+    assert isinstance(captured["session"], EphemeralSession)
+    assert captured["session"].session_id == "user-42"
+
+
+def test_run_streamed_resolves_a_session_id_string_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The streaming entry point builds its own turn input, so it has to resolve one as well."""
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+    captured: dict[str, Any] = {}
+
+    async def fake_run(agent: Any, turn_input: Any, *, session: Any, emit: Any, **kwargs: Any):
+        captured["session"] = session
+        emit("event")
+        return _loop_run(_original_input=[{"role": "user", "content": "hi"}])
+
+    monkeypatch.setattr("runa.agent._run_async", fake_run)
+
+    async def _consume() -> None:
+        async for _ in Researcher().run_streamed("hi", session="user-42"):
+            pass
+
+    asyncio.run(_consume())
+
+    assert isinstance(captured["session"], EphemeralSession)
+    assert captured["session"].session_id == "user-42"
+
+
+def test_a_session_object_is_passed_through_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fuller form still works: `db.session(id, user_id=...)` and custom stores pass through."""
+    captured: dict[str, Any] = {}
+
+    def fake_run_sync(agent: Any, turn_input: Any, *, session: Any, **kwargs: Any) -> Run:
+        captured["session"] = session
+        return _loop_run()
+
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
+
+    session = EphemeralSession("s", user_id="u1")
+    Researcher().run_sync("hi", session=session)
+
+    assert captured["session"] is session
+
+
 def test_evaluate_delegates_to_evaluate_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     """`Agent.evaluate()` forwards straight to `runa.eval.evaluate.evaluate_agent`."""
     from runa.eval.case import Case

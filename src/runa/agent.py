@@ -82,6 +82,24 @@ def _adapt_instructions(instructions: Any) -> Any:
     return _resolved
 
 
+def _resolve_session(session: SessionABC | str | None) -> SessionABC | None:
+    """Turn a `session_id` into this deployment's session for it, passing an object through.
+
+    A conversation id is all an app actually knows: which backend holds it is
+    `RUNA_DATABASE_URL`'s answer, asked here through `runa.db` so that `session="user-42"` keeps
+    following the variable the way traces, memory and the cache already do. Naming a backend at
+    the call site (`SQLiteSession(...)`) stays available for pointing at a specific file, and a
+    custom `SessionABC` is passed straight through.
+
+    Imported inside the function because `runa.db` resolves lazily by design; see its docstring.
+    """
+    if isinstance(session, str):
+        from runa import db
+
+        return db.session(session)
+    return session
+
+
 def _turn_input(
     message: MessageContent | RunState,
     history: list[TResponseInputItem],
@@ -435,7 +453,7 @@ class Agent:
         message: MessageContent | RunState,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
-        session: SessionABC | None = None,
+        session: SessionABC | str | None = None,
         *,
         _context_wrapper: RunContextWrapper[Any] | None = None,
     ) -> Run:
@@ -456,10 +474,15 @@ class Agent:
         guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle
         callbacks (`on_agent_start`, `on_tool_end`, etc.); it defaults to `LoggingRunHooks`.
 
-        Pass a `session` (e.g. `SQLiteSession`) to persist conversation history there instead
-        of on `self.history`; the session supplies prior turns automatically, so only the new
-        `message` is sent as input, and `self.history` is left untouched. Resume a paused run
-        with the same `session` it started with.
+        Pass a `session` to persist conversation history there instead of on `self.history`; the
+        session supplies prior turns automatically, so only the new `message` is sent as input,
+        and `self.history` is left untouched. Resume a paused run with the same `session` it
+        started with.
+
+        A `session` is normally the conversation's id: `session="user-42"` persists to whichever
+        backend `RUNA_DATABASE_URL` names, so an app moves to Postgres without naming one here.
+        Pass a `SessionABC` instead when the run needs more than the id -- `db.session(id,
+        user_id=...)` to scope automatic memory, or your own store.
 
         Returns a `Run` exposing `.output`, `.status`, `.interruptions`, `.trace`, `.usage` and
         `.error`. A tool call needing approval pauses the run (`status="paused"`). A guardrail
@@ -480,6 +503,7 @@ class Agent:
         a forked `RunContextWrapper` with the caller instead of building a fresh one; `context`
         is ignored when it's given. Don't pass it directly.
         """
+        session = _resolve_session(session)
         turn_input = _turn_input(message, self.history, session, context)
         with self._exclusive(session):
             try:
@@ -501,7 +525,7 @@ class Agent:
         message: MessageContent | RunState,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
-        session: SessionABC | None = None,
+        session: SessionABC | str | None = None,
     ) -> Run:
         """Synchronous `run`, for callers not already inside an event loop."""
         return asyncio.run(self.run(message, context, hooks, session))
@@ -511,7 +535,7 @@ class Agent:
         message: MessageContent | RunState,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
-        session: SessionABC | None = None,
+        session: SessionABC | str | None = None,
     ) -> RunStream:
         """Run a turn as a stream of events: the same run as `run`, with the same arguments.
 
@@ -525,6 +549,7 @@ class Agent:
         starting to consume a second session-less stream on the same instance while one is in
         flight raises `UserError` rather than interleaving the two histories.
         """
+        session = _resolve_session(session)
         turn_input = _turn_input(message, self.history, session, context)
         run_config = self._run_config(session)
 

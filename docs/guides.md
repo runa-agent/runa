@@ -26,7 +26,7 @@ stands alone. Read whichever covers what you're building today.
 ## Running Agents
 
 * **[Sessions and Chat](sessions.md).**
-  Persisting conversation history with `SQLiteSession`, and `runa chat`.
+  Persisting conversation history with `session=`, and `runa chat`.
 
 * **[Memory](memory.md).**
   Long-term, semantic memory that persists across conversations.

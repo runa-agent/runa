@@ -8,7 +8,7 @@ pairing of the two: this concern's spec, and where its file lives.
 
 from pathlib import Path
 
-from runa.db import DEFAULT_DB_PATH
+from runa.db import sqlite_path
 from runa.db.vectors.sqlite import SQLiteVectorStore
 from runa.memory.vector import VectorMemoryStore, spec
 
@@ -20,9 +20,12 @@ class SQLiteMemoryStore(VectorMemoryStore):
     stays correct per user instead of a global top-k that another user's items could crowd out.
     """
 
-    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH, *, dimensions: int) -> None:
-        """Store where this store's items/vectors live and the embedding size its table expects."""
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | Path | None = None, *, dimensions: int) -> None:
+        """Store where this store's items/vectors live and the embedding size its table expects.
+
+        `db_path` defaults to `runa.db.sqlite_path()`.
+        """
+        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
         self.dimensions = dimensions
         super().__init__(SQLiteVectorStore(spec(dimensions), self.db_path))
 

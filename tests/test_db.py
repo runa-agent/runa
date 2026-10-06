@@ -150,6 +150,41 @@ def test_root_leaves_an_absolute_sqlite_url_alone(monkeypatch: pytest.MonkeyPatc
     assert db.sqlite_path(Path("other/project")) == Path("/var/lib/runa.db")
 
 
+def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Constructing a local adapter by name must land on the same file the factories pick.
+
+    These seven used to default to a `db/runa.db` constant of their own, so an app that set
+    `sqlite:///data/runa.db` moved six concerns and left whichever one it built by hand behind
+    on the old path -- silently, and only in the deployment that set the variable.
+    """
+    monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:///data/runa.db")
+
+    from runa.cache.sqlite import SQLiteCache
+    from runa.eval.sqlite import SQLiteEvalStore
+    from runa.knowledge.sqlite import SQLiteKnowledgeStore
+    from runa.memory.sqlite import SQLiteMemoryStore
+    from runa.session.sqlite import SQLiteSession, SQLiteSessionStore
+    from runa.tracing.sqlite import SQLiteTraceStore
+
+    expected = Path("data/runa.db")
+    assert SQLiteSession("user-42").db_path == expected
+    assert SQLiteSessionStore().db_path == expected
+    assert SQLiteTraceStore().db_path == expected
+    assert SQLiteEvalStore().db_path == expected
+    assert SQLiteCache().db_path == expected
+    assert SQLiteMemoryStore(dimensions=3).db_path == expected
+    assert SQLiteKnowledgeStore(dimensions=3).db_path == expected
+
+
+def test_an_explicit_db_path_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sharp knife survives: `db_path=` points at some other file whatever the URL says."""
+    monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:///data/runa.db")
+
+    from runa.session.sqlite import SQLiteSession
+
+    assert SQLiteSession("user-42", "other/runa.db").db_path == Path("other/runa.db")
+
+
 def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """`memory://` is the third answer: no file, no server, all six concerns together.
 

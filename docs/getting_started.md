@@ -396,19 +396,16 @@ session greeter_agent-20260912-073154-890a
 
 ## 9. Persisting Conversations in Code
 
-`runa chat` uses `SQLiteSession` under the hood by default; use it directly to persist
-history from your own code:
+`runa chat` persists history to `runa.db` under the hood; pass a `session` to do the same from
+your own code, naming the conversation and nothing else:
 
 ```python
-from runa import SQLiteSession
-
 from app.agents import GreeterAgent
 
 agent = GreeterAgent()
-session = SQLiteSession("user-42")
 
-r1 = agent.run_sync("Hi, I'm new here.", session=session)
-r2 = agent.run_sync("What did I just say?", session=session)
+r1 = agent.run_sync("Hi, I'm new here.", session="user-42")
+r2 = agent.run_sync("What did I just say?", session="user-42")
 print(r1.output)
 print(r2.output)
 ```

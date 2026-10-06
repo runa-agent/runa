@@ -14,7 +14,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
-from runa.db import DEFAULT_DB_PATH
+from runa.db import sqlite_path
 from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
 from runa.eval.report import Report
@@ -28,9 +28,12 @@ _DDL = ddl(SQLITE, RUNS, CASES)
 class SQLiteEvalStore:
     """The local `EvalStore`: `db/runa.db`'s `eval_runs`/`eval_cases` tables."""
 
-    def __init__(self, db_path: str | Path = DEFAULT_DB_PATH) -> None:
-        """Store which SQLite file this history lives in; the tables are created on first use."""
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        """Store which SQLite file this history lives in, defaulting to `db.sqlite_path()`.
+
+        The tables are created on first use.
+        """
+        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def _connect(self) -> sqlite3.Connection:
         """Open the file, adding `eval_cases.trace_id` to a `runa.db` from before it existed.

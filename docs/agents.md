@@ -82,8 +82,8 @@ Give each run its own `session`, or its own `Agent`:
 
 ```python
 await asyncio.gather(
-    agent.run("one", session=SQLiteSession("conv-a")),
-    agent.run("two", session=SQLiteSession("conv-b")),
+    agent.run("one", session="conv-a"),
+    agent.run("two", session="conv-b"),
 )
 ```
 

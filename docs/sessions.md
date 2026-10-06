@@ -12,17 +12,13 @@ agent.run_sync("It's order #4821.")  # remembers the first message
 
 `agent.history` holds this. It only lives as long as the instance does.
 
-## Persisting with `SQLiteSession`
+## Persisting with a `session`
 
 Pass a `session` to persist history to `runa.db` instead, keyed by a `session_id` you choose:
 
 ```python
-from runa import SQLiteSession
-
-session = SQLiteSession("user-42")
-
-agent.run_sync("My order hasn't arrived.", session=session)
-agent.run_sync("It's order #4821.", session=session)
+agent.run_sync("My order hasn't arrived.", session="user-42")
+agent.run_sync("It's order #4821.", session="user-42")
 ```
 
 With a `session`, prior turns are read back from `runa.db` automatically. You only ever pass the
@@ -30,9 +26,21 @@ new message, and `agent.history` is left untouched. Reuse the same `session_id` 
 ticket id) to resume a conversation from anywhere, including a later process. Don't mix the two:
 pick session-backed or in-memory per agent instance, not both for the same conversation.
 
-`SQLiteSession` also supports:
+The id is all your application names. Which backend holds it is
+[`RUNA_DATABASE_URL`](deployment.md)'s answer, resolved through `db.session(...)`, so the two
+calls above persist to a local file on a laptop and to a shared Postgres in production with no
+edit here.
+
+## Working with the Session Object
+
+For anything beyond the id, ask `runa.db` for the session itself and pass that:
 
 ```python
+from runa import db
+
+session = db.session("user-42", user_id="user-42")
+agent.run_sync("My order hasn't arrived.", session=session)
+
 await session.get_items()  # this session's items, oldest first
 await session.add_items(items)  # append items to this session's history
 await session.set_items(items)  # replace this session's whole history
@@ -40,9 +48,9 @@ await session.pop_item()  # remove and return the most recent item
 await session.clear_session()  # delete the session and all its items
 ```
 
-Pass `user_id="user-42"` to `SQLiteSession` to also scope that agent's automatic
-[Memory](memory.md) to this user. `session.user_id` is unrelated to conversation history itself;
-`run` reads it only to know which user's memories to retrieve and store.
+`user_id` scopes that agent's automatic [Memory](memory.md) to this user. It is unrelated to
+conversation history itself; `run` reads it only to know which user's memories to retrieve and
+store.
 
 ## Loading an Existing Transcript
 
@@ -66,9 +74,9 @@ conversations; `set_items` replaces its history instead. Both are `async`, hence
 
 ## Writing Your Own Backend
 
-`SQLiteSession` is the only session implementation Runa ships for a single local process. A
-custom store subclasses `SessionABC`'s four abstract methods (`get_items`, `add_items`,
-`pop_item`, `clear_session`), nothing less.
+Runa ships one implementation per backend `RUNA_DATABASE_URL` understands, and `db.session`
+picks between them. A custom store subclasses `SessionABC`'s four abstract methods (`get_items`,
+`add_items`, `pop_item`, `clear_session`), nothing less.
 
 For a deployment where multiple processes share one store, set `RUNA_DATABASE_URL` and change
 nothing else. `runa serve`, `runa chat` and `runa ui` all resolve their session store through
@@ -79,16 +87,19 @@ uv add "runa-ai[postgres]"
 export RUNA_DATABASE_URL=postgresql://runa:runa@localhost:5432/runa
 ```
 
-Constructing one by hand is the escape hatch for a database that is not this deployment's shared
-one:
+Constructing one by hand is the escape hatch for a store that is not this deployment's own:
 
 ```python
+from runa import SQLiteSession
 from runa.session.postgres import PostgresSession
 
-session = PostgresSession("user-42", "postgresql://runa:runa@localhost:5432/runa")
+SQLiteSession("user-42", "other/runa.db")  # one specific file
+PostgresSession("user-42", "postgresql://runa:runa@localhost:5432/runa")  # another database
 ```
 
-It implements the same interface, backed by Postgres instead of SQLite.
+Both implement the same interface, so either can be passed as `session=`. Naming one is the
+exception, not the default: it opts that conversation out of `RUNA_DATABASE_URL`, which is why
+`session="user-42"` is the shape to reach for first.
 
 ## `runa chat`
 

@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 DATABASE_URL_ENV = "RUNA_DATABASE_URL"
 
-DEFAULT_DB_PATH = Path("db/runa.db")
+_DEFAULT_DB_PATH = Path("db/runa.db")
 
 _POSTGRES_SCHEMES = ("postgresql://", "postgres://")
 _SQLITE_SCHEME = "sqlite://"
@@ -107,7 +107,7 @@ def sqlite_path(root: Path | None = None) -> Path:
     """
     url = os.environ.get(DATABASE_URL_ENV) or None
     if url is None or not url.startswith(_SQLITE_SCHEME):
-        path = DEFAULT_DB_PATH
+        path = _DEFAULT_DB_PATH
     else:
         tail = url.removeprefix(_SQLITE_SCHEME)
         path = Path(tail[1:]) if tail.startswith("//") else Path(tail.lstrip("/"))
@@ -283,7 +283,6 @@ def reset_ephemeral() -> None:
 
 __all__ = [
     "DATABASE_URL_ENV",
-    "DEFAULT_DB_PATH",
     "InvalidDatabaseURL",
     "cache",
     "ephemeral",
