@@ -31,6 +31,10 @@ def _agent(**overrides: Any) -> Any:
         input_guardrails=[],
         output_guardrails=[],
         output_type=None,
+        mcp_servers=[],
+        memory=None,
+        knowledge=None,
+        compact=False,
         model_settings=ModelSettings(),
     )
     defaults.update(overrides)

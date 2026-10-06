@@ -1,23 +1,18 @@
 """tool_execution.py: executing one message's tool calls, handoffs, approval gating, guardrails."""
 
 import asyncio
+import inspect
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.exceptions import DuplicateToolCallError
 from runa.handoff import DelegatePaused
 from runa.lifecycle import _Dispatch
-from runa.run_internal.agent_runner_helpers import (
-    _agent_tools,
-    _find_tool,
-    _gate_tool_call,
-    _model_settings,
-    _normalized_handoffs,
-    _parse_arguments,
-)
+from runa.run_internal.agent_shape import AgentLike, _agent_tools, _find_tool, _normalized_handoffs
 from runa.run_internal.guardrails import _run_tool_input_guardrails, _run_tool_output_guardrails
 from runa.run_internal.spans import _close_span, _new_span
 from runa.run_state import Interruption
@@ -29,7 +24,7 @@ async def _run_tool_call(
     tool: FunctionTool,
     call: dict[str, Any],
     context_wrapper: RunContextWrapper,
-    agent: Any,
+    agent: AgentLike,
     hooks: _Dispatch[Any],
     trace: Trace,
     parent_id: str,
@@ -73,6 +68,68 @@ async def _run_tool_call(
     return {"role": "tool", "tool_call_id": call_id, "content": str(result)}
 
 
+def _parse_arguments(args_json: str) -> dict[str, Any] | str:
+    """A tool call's arguments as a dict, or an error string to feed back to the model."""
+    try:
+        args = json.loads(args_json or "{}")
+    except json.JSONDecodeError as exc:
+        return f"error: invalid JSON arguments: {exc}"
+    if not isinstance(args, dict):
+        return "error: tool arguments must be a JSON object"
+    return args
+
+
+async def _needs_approval(
+    tool: FunctionTool, context_wrapper: RunContextWrapper, args: dict[str, Any], call_id: str
+) -> bool:
+    if isinstance(tool.needs_approval, bool):
+        return tool.needs_approval
+    verdict = tool.needs_approval(context_wrapper, args, call_id)
+    return bool(await verdict if inspect.isawaitable(verdict) else verdict)
+
+
+@dataclass
+class _ApprovalGate:
+    """What `_gate_tool_call` decided for one tool call."""
+
+    action: Literal["run", "reject", "interrupt"]
+    message: str | None = None
+
+
+async def _gate_tool_call(
+    tool: FunctionTool,
+    args: dict[str, Any],
+    call_id: str,
+    context_wrapper: RunContextWrapper,
+    approvals: dict[str, bool] | None = None,
+    rejection_messages: dict[str, str] | None = None,
+) -> _ApprovalGate:
+    """Decide whether a tool call should run, be rejected, or pause for approval.
+
+    Consults `context_wrapper.approval_ledger` first -- the sticky "always approve"/"always
+    reject" decisions set via `RunState.approve`/`.reject(..., always=True)` -- before falling
+    back to `_needs_approval` and the per-call-id `approvals` dict.
+    """
+    sticky = context_wrapper.approval_ledger.get(tool.name)
+    if sticky is True:
+        return _ApprovalGate("run")
+    if sticky is False:
+        return _ApprovalGate(
+            "reject",
+            context_wrapper.approval_ledger_messages.get(tool.name, "rejected by the operator"),
+        )
+    if not await _needs_approval(tool, context_wrapper, args, call_id):
+        return _ApprovalGate("run")
+    verdict = (approvals or {}).get(call_id)
+    if verdict is None:
+        return _ApprovalGate("interrupt")
+    if verdict is False:
+        return _ApprovalGate(
+            "reject", (rejection_messages or {}).get(call_id, "rejected by the operator")
+        )
+    return _ApprovalGate("run")
+
+
 @dataclass
 class _TurnOutcome:
     final_output: Any
@@ -85,7 +142,7 @@ class _TurnOutcome:
 
 async def _run_message_tool_calls(
     message: dict[str, Any],
-    current_agent: Any,
+    current_agent: AgentLike,
     context_wrapper: RunContextWrapper,
     hooks: _Dispatch[Any],
     trace: Trace,
@@ -101,7 +158,7 @@ async def _run_message_tool_calls(
     order either way. `ready_results` are results a paused run already computed for calls in
     `message`: reused as is on resume, never executed a second time.
     """
-    handoff_map = _normalized_handoffs(getattr(current_agent, "handoffs", []))
+    handoff_map = _normalized_handoffs(current_agent.handoffs)
     tools = await _agent_tools(current_agent)
     results: list[TResponseInputItem] = []
     interruptions: list[Interruption] = []
@@ -162,7 +219,7 @@ async def _run_message_tool_calls(
         )
         results.append({})  # filled in once the approved calls have run
 
-    parallel = _model_settings(current_agent).parallel_tool_calls is not False
+    parallel = current_agent.model_settings.parallel_tool_calls is not False
     paused: list[int] = []
     for index, result in zip(runs, await _execute(list(runs.values()), parallel), strict=True):
         if isinstance(result, DelegatePaused):

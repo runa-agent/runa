@@ -73,6 +73,10 @@ def _agent_with_tool() -> Any:
         input_guardrails=[],
         output_guardrails=[],
         output_type=None,
+        mcp_servers=[],
+        memory=None,
+        knowledge=None,
+        compact=False,
         model_settings=ModelSettings(),
     )
 
@@ -216,7 +220,7 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
         """Return a dict containing an email."""
         return {"email": "a@b.com", "id": 1}
 
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         name="TestAgent",
         instructions="hi",
         model=_ScriptedModel(_tool_call_then_text("lookup", "{}", "done")),
@@ -225,6 +229,10 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
         input_guardrails=[],
         output_guardrails=[],
         output_type=None,
+        mcp_servers=[],
+        memory=None,
+        knowledge=None,
+        compact=False,
         model_settings=ModelSettings(),
     )
 
@@ -246,7 +254,7 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
         return "ok"
 
     long_arg = "x" * 100
-    agent = SimpleNamespace(
+    agent: Any = SimpleNamespace(
         name="TestAgent",
         instructions="hi",
         model=_ScriptedModel(_tool_call_then_text("now", f'{{"x": "{long_arg}"}}', "done")),
@@ -255,6 +263,10 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
         input_guardrails=[],
         output_guardrails=[],
         output_type=None,
+        mcp_servers=[],
+        memory=None,
+        knowledge=None,
+        compact=False,
         model_settings=ModelSettings(),
     )
 

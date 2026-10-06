@@ -558,11 +558,11 @@ def _two_arg_instructions(context: RunContextWrapper[_Ctx], agent: Any) -> str:
 
 def test_single_arg_instructions_resolves_from_run_context() -> None:
     """A one-parameter `(context) -> str` `instructions` is adapted to the runner's 2-arg shape."""
-    from runa.run_internal.agent_runner_helpers import _resolve_instructions
+    from runa.run_internal.run_loop import _resolve_instructions
 
     class Dynamic(Agent):
         name = "Dynamic"
-        instructions = _single_arg_instructions  # pyright: ignore[reportAssignmentType]
+        instructions: Any = _single_arg_instructions
 
     agent = Dynamic()
 
@@ -573,11 +573,11 @@ def test_single_arg_instructions_resolves_from_run_context() -> None:
 
 def test_two_arg_instructions_still_supported() -> None:
     """A native runner-style `(context, agent) -> str` `instructions` passes through unadapted."""
-    from runa.run_internal.agent_runner_helpers import _resolve_instructions
+    from runa.run_internal.run_loop import _resolve_instructions
 
     class Dynamic(Agent):
         name = "Dynamic"
-        instructions = _two_arg_instructions
+        instructions: Any = _two_arg_instructions
 
     agent = Dynamic()
 

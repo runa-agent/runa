@@ -103,6 +103,10 @@ def _agent(**overrides: Any) -> Any:
         input_guardrails=[],
         output_guardrails=[],
         output_type=None,
+        mcp_servers=[],
+        memory=None,
+        knowledge=None,
+        compact=False,
         model_settings=ModelSettings(),
     )
     defaults.update(overrides)
@@ -1625,24 +1629,24 @@ def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
     assert result.output == "ok"
 
 
-def test_agent_without_knowledge_behaves_exactly_as_before() -> None:
-    """An agent with no `knowledge` attribute at all runs unaffected -- no lookup, no injection."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]))
-    assert not hasattr(agent, "knowledge")
+def test_knowledge_none_behaves_exactly_as_before() -> None:
+    """`knowledge=None` runs unaffected: no lookup, no injection, no retrieval span."""
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=None)
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert result.output == "ok"
+    assert [s for s in trace_of(result).spans if s.type == "retrieval"] == []
 
 
-def test_agent_without_memory_behaves_exactly_as_before() -> None:
-    """An agent with no `memory` attribute at all runs unaffected -- no lookup, no injection."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]))
-    assert not hasattr(agent, "memory")
+def test_memory_none_behaves_exactly_as_before() -> None:
+    """`memory=None` runs unaffected: no lookup, no injection, no retrieval span."""
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=None)
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert result.output == "ok"
+    assert [s for s in trace_of(result).spans if s.type == "retrieval"] == []
 
 
 def test_mcp_server_tools_are_merged_in_and_callable() -> None:

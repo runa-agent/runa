@@ -15,6 +15,7 @@ from runa._types import (
     Usage,
 )
 from runa.exceptions import UserError
+from runa.run_internal.agent_shape import _agent_tools, _find_tool, _normalized_handoffs
 from runa.tool import FunctionTool
 from runa.tracing.traces import Trace
 
@@ -103,6 +104,34 @@ def _context_to_json(context: Any) -> Any:
     if dataclasses.is_dataclass(context) and not isinstance(context, type):
         return dataclasses.asdict(context)
     return context
+
+
+def _find_agent_by_name(root: Any, name: str) -> Any:
+    """BFS `root` and everything reachable via its handoffs and delegates, matching on `.name`.
+
+    Deserialization carries an agent as a name string, so resuming has to find the instance
+    again: a handoff may have switched the current agent before the pause, or the paused call
+    may belong to a delegate, so the match isn't necessarily `root` itself.
+    """
+    seen: set[int] = set()
+    queue: list[Any] = [root]
+    while queue:
+        candidate = queue.pop(0)
+        if id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        if getattr(candidate, "name", None) == name:
+            return candidate
+        queue.extend(
+            handoff.agent
+            for handoff in _normalized_handoffs(getattr(candidate, "handoffs", [])).values()
+        )
+        queue.extend(
+            tool.delegate
+            for tool in getattr(candidate, "tools", [])
+            if getattr(tool, "delegate", None) is not None
+        )
+    raise UserError(f"no agent named {name!r} reachable from {getattr(root, 'name', root)!r}")
 
 
 @dataclass
@@ -272,12 +301,6 @@ class RunState:
         cls, initial_agent: Any, schema: _RunStateSchema, context_wrapper: RunContextWrapper
     ) -> RunState:
         """Rebuild one state (the caller's, or a paused delegate's) onto `context_wrapper`."""
-        from runa.run_internal.agent_runner_helpers import (
-            _agent_tools,
-            _find_agent_by_name,
-            _find_tool,
-        )
-
         state = cls(
             agent=_find_agent_by_name(initial_agent, schema.agent_name),
             original_input=schema.original_input,

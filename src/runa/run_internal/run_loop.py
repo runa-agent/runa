@@ -7,10 +7,13 @@ hands and nothing in between translating one into another.
 """
 
 import asyncio
+import inspect
 import time
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Any
+
+from pydantic import TypeAdapter, ValidationError
 
 from runa._types import RunContextWrapper, TResponseInputItem, Usage
 from runa.compact import Compactor, default_compactor
@@ -26,12 +29,10 @@ from runa.guardrail import guardrail_results
 from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
 from runa.run import Run
 from runa.run_config import RunConfig
-from runa.run_internal.agent_runner_helpers import (
+from runa.run_internal.agent_shape import (
+    AgentLike,
     _agent_tools,
-    _model_settings,
     _normalized_handoffs,
-    _parse_output,
-    _resolve_instructions,
     _resolve_model,
 )
 from runa.run_internal.guardrails import _run_input_guardrails, _run_output_guardrails
@@ -44,6 +45,28 @@ from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
+
+
+async def _resolve_instructions(agent: AgentLike, context_wrapper: RunContextWrapper) -> str | None:
+    """Resolve `agent.instructions`: a string passes through, a callable is called and awaited."""
+    instructions = agent.instructions
+    if not callable(instructions):
+        return instructions
+    resolved: Any = instructions(context_wrapper, agent)
+    return await resolved if inspect.isawaitable(resolved) else resolved
+
+
+def _parse_output(agent: AgentLike, text: str) -> Any:
+    """The model's final `text`, validated into `agent.output_type` when it declares one."""
+    output_type = agent.output_type
+    if output_type is None or output_type is str:
+        return text
+    try:
+        return TypeAdapter(output_type).validate_json(text)
+    except ValidationError as exc:
+        raise ModelBehaviorError(
+            f"final output doesn't match {getattr(output_type, '__name__', output_type)}: {exc}"
+        ) from exc
 
 
 def _latest_user_index(items: list[TResponseInputItem]) -> int | None:
@@ -103,21 +126,25 @@ async def _retrieve(
         return []
 
 
-def _resolve_compactor(agent: Any) -> Compactor | None:
+def _resolve_compactor(agent: AgentLike) -> Compactor | None:
     """`agent.compact` to the `Compactor` to run, or `None` if compaction is off.
 
     `True` means Runa's own `default_compactor`; anything else truthy is trusted as already
     being a `Compactor` -- `Agent(compact=...)`'s escape hatch, the same shape as
     `memory=`/`knowledge=` accepting an instance instead of `"auto"`.
     """
-    compact = getattr(agent, "compact", False)
+    compact = agent.compact
     if not compact:
         return None
     return default_compactor if compact is True else compact
 
 
 def _maybe_compact(
-    agent: Any, items: list[TResponseInputItem], usage_tokens: int, trace: Trace, parent_id: str
+    agent: AgentLike,
+    items: list[TResponseInputItem],
+    usage_tokens: int,
+    trace: Trace,
+    parent_id: str,
 ) -> None:
     """Run `agent.compact`'s `Compactor`, if any, and replace `items` in place if it trims them.
 
@@ -139,7 +166,7 @@ def _maybe_compact(
 
 
 async def _save_to_session(
-    agent: Any,
+    agent: AgentLike,
     session: SessionABC,
     new_tail: list[TResponseInputItem],
     context_tokens: int,
@@ -178,7 +205,7 @@ def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
 
 
 async def _run_turns(
-    current_agent: Any,
+    current_agent: AgentLike,
     items: list[TResponseInputItem],
     context_wrapper: RunContextWrapper,
     hooks: _Dispatch[Any],
@@ -236,10 +263,10 @@ async def _run_turns(
         request = (
             system_instructions,
             items,
-            _model_settings(current_agent),
+            current_agent.model_settings,
             await _agent_tools(current_agent),
-            getattr(current_agent, "output_type", None),
-            list(_normalized_handoffs(getattr(current_agent, "handoffs", [])).values()),
+            current_agent.output_type,
+            list(_normalized_handoffs(current_agent.handoffs).values()),
         )
         if emit is None:
             response = await model.get_response(*request)
@@ -289,7 +316,7 @@ async def _run_turns(
 class _Run:
     """What a fresh run and a resumed one share once the turn loop starts."""
 
-    agent: Any
+    agent: AgentLike
     input: str | list[TResponseInputItem]
     items: list[TResponseInputItem]
     context_wrapper: RunContextWrapper
@@ -339,7 +366,7 @@ async def _guarded(
 
 async def _extract_memory(run: _Run, final_output: Any, run_config: RunConfig) -> None:
     """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
-    memory = getattr(run.agent, "memory", None)
+    memory = run.agent.memory
     query = _latest_user_text([*run.original_input, *run.session_input])
     if memory is None or query is None:
         return
@@ -432,7 +459,7 @@ async def _finish(
 
 
 async def _run_async(
-    agent: Any,
+    agent: AgentLike,
     input: str | list[TResponseInputItem] | RunState,
     *,
     context: Any = None,
@@ -477,8 +504,8 @@ async def _run_async(
         generated=[],
     )
 
-    memory = getattr(agent, "memory", None)
-    knowledge = getattr(agent, "knowledge", None)
+    memory = agent.memory
+    knowledge = agent.knowledge
     if query is not None and (memory is not None or knowledge is not None):
         memory_matches, knowledge_matches = await asyncio.gather(
             _retrieve(
