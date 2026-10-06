@@ -1,8 +1,8 @@
 """knowledge/store.py: `KnowledgeStore`, the chunks a `Knowledge` searches, and what it returns.
 
-One interface, three adapters: `knowledge/sqlite.py`, `knowledge/postgres.py`,
-`knowledge/ephemeral.py`. Which one a bare `Knowledge()` gets is
-`runa.db.knowledge_store(...)`'s decision, asked once.
+One interface, three backends: `knowledge/sqlite.py`, `knowledge/postgres.py`, and the
+in-process pairing `runa.db.knowledge_store(...)` holds inline. Which one a bare `Knowledge()`
+gets is that function's decision, asked once.
 
 `memory/store.py`'s counterpart, and separate from it for the same reason the two concerns are
 separate: these chunks are application-scoped, so nothing here is keyed by `user_id`.

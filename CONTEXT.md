@@ -16,12 +16,15 @@ this process (`memory://`). Chosen once, in `runa.db`, so nothing above it names
 one. _Not_: driver, database (a backend is the choice, not the server).
 
 **Adapter.** The concrete module implementing one concern on one backend, for
-example `session/postgres.py`. Every concern has three. _Not_: provider, which
-is the model-side word.
+example `session/postgres.py`. _Not_: provider, which is the model-side word.
 
 **Concern.** One kind of state `runa.db` resolves: sessions, memory, knowledge,
-the cache, traces, eval history. A concern has one interface and three adapters.
-_Not_: service, store (a store is the object, not the kind).
+the cache, traces, eval history. A concern has one interface and three backends
+behind it. Four of the six give each backend its own named adapter; `memory` and
+`knowledge` name only their SQLite and Postgres ones, because their adapters are
+a spec over the shared `VectorStore` and the in-process pairing is one line
+`runa.db` holds inline. _Not_: service, store (a store is the object, not the
+kind).
 
 **Vector store.** The storage `Memory` and `Knowledge` share: embeddings, the
 payload row beside each one, and nearest-neighbor search over them. It is

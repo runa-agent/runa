@@ -159,9 +159,10 @@ def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.Monkey
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
 
     from runa.cache.memory import MemoryCache
+    from runa.db.vectors.ephemeral import EphemeralVectorStore
     from runa.eval.ephemeral import EphemeralEvalStore
-    from runa.knowledge.ephemeral import EphemeralKnowledgeStore
-    from runa.memory.ephemeral import EphemeralMemoryStore
+    from runa.knowledge.vector import VectorKnowledgeStore
+    from runa.memory.vector import VectorMemoryStore
     from runa.session.ephemeral import EphemeralSession, EphemeralSessionStore
     from runa.tracing.ephemeral import EphemeralTraceStore
 
@@ -171,9 +172,16 @@ def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.Monkey
     assert isinstance(db.sessions(), EphemeralSessionStore)
     assert isinstance(db.traces(), EphemeralTraceStore)
     assert isinstance(db.evals(), EphemeralEvalStore)
-    assert isinstance(db.memory_store(dimensions=4), EphemeralMemoryStore)
-    assert isinstance(db.knowledge_store(dimensions=4), EphemeralKnowledgeStore)
     assert isinstance(db.cache(), MemoryCache)
+
+    # The two vector concerns have no named in-process adapter to name here: what makes them
+    # ephemeral is the `VectorStore` underneath the mapping `runa.db` pairs them with.
+    memory = db.memory_store(dimensions=4)
+    knowledge = db.knowledge_store(dimensions=4)
+    assert isinstance(memory, VectorMemoryStore)
+    assert isinstance(knowledge, VectorKnowledgeStore)
+    assert isinstance(memory._vectors, EphemeralVectorStore)
+    assert isinstance(knowledge._vectors, EphemeralVectorStore)
 
 
 def test_the_ephemeral_cache_is_one_cache_per_process(monkeypatch: pytest.MonkeyPatch) -> None:

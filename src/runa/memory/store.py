@@ -1,11 +1,11 @@
 """memory/store.py: `MemoryStore`, the vectors a `Memory` searches, and the match it returns.
 
-One interface, three adapters: `memory/sqlite.py`, `memory/postgres.py`, `memory/ephemeral.py`.
-Which one a bare `Memory()` gets is `runa.db.memory_store(...)`'s decision, asked once, so nothing
-above it names a backend.
+One interface, three backends: `memory/sqlite.py`, `memory/postgres.py`, and the in-process
+pairing `runa.db.memory_store(...)` holds inline. Which one a bare `Memory()` gets is that
+function's decision, asked once, so nothing above it names a backend.
 
 Here rather than in `runa.memory` for the same reason as `session/store.py`, `tracing/store.py`
-and `eval/store.py`: the three adapters need the contract and the match object, and nothing else
+and `eval/store.py`: the adapters need the contract and the match object, and nothing else
 in this package -- not the embedding model, not the extraction prompt, not `Memory` itself. Only
 `cache/__init__.py` declares its own interface, because there the store *is* the concern.
 """

@@ -61,3 +61,24 @@ partition concept that `Knowledge` itself does not use.
   `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so emitting
   `jsonb` would give new deployments a column type old ones do not have.
   `Column(json=True)` is what makes that migration one place to change.
+
+## Amendment, 2026-10-06: four named adapters, not six
+
+"The six named adapter classes and their import paths stay" was decided for one
+stated reason, that they are the documented `store=` escape hatch. That reason
+covers four of them. `EphemeralMemoryStore` and `EphemeralKnowledgeStore` were in
+no package `__all__`, in no document, and had one caller each, `runa.db`, which
+reaches them because `RUNA_DATABASE_URL=memory://` is set and not because anyone
+named them. The 49 lines they held were the pairing plus a `self.dimensions` no
+code read.
+
+Both are deleted. `runa.db.memory_store`/`knowledge_store` now pair the concern's
+spec with `EphemeralVectorStore` inline, which is how the same module already
+resolves `vector_store`. `SQLiteMemoryStore`, `PostgresMemoryStore`,
+`SQLiteKnowledgeStore` and `PostgresKnowledgeStore` are untouched, so no public
+name, import path or documented example changes and `store=` still works exactly
+as the decision above intends.
+
+This narrows the decision; it does not reopen the rejected alternative.
+`VectorMemoryStore` and `VectorKnowledgeStore` stay as the two public mapping
+classes, for the reason the final consequence above gives.

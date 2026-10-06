@@ -1,14 +1,15 @@
-"""memory/vector.py: `MemoryStore` over any `VectorStore`, which is what all three adapters are.
+"""memory/vector.py: `MemoryStore` over any `VectorStore`, which is what every adapter is.
 
 A remembered fact is an embedding, the text it was embedded from, the metadata it arrived with,
 and the user it belongs to. `runa.db.vectors` stores exactly that, for either concern, so what
 belongs here is only the mapping: which columns a memory occupies, that `user_id` is the partition
 rather than a filter, and that a row comes back as a `MemoryMatch`.
 
-The three named adapters (`memory/sqlite.py`, `memory/postgres.py`, `memory/ephemeral.py`) are
-this class over the matching `VectorStore`. They stay separate modules because they are separate
-public import paths and because the Postgres one must not pull `asyncpg` into an app without the
-extra, not because any of them has storage logic of its own.
+Every backend is this class over the matching `VectorStore`. Two get a named module of their own
+(`memory/sqlite.py`, `memory/postgres.py`), because they are public import paths a
+`Memory(store=...)` can name and because the Postgres one must not pull `asyncpg` into an app
+without the extra. The in-process one is paired in `runa.db.memory_store` instead: no caller
+names it, so a module would hold nothing but the pairing.
 """
 
 from typing import Any

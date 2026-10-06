@@ -1,8 +1,10 @@
-"""knowledge/vector.py: `KnowledgeStore` over any `VectorStore`, which is what all three are.
+"""knowledge/vector.py: `KnowledgeStore` over any `VectorStore`, which is what every adapter is.
 
 `memory/vector.py`'s counterpart, and separate from it for the same reason the two concerns are
 separate: these chunks are application-scoped, so the spec declares no partition and nothing here
-is keyed by `user_id`.
+is keyed by `user_id`. It splits its backends the same way too: `knowledge/sqlite.py` and
+`knowledge/postgres.py` are named modules, and in-process is paired in
+`runa.db.knowledge_store`.
 
 What belongs here is only the mapping: a chunk occupies a `text` and a `source` column, and a row
 comes back as a `KnowledgeMatch`. The storage, the DDL and the distance are `runa.db.vectors`'s.
