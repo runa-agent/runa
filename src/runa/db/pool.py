@@ -14,8 +14,9 @@ two resources in Runa that have it.
 """
 
 import asyncio
+import functools
 import threading
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 import asyncpg
@@ -52,6 +53,24 @@ def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
     """
     future = asyncio.run_coroutine_threadsafe(coro, _background_loop())
     return future.result(timeout)
+
+
+def sync[**P, T](method: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
+    """Expose an `async def` store method as the synchronous method its callers actually call.
+
+    The other half of `run_sync`, and the reason it's here rather than written out per method: a
+    `TraceStore`/`EvalStore`/`SessionStore` is a synchronous interface (`runa traces`, `runa ui`
+    and `TraceExporter.export` reach it from no loop at all, or from inside a finishing run)
+    while `asyncpg` is not, so every read and write across those three adapters needs the same
+    pairing. Decorating the async body states it once; the alternative was nine one-line twins,
+    each of which had to remember that `asyncio.run` is the wrong half.
+    """
+
+    @functools.wraps(method)
+    def synchronous(*args: P.args, **kwargs: P.kwargs) -> T:
+        return run_sync(method(*args, **kwargs))
+
+    return synchronous
 
 
 _pools: LoopCache[str, asyncpg.Pool] = LoopCache()
@@ -99,4 +118,23 @@ async def connect(url: str, ddl: str) -> asyncpg.Pool:
     return pool
 
 
-__all__ = ["close_pool", "connect", "get_pool", "run_sync"]
+class Shared:
+    """A store that lives in the shared Postgres: which database it's in, and its own tables.
+
+    What every Postgres adapter needs and all it needs: the URL it was built with, and its DDL
+    applied once before its first query. Subclassing this is what keeps the lifetime rule above
+    (one pool per URL per loop, tables created on first use) a fact of this module instead of
+    something each adapter rediscovers -- five of them had, in twelve places.
+    """
+
+    def __init__(self, url: str, ddl: str) -> None:
+        """Store which Postgres database this store's tables live in; connected lazily."""
+        self.url = url
+        self._ddl = ddl
+
+    async def _pool(self) -> asyncpg.Pool:
+        """This store's shared pool, with its own tables created on first use."""
+        return await connect(self.url, self._ddl)
+
+
+__all__ = ["Shared", "close_pool", "connect", "get_pool", "run_sync", "sync"]

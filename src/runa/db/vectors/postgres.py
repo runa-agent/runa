@@ -17,20 +17,19 @@ migration, not a DDL edit, and `Column(json=True)` is what makes it one place to
 
 from typing import Any
 
-import asyncpg
-
-from runa.db.pool import connect as _connect
+from runa.db.pool import Shared
 from runa.db.vectors import VectorMatch, VectorSpec
 
 
-class PostgresVectorStore:
+class PostgresVectorStore(Shared):
     """The shared `VectorStore`: one table of payload rows and their `pgvector` embeddings."""
 
     def __init__(self, spec: VectorSpec, url: str) -> None:
         """Name this store's table, from `spec.name`, and the database it lives in."""
         self.spec = spec
-        self.url = url
         self.items = f"{spec.name}_items"
+        # `ddl` reads both of the above, so it can only be handed over once they're set.
+        super().__init__(url, self.ddl)
 
     @property
     def ddl(self) -> str:
@@ -50,9 +49,6 @@ class PostgresVectorStore:
             else ""
         )
         return f"CREATE TABLE IF NOT EXISTS {self.items} (\n{body}\n    );\n    {index}\n"
-
-    async def _pool(self) -> asyncpg.Pool:
-        return await _connect(self.url, self.ddl)
 
     def _scope(self, start: int) -> str:
         """The `WHERE`/`AND` fragment scoping a query to one partition, or nothing."""

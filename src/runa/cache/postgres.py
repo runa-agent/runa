@@ -14,24 +14,19 @@ import json
 import time
 from typing import Any
 
-import asyncpg
-
 from runa.cache import ENTRIES
-from runa.db.pool import connect as _connect
+from runa.db.pool import Shared
 from runa.db.schema import POSTGRES, ddl
 
 _DDL = ddl(POSTGRES, ENTRIES)
 
 
-class PostgresCache:
+class PostgresCache(Shared):
     """Persistent `Cache`: the `cache_entries` table in this deployment's shared Postgres."""
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this cache's entries live in; connected lazily."""
-        self.url = url
-
-    async def _pool(self) -> asyncpg.Pool:
-        return await _connect(self.url, _DDL)
+        super().__init__(url, _DDL)
 
     async def get(self, key: str) -> Any:
         """Return the value stored for `key`, or `None` if it's missing or expired."""

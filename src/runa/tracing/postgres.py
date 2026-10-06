@@ -15,8 +15,7 @@ fetch.
 
 from typing import Any
 
-from runa.db.pool import connect as _connect
-from runa.db.pool import run_sync
+from runa.db.pool import Shared, sync
 from runa.db.schema import POSTGRES, ddl
 from runa.tracing.config import StoreExporter
 from runa.tracing.store import (
@@ -35,7 +34,7 @@ def _assignments(columns: tuple[str, ...], *, keep: str = "id") -> str:
     return ", ".join(f"{column} = EXCLUDED.{column}" for column in columns if column != keep)
 
 
-class PostgresTraceStore:
+class PostgresTraceStore(Shared):
     """The shared `TraceStore`: `traces`/`spans` in this deployment's Postgres database.
 
     `runa.db.traces()` builds this whenever `RUNA_DATABASE_URL` is a `postgresql://` one, so no
@@ -45,29 +44,12 @@ class PostgresTraceStore:
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this history lives in; connected lazily."""
-        self.url = url
+        super().__init__(url, _DDL)
 
-    def save(self, trace: Trace) -> None:
+    @sync
+    async def save(self, trace: Trace) -> None:
         """Persist `trace` and every span in it, replacing any existing one with the same id."""
-        run_sync(self._save(trace))
-
-    def get(self, trace_id: str) -> Trace | None:
-        """Look up one trace by id, with every span it has, or `None` if this database has none."""
-        return run_sync(self._get(trace_id))
-
-    def list(
-        self,
-        *,
-        limit: int = 50,
-        agent: str | None = None,
-        status: str | None = None,
-        session_id: str | None = None,
-    ) -> list[Trace]:
-        """Return the most recent `limit` traces, newest first, optionally filtered."""
-        return run_sync(self._list(limit, agent, status, session_id))
-
-    async def _save(self, trace: Trace) -> None:
-        pool = await _connect(self.url, _DDL)
+        pool = await self._pool()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 f"""
@@ -87,8 +69,10 @@ class PostgresTraceStore:
                     [span_values(span) for span in trace.spans],
                 )
 
-    async def _get(self, trace_id: str) -> Trace | None:
-        pool = await _connect(self.url, _DDL)
+    @sync
+    async def get(self, trace_id: str) -> Trace | None:
+        """Look up one trace by id, with every span it has, or `None` if this database has none."""
+        pool = await self._pool()
         row = await pool.fetchrow(f"SELECT * FROM {TRACES.name} WHERE id = $1", trace_id)
         if row is None:
             return None
@@ -97,10 +81,17 @@ class PostgresTraceStore:
         )
         return to_trace(row, list(spans))
 
-    async def _list(
-        self, limit: int, agent: str | None, status: str | None, session_id: str | None
+    @sync
+    async def list(
+        self,
+        *,
+        limit: int = 50,
+        agent: str | None = None,
+        status: str | None = None,
+        session_id: str | None = None,
     ) -> list[Trace]:
-        pool = await _connect(self.url, _DDL)
+        """Return the most recent `limit` traces, newest first, optionally filtered."""
+        pool = await self._pool()
         clauses: list[str] = []
         params: list[Any] = []
         for column, value in (("name", agent), ("status", status), ("session_id", session_id)):

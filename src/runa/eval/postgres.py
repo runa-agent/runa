@@ -11,8 +11,7 @@ two tables and the row marshalling are `eval/store.py`'s, shared with the SQLite
 
 from datetime import UTC, datetime
 
-from runa.db.pool import connect as _connect
-from runa.db.pool import run_sync
+from runa.db.pool import Shared, sync
 from runa.db.schema import POSTGRES, ddl
 from runa.eval.report import Report
 from runa.eval.store import CASES, RUNS, EvalRun, case_values, to_run
@@ -20,31 +19,17 @@ from runa.eval.store import CASES, RUNS, EvalRun, case_values, to_run
 _DDL = ddl(POSTGRES, RUNS, CASES)
 
 
-class PostgresEvalStore:
+class PostgresEvalStore(Shared):
     """The shared `EvalStore`: `eval_runs`/`eval_cases` in this deployment's Postgres database."""
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this history lives in; connected lazily."""
-        self.url = url
+        super().__init__(url, _DDL)
 
-    def save(self, report: Report) -> int:
+    @sync
+    async def save(self, report: Report) -> int:
         """Persist `report` as one run plus one row per case, returning the new run's id."""
-        return run_sync(self._save(report))
-
-    def get(self, run_id: int) -> EvalRun | None:
-        """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
-        return run_sync(self._get(run_id))
-
-    def list(self, *, limit: int = 50) -> list[EvalRun]:
-        """Return the most recent `limit` runs, newest first, without their cases."""
-        return run_sync(self._list(limit))
-
-    def baseline(self, agent_name: str, *, before: int | None = None) -> dict[str, bool] | None:
-        """Map each input of `agent_name`'s latest run to whether it passed."""
-        return run_sync(self._baseline(agent_name, before))
-
-    async def _save(self, report: Report) -> int:
-        pool = await _connect(self.url, _DDL)
+        pool = await self._pool()
         created_at = datetime.now(UTC).isoformat()
         async with pool.acquire() as conn, conn.transaction():
             run_id: int = await conn.fetchval(
@@ -63,8 +48,10 @@ class PostgresEvalStore:
                 )
         return run_id
 
-    async def _get(self, run_id: int) -> EvalRun | None:
-        pool = await _connect(self.url, _DDL)
+    @sync
+    async def get(self, run_id: int) -> EvalRun | None:
+        """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
+        pool = await self._pool()
         row = await pool.fetchrow(f"SELECT * FROM {RUNS.name} WHERE id = $1", run_id)
         if row is None:
             return None
@@ -73,13 +60,19 @@ class PostgresEvalStore:
         )
         return to_run(row, list(cases))
 
-    async def _list(self, limit: int) -> list[EvalRun]:
-        pool = await _connect(self.url, _DDL)
+    @sync
+    async def list(self, *, limit: int = 50) -> list[EvalRun]:
+        """Return the most recent `limit` runs, newest first, without their cases."""
+        pool = await self._pool()
         rows = await pool.fetch(f"SELECT * FROM {RUNS.name} ORDER BY id DESC LIMIT $1", limit)
         return [to_run(row, []) for row in rows]
 
-    async def _baseline(self, agent_name: str, before: int | None) -> dict[str, bool] | None:
-        pool = await _connect(self.url, _DDL)
+    @sync
+    async def baseline(
+        self, agent_name: str, *, before: int | None = None
+    ) -> dict[str, bool] | None:
+        """Map each input of `agent_name`'s latest run to whether it passed."""
+        pool = await self._pool()
         if before is None:
             row = await pool.fetchrow(
                 f"SELECT id FROM {RUNS.name} WHERE agent_name = $1 ORDER BY id DESC LIMIT 1",

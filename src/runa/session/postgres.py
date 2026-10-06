@@ -14,11 +14,8 @@ hatch for a database that is not this deployment's shared one.
 
 import json
 
-import asyncpg
-
 from runa._types import TResponseInputItem
-from runa.db.pool import connect as _connect
-from runa.db.pool import run_sync
+from runa.db.pool import Shared, sync
 from runa.db.schema import POSTGRES, ddl
 from runa.session import SessionABC
 from runa.session.store import (
@@ -35,17 +32,18 @@ from runa.session.store import (
 DDL = ddl(POSTGRES, SESSIONS, MESSAGES)
 
 
-class PostgresSession(SessionABC):
-    """`SessionABC` backed by Postgres, for a deployment sharing history across processes."""
+class PostgresSession(Shared, SessionABC):
+    """`SessionABC` backed by Postgres, for a deployment sharing history across processes.
+
+    `Shared` comes first so `super().__init__` reaches the one that takes `(url, ddl)`; the
+    identity that matters to a caller is still `SessionABC`, which this is the write side of.
+    """
 
     def __init__(self, session_id: str, url: str, *, user_id: str | None = None) -> None:
         """Store `session_id` and which Postgres database its history lives in."""
         self.session_id = session_id
-        self.url = url
         self.user_id = user_id
-
-    async def _pool(self) -> asyncpg.Pool:
-        return await _connect(self.url, DDL)
+        super().__init__(url, DDL)
 
     async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
@@ -136,7 +134,7 @@ class PostgresSession(SessionABC):
             )
 
 
-class PostgresSessionStore:
+class PostgresSessionStore(Shared):
     """The shared `SessionStore`: the read side of this deployment's session tables.
 
     Same ordering and the same timestamp rendering as `session/sqlite.py`, both of which come
@@ -148,18 +146,12 @@ class PostgresSessionStore:
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this history lives in; connected lazily."""
-        self.url = url
+        super().__init__(url, DDL)
 
-    def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
+    @sync
+    async def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this database's sessions, most recently updated first."""
-        return run_sync(self._listing(agent))
-
-    def messages(self, session_id: str) -> list[SessionMessage]:
-        """Return `session_id`'s messages, oldest first."""
-        return run_sync(self._messages(session_id))
-
-    async def _listing(self, agent: str | None) -> list[SessionSummary]:
-        pool = await _connect(self.url, DDL)
+        pool = await self._pool()
         where = ""
         params: tuple[object, ...] = ()
         if agent is not None:
@@ -175,8 +167,10 @@ class PostgresSessionStore:
             for row in rows
         ]
 
-    async def _messages(self, session_id: str) -> list[SessionMessage]:
-        pool = await _connect(self.url, DDL)
+    @sync
+    async def messages(self, session_id: str) -> list[SessionMessage]:
+        """Return `session_id`'s messages, oldest first."""
+        pool = await self._pool()
         exists = await pool.fetchval(
             f"SELECT 1 FROM {SESSIONS.name} WHERE session_id = $1", session_id
         )
