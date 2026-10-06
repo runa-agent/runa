@@ -12,6 +12,6 @@ to run an agent and nothing more. What a caller does touch lives at the top leve
 `RunStream`, `RunState`, `RunConfig`, `Interruption`, and the stream-event types (`runa.run`,
 `runa.run_state`, `runa.run_config`, `runa.stream_events`). This package holds only
 execution-time detail: `run_loop` (the turn loop itself), `guardrails`, `tool_execution`,
-`streaming`, `agent_shape` (what more than one of them reads off an Agent), and `spans` (tracing
-span helpers).
+`streaming`, `active_run` (`_Run`, the one value the loop passes down), `agent_shape` (what more
+than one of them reads off an Agent), and `spans` (tracing span helpers).
 """

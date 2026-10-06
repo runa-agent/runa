@@ -12,9 +12,8 @@ from runa.exceptions import (
 )
 from runa.guardrail import GuardrailResult, ToolInputGuardrailContext, ToolInputGuardrailData
 from runa.run_internal.agent_shape import AgentLike
-from runa.run_internal.spans import _close_span, _new_span
+from runa.run_internal.spans import _close_span, _Spans
 from runa.tool import FunctionTool
-from runa.tracing.traces import Trace
 
 
 async def _run_guardrails(
@@ -23,8 +22,7 @@ async def _run_guardrails(
     invoke: Callable[[Any], Awaitable[Any]],
     record_to: list[GuardrailResult],
     raise_as: Callable[[GuardrailResult], Exception],
-    trace: Trace,
-    parent_id: str,
+    spans: _Spans,
 ) -> None:
     """Run `entries` in list order, span and record each verdict, raise on the first that trips.
 
@@ -35,7 +33,7 @@ async def _run_guardrails(
     `(data)`) to one call, and `raise_as` names which tripwire exception this list raises.
     """
     for entry in entries:
-        span = _new_span(trace, parent_id, entry.get_name(), "guardrail")
+        span = spans.open(entry.get_name(), "guardrail")
         result = await invoke(entry)
         _close_span(span, error="tripwire triggered" if result.tripped else None)
         guardrail_result = GuardrailResult(entry, result, result.tripped)
@@ -64,8 +62,7 @@ async def _run_input_guardrails(
     agent: AgentLike,
     context_wrapper: RunContextWrapper,
     turn_input: Any,
-    trace: Trace,
-    parent_id: str,
+    spans: _Spans,
 ) -> None:
     """Run the agent's input guardrails against this turn's input, before the model sees it."""
     await _run_guardrails(
@@ -73,13 +70,12 @@ async def _run_input_guardrails(
         invoke=lambda entry: entry.guardrail_function(context_wrapper, agent, turn_input),
         record_to=context_wrapper.input_guardrail_results,
         raise_as=InputGuardrailTripwireTriggered,
-        trace=trace,
-        parent_id=parent_id,
+        spans=spans,
     )
 
 
 async def _run_output_guardrails(
-    agent: AgentLike, context_wrapper: RunContextWrapper, output: Any, trace: Trace, parent_id: str
+    agent: AgentLike, context_wrapper: RunContextWrapper, output: Any, spans: _Spans
 ) -> None:
     """Run the agent's output guardrails against its final output, before the run returns it."""
     await _run_guardrails(
@@ -87,8 +83,7 @@ async def _run_output_guardrails(
         invoke=lambda entry: entry.guardrail_function(context_wrapper, agent, output),
         record_to=context_wrapper.output_guardrail_results,
         raise_as=OutputGuardrailTripwireTriggered,
-        trace=trace,
-        parent_id=parent_id,
+        spans=spans,
     )
 
 
@@ -97,8 +92,7 @@ async def _run_tool_input_guardrails(
     args_json: str,
     call_id: str,
     context_wrapper: RunContextWrapper,
-    trace: Trace,
-    parent_id: str,
+    spans: _Spans,
 ) -> None:
     """Run the tool's input guardrails against the call's raw arguments, before it runs."""
     data = _tool_data(tool, args_json, call_id)
@@ -109,8 +103,7 @@ async def _run_tool_input_guardrails(
         raise_as=lambda result: ToolInputGuardrailTripwireTriggered(
             result.guardrail, result.output
         ),
-        trace=trace,
-        parent_id=parent_id,
+        spans=spans,
     )
 
 
@@ -120,8 +113,7 @@ async def _run_tool_output_guardrails(
     call_id: str,
     output: Any,
     context_wrapper: RunContextWrapper,
-    trace: Trace,
-    parent_id: str,
+    spans: _Spans,
 ) -> None:
     """Run the tool's output guardrails against what it returned, before the model sees it."""
     data = _tool_data(tool, args_json, call_id, output=output)
@@ -132,8 +124,7 @@ async def _run_tool_output_guardrails(
         raise_as=lambda result: ToolOutputGuardrailTripwireTriggered(
             result.guardrail, result.output
         ),
-        trace=trace,
-        parent_id=parent_id,
+        spans=spans,
     )
 
 

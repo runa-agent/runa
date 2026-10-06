@@ -11,23 +11,16 @@ from typing import Any, Literal
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.exceptions import DuplicateToolCallError
 from runa.handoff import DelegatePaused
-from runa.lifecycle import _Dispatch
-from runa.run_internal.agent_shape import AgentLike, _agent_tools, _find_tool, _normalized_handoffs
+from runa.run_internal.active_run import _Pending, _Run
+from runa.run_internal.agent_shape import _agent_tools, _find_tool, _normalized_handoffs
 from runa.run_internal.guardrails import _run_tool_input_guardrails, _run_tool_output_guardrails
-from runa.run_internal.spans import _close_span, _new_span
+from runa.run_internal.spans import _close_span
 from runa.run_state import Interruption
 from runa.tool import FunctionTool
-from runa.tracing.traces import Trace
 
 
 async def _run_tool_call(
-    tool: FunctionTool,
-    call: dict[str, Any],
-    context_wrapper: RunContextWrapper,
-    agent: AgentLike,
-    hooks: _Dispatch[Any],
-    trace: Trace,
-    parent_id: str,
+    run: _Run, tool: FunctionTool, call: dict[str, Any]
 ) -> TResponseInputItem | DelegatePaused:
     """Run one already-approved tool call end to end: guardrails, invocation, guardrails.
 
@@ -35,6 +28,7 @@ async def _run_tool_call(
     before anything else runs. A delegate that paused for approval comes back as its
     `DelegatePaused`, not a result: the call hasn't finished, so resuming may run it again.
     """
+    context_wrapper = run.context_wrapper
     call_id = call["id"]
     if call_id in context_wrapper.executed_call_ids:
         raise DuplicateToolCallError(call_id, tool.name)
@@ -42,10 +36,11 @@ async def _run_tool_call(
 
     args_json = call["function"]["arguments"] or "{}"
     span_type = "delegate" if tool.delegate is not None else "tool"
-    span = _new_span(trace, parent_id, tool.name, span_type, input=args_json)
-    await hooks.on_tool_start(context_wrapper, agent, tool)
+    span = run.span(tool.name, span_type, input=args_json)
+    inside = run.spans.under(span)  # this call's guardrails belong under the call
+    await run.hooks.on_tool_start(context_wrapper, run.current_agent, tool)
     try:
-        await _run_tool_input_guardrails(tool, args_json, call_id, context_wrapper, trace, span.id)
+        await _run_tool_input_guardrails(tool, args_json, call_id, context_wrapper, inside)
         try:
             result = await tool.on_invoke_tool(context_wrapper, args_json, call_id)
             error: str | None = None
@@ -56,15 +51,13 @@ async def _run_tool_call(
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
             result = f"error: {exc}"
             error = str(exc)
-        await _run_tool_output_guardrails(
-            tool, args_json, call_id, result, context_wrapper, trace, span.id
-        )
+        await _run_tool_output_guardrails(tool, args_json, call_id, result, context_wrapper, inside)
     except BaseException as exc:  # a tripwire, a cancelled sibling call, ...: say which
         detail = str(exc)
         _close_span(span, error=f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)
         raise
     _close_span(span, error=error, output=result)
-    await hooks.on_tool_end(context_wrapper, agent, tool, result)
+    await run.hooks.on_tool_end(context_wrapper, run.current_agent, tool, result)
     return {"role": "tool", "tool_call_id": call_id, "content": str(result)}
 
 
@@ -132,39 +125,41 @@ async def _gate_tool_call(
 
 @dataclass
 class _TurnOutcome:
+    """How the turn loop came out: an answer, or interruptions waiting on a human.
+
+    Only what the loop couldn't put on its `_Run` as it went. Everything it did record there --
+    the generated items, which agent ended up answering -- `_finish` reads off the run.
+    """
+
     final_output: Any
-    generated: list[TResponseInputItem]
     interruptions: list[Interruption]
     ready_results: list[TResponseInputItem]
-    current_agent: Any
     context_tokens: int = 0
 
 
 async def _run_message_tool_calls(
-    message: dict[str, Any],
-    current_agent: AgentLike,
-    context_wrapper: RunContextWrapper,
-    hooks: _Dispatch[Any],
-    trace: Trace,
-    parent_id: str,
-    approvals: dict[str, bool] | None,
-    rejection_messages: dict[str, str] | None = None,
-    ready_results: list[TResponseInputItem] | None = None,
+    run: _Run, message: dict[str, Any], resume: _Pending | None = None
 ) -> tuple[list[TResponseInputItem], list[Interruption], Any]:
     """Execute (or defer for approval) every tool call in `message`; returns results so far.
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
     agent's `model_settings.parallel_tool_calls` is `False`. Results keep the message's call
-    order either way. `ready_results` are results a paused run already computed for calls in
-    `message`: reused as is on resume, never executed a second time.
+    order either way. `resume` carries a paused run's decisions, including results it already
+    computed for calls in `message`: those are reused as is, never executed a second time.
     """
-    handoff_map = _normalized_handoffs(current_agent.handoffs)
-    tools = await _agent_tools(current_agent)
+    agent = run.current_agent
+    context_wrapper = run.context_wrapper
+    handoff_map = _normalized_handoffs(agent.handoffs)
+    tools = await _agent_tools(agent)
     results: list[TResponseInputItem] = []
     interruptions: list[Interruption] = []
     switched_agent: Any = None
-    approvals = approvals or {}
-    ready = {result["tool_call_id"]: result for result in ready_results or []}
+    approvals = resume.approvals if resume is not None else {}
+    rejection_messages = resume.rejection_messages if resume is not None else None
+    ready = {
+        result["tool_call_id"]: result
+        for result in (resume.ready_results if resume is not None else [])
+    }
     runs: dict[int, Callable[[], Awaitable[TResponseInputItem | DelegatePaused]]] = {}
 
     for call in message.get("tool_calls") or []:
@@ -173,9 +168,9 @@ async def _run_message_tool_calls(
         if name in handoff_map:
             handoff = handoff_map[name]
             switched_agent = handoff.agent
-            span = _new_span(trace, parent_id, handoff.tool_name, "handoff")
+            span = run.span(handoff.tool_name, "handoff")
             _close_span(span)
-            await hooks.on_handoff(context_wrapper, current_agent, switched_agent)
+            await run.hooks.on_handoff(context_wrapper, agent, switched_agent)
             results.append(
                 {
                     "role": "tool",
@@ -206,7 +201,7 @@ async def _run_message_tool_calls(
         if gate.action == "interrupt":
             interruptions.append(
                 Interruption(
-                    name=name, arguments=args_json, call_id=call_id, tool=tool, agent=current_agent
+                    name=name, arguments=args_json, call_id=call_id, tool=tool, agent=agent
                 )
             )
             continue
@@ -214,12 +209,10 @@ async def _run_message_tool_calls(
             results.append({"role": "tool", "tool_call_id": call_id, "content": gate.message})
             continue
 
-        runs[len(results)] = partial(
-            _run_tool_call, tool, call, context_wrapper, current_agent, hooks, trace, parent_id
-        )
+        runs[len(results)] = partial(_run_tool_call, run, tool, call)
         results.append({})  # filled in once the approved calls have run
 
-    parallel = current_agent.model_settings.parallel_tool_calls is not False
+    parallel = agent.model_settings.parallel_tool_calls is not False
     paused: list[int] = []
     for index, result in zip(runs, await _execute(list(runs.values()), parallel), strict=True):
         if isinstance(result, DelegatePaused):

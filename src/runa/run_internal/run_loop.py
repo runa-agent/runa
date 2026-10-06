@@ -10,7 +10,6 @@ import asyncio
 import inspect
 import time
 from collections.abc import Awaitable
-from dataclasses import dataclass
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -29,6 +28,7 @@ from runa.guardrail import guardrail_results
 from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
 from runa.run import Run
 from runa.run_config import RunConfig
+from runa.run_internal.active_run import _Pending, _Run
 from runa.run_internal.agent_shape import (
     AgentLike,
     _agent_tools,
@@ -36,13 +36,12 @@ from runa.run_internal.agent_shape import (
     _resolve_model,
 )
 from runa.run_internal.guardrails import _run_input_guardrails, _run_output_guardrails
-from runa.run_internal.spans import _close_span, _export, _new_span
+from runa.run_internal.spans import _close_span, _export, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutcome
 from runa.run_state import RunState
 from runa.session import SessionABC
 from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
-from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 
@@ -106,8 +105,7 @@ async def _retrieve(
     *,
     label: str,
     agent_name: str,
-    trace: Trace,
-    parent_id: str,
+    spans: _Spans,
     **search_kwargs: Any,
 ) -> list[Any]:
     """Search `source` for `query`, degrading to no matches (and a logged warning) if it raises.
@@ -115,7 +113,7 @@ async def _retrieve(
     Wrapped in a `"retrieval"` span so a trace shows whether memory/knowledge were consulted, what
     came back, and any failure -- not just the `llm`/`agent` spans around it.
     """
-    span = _new_span(trace, parent_id, label, "retrieval", input=query)
+    span = spans.open(label, "retrieval", input=query)
     try:
         matches = await source.search(query, **search_kwargs)
         _close_span(span, output={"count": len(matches)})
@@ -140,11 +138,7 @@ def _resolve_compactor(agent: AgentLike) -> Compactor | None:
 
 
 def _maybe_compact(
-    agent: AgentLike,
-    items: list[TResponseInputItem],
-    usage_tokens: int,
-    trace: Trace,
-    parent_id: str,
+    agent: AgentLike, items: list[TResponseInputItem], usage_tokens: int, spans: _Spans
 ) -> None:
     """Run `agent.compact`'s `Compactor`, if any, and replace `items` in place if it trims them.
 
@@ -159,7 +153,7 @@ def _maybe_compact(
     replacement = compactor(items, usage_tokens)
     if replacement is None or len(replacement) == len(items):
         return
-    span = _new_span(trace, parent_id, "compact", "custom", input={"tokens": usage_tokens})
+    span = spans.open("compact", "custom", input={"tokens": usage_tokens})
     dropped = len(items) - len(replacement)
     items[:] = replacement
     _close_span(span, output={"dropped": dropped})
@@ -170,21 +164,16 @@ async def _save_to_session(
     session: SessionABC,
     new_tail: list[TResponseInputItem],
     context_tokens: int,
-    trace: Trace,
-    parent_id: str,
+    spans: _Spans,
 ) -> None:
     """Append `new_tail` to `session`, rewriting its history instead if compaction trimmed it."""
     history = await session.get_items()
     full_history = [*history, *new_tail]
-    _maybe_compact(agent, full_history, context_tokens, trace, parent_id)
+    _maybe_compact(agent, full_history, context_tokens, spans)
     if len(full_history) == len(history) + len(new_tail):
         await session.add_items(new_tail)
     else:
         await session.set_items(full_history)
-
-
-def _ignore(_event: Any) -> None:
-    """The `emit` of a non-streamed run: events go nowhere."""
 
 
 def _spent(usage: Usage) -> int:
@@ -204,142 +193,98 @@ def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
         raise MaxTokensExceeded(f"max tokens ({max_tokens}) exceeded: {spent} used")
 
 
-async def _run_turns(
-    current_agent: AgentLike,
-    items: list[TResponseInputItem],
-    context_wrapper: RunContextWrapper,
-    hooks: _Dispatch[Any],
-    run_config: RunConfig,
-    trace: Trace,
-    agent_span_id: str,
-    *,
-    max_turns: int,
-    generated: list[TResponseInputItem],
-    pending_resume: tuple[
-        TResponseInputItem, dict[str, bool], dict[str, str], list[TResponseInputItem]
-    ]
-    | None = None,
-    emit: Emit | None = None,
-) -> _TurnOutcome:
+async def _record_tool_results(run: _Run, results: list[TResponseInputItem], switched: Any) -> None:
+    """Fold one message's tool results into the run, following a handoff if there was one.
+
+    The loop reaches this twice -- after a resumed message's calls, and after each turn's own --
+    and a result recorded one way but not the other is how a resumed run drifts from a fresh one.
+    """
+    run.items.extend(results)
+    run.generated.extend(results)
+    for result in results:
+        run.notify(RunItemStreamEvent(name="tool_output", item=result))
+    if switched is not None:
+        run.current_agent = switched
+        run.notify(AgentUpdatedStreamEvent(new_agent=switched))
+        await run.hooks.on_agent_start(run.context_wrapper, switched)
+
+
+async def _run_turns(run: _Run) -> _TurnOutcome:
     """Call the model and run its tool calls until it answers, pauses, or runs out of turns.
 
-    With `emit` (a streamed run), the model is streamed and every step is emitted as a
-    `StreamEvent`. Every generated item is appended to `generated`, owned by the caller so a
-    run that errors can still report what it produced.
+    With `run.emit` (a streamed run), the model is streamed and every step is emitted as a
+    `StreamEvent`. Every generated item is appended to `run.generated`, which outlives the loop,
+    so a run that errors can still report what it produced.
     """
-    notify = emit or _ignore
+    items, hooks, run_config = run.items, run.hooks, run.run_config
+    context_wrapper = run.context_wrapper
 
-    if pending_resume is not None:
-        last_message, approvals, rejection_messages, ready_results = pending_resume
+    if run.pending is not None:
         results, interruptions, switched = await _run_message_tool_calls(
-            last_message,
-            current_agent,
-            context_wrapper,
-            hooks,
-            trace,
-            agent_span_id,
-            approvals,
-            rejection_messages,
-            ready_results,
+            run, run.pending.message, run.pending
         )
         if interruptions:
-            return _TurnOutcome(None, generated, interruptions, results, current_agent)
-        items.extend(results)
-        generated.extend(results)
-        for result in results:
-            notify(RunItemStreamEvent(name="tool_output", item=result))
-        if switched is not None:
-            current_agent = switched
-            notify(AgentUpdatedStreamEvent(new_agent=current_agent))
-            await hooks.on_agent_start(context_wrapper, current_agent)
+            return _TurnOutcome(None, interruptions, results)
+        await _record_tool_results(run, results, switched)
 
-    for _turn in range(max_turns):
-        model = _resolve_model(current_agent, run_config.model_provider)
-        llm_span = _new_span(
-            trace, agent_span_id, str(current_agent.model), "llm", input=list(items)
-        )
-        system_instructions = await _resolve_instructions(current_agent, context_wrapper)
-        await hooks.on_llm_start(context_wrapper, current_agent, system_instructions, items)
+    for _turn in range(run_config.max_turns):
+        agent = run.current_agent
+        model = _resolve_model(agent, run_config.model_provider)
+        llm_span = run.span(str(agent.model), "llm", input=list(items))
+        system_instructions = await _resolve_instructions(agent, context_wrapper)
+        await hooks.on_llm_start(context_wrapper, agent, system_instructions, items)
         request = (
             system_instructions,
             items,
-            current_agent.model_settings,
-            await _agent_tools(current_agent),
-            current_agent.output_type,
-            list(_normalized_handoffs(current_agent.handoffs).values()),
+            agent.model_settings,
+            await _agent_tools(agent),
+            agent.output_type,
+            list(_normalized_handoffs(agent.handoffs).values()),
         )
-        if emit is None:
+        if run.emit is None:
             response = await model.get_response(*request)
         else:
-            response = await _stream_response(model, request, emit)
+            response = await _stream_response(model, request, run.emit)
         context_wrapper.usage.add(response.usage)
         _check_token_budget(context_wrapper.usage, run_config.max_tokens)
         _close_span(llm_span, output={"usage": response.usage.__dict__})
-        await hooks.on_llm_end(context_wrapper, current_agent, response)
+        await hooks.on_llm_end(context_wrapper, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
-        _maybe_compact(current_agent, items, context_tokens, trace, agent_span_id)
+        _maybe_compact(agent, items, context_tokens, run.spans)
 
         if not response.output:
             raise ModelBehaviorError("model returned no output items")
         message = response.output[0]
         items.append(message)
-        generated.append(message)
-        notify(RunItemStreamEvent(name="message_output_created", item=message))
+        run.generated.append(message)
+        run.notify(RunItemStreamEvent(name="message_output_created", item=message))
 
         if not message.get("tool_calls"):
             text = message.get("content") or ""
-            await _run_output_guardrails(current_agent, context_wrapper, text, trace, agent_span_id)
-            output = _parse_output(current_agent, text)
-            return _TurnOutcome(output, generated, [], [], current_agent, context_tokens)
+            await _run_output_guardrails(agent, context_wrapper, text, run.spans)
+            return _TurnOutcome(_parse_output(agent, text), [], [], context_tokens)
 
         for call in message["tool_calls"]:
-            notify(RunItemStreamEvent(name="tool_called", item=call))
-        results, interruptions, switched = await _run_message_tool_calls(
-            message, current_agent, context_wrapper, hooks, trace, agent_span_id, None
-        )
+            run.notify(RunItemStreamEvent(name="tool_called", item=call))
+        results, interruptions, switched = await _run_message_tool_calls(run, message)
         if interruptions:
-            return _TurnOutcome(None, generated, interruptions, results, current_agent)
+            return _TurnOutcome(None, interruptions, results)
+        await _record_tool_results(run, results, switched)
 
-        items.extend(results)
-        generated.extend(results)
-        for result in results:
-            notify(RunItemStreamEvent(name="tool_output", item=result))
-        if switched is not None:
-            current_agent = switched
-            notify(AgentUpdatedStreamEvent(new_agent=current_agent))
-            await hooks.on_agent_start(context_wrapper, current_agent)
-
-    raise MaxTurnsExceeded(f"max turns ({max_turns}) exceeded")
+    raise MaxTurnsExceeded(f"max turns ({run_config.max_turns}) exceeded")
 
 
-@dataclass
-class _Run:
-    """What a fresh run and a resumed one share once the turn loop starts."""
-
-    agent: AgentLike
-    input: str | list[TResponseInputItem]
-    items: list[TResponseInputItem]
-    context_wrapper: RunContextWrapper
-    trace: Trace
-    span: Span
-    original_input: list[TResponseInputItem]
-    session: SessionABC | None
-    session_input: list[TResponseInputItem]
-    generated: list[TResponseInputItem]
-
-
-async def _guarded(
-    run: _Run, turns: Awaitable[_TurnOutcome], timeout: float | None = None
-) -> _TurnOutcome:
+async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
     """Await `turns`; on a `RunaError`, close the trace and attach what the run had so far.
 
-    `timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding it is
-    translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
+    `run_config.timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding
+    it is translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
     span, exports its partial trace, and comes back as `Run(status="error")` rather than leaving
     a half-finished trace behind. `asyncio.CancelledError` is deliberately not caught: a caller
     that cancels a run (a dropped HTTP connection, a shutting-down worker) wants it to stop, not
     to be turned into an error result.
     """
+    timeout = run.run_config.timeout
     try:
         if timeout is None:
             return await turns
@@ -349,7 +294,7 @@ async def _guarded(
         except TimeoutError as exc:
             raise RunTimeout(f"run timed out after {timeout}s") from exc
     except RunaError as exc:
-        _close_span(run.span, error=str(exc))
+        _close_span(run.agent_span, error=str(exc))
         run.trace.end_time = time.time()
         _export(run.trace)
         exc.run_data = RunErrorDetails(
@@ -364,18 +309,18 @@ async def _guarded(
         raise
 
 
-async def _extract_memory(run: _Run, final_output: Any, run_config: RunConfig) -> None:
+async def _extract_memory(run: _Run, final_output: Any) -> None:
     """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
     memory = run.agent.memory
     query = _latest_user_text([*run.original_input, *run.session_input])
     if memory is None or query is None:
         return
-    span = _new_span(run.trace, None, "memory", "custom", input=query)
+    span = _Spans(run.trace).open("memory", "custom", input=query)  # the agent span is closed
     try:
         stored = await memory.remember_from_conversation(
             f"User: {query}\nAssistant: {final_output}",
             user_id=getattr(run.session, "user_id", None),
-            model=_resolve_model(run.agent, run_config.model_provider),
+            model=_resolve_model(run.agent, run.run_config.model_provider),
         )
         _close_span(span, output={"stored": len(stored)})
     except Exception as exc:
@@ -383,9 +328,7 @@ async def _extract_memory(run: _Run, final_output: Any, run_config: RunConfig) -
         logger.warning("memory extraction failed for agent %s", run.agent.name, exc_info=True)
 
 
-async def _finish(
-    run: _Run, outcome: _TurnOutcome, hooks: _Dispatch[Any], run_config: RunConfig
-) -> Run:
+async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     """Turn the loop's outcome into the caller's `Run`: a paused `RunState`, or a completed turn.
 
     A session-backed run persists nothing while paused: the whole turn is saved once it
@@ -395,13 +338,13 @@ async def _finish(
     accumulating it all along; `Agent.run` records that same value to `last_usage` rather than
     recomputing it.
     """
-    _close_span(run.span, output=outcome.final_output)
+    _close_span(run.agent_span, output=outcome.final_output)
     run.trace.end_time = time.time()
     context_wrapper = run.context_wrapper
 
     if outcome.interruptions:
         state = RunState(
-            agent=outcome.current_agent,
+            agent=run.current_agent,
             original_input=run.original_input,
             generated_items=list(run.items),
             ready_results=outcome.ready_results,
@@ -436,16 +379,13 @@ async def _finish(
             run.session,
             [*run.session_input, *run.generated],
             outcome.context_tokens,
-            run.trace,
-            run.span.id,
+            run.spans,
         )
     else:
-        _maybe_compact(
-            run.agent, run.original_input, outcome.context_tokens, run.trace, run.span.id
-        )
-    await _extract_memory(run, outcome.final_output, run_config)
+        _maybe_compact(run.agent, run.original_input, outcome.context_tokens, run.spans)
+    await _extract_memory(run, outcome.final_output)
 
-    await hooks.on_agent_end(context_wrapper, outcome.current_agent, outcome.final_output)
+    await run.hooks.on_agent_end(context_wrapper, run.current_agent, outcome.final_output)
     _export(run.trace)
     return Run(
         output=outcome.final_output,
@@ -497,11 +437,14 @@ async def _run_async(
         items=items,
         context_wrapper=context_wrapper,
         trace=trace,
-        span=_new_span(trace, None, agent.name, "agent", input=query),
+        agent_span=_Spans(trace).open(agent.name, "agent", input=query),
         original_input=[] if session is not None else list(turn_input),
         session=session,
         session_input=turn_input if session is not None else [],
         generated=[],
+        hooks=dispatch,
+        run_config=run_config,
+        emit=emit,
     )
 
     memory = agent.memory
@@ -513,20 +456,12 @@ async def _run_async(
                 query,
                 label="memory",
                 agent_name=agent.name,
-                trace=trace,
-                parent_id=run.span.id,
+                spans=run.spans,
                 user_id=getattr(session, "user_id", None),
             )
             if memory is not None
             else _no_matches(),
-            _retrieve(
-                knowledge,
-                query,
-                label="knowledge",
-                agent_name=agent.name,
-                trace=trace,
-                parent_id=run.span.id,
-            )
+            _retrieve(knowledge, query, label="knowledge", agent_name=agent.name, spans=run.spans)
             if knowledge is not None
             else _no_matches(),
         )
@@ -539,23 +474,12 @@ async def _run_async(
             items.insert(at, _memory_block(memory_matches))
 
     async def turns() -> _TurnOutcome:
-        await _run_input_guardrails(agent, context_wrapper, input, trace, run.span.id)
-        return await _run_turns(
-            agent,
-            items,
-            context_wrapper,
-            dispatch,
-            run_config,
-            trace,
-            run.span.id,
-            max_turns=run_config.max_turns,
-            generated=run.generated,
-            emit=emit,
-        )
+        await _run_input_guardrails(agent, context_wrapper, input, run.spans)
+        return await _run_turns(run)
 
     await dispatch.on_agent_start(context_wrapper, agent)
-    outcome = await _guarded(run, turns(), run_config.timeout)
-    return await _finish(run, outcome, dispatch, run_config)
+    outcome = await _guarded(run, turns())
+    return await _finish(run, outcome)
 
 
 async def _resume(
@@ -576,33 +500,24 @@ async def _resume(
         items=list(state.generated_items),
         context_wrapper=state.context_wrapper,
         trace=state.trace,
-        span=_new_span(state.trace, None, state.agent.name, "agent"),
+        agent_span=_Spans(state.trace).open(state.agent.name, "agent"),
         original_input=state.original_input,
         session=session,
         session_input=state.session_input,
         generated=list(state.new_items),
-    )
-    await dispatch.on_agent_start(state.context_wrapper, state.agent)
-    turns = _run_turns(
-        state.agent,
-        run.items,
-        state.context_wrapper,
-        dispatch,
-        run_config,
-        state.trace,
-        run.span.id,
-        max_turns=run_config.max_turns,
-        generated=run.generated,
+        hooks=dispatch,
+        run_config=run_config,
         emit=emit,
-        pending_resume=(
-            state.generated_items[-1],
-            state.approvals,
-            state.rejection_messages,
-            state.ready_results,
+        pending=_Pending(
+            message=state.generated_items[-1],
+            approvals=state.approvals,
+            rejection_messages=state.rejection_messages,
+            ready_results=state.ready_results,
         ),
     )
-    outcome = await _guarded(run, turns, run_config.timeout)
-    return await _finish(run, outcome, dispatch, run_config)
+    await dispatch.on_agent_start(state.context_wrapper, state.agent)
+    outcome = await _guarded(run, _run_turns(run))
+    return await _finish(run, outcome)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]
