@@ -3,10 +3,12 @@
 import asyncio
 from typing import Any
 
+import pytest
 from mcp_types import CallToolResult, ListToolsResult, TextContent, Tool
 
+from runa import mcp
 from runa._types import RunContextWrapper
-from runa.mcp import MCPServer, MCPServerStdio, _MCPServerBase
+from runa.mcp import MCPServer, MCPServerStdio, MCPServerStreamableHttp, _MCPServerBase
 
 
 class _FakeSession:
@@ -124,3 +126,36 @@ def test_mcp_server_stdio_builds_from_the_shared_config() -> None:
 
     assert isinstance(server, MCPServerStdio)
     assert server.name == "fs"
+
+
+def test_mcp_server_http_builds_from_the_shared_config() -> None:
+    """`MCPServer(name=...).http(...)` carries the shared name onto the HTTP transport."""
+    server = MCPServer(name="search").http("https://example.com/mcp")
+
+    assert isinstance(server, MCPServerStreamableHttp)
+    assert server.name == "search"
+
+
+def test_stdio_passes_its_own_params_to_the_subprocess() -> None:
+    """`env`/`cwd` are `stdio`'s own params, reaching the spawn parameters."""
+    server = MCPServer().stdio("npx", ["serve"], env={"TOKEN": "x"}, cwd="/tmp")
+
+    assert server._params.env == {"TOKEN": "x"}
+    assert server._params.cwd == "/tmp"
+
+
+def test_an_unknown_option_is_rejected_at_the_call_site() -> None:
+    """A misspelled option fails where it was written, instead of being silently dropped."""
+    with pytest.raises(TypeError, match="timeuot"):
+        MCPServer(name="files", timeuot=30)  # pyright: ignore[reportCallIssue]
+
+    with pytest.raises(TypeError, match="timeuot"):
+        MCPServer(name="files").stdio("npx", timeuot=30)  # pyright: ignore[reportCallIssue]
+
+    with pytest.raises(TypeError, match="timeuot"):
+        MCPServer(name="search").http("https://example.com/mcp", timeuot=30)  # pyright: ignore[reportCallIssue]
+
+
+def test_mcp_server_is_the_only_exported_name() -> None:
+    """The builder is the whole public surface; the transports aren't a second call site."""
+    assert mcp.__all__ == ["MCPServer"]

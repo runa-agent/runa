@@ -91,7 +91,6 @@ class MCPServerStdio(_MCPServerBase):
         name: str | None = None,
         env: dict[str, str] | None = None,
         cwd: str | None = None,
-        **_ignored: Any,
     ) -> None:
         """Store the command to spawn; nothing runs until the first `connect`/`list_tools`."""
         super().__init__(name=name)
@@ -104,7 +103,7 @@ class MCPServerStdio(_MCPServerBase):
 class MCPServerStreamableHttp(_MCPServerBase):
     """An MCP server reachable over streamable HTTP."""
 
-    def __init__(self, url: str, *, name: str | None = None, **_ignored: Any) -> None:
+    def __init__(self, url: str, *, name: str | None = None) -> None:
         """Store the server's `url`; nothing connects until the first `connect`/`list_tools`."""
         super().__init__(name=name)
         self._url = url
@@ -114,24 +113,38 @@ class MCPServerStreamableHttp(_MCPServerBase):
 
 
 class MCPServer:
-    """Shared server config, finalized by picking a transport.
+    """The one way to build a server: shared config here, finalized by picking a transport.
 
-    Keyword arguments given here (currently just `name`) are common to every transport and
-    forwarded as-is; `http`/`stdio` take only the params specific to that transport (a URL vs. a
-    command).
+    What's given here (currently just `name`) is common to every transport; `http`/`stdio` take
+    the params specific to that transport, a URL vs. a command to spawn. Every parameter is
+    spelled out on all three, rather than collected as `**kwargs` and forwarded, so that a
+    misspelled or unsupported option is a `TypeError` naming it at the call site -- the way a
+    mistyped `Agent` attribute is a `UserError` naming it at construction -- instead of a server
+    that quietly ignores it and misbehaves on connect.
+
+    The two transport classes are deliberately absent from `__all__`: `MCPServer` is the whole
+    public surface, and a third transport is written by subclassing `_MCPServerBase`, not by
+    reaching for `MCPServerStdio` directly.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        """Stash config shared by every transport, applied when `http`/`stdio` is called."""
-        self._kwargs = kwargs
+    def __init__(self, *, name: str | None = None) -> None:
+        """Hold config shared by every transport, applied when `http`/`stdio` is called."""
+        self._name = name
 
-    def http(self, url: str, **params: Any) -> MCPServerStreamableHttp:
+    def http(self, url: str) -> MCPServerStreamableHttp:
         """Connect over streamable HTTP."""
-        return MCPServerStreamableHttp(url, **self._kwargs, **params)
+        return MCPServerStreamableHttp(url, name=self._name)
 
-    def stdio(self, command: str, args: list[str] | None = None, **params: Any) -> MCPServerStdio:
+    def stdio(
+        self,
+        command: str,
+        args: list[str] | None = None,
+        *,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+    ) -> MCPServerStdio:
         """Spawn a local process over stdio."""
-        return MCPServerStdio(command, args, **self._kwargs, **params)
+        return MCPServerStdio(command, args, name=self._name, env=env, cwd=cwd)
 
 
-__all__ = ["MCPServer", "MCPServerStdio", "MCPServerStreamableHttp"]
+__all__ = ["MCPServer"]

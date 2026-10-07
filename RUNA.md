@@ -278,9 +278,13 @@ Knowledge = application/domain information
 ## 9. MCP Server
 
 **Always built as `MCPServer(...).http(...)` or `MCPServer(...).stdio(...)`,
-listed in `mcp=`/`mcp_servers=`, never `MCPServerStdio(...)`/
-`MCPServerStreamableHttp(...)` directly** unless you're the one
-implementing a third transport.
+listed in `mcp=`/`mcp_servers=`.** `MCPServer` is the only exported name:
+the per-transport classes it returns aren't a second call site, and a third
+transport is written by subclassing `_MCPServerBase`, not by constructing
+them. Enforced in code, in the ordinary Python way: every parameter of
+`MCPServer`/`.http`/`.stdio` is named, so a misspelled or unsupported
+option is a `TypeError` at the call site rather than a server that silently
+ignores it.
 
 ```python
 files = MCPServer(name="files").stdio("npx", ["-y", "@modelcontextprotocol/server-filesystem", "."])
