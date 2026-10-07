@@ -16,6 +16,7 @@ from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.tracing.adapter import run_agent_for_eval
 from runa.run import Run
+from runa.tool import ToolCall
 from runa.tracing import Span, Trace
 
 
@@ -48,11 +49,16 @@ def test_run_agent_for_eval_captures_final_output(monkeypatch: pytest.MonkeyPatc
     assert run.latency >= 0.0
 
 
-def test_run_agent_for_eval_pairs_tool_calls_with_their_output(
+def test_run_agent_for_eval_reads_tool_calls_off_the_run_not_its_spans(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A `"tool"` span in `Run.trace` becomes a `ToolCallRecord`, read straight off it."""
-    tool_span = Span(
+    """Graded evidence is the run's own `ToolCall` record, whatever the trace ended up holding.
+
+    A `"tool"` span's input/output has been through the tracing privacy policy, so reading the
+    judge's evidence off it let an observability setting decide an eval score. The trace is still
+    carried on the `AgentRun`, for `runa ui` to display.
+    """
+    redacted_span = Span(
         id="s1",
         trace_id="t1",
         parent_id=None,
@@ -60,21 +66,20 @@ def test_run_agent_for_eval_pairs_tool_calls_with_their_output(
         type="tool",
         start_time=0.0,
         end_time=0.0,
-        input='{"order_id": "123"}',
-        output="cancelled",
+        input=None,
+        output=None,
     )
-    trace = Trace(id="t1", name="UnderTest", start_time=0.0, end_time=0.0, spans=[tool_span])
+    trace = Trace(id="t1", name="UnderTest", start_time=0.0, end_time=0.0, spans=[redacted_span])
+    call = ToolCall(name="cancel_order", arguments='{"order_id": "123"}', output="cancelled")
 
     async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
-        return _run("done", trace)
+        return _run("done", trace, _tool_calls=[call])
 
     monkeypatch.setattr(Agent, "run", fake_run)
 
     run = asyncio.run(run_agent_for_eval(_AGENT, Case(input="cancel order 123")))
 
-    assert len(run.tool_calls) == 1
-    assert run.tool_calls[0].name == "cancel_order"
-    assert run.tool_calls[0].output == "cancelled"
+    assert run.tool_calls == [call]
     assert any(span.type == "tool" for span in run.trace.spans)
 
 

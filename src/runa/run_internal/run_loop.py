@@ -339,6 +339,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             new_items=list(run.generated),
             session_input=run.session_input,
             guardrail_results=context_wrapper.guardrail_results.snapshot(),
+            tool_calls=list(run.tool_calls),
         )
         for interruption in outcome.interruptions:
             interruption.owner = interruption.owner or state  # a delegate's keeps its own
@@ -353,6 +354,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             _context_wrapper=context_wrapper,
             _original_input=run.original_input,
             _generated_items=list(run.generated),
+            _tool_calls=list(run.tool_calls),
             guardrail_results=context_wrapper.guardrail_results.snapshot(),
         )
 
@@ -379,6 +381,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
         _context_wrapper=context_wrapper,
         _original_input=run.original_input,
         _generated_items=list(run.generated),
+        _tool_calls=list(run.tool_calls),
         guardrail_results=context_wrapper.guardrail_results.snapshot(),
     )
 
@@ -495,6 +498,7 @@ async def _resume(
         hooks=dispatch,
         run_config=run_config,
         emit=emit,
+        tool_calls=list(state.tool_calls),
         pending=_Pending(
             message=state.generated_items[-1],
             approvals=state.approvals,

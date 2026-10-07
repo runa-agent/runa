@@ -10,7 +10,7 @@ from runa._types import ModelResponse, Usage
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
-from runa.tool import tool
+from runa.tool import ToolCall, tool
 from runa.tracing import ConsoleExporter, Trace, config, observe
 
 
@@ -250,3 +250,36 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
     assert len(tool_span.input) < 100
     assert tool_span.input.endswith("[truncated]")
+
+
+def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> None:
+    """A privacy setting decides what a trace shows, never what the run reports it did.
+
+    `runa.eval` grades `Run._tool_calls`, so this is what keeps an operational decision --
+    switching input capture off for PII reasons, or any tool result over `max_tool_result_bytes`
+    -- from quietly weakening `task_completion`/`faithfulness` grading instead.
+    """
+    long_result = "y" * 100
+
+    @tool
+    def lookup(order_id: str) -> str:
+        """Return a long result, ignoring `order_id`."""
+        return long_result
+
+    agent: Any = AgentShape(
+        name="TestAgent",
+        instructions="hi",
+        model=_ScriptedModel(_tool_call_then_text("lookup", '{"order_id": "4821"}', "done")),
+        tools=[lookup],
+    )
+
+    with observe(capture_inputs=False, max_tool_result_bytes=10):
+        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
+
+    assert result.trace is not None
+    tool_span = next(span for span in result.trace.spans if span.type == "tool")
+    assert tool_span.input is None
+    assert tool_span.output.endswith("[truncated]")
+    assert result._tool_calls == [
+        ToolCall(name="lookup", arguments='{"order_id": "4821"}', output=long_result)
+    ]

@@ -16,7 +16,7 @@ from runa.run_internal.active_run import _Pending, _Run
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.spans import _close_span
 from runa.run_state import Interruption
-from runa.tool import FunctionTool
+from runa.tool import FunctionTool, ToolCall
 
 
 async def _run_tool_call(
@@ -60,6 +60,8 @@ async def _run_tool_call(
         _close_span(span, error=f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)
         raise
     _close_span(span, error=error, output=result)
+    if tool.delegate is None:  # a delegate's own run records its own calls, under its own trace
+        run.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(context_wrapper, run.current_agent, tool, result)
     return {"role": "tool", "tool_call_id": call_id, "content": str(result)}
 

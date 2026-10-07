@@ -38,7 +38,7 @@ from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.stream_events import StreamEvent
-from runa.tool import tool
+from runa.tool import ToolCall, tool
 from runa.tracing.util import gen_trace_id
 
 
@@ -235,6 +235,7 @@ def test_tool_call_then_final_text() -> None:
     result = asyncio.run(_run_async(agent, "what time is it?", run_config=_run_config()))
 
     assert result.output == "it is 2024-01-01"
+    assert result._tool_calls == [ToolCall(name="now", arguments="{}", output="2024-01-01")]
     tool_spans = [s for s in trace_of(result).spans if s.type == "tool"]
     assert len(tool_spans) == 1
     assert tool_spans[0].name == "now"
@@ -345,6 +346,7 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     (delegate_span,) = [s for s in trace_of(result).spans if s.name == "researcher"]
     assert delegate_span.type == "delegate"
     assert not [s for s in trace_of(result).spans if s.type == "tool"]
+    assert result._tool_calls == []  # the delegate's own run records its own calls
 
 
 def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
@@ -651,6 +653,32 @@ def test_resume_runs_the_approved_call_and_reuses_the_ready_result_from_the_same
         {"role": "tool", "tool_call_id": "c1", "content": "safe done"},
         {"role": "tool", "tool_call_id": "c2", "content": "gated done"},
         {"role": "assistant", "content": "all done", "tool_calls": None},
+    ]
+
+
+def test_a_resumed_run_reports_the_calls_that_ran_before_the_pause_too() -> None:
+    """One turn, one record: an approval in the middle of it doesn't split what the run did.
+
+    The paused `RunState` carries the calls already executed, so the `Run` that finally comes back
+    reports the whole turn -- what `runa.eval` grades, and what `run.interruptions` suggested the
+    operator was deciding about in the first place.
+    """
+    ran: list[str] = []
+    agent = _agent(
+        tools=_safe_and_gated_tools(ran),
+        model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
+    )
+
+    result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
+    assert result._tool_calls == [ToolCall(name="safe", arguments="{}", output="safe done")]
+
+    state = result.to_state()
+    state.approve(result.interruptions[0])
+    resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
+
+    assert resumed._tool_calls == [
+        ToolCall(name="safe", arguments="{}", output="safe done"),
+        ToolCall(name="gated", arguments="{}", output="gated done"),
     ]
 
 

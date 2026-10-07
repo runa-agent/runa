@@ -17,6 +17,7 @@ from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_state import Interruption, RunState
 from runa.stream_events import StreamEvent
+from runa.tool import ToolCall
 from runa.tracing import Trace
 
 Status = Literal["completed", "paused", "error"]
@@ -53,6 +54,10 @@ class Run(GuardrailAudit):
     _context_wrapper: RunContextWrapper | None = field(default=None, repr=False)
     _original_input: list[TResponseInputItem] = field(default_factory=list, repr=False)
     _generated_items: list[TResponseInputItem] = field(default_factory=list, repr=False)
+    _tool_calls: list[ToolCall] = field(default_factory=list, repr=False)
+    """Every tool call this run executed, as the turn loop saw it (see `ToolCall`). Private because
+    `trace` is how a caller inspects a run: this is the unfiltered copy `runa.eval` grades, which
+    a trace span can't be, since spans pass through the tracing privacy policy."""
 
     def to_state(self) -> RunState:
         """The paused run's `RunState`: approve or reject its `interruptions`, then resume."""

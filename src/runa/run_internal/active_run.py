@@ -21,6 +21,7 @@ from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit
 from runa.session import SessionABC
 from runa.stream_events import StreamEvent
+from runa.tool import ToolCall
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -64,6 +65,10 @@ class _Run:
     run_config: RunConfig
     emit: Emit | None = None
     pending: _Pending | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    """Every tool call this run has executed, in the order they finished: what the tool was given
+    and what it returned, before the tracing privacy policy gets a say (see `ToolCall`). A resumed
+    run starts from the calls its paused `RunState` already carried."""
     start: AgentShape = field(init=False)
 
     def __post_init__(self) -> None:

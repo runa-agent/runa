@@ -1,8 +1,10 @@
 """eval/tracing/adapter.py: run one `Case` through an `Agent` and normalize the result.
 
-`Run.trace` is used directly: evaluation and observability read the same `Trace`/`Span` data
-instead of two parallel execution-history models, so `AgentRun.tool_calls` is derived straight
-from `AgentRun.trace.spans`.
+`Run.trace` is carried through as the run's observability record, for `runa ui` and `runa traces`
+to display. The graded evidence is not read off it: `AgentRun.tool_calls` is the turn loop's own
+`ToolCall` record, because a `"tool"` span's input/output passes through the tracing privacy
+policy (`runa.tracing.observe`) first, and a team that stops capturing inputs for PII reasons
+would otherwise be grading its agent on arguments the judge never sees.
 
 A case runs through `Agent.run`, the same door an application's own call uses, so an agent is
 evaluated with the wiring it actually ships with: its guardrails, its memory and knowledge, its
@@ -17,18 +19,10 @@ from dataclasses import dataclass, field
 
 from runa.agent import Agent
 from runa.eval.case import Case
+from runa.tool import ToolCall
 from runa.tracing import Trace
 
 _EMPTY_TRACE = Trace(id="", name="", start_time=0.0, end_time=0.0, spans=[], metadata={})
-
-
-@dataclass
-class ToolCallRecord:
-    """One tool call an agent made during a run, paired with its output."""
-
-    name: str
-    arguments: str
-    output: str | None = None
 
 
 @dataclass
@@ -37,7 +31,7 @@ class AgentRun:
 
     input: str
     final_output: str | None
-    tool_calls: list[ToolCallRecord] = field(default_factory=list)
+    tool_calls: list[ToolCall] = field(default_factory=list)
     error: str | None = None
     latency: float = 0.0
     trace: Trace = field(default_factory=lambda: _EMPTY_TRACE)
@@ -61,19 +55,10 @@ async def run_agent_for_eval(agent: Agent, case: Case) -> AgentRun:
             input=case.input, final_output=None, error=run.error, latency=latency, trace=trace
         )
 
-    tool_calls = [
-        ToolCallRecord(
-            name=span.name,
-            arguments=str(span.input) if span.input is not None else "",
-            output=str(span.output) if span.output is not None else None,
-        )
-        for span in trace.spans
-        if span.type == "tool"
-    ]
     return AgentRun(
         input=case.input,
         final_output=run.output,
-        tool_calls=tool_calls,
+        tool_calls=list(run._tool_calls),
         latency=latency,
         trace=trace,
     )

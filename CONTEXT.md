@@ -65,3 +65,13 @@ read back by `version()`. The store's word, because the store cannot know a
 version is a hash of files; `Knowledge` is the only concern that keeps one. See
 [ADR-0002](docs/adr/0002-ingest-state-belongs-to-the-store.md). _Not_: schema
 version, which is `RunState`'s unrelated `schema_version`.
+
+## Runs
+
+**Tool call.** One executed call as the turn loop recorded it (`ToolCall`): the
+tool's name, the arguments string the model produced, and the result string that
+went back to it. This is the gradeable record of what an agent did, which a
+`"tool"` span is not -- a span's input and output have been through the tracing
+privacy policy first. See
+[ADR-0003](docs/adr/0003-eval-evidence-is-recorded-not-traced.md). _Not_: tool
+call record, tool span.

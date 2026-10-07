@@ -47,6 +47,24 @@ class FunctionTool:
     `"delegate"` span, not a plain `"tool"`, and resolvable by name when resuming a paused run."""
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool call a run actually executed: the tool's name, its arguments, its result.
+
+    Recorded by the turn loop as the call runs (`run_internal/tool_execution.py`) and kept on the
+    `Run`, deliberately not derived from the run's `"tool"` trace spans: a span's input/output
+    goes through the tracing privacy policy (`runa.tracing.observe`), so it may be withheld,
+    redacted, or truncated. What an eval grades can't depend on an observability setting, so the
+    facts live here and the spans stay the display copy.
+    """
+
+    name: str
+    arguments: str
+    """The call's arguments as JSON, exactly the string the model produced."""
+    output: str
+    """The tool's return value, exactly the string that went back to the model."""
+
+
 def _json_type(annotation: Any) -> dict[str, Any]:
     """Map a Python type annotation to a JSON Schema fragment, best-effort.
 
@@ -170,4 +188,4 @@ def tool(
     return decorator(func) if func is not None else decorator
 
 
-__all__ = ["FunctionTool", "tool"]
+__all__ = ["FunctionTool", "ToolCall", "tool"]

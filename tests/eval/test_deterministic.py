@@ -3,7 +3,8 @@
 from runa.eval.case import Case
 from runa.eval.evaluation.core import Status
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
-from runa.eval.tracing.adapter import AgentRun, ToolCallRecord
+from runa.eval.tracing.adapter import AgentRun
+from runa.tool import ToolCall
 
 
 def test_check_run_completed_passes_when_there_is_no_error() -> None:
@@ -35,7 +36,7 @@ def test_check_expected_tool_called_passes_when_the_tool_was_called() -> None:
     run = AgentRun(
         input=case.input,
         final_output="done",
-        tool_calls=[ToolCallRecord(name="cancel_order", arguments="{}")],
+        tool_calls=[ToolCall(name="cancel_order", arguments="{}", output="done")],
     )
 
     result = check_expected_tool_called(case, run)
@@ -50,7 +51,7 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
     run = AgentRun(
         input=case.input,
         final_output="done",
-        tool_calls=[ToolCallRecord(name="search", arguments="{}")],
+        tool_calls=[ToolCall(name="search", arguments="{}", output="nothing")],
     )
 
     result = check_expected_tool_called(case, run)

@@ -17,7 +17,7 @@ from runa._types import (
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_internal.agent_shape import AgentShape, _normalized_handoffs
-from runa.tool import FunctionTool
+from runa.tool import FunctionTool, ToolCall
 from runa.tracing.traces import Trace
 
 _SCHEMA_VERSION = 1
@@ -161,6 +161,10 @@ class RunState(GuardrailAudit):
     approvals: dict[str, bool] = field(default_factory=dict)
     rejection_messages: dict[str, str] = field(default_factory=dict)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    """The calls that already ran before the pause, so the resumed run's `Run` reports the whole
+    turn's. Not serialized, for the same reason `trace`'s spans aren't: a restored run reports
+    what it did after being restored."""
 
     def approve(self, interruption: Interruption, *, always: bool = False) -> None:
         """Mark `interruption` approved; its tool runs when the run is resumed.
