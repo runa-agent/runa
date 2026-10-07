@@ -334,14 +334,4 @@ async def _anthropic_deltas(stream: AsyncIterator[Any]) -> AsyncIterator[StreamD
             )
 
 
-__all__ = [
-    "AnthropicModel",
-    "_anthropic_deltas",
-    "_to_anthropic_content",
-    "_to_anthropic_image",
-    "_to_anthropic_messages",
-    "_to_anthropic_tool",
-    "_to_anthropic_tool_choice",
-    "_to_chat_message",
-    "_to_usage",
-]
+__all__ = ["AnthropicModel"]

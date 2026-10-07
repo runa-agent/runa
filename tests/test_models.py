@@ -11,19 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from runa import content
-from runa._models import (
-    AnthropicModel,
-    ModelProvider,
-    OpenAICompatibleModel,
-    _anthropic_deltas,
-    _to_anthropic_content,
-    _to_anthropic_image,
-    _to_anthropic_messages,
-    _to_anthropic_tool,
-    _to_anthropic_tool_choice,
-    _to_chat_message,
-    _to_usage,
-)
+from runa._models import AnthropicModel, ModelProvider, OpenAICompatibleModel
 from runa._types import ModelSettings
 from runa.exceptions import UserError
 
@@ -346,19 +334,157 @@ def test_openai_compatible_asks_for_the_output_types_json_schema() -> None:
     assert schema["additionalProperties"] is False
 
 
-def test_anthropic_asks_for_the_output_types_json_schema() -> None:
-    """On Claude, a structured `output_type` becomes `output_config.format`; text sends none."""
-    model = AnthropicModel("claude-sonnet-5", client=None)  # type: ignore[arg-type]
-    request = model._request(
-        None, [{"role": "user", "content": "hi"}], ModelSettings(), [], _Answer, []
+async def _events(events: list[Any]) -> AsyncIterator[Any]:
+    for event in events:
+        yield event
+
+
+def _anthropic_message(content: list[Any] | None = None, usage: Any | None = None) -> Any:
+    """A canned Anthropic `Message`, the shape the SDK hands back from `messages.create`."""
+    return SimpleNamespace(
+        id="msg_1",
+        content=content if content is not None else [SimpleNamespace(type="text", text="ok")],
+        usage=usage
+        or SimpleNamespace(
+            input_tokens=0,
+            output_tokens=0,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        ),
     )
 
-    output_format = request["output_config"]["format"]
+
+class _FakeAnthropic:
+    """Stands in for `AsyncAnthropic`: records every request, answers with a canned reply."""
+
+    def __init__(self, reply: Any = None, events: list[Any] | None = None) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self._reply = reply if reply is not None else _anthropic_message()
+        self._events = events or []
+        self.messages = SimpleNamespace(create=self._create)
+
+    async def _create(self, **request: Any) -> Any:
+        self.requests.append(request)
+        return _events(self._events) if request.get("stream") else self._reply
+
+
+def _anthropic_request(
+    input: list[Any],
+    model_settings: ModelSettings | None = None,
+    tools: list[Any] | None = None,
+    output_schema: type | None = None,
+) -> dict[str, Any]:
+    """The Anthropic request one `get_response` call puts on the wire."""
+    client = _FakeAnthropic()
+    model = AnthropicModel("claude-sonnet-5", client)  # type: ignore[arg-type]
+    asyncio.run(
+        model.get_response(
+            None, input, model_settings or ModelSettings(), tools or [], output_schema, []
+        )
+    )
+    return client.requests[0]
+
+
+def test_anthropic_get_response_parses_text_and_tool_calls() -> None:
+    """A Claude message's text and tool_use blocks come back as one chat-completions item."""
+    reply = _anthropic_message(
+        content=[
+            SimpleNamespace(type="text", text="Checking the weather."),
+            SimpleNamespace(type="tool_use", id="call_1", name="weather", input={"city": "NYC"}),
+        ],
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=5,
+            cache_read_input_tokens=2,
+            cache_creation_input_tokens=1,
+        ),
+    )
+    model = AnthropicModel("claude-sonnet-5", _FakeAnthropic(reply))  # type: ignore[arg-type]
+
+    async def call() -> Any:
+        return await model.get_response(
+            None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
+        )
+
+    response = asyncio.run(call())
+
+    assert response.output == [
+        {
+            "role": "assistant",
+            "content": "Checking the weather.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "weather", "arguments": '{"city": "NYC"}'},
+                }
+            ],
+        }
+    ]
+    assert response.usage.input_tokens == 10
+    assert response.usage.output_tokens == 5
+    assert response.usage.total_tokens == 15
+    assert response.usage.input_tokens_details.cached_tokens == 2
+    assert response.response_id == "msg_1"
+
+
+def test_anthropic_stream_response_yields_text_and_tool_call_deltas() -> None:
+    """Anthropic's SSE events become `StreamDelta`s with text, tool-call fragments, and usage."""
+    client = _FakeAnthropic(
+        events=[
+            SimpleNamespace(
+                type="message_start", message=SimpleNamespace(usage=SimpleNamespace(input_tokens=7))
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="text_delta", text="Hi"),
+            ),
+            SimpleNamespace(
+                type="content_block_start",
+                index=1,
+                content_block=SimpleNamespace(type="tool_use", id="call_1", name="weather"),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=1,
+                delta=SimpleNamespace(type="input_json_delta", partial_json='{"city":'),
+            ),
+            SimpleNamespace(type="message_delta", usage=SimpleNamespace(output_tokens=4)),
+        ]
+    )
+    model = AnthropicModel("claude-sonnet-5", client)  # type: ignore[arg-type]
+
+    async def collect() -> list[Any]:
+        return [
+            d
+            async for d in model.stream_response(
+                None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
+            )
+        ]
+
+    deltas = asyncio.run(collect())
+
+    assert deltas[0].text == "Hi"
+    assert deltas[1].tool_call_id == "call_1"
+    assert deltas[1].tool_call_name == "weather"
+    assert deltas[2].tool_call_index == 1
+    assert deltas[2].tool_call_arguments == '{"city":'
+    assert deltas[3].usage is not None
+    assert deltas[3].usage.input_tokens == 7
+    assert deltas[3].usage.output_tokens == 4
+
+
+def test_anthropic_asks_for_the_output_types_json_schema() -> None:
+    """On Claude, a structured `output_type` becomes `output_config.format`; text sends none."""
+    message: list[Any] = [{"role": "user", "content": "hi"}]
+
+    output_format = _anthropic_request(message, output_schema=_Answer)["output_config"]["format"]
+
     assert output_format["type"] == "json_schema"
     assert output_format["schema"]["required"] == ["city", "temperature"]
     assert output_format["schema"]["additionalProperties"] is False
-    plain = model._request(None, [{"role": "user", "content": "hi"}], ModelSettings(), [], str, [])
-    assert "output_config" not in plain
+    assert "output_config" not in _anthropic_request(message, output_schema=str)
 
 
 def test_anthropic_api_errors_surface_as_model_behavior_errors() -> None:
@@ -383,127 +509,120 @@ def test_anthropic_api_errors_surface_as_model_behavior_errors() -> None:
         )
 
 
-def test_split_system_and_merges_consecutive_tool_results() -> None:
+def test_anthropic_splits_system_and_merges_consecutive_tool_results() -> None:
     """Two tool replies to one multi-tool-call turn merge into a single Anthropic user message."""
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": "Be terse."},
-        {"role": "user", "content": "weather in two cities?"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"id": "call_1", "function": {"name": "weather", "arguments": '{"city": "NYC"}'}},
-                {"id": "call_2", "function": {"name": "weather", "arguments": '{"city": "SF"}'}},
-            ],
-        },
-        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
-        {"role": "tool", "tool_call_id": "call_2", "content": "foggy"},
-    ]
+    request = _anthropic_request(
+        [
+            {"role": "system", "content": "Be terse."},
+            {"role": "user", "content": "weather in two cities?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {"name": "weather", "arguments": '{"city": "NYC"}'},
+                    },
+                    {
+                        "id": "call_2",
+                        "function": {"name": "weather", "arguments": '{"city": "SF"}'},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "foggy"},
+        ]
+    )
 
-    system, turns = _to_anthropic_messages(messages)
-
-    assert system == "Be terse."
-    assert [t["role"] for t in turns] == ["user", "assistant", "user"]
-    tool_results = turns[2]["content"]
-    assert [b["tool_use_id"] for b in tool_results] == ["call_1", "call_2"]
-    assert [b["content"] for b in tool_results] == ["sunny", "foggy"]
+    assert request["system"] == "Be terse."
+    assert [turn["role"] for turn in request["messages"]] == ["user", "assistant", "user"]
+    tool_results = request["messages"][2]["content"]
+    assert [block["tool_use_id"] for block in tool_results] == ["call_1", "call_2"]
+    assert [block["content"] for block in tool_results] == ["sunny", "foggy"]
 
 
-def test_assistant_turn_carries_text_and_tool_use_blocks() -> None:
+def test_anthropic_assistant_turn_carries_text_and_tool_use_blocks() -> None:
     """An assistant message with both text and a tool call becomes two Anthropic content blocks."""
-    messages = [
-        {
-            "role": "assistant",
-            "content": "Let me check.",
-            "tool_calls": [
-                {"id": "call_1", "function": {"name": "weather", "arguments": '{"city": "NYC"}'}}
-            ],
-        }
-    ]
+    request = _anthropic_request(
+        [
+            {
+                "role": "assistant",
+                "content": "Let me check.",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {"name": "weather", "arguments": '{"city": "NYC"}'},
+                    }
+                ],
+            }
+        ]
+    )
 
-    _, turns = _to_anthropic_messages(messages)
-
-    assert turns[0]["content"] == [
+    assert request["messages"][0]["content"] == [
         {"type": "text", "text": "Let me check."},
         {"type": "tool_use", "id": "call_1", "name": "weather", "input": {"city": "NYC"}},
     ]
 
 
-def test_to_anthropic_content_flattens_a_plain_string() -> None:
-    """A bare string content becomes one text block; empty/`None` content becomes no blocks."""
-    assert _to_anthropic_content("hi") == [{"type": "text", "text": "hi"}]
-    assert _to_anthropic_content("") == []
-    assert _to_anthropic_content(None) == []
-
-
-def test_to_anthropic_content_translates_text_and_image_parts() -> None:
+def test_anthropic_user_turn_translates_text_and_image_parts() -> None:
     """A `runa.content` parts list keeps its text blocks and translates `image_url` parts."""
-    parts = [content.text("what is this?"), content.image("https://example.test/cat.png")]
+    request = _anthropic_request(
+        [
+            {
+                "role": "user",
+                "content": [
+                    content.text("what is this?"),
+                    content.image("https://host.test/c.png"),
+                ],
+            }
+        ]
+    )
 
-    assert _to_anthropic_content(parts) == [
-        {"type": "text", "text": "what is this?"},
-        {"type": "image", "source": {"type": "url", "url": "https://example.test/cat.png"}},
-    ]
-
-
-def test_to_anthropic_image_decodes_a_data_uri_to_a_base64_source() -> None:
-    """A `data:` URI image part becomes Anthropic's base64 source, media type and data split out."""
-    block = _to_anthropic_image({"url": "data:image/png;base64,aGVsbG8="})
-
-    assert block == {
-        "type": "image",
-        "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="},
-    }
-
-
-def test_to_anthropic_image_keeps_a_plain_url_as_a_url_source() -> None:
-    """An `http(s)` image part becomes Anthropic's own url source, not re-encoded."""
-    block = _to_anthropic_image({"url": "https://example.test/cat.png"})
-
-    assert block == {
-        "type": "image",
-        "source": {"type": "url", "url": "https://example.test/cat.png"},
-    }
-
-
-def test_user_turn_with_an_image_survives_the_full_message_split() -> None:
-    """A user message with mixed text/image content keeps both blocks through the full pipeline."""
-    messages = [
-        {
-            "role": "user",
-            "content": [content.text("describe this"), content.image("https://example.test/x.png")],
-        }
-    ]
-
-    _, turns = _to_anthropic_messages(messages)
-
-    assert turns == [
+    assert request["messages"] == [
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "describe this"},
-                {"type": "image", "source": {"type": "url", "url": "https://example.test/x.png"}},
+                {"type": "text", "text": "what is this?"},
+                {"type": "image", "source": {"type": "url", "url": "https://host.test/c.png"}},
             ],
         }
     ]
 
 
-def test_to_anthropic_tool_translates_the_function_schema() -> None:
-    """A chat-completions-shaped function-tool dict maps to Anthropic's own shape."""
-    tool = {
-        "type": "function",
-        "function": {
+def test_anthropic_sends_a_data_uri_image_as_a_base64_source() -> None:
+    """A `data:` URI image part becomes Anthropic's base64 source, media type and data split out."""
+    request = _anthropic_request(
+        [{"role": "user", "content": [content.image("data:image/png;base64,aGVsbG8=")]}]
+    )
+
+    assert request["messages"][0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="},
+        }
+    ]
+
+
+def test_anthropic_drops_a_turn_with_no_content() -> None:
+    """A string content becomes one text block; empty/`None` content sends no turn at all."""
+    assert _anthropic_request([{"role": "user", "content": "hi"}])["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]}
+    ]
+    assert _anthropic_request([{"role": "user", "content": ""}])["messages"] == []
+    assert _anthropic_request([{"role": "user", "content": None}])["messages"] == []
+
+
+def test_anthropic_translates_a_tools_function_schema() -> None:
+    """A Runa tool reaches Anthropic in its own `input_schema` shape, not OpenAI's `parameters`."""
+    request = _anthropic_request([{"role": "user", "content": "hi"}], tools=[_Tool("weather")])
+
+    assert request["tools"] == [
+        {
             "name": "weather",
             "description": "Get the weather.",
-            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
-        },
-    }
-
-    assert _to_anthropic_tool(tool) == {
-        "name": "weather",
-        "description": "Get the weather.",
-        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
-    }
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -516,9 +635,15 @@ def test_to_anthropic_tool_translates_the_function_schema() -> None:
         (None, None),
     ],
 )
-def test_to_anthropic_tool_choice(tool_choice: Any, expected: dict[str, Any] | None) -> None:
+def test_anthropic_tool_choice(tool_choice: Any, expected: dict[str, Any] | None) -> None:
     """Each `ToolChoice` value maps to Anthropic's own `tool_choice` shape."""
-    assert _to_anthropic_tool_choice(tool_choice) == expected
+    request = _anthropic_request(
+        [{"role": "user", "content": "hi"}],
+        ModelSettings(tool_choice=tool_choice),
+        tools=[_Tool("weather")],
+    )
+
+    assert request.get("tool_choice") == expected
 
 
 @pytest.mark.parametrize(
@@ -531,86 +656,14 @@ def test_to_anthropic_tool_choice(tool_choice: Any, expected: dict[str, Any] | N
         ("none", {"type": "none"}),
     ],
 )
-def test_parallel_tool_calls_false_disables_parallel_tool_use(
+def test_anthropic_parallel_tool_calls_false_disables_parallel_tool_use(
     tool_choice: Any, expected: dict[str, Any]
 ) -> None:
     """`parallel_tool_calls=False` becomes `disable_parallel_tool_use` on Anthropic's choice."""
-    assert _to_anthropic_tool_choice(tool_choice, parallel_tool_calls=False) == expected
-
-
-def test_to_chat_message_collects_text_and_tool_use() -> None:
-    """A Claude response's text and tool_use blocks become message content and tool_calls."""
-    message = SimpleNamespace(
-        content=[
-            SimpleNamespace(type="text", text="Checking the weather."),
-            SimpleNamespace(type="tool_use", id="call_1", name="weather", input={"city": "NYC"}),
-        ],
+    request = _anthropic_request(
+        [{"role": "user", "content": "hi"}],
+        ModelSettings(tool_choice=tool_choice, parallel_tool_calls=False),
+        tools=[_Tool("weather")],
     )
 
-    result = _to_chat_message(message)
-
-    assert result["content"] == "Checking the weather."
-    assert result["tool_calls"] == [
-        {
-            "id": "call_1",
-            "type": "function",
-            "function": {"name": "weather", "arguments": '{"city": "NYC"}'},
-        }
-    ]
-
-
-def test_to_usage_converts_anthropic_token_counts() -> None:
-    """Anthropic's usage fields map onto Runa's own `Usage`, cache fields included."""
-    usage = SimpleNamespace(
-        input_tokens=10, output_tokens=5, cache_read_input_tokens=2, cache_creation_input_tokens=1
-    )
-
-    result = _to_usage(usage)
-
-    assert result.requests == 1
-    assert result.input_tokens == 10
-    assert result.output_tokens == 5
-    assert result.total_tokens == 15
-    assert result.input_tokens_details.cached_tokens == 2
-
-
-async def _stream(events: list[SimpleNamespace]) -> AsyncIterator[SimpleNamespace]:
-    for event in events:
-        yield event
-
-
-def test_anthropic_deltas_carries_text_and_tool_call_fragments() -> None:
-    """Anthropic's SSE events become `StreamDelta`s with text, tool-call fragments, and usage."""
-    events = [
-        SimpleNamespace(
-            type="message_start", message=SimpleNamespace(usage=SimpleNamespace(input_tokens=7))
-        ),
-        SimpleNamespace(
-            type="content_block_delta", index=0, delta=SimpleNamespace(type="text_delta", text="Hi")
-        ),
-        SimpleNamespace(
-            type="content_block_start",
-            index=1,
-            content_block=SimpleNamespace(type="tool_use", id="call_1", name="weather"),
-        ),
-        SimpleNamespace(
-            type="content_block_delta",
-            index=1,
-            delta=SimpleNamespace(type="input_json_delta", partial_json='{"city":'),
-        ),
-        SimpleNamespace(type="message_delta", usage=SimpleNamespace(output_tokens=4)),
-    ]
-
-    async def collect() -> list[Any]:
-        return [d async for d in _anthropic_deltas(_stream(events))]
-
-    deltas = asyncio.run(collect())
-
-    assert deltas[0].text == "Hi"
-    assert deltas[1].tool_call_id == "call_1"
-    assert deltas[1].tool_call_name == "weather"
-    assert deltas[2].tool_call_index == 1
-    assert deltas[2].tool_call_arguments == '{"city":'
-    assert deltas[3].usage is not None
-    assert deltas[3].usage.input_tokens == 7
-    assert deltas[3].usage.output_tokens == 4
+    assert request["tool_choice"] == expected
