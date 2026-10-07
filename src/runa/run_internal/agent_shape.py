@@ -20,14 +20,18 @@ Work that belongs to a single caller lives with that caller instead -- approval 
 `run_state`.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from runa._models import Model, ModelProvider
 from runa._types import ModelSettings
+from runa.compact import Compactor
 from runa.guardrail import BoundGuardrail, Phase
 from runa.handoff import Handoff
+from runa.knowledge import KnowledgeLike
 from runa.lifecycle import AgentHooks
+from runa.memory import MemoryLike
 from runa.tool import FunctionTool
 
 
@@ -51,22 +55,25 @@ def _normalized_handoffs(handoffs: Any) -> dict[str, Handoff]:
 class AgentShape:
     """One agent's surface as the turn loop needs it, resolved and named in one place.
 
-    The loose annotations are the ones `Agent` itself leaves open: `model` is a string or a
-    `Model`, `instructions` a string or a callable, `memory`/`knowledge` a mode string or a
-    store, `compact` a bool or a `Compactor`.
+    The two loose annotations are the ones `Agent` leaves open past construction: `model` is the
+    declared string (resolved per turn, since `RunConfig.model_provider` is the run's to override,
+    and kept as the string because it names the `llm` span) or a `Model` built directly; and
+    `agent` is whatever object user code is handed, which `run_internal` cannot name without
+    importing the class it implements. Everything else arrives already resolved -- a mode string
+    or a bool is `Agent.__init__`'s to turn into an object, not this module's.
     """
 
     name: str = "agent"
-    instructions: Any = None
+    instructions: str | Callable[..., Any] | None = None
     model: Any = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     tools: list[FunctionTool] = field(default_factory=list)
     handoffs: dict[str, Handoff] = field(default_factory=dict)
     guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     output_type: type | None = None
-    memory: Any = None
-    knowledge: Any = None
-    compact: Any = False
+    memory: MemoryLike | None = None
+    knowledge: KnowledgeLike | None = None
+    compactor: Compactor | None = None
     hooks: AgentHooks[Any] | None = None
     agent: Any = None
 
@@ -100,7 +107,7 @@ class AgentShape:
             output_type=agent.output_type,
             memory=agent.memory,
             knowledge=agent.knowledge,
-            compact=agent.compact,
+            compactor=agent.compactor,
             hooks=agent.hooks,
             agent=agent,
         )

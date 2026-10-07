@@ -17,6 +17,7 @@ from helpers import context_of, trace_of
 
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
+from runa.compact import default_compactor
 from runa.exceptions import (
     DuplicateToolCallError,
     GuardrailTripwireTriggered,
@@ -1272,8 +1273,11 @@ def _huge_usage() -> Usage:
 
 
 def test_compact_drops_history_before_the_latest_user_message_once_over_budget() -> None:
-    """`agent.compact=True` trims older turns once this run's usage crosses 200k tokens."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]), compact=True)
+    """`default_compactor` (what `compact=True` resolves to) trims older turns past 200k tokens."""
+    agent = _agent(
+        model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]),
+        compactor=default_compactor,
+    )
     history = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer", "tool_calls": None},
@@ -1306,7 +1310,7 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
     agent = _agent(
         tools=[step],
         model=_ScriptedModel([call, _text_response("done", usage=usage)]),
-        compact=True,
+        compactor=default_compactor,
     )
     history = [
         {"role": "user", "content": "old question"},
@@ -1322,7 +1326,7 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
 
 
 def test_compact_defaults_to_off() -> None:
-    """Without `compact=True`, history is left alone no matter how large usage gets."""
+    """With no `compactor`, history is left alone no matter how large usage gets."""
     agent = _agent(model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]))
     history = [
         {"role": "user", "content": "old question"},
@@ -1340,7 +1344,7 @@ def test_compact_defaults_to_off() -> None:
 
 
 def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
-    """`compact=True` replaces a session's stored history too, not just `agent.history`."""
+    """A compactor replaces a session's stored history too, not just `agent.history`."""
     from runa.session import SQLiteSession
 
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
@@ -1352,7 +1356,10 @@ def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
             ]
         )
     )
-    agent = _agent(model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]), compact=True)
+    agent = _agent(
+        model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]),
+        compactor=default_compactor,
+    )
 
     asyncio.run(_run_async(agent, "new question", session=session, run_config=_run_config()))
 
@@ -1362,12 +1369,13 @@ def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
     ]
 
 
-def test_compact_accepts_a_custom_compactor_callable() -> None:
-    """`compact=` also accepts a plain `(items, tokens) -> items|None` callable, not just `True`.
+def test_compact_runs_whatever_compactor_the_shape_carries() -> None:
+    """The loop runs the agent's resolved `compactor`, whatever strategy it is.
 
-    Its own arbitrary strategy (here: drop the oldest single item, ignoring `usage_tokens`
-    entirely) takes effect -- proof the built-in `default_compactor` isn't secretly still in
-    charge.
+    An arbitrary one (here: drop the oldest single item, ignoring `usage_tokens` entirely) takes
+    effect -- proof the built-in `default_compactor` isn't secretly still in charge. What
+    `compact=True`/`compact=my_fn` resolve *to* is `Agent.__init__`'s job; see
+    `tests/test_agent.py`.
     """
     calls: list[int] = []
 
@@ -1375,7 +1383,7 @@ def test_compact_accepts_a_custom_compactor_callable() -> None:
         calls.append(usage_tokens)
         return items[1:] if len(items) > 1 else None
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), compact=drop_oldest_item)
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]), compactor=drop_oldest_item)
     history = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer", "tool_calls": None},

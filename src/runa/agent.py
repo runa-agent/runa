@@ -16,11 +16,12 @@ from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import MISSING, dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from runa import content
 from runa._models import DEFAULT_MODEL, ModelProvider
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, TResponseInputItem, Usage
+from runa.compact import Compactor, default_compactor
 from runa.exceptions import RunaError, UserError
 from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
 from runa.handoff import agent_as_tool
@@ -193,6 +194,26 @@ def _flatten_subagents(subagents: SubagentsList | SubagentsDict) -> SubagentsLis
     return flat
 
 
+def _resolve_compactor(compact: Any) -> Compactor | None:
+    """Resolve a `compact=` setting to the `Compactor` the turn loop should run, or `None` for off.
+
+    Resolved here, alongside `memory=`/`knowledge=`, for the reason they are: a declared attribute
+    becomes a usable object once, at construction, so a value that is neither a bool nor a
+    callable is a `UserError` naming the attribute rather than a `TypeError` raised from inside
+    `run_internal.run_loop._maybe_compact` after a model call has already been paid for.
+    """
+    if compact is None or compact is False:
+        return None
+    if compact is True:
+        return default_compactor
+    if callable(compact):
+        return cast(Compactor, compact)
+    raise UserError(
+        f"compact must be True, False, a (items, usage_tokens) -> items|None callable, "
+        f"or None, got {compact!r}"
+    )
+
+
 def _resolve_retrieval_setting(
     setting: Any, cls: type[Memory] | type[Knowledge], tools: list[FunctionTool]
 ) -> Any:
@@ -291,6 +312,8 @@ class Agent:
           - a `runa.compact.Compactor` (any `(items, usage_tokens) -> items | None` callable):
             your own strategy -- a different threshold, an LLM summary, whatever you return.
           - `False` (the default): off.
+        Resolved to a `Compactor` (or `None`) here, as `self.compactor`, the way `memory=`/
+        `knowledge=` are; anything else is a `UserError` at construction.
 
         `max_turns` caps how many model calls one run may make before `MaxTurnsExceeded`;
         `max_tokens` caps the tokens they may spend before `MaxTokensExceeded`; `timeout` caps
@@ -344,7 +367,9 @@ class Agent:
         self.bound_guardrails: dict[Phase, list[BoundGuardrail]] = bound_guardrails
         self.output_type: type | None = kwargs.get("output_type")
         self.hooks = kwargs.get("hooks")
-        self.compact: bool = kwargs.get("compact", False)
+        # Not `self.compact`: that name belongs to the bool/callable a subclass declares, the way
+        # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
+        self.compactor: Compactor | None = _resolve_compactor(kwargs.get("compact"))
         self.max_turns: int = kwargs["max_turns"]
         self.max_tokens: int | None = kwargs.get("max_tokens")
         self.timeout: float | None = kwargs.get("timeout")

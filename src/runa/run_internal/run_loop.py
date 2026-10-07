@@ -15,7 +15,6 @@ from typing import Any
 from pydantic import TypeAdapter, ValidationError
 
 from runa._types import RunContextWrapper, TResponseInputItem, Usage
-from runa.compact import Compactor, default_compactor
 from runa.exceptions import (
     MaxTokensExceeded,
     MaxTurnsExceeded,
@@ -121,19 +120,6 @@ async def _retrieve(
         return []
 
 
-def _resolve_compactor(shape: AgentShape) -> Compactor | None:
-    """`agent.compact` to the `Compactor` to run, or `None` if compaction is off.
-
-    `True` means Runa's own `default_compactor`; anything else truthy is trusted as already
-    being a `Compactor` -- `Agent(compact=...)`'s escape hatch, the same shape as
-    `memory=`/`knowledge=` accepting an instance instead of `"auto"`.
-    """
-    compact = shape.compact
-    if not compact:
-        return None
-    return default_compactor if compact is True else compact
-
-
 def _maybe_compact(
     shape: AgentShape, items: list[TResponseInputItem], usage_tokens: int, spans: _Spans
 ) -> None:
@@ -144,7 +130,7 @@ def _maybe_compact(
     finishes (on `original_input` for a no-session run, or in `_save_to_session` on the session's
     full history) so the *next* call's history reflects the same cut too.
     """
-    compactor = _resolve_compactor(shape)
+    compactor = shape.compactor
     if compactor is None:
         return
     replacement = compactor(items, usage_tokens)

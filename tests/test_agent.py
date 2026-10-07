@@ -527,6 +527,71 @@ def test_knowledge_rejects_an_unknown_string() -> None:
         BadKnowledge()
 
 
+def test_compact_defaults_to_no_compactor() -> None:
+    """Without `compact=`, an agent behaves exactly as if `runa.compact` didn't exist."""
+    agent = Researcher()
+
+    assert agent.compactor is None
+
+
+def test_compact_true_resolves_to_the_default_compactor() -> None:
+    """`compact=True` is sugar for Runa's own rolling-window `Compactor`, resolved at construction.
+
+    The turn loop reads `compactor`, so `True` has to have become a callable by the time a run
+    starts -- it is not the loop's job to know what the bool meant.
+    """
+    from runa.compact import default_compactor
+
+    class Compacting(Agent):
+        name = "Compacting"
+        instructions = "compacts"
+        compact = True
+
+    assert Compacting().compactor is default_compactor
+
+
+def test_compact_accepts_a_custom_compactor_callable() -> None:
+    """`compact=` also takes any `(items, usage_tokens) -> items|None` callable, passed through."""
+
+    def drop_oldest_item(items: list[Any], usage_tokens: int) -> list[Any] | None:
+        return items[1:]
+
+    class Compacting(Agent):
+        name = "Compacting"
+        instructions = "compacts"
+        compact = drop_oldest_item
+
+    assert Compacting().compactor is drop_oldest_item
+
+
+def test_compact_false_resolves_to_no_compactor() -> None:
+    """`compact=False` is off, the same as not declaring it -- not a falsy value trusted onward."""
+
+    class NotCompacting(Agent):
+        name = "NotCompacting"
+        instructions = "does not compact"
+        compact = False
+
+    assert NotCompacting().compactor is None
+
+
+def test_compact_rejects_a_value_that_is_neither_a_bool_nor_a_callable() -> None:
+    """A bad `compact=` fails at construction, not as a `TypeError` mid-run.
+
+    The regression this guards: a truthy non-callable used to be "trusted as already being a
+    `Compactor`" and only blew up inside the turn loop, after a model call had been paid for.
+    """
+    from runa.exceptions import UserError
+
+    class BadCompact(Agent):
+        name = "BadCompact"
+        instructions = "bad compact"
+        compact = "sometimes"
+
+    with pytest.raises(UserError, match="compact"):
+        BadCompact()
+
+
 def test_history_starts_empty() -> None:
     """A freshly constructed agent has no conversation history yet."""
     agent = Researcher()
