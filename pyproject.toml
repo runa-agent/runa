@@ -1,6 +1,6 @@
 [project]
 name = "runa-ai"
-version = "0.5.0"
+version = "0.6.0"
 authors = [
     { name = "Brahim Benyous" },
 ]
