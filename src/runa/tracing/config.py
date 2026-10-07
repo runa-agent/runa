@@ -2,7 +2,8 @@
 
 One small, global, mutable policy, not a policy engine. `capture_inputs`/`capture_outputs` gate
 whether input/output are kept at all; `redact`/`redactor` scrub what's kept; the `max_*_bytes`
-limits truncate what's left. `RunaTraceProcessor` (`tracing/processor.py`) is the only caller.
+limits truncate what's left. `run_internal/spans.py` applies it as each span opens and closes,
+and `lifecycle.py` applies the same policy to its DEBUG log lines, so one setting covers both.
 """
 
 import json
@@ -21,9 +22,12 @@ _REDACTED = "[REDACTED]"
 class TraceExporter(Protocol):
     """Exports a finished `Trace` somewhere: SQLite, the console, or a caller's own backend.
 
-    `export` is synchronous because it's called from `on_trace_end`, a synchronous callback the
-    underlying Agents SDK invokes as part of finishing a trace (see `TracingProcessor` in
-    `agents.tracing`); there is no event loop available to await from there.
+    `export` is synchronous because it's called from `_export` (`run_internal/spans.py`, or
+    `tracing/manual.py` for a manual `trace` block) as a run finishes, from inside whatever loop
+    that run was already on: there is nothing to await from there, and `asyncio.run()` demands
+    there be no running loop. `TraceStore` is synchronous for the same reason, plus the
+    `runa traces`/`runa ui` read path. An exporter over an async backend reaches a loop through
+    `db/pool.run_sync`, as `PostgresTraceStore` does.
     """
 
     def export(self, trace: Trace) -> None:

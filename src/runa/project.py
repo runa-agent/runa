@@ -124,8 +124,8 @@ def find_agent_class(agent_name: str, *, agents_dir: Path) -> type[Agent]:
     """Find the Agent subclass under `agents_dir` whose declared `name` is `agent_name`.
 
     Matches the `name` class attribute (e.g. `class SupportAgent(Agent): name = "Support"`),
-    not the Python class name  `name` is the identity the SDK itself uses for traces,
-    instructions, and handoffs, so it's what an operator should type too.
+    not the Python class name: `name` is the identity Runa itself uses for traces, instructions,
+    and handoffs, so it's what an operator should type too.
     """
     for agent_cls in iter_agent_classes(agents_dir):
         if getattr(agent_cls, "name", None) == agent_name:

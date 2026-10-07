@@ -280,8 +280,9 @@ class Guardrail:
     both places it's listed:
 
     - In an `Agent.guardrails` list, it's bound to `Phase.INPUT`/`Phase.OUTPUT`: the predicate
-      sees the latest user message as plain text (regardless of whether the SDK passed a string
-      or the running list of input items) on `.input`, or the agent's final output on `.output`.
+      sees the latest user message as plain text (regardless of whether the run was passed a
+      string or the running list of input items) on `.input`, or the agent's final output on
+      `.output`.
     - In a `@tool(guardrails=[...])` list, the same object is rebound to `Phase.TOOL_INPUT`/
       `Phase.TOOL_OUTPUT`: the predicate sees the tool call's arguments (parsed from JSON into a
       dict) on `.input`, or the tool's raw return value on `.output`.
