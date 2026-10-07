@@ -458,10 +458,12 @@ class Agent:
     def _fresh(self) -> Agent:
         """A copy of this agent with empty per-run state, sharing its config.
 
-        What `agent_as_tool` runs a delegate on. The delegate's documented contract is that a
-        nested run does not inherit the caller's conversation, and a `Subagent` is built once and
-        reused, so running the shared instance directly would both accumulate history across
-        unrelated delegations and corrupt it when the model delegates twice in one message.
+        For a run that must not inherit this instance's conversation, and may be one of several
+        in flight on it. An agent declared once is reused for many such runs -- a `Subagent` is
+        built once per caller, an eval's agent once per dataset -- so running the shared instance
+        directly would both accumulate history across unrelated runs and corrupt it when two
+        overlap, whether the model delegated twice in one message or two eval cases are running
+        concurrently.
         """
         clone = copy.copy(self)
         clone.history = []
@@ -545,9 +547,11 @@ class Agent:
         `session`, or its own `Agent`. Under a web server, build the agent inside the request
         handler (`runa serve` does exactly this).
 
-        `_context_wrapper` is internal, used by `agent_as_tool`'s nested delegate calls to share
-        a forked `RunContextWrapper` with the caller instead of building a fresh one; `context`
-        is ignored when it's given. Don't pass it directly.
+        `_context_wrapper` is internal: a nested run takes the fork of an enclosing run's
+        `RunContextWrapper` instead of building a fresh one, which is what shares the approval
+        ledger, the usage accounting and the guardrail audit trail between the two. `context` is
+        ignored when it's given, since a fork already carries the enclosing run's. Don't pass it
+        directly; delegation, the one thing that needs it, is `runa.handoff`'s to wire up.
         """
         session = _resolve_session(session)
         turn_input = _turn_input(message, self.history, session, context)
