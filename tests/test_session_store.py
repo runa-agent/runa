@@ -19,6 +19,8 @@ import pytest
 from contracts.session import CONTRACT, Check, SessionPair
 
 from runa import db
+from runa.db.schema import POSTGRES, SQLITE, Dialect
+from runa.session.store import agent_filter
 
 
 @pytest.fixture(params=["sqlite", "ephemeral"])
@@ -72,3 +74,24 @@ def test_listing_breaks_updated_at_ties_by_session_id_descending(root: Path) -> 
     listed = pair.read.listing(agent=pair.tag)
 
     assert [summary.id for summary in listed] == [pair.id("-c"), pair.id("-b"), pair.id("-a")]
+
+
+@pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
+def test_agent_filter_carries_its_escape_clause_in_every_dialect(dialect: Dialect) -> None:
+    """The escaped pattern and the `ESCAPE` clause that gives it meaning come back together.
+
+    Both are one value because an adapter handed the pattern alone can bind it without the clause,
+    which is how the Postgres listing was written: correct only because a backslash happens to be
+    its default escape character. Asserted per dialect rather than per adapter, since the live
+    Postgres half of the contract is `tests/test_postgres.py`.
+    """
+    where, params = agent_filter("a_b", dialect)
+
+    assert "ESCAPE '\\'" in where
+    assert params == ("a_b", "a\\_b-%")
+
+
+@pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
+def test_agent_filter_is_no_clause_at_all_for_no_agent(dialect: Dialect) -> None:
+    """`agent=None` filters nothing, so a listing composes one string either way."""
+    assert agent_filter(None, dialect) == ("", ())

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from runa.db.schema import Column, Index, Table
+from runa.db.schema import Column, Dialect, Index, Table
 from runa.exceptions import OperatorError
 
 SESSIONS = Table(
@@ -108,14 +108,29 @@ def as_timestamp(value: str | datetime) -> str:
     return value.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def agent_pattern(agent: str) -> str:
-    r"""The `LIKE` pattern matching `agent`'s session ids, wildcards in `agent` escaped.
+def agent_filter(agent: str | None, dialect: Dialect) -> tuple[str, tuple[str, ...]]:
+    r"""The `WHERE` clause keeping only `agent`'s sessions, and the values it binds.
 
-    Shared by both SQL adapters so an agent named `a_b` can't match a session of `axb` in one
-    backend and not the other. Pair it with `ESCAPE '\\'`.
+    Matches a session id that is either exactly `agent` or starts with `f"{agent}-"`, with
+    wildcards in `agent` escaped, so an agent named `a_b` can't match a session of `axb` in one
+    backend and not the other. `agent=None` is no filter: an empty clause and no values, so a
+    listing composes the same string either way. The clause ends in a space, ready to sit between
+    a `FROM` and an `ORDER BY`; its placeholders are the `dialect`'s, like `Table.placeholders`.
+
+    The whole fragment rather than the `LIKE` pattern alone, because escaping a wildcard only
+    works paired with the `ESCAPE` clause naming the escape character, and an adapter handed the
+    pattern plus a docstring asking for the clause can take half the rule -- the Postgres one did,
+    and matched anyway only because a backslash is already its default. How a session id matches
+    an agent is one of the rules this module exists to state, so it states all of it.
     """
+    if agent is None:
+        return "", ()
+    exact, prefix = ("$1", "$2") if dialect.numbered_placeholders else ("?", "?")
     escaped = agent.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"{escaped}-%"
+    return (
+        rf"WHERE session_id = {exact} OR session_id LIKE {prefix} ESCAPE '\' ",
+        (agent, f"{escaped}-%"),
+    )
 
 
 def message_text(item: dict[str, Any]) -> tuple[str, str]:
@@ -147,7 +162,7 @@ __all__ = [
     "SessionNotFound",
     "SessionStore",
     "SessionSummary",
-    "agent_pattern",
+    "agent_filter",
     "as_timestamp",
     "message_text",
     "to_message",

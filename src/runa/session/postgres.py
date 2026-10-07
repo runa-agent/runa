@@ -24,7 +24,7 @@ from runa.session.store import (
     SessionMessage,
     SessionNotFound,
     SessionSummary,
-    agent_pattern,
+    agent_filter,
     as_timestamp,
     to_message,
 )
@@ -152,11 +152,7 @@ class PostgresSessionStore(Shared):
     async def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this database's sessions, most recently updated first."""
         pool = await self._pool()
-        where = ""
-        params: tuple[object, ...] = ()
-        if agent is not None:
-            where = "WHERE session_id = $1 OR session_id LIKE $2 "
-            params = (agent, agent_pattern(agent))
+        where, params = agent_filter(agent, POSTGRES)
         rows = await pool.fetch(
             f"SELECT session_id, updated_at FROM {SESSIONS.name} {where}"
             "ORDER BY updated_at DESC, session_id DESC",

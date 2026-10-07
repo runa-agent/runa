@@ -15,10 +15,15 @@ its `Table`s once, beside the code that turns a row into an object, and `ddl(dia
 renders them; a column added in the declaration appears in both backends or in neither.
 
 What this is not is a query builder. Adapters still write their own SQL, because that is where
-they genuinely differ (`ON CONFLICT ... EXCLUDED`, `LIKE ... ESCAPE`, a batched `ANY($1::text[])`),
-and a builder general enough to express those would be a shallower module than the eight adapters
-it replaced. The one query fragment here is `Table.placeholders`, which is dialect, not query:
-`?` against `$1`.
+they genuinely differ (`INSERT OR REPLACE` against `ON CONFLICT ... EXCLUDED`, a batched
+`ANY($1::text[])`), and a builder general enough to express those would be a shallower module than
+the eight adapters it replaced. The one query fragment here is `Table.placeholders`, which is
+dialect, not query: `?` against `$1`.
+
+A concern whose adapters must phrase one predicate identically can keep that fragment beside its
+own tables -- `session/store.py`'s `agent_filter` is the whole `WHERE` matching an agent's session
+ids, placeholders and `ESCAPE` clause included, because half of that rule is not usable on its own.
+That is a predicate a concern owns, not a query builder growing here.
 """
 
 from dataclasses import dataclass, field

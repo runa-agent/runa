@@ -802,129 +802,174 @@ Before concluding, verify that the review considered:
 
 The final review should be **specific enough that another engineer could use it as an architecture discussion document**.
 
-# HTML REPORT OUTPUT
+# Final report format
 
-The final review must be delivered as a **standalone HTML report**, not only as Markdown or plain text.
+The report should be **decision-oriented, repository-specific, and concise**. Prioritize the few architectural issues that materially affect complexity, maintainability, or change cost.
 
-## Required output
+## 1. Executive verdict
 
-After completing the repository analysis:
+Start with a compact summary containing:
 
-1. Generate a complete HTML document.
-2. Save it as:
-   `architecture-review.html`
-3. Return the generated HTML file to the user as a downloadable artifact.
-4. The HTML must contain the complete review; do not require the user to copy Markdown into an HTML file manually.
-5. Do not return only a description of the report or an HTML snippet.
+* **Overall assessment:** Broadly aligned / Partially aligned / Materially misaligned
+* **Biggest architectural strength**
+* **Biggest architectural weakness**
+* **Highest-leverage redesign**
+* **Overall confidence**
 
-## HTML structure
+Keep this to a few paragraphs or a short callout.
 
-The generated report should contain:
+## 2. Architecture at a glance
 
-* a clear report title
-* executive summary
-* architecture map
-* strong aspects
-* findings
-* change-amplification hotspots
-* information-leakage hotspots
-* recommended redesign priorities
-* what not to change
-* architecture scorecard
-* overall assessment
-* review scope / confidence notes
+Show the major architectural boundaries and dependency direction.
 
-Use semantic HTML elements such as:
+Use a compact ASCII diagram when useful.
 
-* `<header>`
-* `<main>`
-* `<section>`
-* `<article>`
-* `<table>`
-* `<footer>`
+```text
+API
+ ↓
+Application
+ ↓
+Domain
+ ↓
+Infrastructure
+ ↓
+Database
+```
 
-## Presentation requirements
+Annotate only the most important leakage, coupling, or layering problems.
 
-The report should be professional and easy to scan.
+## 3. Top architectural findings
 
-Include:
+Report only the **5–7 highest-impact findings**.
 
-* responsive layout for desktop and mobile
-* clear heading hierarchy
-* readable typography
-* visually distinct severity levels
-* styled scorecard
-* tables for structured findings
-* code blocks / diagrams where useful
-* callout boxes for important conclusions
-* sufficient spacing and visual hierarchy
+Order them by architectural impact, not by file order.
 
-Use CSS in the same HTML file.
+For each finding include:
 
-The report should work when opened directly in a browser without requiring a build step.
+```text
+### [HIGH] Short, specific problem statement
 
-## Self-contained requirement
+Principle:
+Relevant Ousterhout principle(s)
 
-Prefer a **single self-contained HTML file**.
+Location:
+Files, modules, classes, or dependency relationships
 
-Do not require:
+Evidence:
+What the repository actually does
 
-* a JavaScript framework
-* a CSS build system
-* a bundler
-* a server
-* external assets
+Why it matters:
+How this increases complexity, knowledge duplication,
+change amplification, coupling, or obscurity
 
-Avoid external CDN dependencies unless the user explicitly requests them.
+Recommendation:
+The smallest high-leverage architectural change
 
-## Content fidelity
+Trade-off:
+What becomes more constrained or complex
 
-The HTML report must preserve the architecture-review reasoning defined by this skill.
+Confidence:
+High / Medium / Low
+```
 
-Do not replace the repository-specific analysis with a generic explanation of Ousterhout's principles.
+A finding is not valid without **concrete repository evidence**.
 
-Every significant finding must retain:
+Do not create findings from naming, directory structure, or architectural preferences alone.
+
+## 4. What is working
+
+Identify **3–5 strong architectural decisions** that successfully reduce complexity.
+
+For each, briefly state:
 
 * Principle
-* Location
 * Evidence
-* Complexity impact / Why it matters
-* Recommendation
-* Trade-off
-* Confidence
+* Why it works
 
-The qualitative scorecard must use:
+Avoid generic praise.
 
-* Strong
-* Good
-* Mixed
-* Weak
-* Poor
+## 5. Change-amplification hotspots
 
-Do not calculate a numeric architecture score unless the user explicitly requests one.
+Show a small number of realistic change scenarios.
 
-## Output behavior
+For example:
 
-The final assistant response should:
+```text
+Change: Replace payment provider
+Current impact: 8 modules
+Primary problem: provider concepts leak into application code
+Better boundary: PaymentGateway
+Expected impact after redesign: 2 modules
+```
 
-* briefly summarize the completed review
-* provide the generated `.html` file as a downloadable artifact
-* mention any important limitations or incomplete evidence
+Use scenarios that demonstrate architectural consequences rather than theoretical concerns.
 
-Do not paste the entire HTML source into the chat unless the user explicitly asks for the source code.
+## 6. Recommended redesign priorities
 
-## Important
+Give only the **smallest set of high-leverage changes**.
 
-The HTML generation step happens **after** the repository review is complete.
+Rank them:
 
-The workflow is:
+**P0 — Do first**
+Removes substantial complexity or isolates an important architectural decision.
 
-Repository
-→ establish architecture
-→ trace flows
-→ analyze boundaries and dependencies
-→ identify findings
-→ rank findings
-→ produce recommendations
-→ generate final HTML report
-→ return `architecture-review.html`
+**P1 — Do next**
+Meaningfully improves boundaries or reduces repeated knowledge.
+
+**P2 — Optional**
+Useful improvement, but not necessary to address the main architectural risk.
+
+For every recommendation, explain **what complexity disappears**.
+
+Do not provide a large refactoring backlog.
+
+## 7. What not to change
+
+Explicitly identify sound boundaries or designs that should remain.
+
+Also call out tempting refactors that would add abstraction, layering, or indirection without reducing complexity.
+
+## 8. Architecture scorecard
+
+Use a compact qualitative scorecard:
+
+| Dimension             | Assessment                          |
+| --------------------- | ----------------------------------- |
+| Complexity management | Strong / Good / Mixed / Weak / Poor |
+| Module depth          | Strong / Good / Mixed / Weak / Poor |
+| Information hiding    | Strong / Good / Mixed / Weak / Poor |
+| Abstraction quality   | Strong / Good / Mixed / Weak / Poor |
+| Layering              | Strong / Good / Mixed / Weak / Poor |
+| Dependency direction  | Strong / Good / Mixed / Weak / Poor |
+| Change amplification  | Strong / Good / Mixed / Weak / Poor |
+| Error complexity      | Strong / Good / Mixed / Weak / Poor |
+| Consistency           | Strong / Good / Mixed / Weak / Poor |
+| Obviousness           | Strong / Good / Mixed / Weak / Poor |
+
+Do not calculate a numeric architecture score unless explicitly requested.
+
+## 9. Final assessment
+
+Finish with:
+
+* **Strongest principle:** …
+* **Weakest principle:** …
+* **Highest-leverage redesign:** …
+* **Biggest architectural risk:** …
+* **Confidence:** High / Medium / Low
+
+The conclusion should be understandable without reading the full report.
+
+## Review quality gate
+
+Before finalizing, verify:
+
+* Every major finding has concrete repository evidence.
+* The report distinguishes architectural problems from stylistic preferences.
+* Findings explain complexity impact, not merely code structure.
+* Recommendations reduce complexity rather than add abstraction by default.
+* The report focuses on a small number of high-leverage changes.
+* Strong existing architecture is explicitly recognized.
+* Uncertain conclusions are marked with appropriate confidence.
+
+Save in an html file: architecture-review.html
