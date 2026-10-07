@@ -72,6 +72,11 @@ def _agent_with_tool() -> Any:
     )
 
 
+async def _both(first: Any, second: Any) -> None:
+    """Run two coroutines concurrently, each on its own task, so each gets its own context."""
+    await asyncio.gather(first, second)
+
+
 def test_observe_bare_call_leaves_the_setting_applied() -> None:
     """A plain `observe(capture_inputs=False)` call (no `with`) applies immediately and sticks."""
     observe(capture_inputs=False)
@@ -89,6 +94,63 @@ def test_observe_context_manager_restores_the_previous_setting_on_exit() -> None
         assert config.capture_inputs() is False
 
     assert config.capture_inputs() is True
+
+
+def test_a_with_observe_block_does_not_change_what_another_task_captures() -> None:
+    """One request's `with observe(...)` must not decide what every request in flight captures.
+
+    `runa.serve` builds an `Agent` per request so that concurrent requests share no state, and
+    `Agent.run` refuses two overlapping session-less runs for the same reason. A policy held in a
+    module-level global undid that care: the block below used to switch input capture off for the
+    bystander task too, and interleaved blocks restored in construction order rather than by
+    nesting, so a late-exiting block could reinstate a stale policy over a live one.
+    """
+    seen: dict[str, bool] = {}
+    opened, read = asyncio.Event(), asyncio.Event()
+
+    async def scoped() -> None:
+        with observe(capture_inputs=False):
+            opened.set()
+            await read.wait()  # hold the block open until `bystander` has looked
+            seen["scoped"] = config.capture_inputs()
+
+    async def bystander() -> None:
+        await opened.wait()  # look only once the block really is open
+        seen["bystander"] = config.capture_inputs()
+        read.set()
+
+    asyncio.run(_both(scoped(), bystander()))
+
+    assert seen == {"scoped": False, "bystander": True}
+    assert config.capture_inputs() is True
+
+
+def test_a_bare_observe_call_reaches_tasks_started_after_it() -> None:
+    """The bare form configures a whole deployment, so it has to cross a task boundary.
+
+    This is the half a `ContextVar` alone would not give: a policy only ever set inside the
+    context that called `observe` would be invisible to the tasks an app's requests run on.
+    """
+
+    async def read() -> bool:
+        return config.capture_inputs()
+
+    observe(capture_inputs=False)
+    try:
+        assert asyncio.run(read()) is False
+    finally:
+        observe(capture_inputs=True)
+
+
+def test_nested_with_observe_blocks_keep_the_setting_the_outer_one_made() -> None:
+    """An inner block overrides what it names and inherits the rest from the block around it."""
+    with observe(capture_inputs=False):
+        with observe(max_input_bytes=10):
+            assert config.capture_inputs() is False
+            assert config.input_limit() == 10
+
+        assert config.capture_inputs() is False
+        assert config.input_limit() == 32_000
 
 
 def test_default_exporters_is_the_store_only_without_langfuse_env_vars(
@@ -145,7 +207,7 @@ def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
     pytest.importorskip("asyncpg")
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    monkeypatch.setattr(config._config, "exporters", None)  # as it is at import
+    monkeypatch.setattr(config._default, "exporters", None)  # as it is at import
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
 
     exporters = config.exporters()
@@ -185,10 +247,8 @@ def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
     extra = ConsoleExporter()
 
     config.add_exporter(extra)
-    try:
-        assert config.exporters() == [*before, extra]
-    finally:
-        observe(exporter=before)
+
+    assert config.exporters() == [*before, extra]
 
 
 def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:

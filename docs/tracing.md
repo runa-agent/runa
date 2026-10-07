@@ -36,12 +36,12 @@ Outside a block, a session-backed run is grouped by its session id.
 
 ### Privacy Policy
 
-`observe()` configures what tracing captures, globally or for a block:
+`observe()` configures what tracing captures, for the whole application or for a block:
 
 ```python
 from runa import observe
 
-observe(capture_inputs=False)  # applies immediately, stays applied
+observe(capture_inputs=False)  # applies immediately, stays applied, applies everywhere
 
 with observe(redact=["password", "ssn"]):
     agent.run_sync(...)  # redacted within this block only
@@ -50,6 +50,13 @@ with observe(redact=["password", "ssn"]):
 Options: `capture_inputs`/`capture_outputs` (whether to keep them at all), `redact` (a list of
 dict keys to scrub) or a custom `redactor` callable, and `max_input_bytes`/`max_output_bytes`/
 `max_tool_result_bytes` to truncate what's kept.
+
+The two forms differ in more than how long they last. A bare call sets the process-wide policy, so
+it's what an application configures itself with, once, at startup. A `with` block applies to the
+current task only: under `runa serve`, one request's block doesn't change what tracing captures
+for the other requests in flight, the same way each request gets its own `Agent`. The flip side is
+that a block has to wrap the work it means to cover -- a task started before the block was entered
+keeps the policy it already had, so a `with` block is not a way to configure a whole deployment.
 
 ### Custom Exporters
 
