@@ -38,24 +38,23 @@ def _content(value: Any, *, limit: int | None = None) -> str:
     return repr(apply_policy(value, max_bytes=limit if limit is not None else output_limit()))
 
 
-def _log_output(label: str, name: str, value: Any) -> None:
-    """Log one completed step: its name at INFO, its output at DEBUG if the policy allows."""
+def _log_agent_start(agent: Any) -> None:
+    """Log that `agent` is about to run; the one event both hook scopes name differently."""
+    logger.info("agent start: %s", agent.name)
+
+
+def _log_agent_end(agent: Any, output: Any) -> None:
+    """Log that `agent` finished: its name at INFO, its output at DEBUG if the policy allows."""
     from runa.tracing.config import capture_outputs, output_limit
 
-    logger.info("%s end: %s", label, name)
+    logger.info("agent end: %s", agent.name)
     if capture_outputs() and logger.isEnabledFor(logging.DEBUG):
-        logger.debug("%s output: %s -> %s", label, name, _content(value, limit=output_limit()))
+        logger.debug("agent output: %s -> %s", agent.name, _content(output, limit=output_limit()))
 
 
-def _log_tool_output(agent_name: str, tool_name: str, result: object) -> None:
-    """Log a finished tool call: names at INFO, the result at DEBUG if the policy allows."""
-    from runa.tracing.config import capture_outputs, tool_result_limit
-
-    logger.info("tool end: %s (%s)", tool_name, agent_name)
-    if capture_outputs() and logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            "tool output: %s -> %s", tool_name, _content(result, limit=tool_result_limit())
-        )
+def _log_handoff(source: Any, target: Any) -> None:
+    """Log a handoff as `source -> target`, whichever scope's argument order it arrived in."""
+    logger.info("handoff: %s -> %s", source.name, target.name)
 
 
 class RunHooks[TContext]:
@@ -220,26 +219,13 @@ class _Dispatch[TContext]:
             await own.on_llm_end(context, agent, response)
 
 
-class LoggingRunHooks(RunHooks[Any]):
-    """Logs each lifecycle event of a run through the standard `logging` module.
+class _LoggedEvents:
+    """The callbacks `RunHooks` and `AgentHooks` name identically, logged once for both scopes.
 
-    `Agent.run`/`run_sync` use an instance of this as the default `hooks`, so every run is
-    logged without the caller having to ask; passing an explicit `hooks` overrides it.
+    A tool call and a model call belong to no scope in particular, so the two `Logging*` classes
+    below mix this in and define only what the scopes genuinely spell differently: an agent's
+    start and end (`on_agent_start`/`on_start`), and which way a handoff's arguments point.
     """
-
-    async def on_agent_start(self, context: RunContextWrapper[Any], agent: Any) -> None:
-        """Log that `agent` is about to run."""
-        logger.info("agent start: %s", agent.name)
-
-    async def on_agent_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
-        """Log that `agent` finished; its output only at DEBUG, under the tracing policy."""
-        _log_output("agent", agent.name, output)
-
-    async def on_handoff(
-        self, context: RunContextWrapper[Any], from_agent: Any, to_agent: Any
-    ) -> None:
-        """Log a handoff between agents."""
-        logger.info("handoff: %s -> %s", from_agent.name, to_agent.name)
 
     async def on_tool_start(
         self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool
@@ -251,7 +237,13 @@ class LoggingRunHooks(RunHooks[Any]):
         self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool, result: object
     ) -> None:
         """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
-        _log_tool_output(agent.name, tool.name, result)
+        from runa.tracing.config import capture_outputs, tool_result_limit
+
+        logger.info("tool end: %s (%s)", tool.name, agent.name)
+        if capture_outputs() and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "tool output: %s -> %s", tool.name, _content(result, limit=tool_result_limit())
+            )
 
     async def on_llm_start(
         self,
@@ -268,7 +260,30 @@ class LoggingRunHooks(RunHooks[Any]):
         logger.debug("llm end: %s", agent.name)
 
 
-class LoggingAgentHooks(AgentHooks[Any]):
+class LoggingRunHooks(_LoggedEvents, RunHooks[Any]):
+    """Logs each lifecycle event of a run through the standard `logging` module.
+
+    `Agent.run`/`run_sync` use an instance of this as the default `hooks`, so every run is
+    logged without the caller having to ask; passing an explicit `hooks` overrides it. A tool
+    call and a model call are logged by `_LoggedEvents`, shared with `LoggingAgentHooks`.
+    """
+
+    async def on_agent_start(self, context: RunContextWrapper[Any], agent: Any) -> None:
+        """Log that `agent` is about to run."""
+        _log_agent_start(agent)
+
+    async def on_agent_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
+        """Log that `agent` finished; its output only at DEBUG, under the tracing policy."""
+        _log_agent_end(agent, output)
+
+    async def on_handoff(
+        self, context: RunContextWrapper[Any], from_agent: Any, to_agent: Any
+    ) -> None:
+        """Log a handoff between agents."""
+        _log_handoff(from_agent, to_agent)
+
+
+class LoggingAgentHooks(_LoggedEvents, AgentHooks[Any]):
     """Logs the lifecycle events of a single agent through the standard `logging` module.
 
     Assign an instance to an `Agent` subclass's `hooks` class attribute to log that agent's
@@ -277,38 +292,12 @@ class LoggingAgentHooks(AgentHooks[Any]):
 
     async def on_start(self, context: RunContextWrapper[Any], agent: Any) -> None:
         """Log that `agent` is about to run."""
-        logger.info("agent start: %s", agent.name)
+        _log_agent_start(agent)
 
     async def on_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
         """Log that `agent` finished; its output only at DEBUG, under the tracing policy."""
-        _log_output("agent", agent.name, output)
+        _log_agent_end(agent, output)
 
     async def on_handoff(self, context: RunContextWrapper[Any], agent: Any, source: Any) -> None:
         """Log that `source` handed off to `agent`."""
-        logger.info("handoff: %s -> %s", source.name, agent.name)
-
-    async def on_tool_start(
-        self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool
-    ) -> None:
-        """Log that `tool` is about to run."""
-        logger.info("tool start: %s (%s)", tool.name, agent.name)
-
-    async def on_tool_end(
-        self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool, result: object
-    ) -> None:
-        """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
-        _log_tool_output(agent.name, tool.name, result)
-
-    async def on_llm_start(
-        self,
-        context: RunContextWrapper[Any],
-        agent: Any,
-        system_prompt: str | None,
-        input_items: list[ConversationItem],
-    ) -> None:
-        """Log that `agent` is about to call the model."""
-        logger.debug("llm start: %s", agent.name)
-
-    async def on_llm_end(self, context: RunContextWrapper[Any], agent: Any, response: Any) -> None:
-        """Log that `agent`'s model call returned."""
-        logger.debug("llm end: %s", agent.name)
+        _log_handoff(source, agent)
