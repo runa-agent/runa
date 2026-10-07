@@ -1296,6 +1296,22 @@ def test_compact_drops_history_before_the_latest_user_message_once_over_budget()
     assert all(s.output == {"dropped": 2} for s in compact_spans)
 
 
+def test_compact_keeps_a_first_turn_whose_user_message_is_the_very_first_item() -> None:
+    """A user message at index 0 is a found cut point, not a missing one.
+
+    `items[0:]` is everything, so a first turn is kept whole either way -- but only one of the two
+    is the strategy saying so. `None` is reserved for "no user message to cut at".
+    """
+    items: list[Any] = [
+        {"role": "user", "content": "one question"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "content": "ok", "tool_call_id": "c1"},
+    ]
+
+    assert default_compactor(items, 300_000) == items
+    assert default_compactor([items[1], items[2]], 300_000) is None
+
+
 def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
     """A long tool loop whose total usage passes 200k, but whose context never does, isn't cut."""
 

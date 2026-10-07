@@ -43,14 +43,16 @@ def default_compactor(
 
     Cutting at the most recent user message is always safe mid-turn: everything from there on
     (including the current exchange's own tool-call/tool-result pairs) is kept intact; only
-    older, already-finished turns are dropped.
+    older, already-finished turns are dropped. Which means there is nothing for this strategy to
+    drop until a conversation has a second turn: a first turn's own tool loop, however long, all
+    sits after that one user message. Swap in a summarizing `Compactor` to trim that too.
     """
     if usage_tokens <= DEFAULT_COMPACTION_TOKENS:
         return None
-    last_user = max((i for i, item in enumerate(items) if item.get("role") == "user"), default=None)
-    if not last_user:
+    user_turns = [i for i, item in enumerate(items) if item.get("role") == "user"]
+    if not user_turns:
         return None
-    return items[last_user:]
+    return items[user_turns[-1] :]
 
 
 __all__ = ["Compactor", "DEFAULT_COMPACTION_TOKENS", "default_compactor"]
