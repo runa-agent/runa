@@ -7,11 +7,11 @@ output back to the *calling* agent, which keeps going (`.delegate` mode). See `r
 for how a class wires either mode up from its `subagents` list.
 """
 
-import json
 import re
 from dataclasses import dataclass
 from typing import Any
 
+from runa._items import parsed_arguments
 from runa._types import RunContextWrapper, Usage
 from runa.tool import FunctionTool
 
@@ -78,7 +78,7 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
             forked = paused.context_wrapper
             run = await agent.run(paused)
         else:
-            args = json.loads(arguments_json) if arguments_json else {}
+            args = parsed_arguments(arguments_json)
             forked = ctx.fork()
             run = await agent._fresh().run(args.get("input", ""), _context_wrapper=forked)
         ctx.usage.add(forked.usage)

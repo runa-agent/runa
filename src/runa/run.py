@@ -12,7 +12,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from runa._types import RunContextWrapper, TResponseInputItem, Usage
+from runa._items import ConversationItem
+from runa._types import RunContextWrapper, Usage
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_state import Interruption, RunState
@@ -52,8 +53,8 @@ class Run(GuardrailAudit):
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     _state: RunState | None = field(default=None, repr=False)
     _context_wrapper: RunContextWrapper | None = field(default=None, repr=False)
-    _original_input: list[TResponseInputItem] = field(default_factory=list, repr=False)
-    _generated_items: list[TResponseInputItem] = field(default_factory=list, repr=False)
+    _original_input: list[ConversationItem] = field(default_factory=list, repr=False)
+    _generated_items: list[ConversationItem] = field(default_factory=list, repr=False)
     _tool_calls: list[ToolCall] = field(default_factory=list, repr=False)
     """Every tool call this run executed, as the turn loop saw it (see `ToolCall`). Private because
     `trace` is how a caller inspects a run: this is the unfiltered copy `runa.eval` grades, which
@@ -65,7 +66,7 @@ class Run(GuardrailAudit):
             raise UserError(f"to_state() needs a paused run, this one is {self.status!r}")
         return self._state
 
-    def _history(self) -> list[TResponseInputItem]:
+    def _history(self) -> list[ConversationItem]:
         """`original_input + generated_items`: the conversation as it stands after this run.
 
         What `Agent.run` writes back to `self.history` on a session-less run. Private because a

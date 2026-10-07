@@ -10,7 +10,8 @@ from typing import Any, Protocol
 
 from pydantic import TypeAdapter
 
-from runa._types import ModelResponse, ModelSettings, TResponseInputItem, Usage
+from runa._items import ConversationItem
+from runa._types import ModelResponse, ModelSettings, Usage
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,7 @@ class ModelRequest:
     `None` or `str` for plain-text output, or any other type to ask the backend for JSON output.
     """
 
-    input: list[TResponseInputItem]
+    input: list[ConversationItem]
     system_instructions: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     tools: list[Any] = field(default_factory=list)
@@ -29,7 +30,7 @@ class ModelRequest:
     handoffs: list[Any] = field(default_factory=list)
 
     @property
-    def messages(self) -> list[TResponseInputItem]:
+    def messages(self) -> list[ConversationItem]:
         """`input`, with `system_instructions` prepended as a system message if there are any."""
         if not self.system_instructions:
             return list(self.input)

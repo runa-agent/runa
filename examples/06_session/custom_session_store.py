@@ -13,30 +13,30 @@ Run it:
 
 import asyncio
 
-from runa import Agent, TResponseInputItem
+from runa import Agent, ConversationItem
 from runa.session import SessionABC
 
 
 class DictSession(SessionABC):
     """The minimal `SessionABC` implementation: one dict, keyed by `session_id`."""
 
-    _store: dict[str, list[TResponseInputItem]] = {}
+    _store: dict[str, list[ConversationItem]] = {}
 
     def __init__(self, session_id: str, *, user_id: str | None = None) -> None:
         """Store `session_id`; `user_id` scopes this session's automatic memory, if any."""
         self.session_id = session_id
         self.user_id = user_id
 
-    async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
+    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
         items = self._store.get(self.session_id, [])
         return items if limit is None else items[-limit:]
 
-    async def add_items(self, items: list[TResponseInputItem]) -> None:
+    async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items` to this session's history."""
         self._store.setdefault(self.session_id, []).extend(items)
 
-    async def pop_item(self) -> TResponseInputItem | None:
+    async def pop_item(self) -> ConversationItem | None:
         """Remove and return this session's most recent item, or `None` if it has none."""
         items = self._store.get(self.session_id, [])
         return items.pop() if items else None

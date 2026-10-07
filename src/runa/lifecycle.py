@@ -13,7 +13,8 @@ at DEBUG only, and even there it goes through `runa.tracing`'s redact/truncate p
 import logging
 from typing import Any
 
-from runa._types import RunContextWrapper, TResponseInputItem
+from runa._items import ConversationItem
+from runa._types import RunContextWrapper
 from runa.tool import FunctionTool
 
 logger = logging.getLogger("runa")
@@ -92,7 +93,7 @@ class RunHooks[TContext]:
         context: RunContextWrapper[TContext],
         agent: Any,
         system_prompt: str | None,
-        input_items: list[TResponseInputItem],
+        input_items: list[ConversationItem],
     ) -> None:
         """Called right before `agent` calls the model."""
 
@@ -135,7 +136,7 @@ class AgentHooks[TContext]:
         context: RunContextWrapper[TContext],
         agent: Any,
         system_prompt: str | None,
-        input_items: list[TResponseInputItem],
+        input_items: list[ConversationItem],
     ) -> None:
         """Called right before this agent calls the model."""
 
@@ -205,7 +206,7 @@ class _Dispatch[TContext]:
         context: RunContextWrapper[TContext],
         agent: Any,
         system_prompt: str | None,
-        input_items: list[TResponseInputItem],
+        input_items: list[ConversationItem],
     ) -> None:
         await self.run_hooks.on_llm_start(context, agent, system_prompt, input_items)
         if (own := self._own(agent)) is not None:
@@ -257,7 +258,7 @@ class LoggingRunHooks(RunHooks[Any]):
         context: RunContextWrapper[Any],
         agent: Any,
         system_prompt: str | None,
-        input_items: list[TResponseInputItem],
+        input_items: list[ConversationItem],
     ) -> None:
         """Log that `agent` is about to call the model."""
         logger.debug("llm start: %s", agent.name)
@@ -303,7 +304,7 @@ class LoggingAgentHooks(AgentHooks[Any]):
         context: RunContextWrapper[Any],
         agent: Any,
         system_prompt: str | None,
-        input_items: list[TResponseInputItem],
+        input_items: list[ConversationItem],
     ) -> None:
         """Log that `agent` is about to call the model."""
         logger.debug("llm start: %s", agent.name)

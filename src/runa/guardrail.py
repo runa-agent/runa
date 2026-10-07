@@ -9,14 +9,12 @@ field, class and list in nine modules.
 
 import asyncio
 import inspect
-import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
-if TYPE_CHECKING:
-    from runa._types import TResponseInputItem
+from runa._items import ConversationItem, latest_text, parsed_arguments
 
 _Predicate = Callable[[Any], bool | Awaitable[bool]]
 _GuardrailFunction = Callable[..., Awaitable[Any]]
@@ -213,21 +211,16 @@ class BoundGuardrail:
         return self.name or getattr(self.guardrail_function, "__name__", "guardrail")
 
 
-def _latest_text(value: str | list[TResponseInputItem]) -> str:
+def _checked_input(value: str | list[ConversationItem]) -> str:
     """Reduce a guardrail's raw input (a string, or the running item list) to the latest text."""
-    if isinstance(value, str):
-        return value
-    content = value[-1].get("content", "") if value else ""
-    if isinstance(content, list):
-        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
-    return str(content)
+    return value if isinstance(value, str) else latest_text(value)
 
 
 def _tool_args(data: ToolInputGuardrailData) -> Any:
     """Parse a tool call's raw JSON arguments into a dict, falling back to the raw string."""
     try:
-        return json.loads(data.context.tool_arguments)
-    except TypeError, ValueError:
+        return parsed_arguments(data.context.tool_arguments)
+    except ValueError:
         return data.context.tool_arguments
 
 
@@ -240,7 +233,7 @@ def _checked(phase: Phase, args: tuple[Any, ...]) -> Any:
     """
     if not phase.on_tool:
         value = args[-1]
-        return value if phase.on_output else _latest_text(value)
+        return value if phase.on_output else _checked_input(value)
     data = args[0]
     return data.output if phase.on_output else _tool_args(data)
 

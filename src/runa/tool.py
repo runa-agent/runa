@@ -9,12 +9,12 @@ themselves" approach the rest of Runa follows, and the one the `pyright` overrid
 import asyncio
 import enum
 import inspect
-import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
+from runa._items import parsed_arguments
 from runa._types import RunContextWrapper
 from runa.approval import _NeedsApproval as _ApprovalPredicate
 from runa.guardrail import (
@@ -166,7 +166,7 @@ def tool(
         schema, _ = _schema_from_signature(fn)
 
         async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
-            args = json.loads(arguments_json) if arguments_json else {}
+            args = parsed_arguments(arguments_json)
             kwargs = _bind_arguments(fn, args, ctx, call_id)
             if inspect.iscoroutinefunction(fn):
                 result = await fn(**kwargs)

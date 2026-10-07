@@ -10,7 +10,7 @@ full raw `items`/`usage_tokens` and decides entirely for itself whether/how to t
 
 from typing import Protocol
 
-from runa._types import TResponseInputItem
+from runa._items import ConversationItem
 
 DEFAULT_COMPACTION_TOKENS = 200_000
 
@@ -25,8 +25,8 @@ class Compactor(Protocol):
     """
 
     def __call__(
-        self, items: list[TResponseInputItem], usage_tokens: int
-    ) -> list[TResponseInputItem] | None:
+        self, items: list[ConversationItem], usage_tokens: int
+    ) -> list[ConversationItem] | None:
         """Return replacement items to compact `items` down to, or `None` to leave them as is.
 
         Whether `usage_tokens` warrants compacting at all, and by how much, is entirely this
@@ -37,8 +37,8 @@ class Compactor(Protocol):
 
 
 def default_compactor(
-    items: list[TResponseInputItem], usage_tokens: int
-) -> list[TResponseInputItem] | None:
+    items: list[ConversationItem], usage_tokens: int
+) -> list[ConversationItem] | None:
     """`Agent(compact=True)`'s strategy: past `DEFAULT_COMPACTION_TOKENS`, keep the latest exchange.
 
     Cutting at the most recent user message is always safe mid-turn: everything from there on

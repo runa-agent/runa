@@ -19,7 +19,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from runa._types import TResponseInputItem
+from runa._items import ConversationItem
 from runa.db import sqlite_path
 from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
@@ -63,7 +63,7 @@ class SQLiteSession(SessionABC):
     def _connect(self) -> sqlite3.Connection:
         return _connect_db(self.db_path, DDL)
 
-    async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
+    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
         with closing(self._connect()) as conn:
             if limit is None:
@@ -82,7 +82,7 @@ class SQLiteSession(SessionABC):
                 rows.reverse()
         return [json.loads(row[0]) for row in rows]
 
-    async def add_items(self, items: list[TResponseInputItem]) -> None:
+    async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items`, creating the session row on first write."""
         if not items:
             return
@@ -101,7 +101,7 @@ class SQLiteSession(SessionABC):
             )
             conn.commit()
 
-    async def set_items(self, items: list[TResponseInputItem]) -> None:
+    async def set_items(self, items: list[ConversationItem]) -> None:
         """Replace this session's entire history with `items`, in one transaction."""
         with closing(self._connect()) as conn:
             conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
@@ -120,7 +120,7 @@ class SQLiteSession(SessionABC):
             )
             conn.commit()
 
-    async def pop_item(self) -> TResponseInputItem | None:
+    async def pop_item(self) -> ConversationItem | None:
         """Remove and return this session's most recent item, or `None` if it has none."""
         with closing(self._connect()) as conn:
             row = conn.execute(

@@ -1,9 +1,11 @@
-"""_types.py: the provider-neutral request/response shapes Runa's own runtime is built on.
+"""_types.py: the request/response shapes Runa's own runtime is built on, apart from the item.
 
 No OpenAI (or Anthropic) SDK type leaks past `_models`, everywhere else in Runa speaks these
-types instead: a plain dict for one turn of conversation, a token-usage tally, and per-call model
-settings. `run_internal` builds and consumes these; each `Model` implementation translates them to
-and from whatever shape its own provider's wire format actually wants.
+types instead: a token-usage tally, per-call model settings, the context a run carries. The one
+shape they're all in service of, the `ConversationItem`, lives in `runa._items` with the
+accessors that read one -- it is chat-completions-shaped by choice, not a neutral format, and
+that module is where the choice is argued. `run_internal` builds and consumes everything here;
+each `Model` implementation translates it to and from its own provider's wire format.
 """
 
 from collections.abc import Sequence
@@ -11,18 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from runa._items import ConversationItem
 from runa.guardrail import GuardrailResults
-
-TResponseInputItem = dict[str, Any]
-"""One turn of conversation history: a `{"role": ..., "content": ...}` message, a tool call, or a
-tool result. Plain JSON, never a provider SDK type, an output item becomes tomorrow's input item
-once appended to history, so this one shape serves both directions.
-"""
-
-TResponseOutputItem = TResponseInputItem
-"""What a model call produces, before it's appended to history, the same shape as
-`TResponseInputItem`; see that alias for why one shape covers both.
-"""
 
 MessageContent = str | Sequence[str | Path | dict[str, Any]]
 """One user message's `content`: plain text, or a list for a multimodal message. Each list item
@@ -35,11 +27,6 @@ content blocks.
 
 `Sequence`, not `list`, so a `list[dict[str, Any]]` of already-built parts type-checks too --
 `list` is invariant, `Sequence` is covariant.
-"""
-
-TResponseStreamEvent = dict[str, Any]
-"""One raw provider streaming event, passed through to callers as-is via
-`RawResponsesStreamEvent.data`. Opaque to Runa itself: each `Model` decides what to put in it.
 """
 
 ToolChoice = Literal["auto", "required", "none"] | str | None
@@ -119,7 +106,7 @@ class ModelSettings:
 class ModelResponse:
     """What a `Model.get_response()` call returns: the model's output items, plus usage."""
 
-    output: list[TResponseOutputItem]
+    output: list[ConversationItem]
     usage: Usage
     response_id: str | None = None
 
@@ -175,9 +162,6 @@ __all__ = [
     "OutputTokensDetails",
     "Reasoning",
     "RunContextWrapper",
-    "TResponseInputItem",
-    "TResponseOutputItem",
-    "TResponseStreamEvent",
     "ToolChoice",
     "Usage",
 ]

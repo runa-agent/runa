@@ -7,7 +7,6 @@ lifetime (not per `Agent.run()` call): an MCP server is meant to be a persistent
 connection, not something reopened every turn.
 """
 
-import json
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -15,6 +14,7 @@ from mcp import ClientSession, StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp_types import TextContent
 
+from runa._items import parsed_arguments
 from runa._types import RunContextWrapper
 from runa.tool import FunctionTool
 
@@ -65,7 +65,7 @@ class _MCPServerBase:
         async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
             await self.connect()
             assert self._session is not None
-            args = json.loads(arguments_json) if arguments_json else {}
+            args = parsed_arguments(arguments_json)
             result = await self._session.call_tool(tool.name, args)
             text = "".join(block.text for block in result.content if isinstance(block, TextContent))
             if result.is_error:

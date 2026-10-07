@@ -16,6 +16,7 @@ import re
 from typing import Any, Protocol
 
 from runa import db
+from runa._items import item_text
 from runa._models import ModelRequest
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.memory.sqlite import SQLiteMemoryStore
@@ -157,7 +158,7 @@ class Memory:
         response = await model.get_response(
             ModelRequest(input=[{"role": "user", "content": prompt}])
         )
-        reply = response.output[0].get("content") or ""
+        reply = item_text(response.output[0])
         candidates = _extract_json_object(reply).get("memories") or []
         stored = []
         for candidate in candidates:

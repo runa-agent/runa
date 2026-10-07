@@ -68,6 +68,14 @@ version, which is `RunState`'s unrelated `schema_version`.
 
 ## Runs
 
+**Conversation item.** One turn of conversation as the runtime passes it around
+(`ConversationItem`): a message, a tool call, or a tool result, as a plain dict
+in OpenAI's chat-completions wire format. The format is a choice, not a neutral
+interchange shape, and `runa._items` owns both the choice and every reader of an
+item -- nothing else flattens `content` or parses a call's arguments. See
+[ADR-0004](docs/adr/0004-the-conversation-item-is-chat-completions-shaped.md).
+_Not_: message (a message is one kind of item), response item, `TResponseInputItem`.
+
 **Tool call.** One executed call as the turn loop recorded it (`ToolCall`): the
 tool's name, the arguments string the model produced, and the result string that
 went back to it. This is the gradeable record of what an agent did, which a

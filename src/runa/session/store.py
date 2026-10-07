@@ -7,16 +7,17 @@ One interface, three adapters: `session/sqlite.py`, `session/postgres.py`, `sess
 Which one a caller gets is `runa.db.sessions(...)`'s decision, asked once, so no reader here or
 in `web/` branches on a backend or names a file. Nothing in this module touches a database: it
 holds the two tables both SQL adapters create (`db/schema.py` renders them per dialect), the
-contract, the two objects a row becomes, and the three rules the adapters have to agree on --
-how a session id matches an agent, how a timestamp is rendered, and how a stored message is
-flattened to text.
+contract, the two objects a row becomes, and the rules the adapters have to agree on -- how a
+session id matches an agent, and how a timestamp is rendered. What a stored message's `role` and
+`text` are is `runa._items`'s rule, applied here by `to_message`.
 """
 
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Protocol
 
+from runa._items import role_and_text
 from runa.db.schema import Column, Dialect, Index, Table
 from runa.exceptions import OperatorError
 
@@ -133,27 +134,15 @@ def agent_filter(agent: str | None, dialect: Dialect) -> tuple[str, tuple[str, .
     )
 
 
-def message_text(item: dict[str, Any]) -> tuple[str, str]:
-    """One stored message's `(role, text)`, flattening whichever content shape it was saved in."""
-    role = item.get("role") or item.get("type", "item")
-    content = item.get("content")
-    if isinstance(content, str):
-        text = content
-    elif isinstance(content, list):
-        parts = [part["text"] for part in content if isinstance(part, dict) and "text" in part]
-        text = "".join(parts) if parts else str(content)
-    else:
-        text = str(item)
-    return role, text
-
-
 def to_message(created_at: str | datetime, message_data: str) -> SessionMessage:
     """One stored `(created_at, message_data)` row as a `SessionMessage`.
 
     The row-to-object mapping, written once: every adapter stores a message as the same JSON
-    blob, so none of them should be deciding for itself what `role` or `text` means.
+    blob, so none of them should be deciding for itself what `role` or `text` means. What those
+    two mean for a stored item is `runa._items.role_and_text`'s to say, not this module's: a
+    transcript reads an item, it doesn't define one.
     """
-    role, text = message_text(json.loads(message_data))
+    role, text = role_and_text(json.loads(message_data))
     return SessionMessage(created_at=as_timestamp(created_at), role=role, text=text)
 
 
@@ -164,6 +153,5 @@ __all__ = [
     "SessionSummary",
     "agent_filter",
     "as_timestamp",
-    "message_text",
     "to_message",
 ]

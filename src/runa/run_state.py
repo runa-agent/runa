@@ -7,13 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from runa._types import (
-    InputTokensDetails,
-    OutputTokensDetails,
-    RunContextWrapper,
-    TResponseInputItem,
-    Usage,
-)
+from runa._items import ConversationItem
+from runa._types import InputTokensDetails, OutputTokensDetails, RunContextWrapper, Usage
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_internal.agent_shape import AgentShape, _normalized_handoffs
@@ -150,14 +145,14 @@ class RunState(GuardrailAudit):
     """
 
     agent: Any
-    original_input: list[TResponseInputItem]
-    generated_items: list[TResponseInputItem]
-    ready_results: list[TResponseInputItem]
+    original_input: list[ConversationItem]
+    generated_items: list[ConversationItem]
+    ready_results: list[ConversationItem]
     pending: list[Interruption]
     context_wrapper: RunContextWrapper
     trace: Trace
-    new_items: list[TResponseInputItem] = field(default_factory=list)
-    session_input: list[TResponseInputItem] = field(default_factory=list)
+    new_items: list[ConversationItem] = field(default_factory=list)
+    session_input: list[ConversationItem] = field(default_factory=list)
     approvals: dict[str, bool] = field(default_factory=dict)
     rejection_messages: dict[str, str] = field(default_factory=dict)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)

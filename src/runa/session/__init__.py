@@ -11,7 +11,7 @@ them, so moving a deployment to Postgres is one environment variable rather than
 
 from abc import ABC, abstractmethod
 
-from runa._types import TResponseInputItem
+from runa._items import ConversationItem
 
 
 class SessionABC(ABC):
@@ -27,22 +27,22 @@ class SessionABC(ABC):
     user_id: str | None
 
     @abstractmethod
-    async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
+    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
 
     @abstractmethod
-    async def add_items(self, items: list[TResponseInputItem]) -> None:
+    async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items` to this session's history."""
 
     @abstractmethod
-    async def pop_item(self) -> TResponseInputItem | None:
+    async def pop_item(self) -> ConversationItem | None:
         """Remove and return this session's most recent item, or `None` if it has none."""
 
     @abstractmethod
     async def clear_session(self) -> None:
         """Delete this session and all of its items."""
 
-    async def set_items(self, items: list[TResponseInputItem]) -> None:
+    async def set_items(self, items: list[ConversationItem]) -> None:
         """Replace this session's entire history with `items`, `Agent(compact=...)`'s hook.
 
         A concrete default built from `clear_session`/`add_items`, not `@abstractmethod`: an

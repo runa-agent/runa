@@ -10,6 +10,7 @@ from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
 
+from runa._items import content_text, parsed_arguments
 from runa._models.interface import (
     ModelRequest,
     StreamDelta,
@@ -28,19 +29,6 @@ from runa._types import (
 from runa.exceptions import ModelBehaviorError
 
 
-def _text_content(content: Any) -> str:
-    """Flatten a chat-completions `content` field (string or a list of parts) to plain text."""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    return "".join(
-        part["text"]
-        for part in content
-        if isinstance(part, dict) and isinstance(part.get("text"), str)
-    )
-
-
 def _to_anthropic_messages(messages: list[Any]) -> tuple[str | None, list[dict[str, Any]]]:
     """Split chat-completions messages into Anthropic's `system` string and `messages` turns.
 
@@ -53,7 +41,7 @@ def _to_anthropic_messages(messages: list[Any]) -> tuple[str | None, list[dict[s
     for message in messages:
         role = message.get("role")
         if role in ("system", "developer"):
-            text = _text_content(message.get("content"))
+            text = content_text(message.get("content"))
             if text:
                 system_parts.append(text)
             continue
@@ -76,12 +64,12 @@ def _to_anthropic_turn(message: Any) -> tuple[str, list[dict[str, Any]]]:
             {
                 "type": "tool_result",
                 "tool_use_id": message["tool_call_id"],
-                "content": _text_content(message.get("content")),
+                "content": content_text(message.get("content")),
             }
         ]
     if role == "assistant":
         blocks: list[dict[str, Any]] = []
-        text = _text_content(message.get("content"))
+        text = content_text(message.get("content"))
         if text:
             blocks.append({"type": "text", "text": text})
         for call in message.get("tool_calls") or []:
@@ -91,7 +79,7 @@ def _to_anthropic_turn(message: Any) -> tuple[str, list[dict[str, Any]]]:
                     "type": "tool_use",
                     "id": call["id"],
                     "name": function["name"],
-                    "input": json.loads(function["arguments"] or "{}"),
+                    "input": parsed_arguments(function["arguments"]),
                 }
             )
         return "assistant", blocks

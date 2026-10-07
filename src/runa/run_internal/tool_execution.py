@@ -2,13 +2,13 @@
 
 import asyncio
 import inspect
-import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Literal
 
-from runa._types import RunContextWrapper, TResponseInputItem
+from runa._items import ConversationItem, parsed_arguments
+from runa._types import RunContextWrapper
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase, ToolInputGuardrailData
 from runa.handoff import DelegatePaused
@@ -21,7 +21,7 @@ from runa.tool import FunctionTool, ToolCall
 
 async def _run_tool_call(
     run: _Run, tool: FunctionTool, call: dict[str, Any]
-) -> TResponseInputItem | DelegatePaused:
+) -> ConversationItem | DelegatePaused:
     """Run one already-approved tool call end to end: guardrails, invocation, guardrails.
 
     Guards against executing the same `call_id` twice (e.g. a resumed/duplicated `RunState`)
@@ -66,15 +66,16 @@ async def _run_tool_call(
     return {"role": "tool", "tool_call_id": call_id, "content": str(result)}
 
 
-def _parse_arguments(args_json: str) -> dict[str, Any] | str:
-    """A tool call's arguments as a dict, or an error string to feed back to the model."""
+def _arguments_or_error(args_json: str) -> dict[str, Any] | str:
+    """A tool call's arguments as a dict, or an error string to feed back to the model.
+
+    Arguments a model got wrong are data, not a failed run: the string goes back as that call's
+    result and the model gets to try again. What counts as wrong is `_items`' to say.
+    """
     try:
-        args = json.loads(args_json or "{}")
-    except json.JSONDecodeError as exc:
-        return f"error: invalid JSON arguments: {exc}"
-    if not isinstance(args, dict):
-        return "error: tool arguments must be a JSON object"
-    return args
+        return parsed_arguments(args_json)
+    except ValueError as exc:
+        return f"error: {exc}"
 
 
 async def _needs_approval(
@@ -138,13 +139,13 @@ class _TurnOutcome:
 
     final_output: Any
     interruptions: list[Interruption]
-    ready_results: list[TResponseInputItem]
+    ready_results: list[ConversationItem]
     context_tokens: int = 0
 
 
 async def _run_message_tool_calls(
     run: _Run, message: dict[str, Any], resume: _Pending | None = None
-) -> tuple[list[TResponseInputItem], list[Interruption], Any]:
+) -> tuple[list[ConversationItem], list[Interruption], Any]:
     """Execute (or defer for approval) every tool call in `message`; returns results so far.
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
@@ -156,7 +157,7 @@ async def _run_message_tool_calls(
     agent = shape.agent
     context_wrapper = run.context_wrapper
     handoff_map = shape.handoffs
-    results: list[TResponseInputItem] = []
+    results: list[ConversationItem] = []
     interruptions: list[Interruption] = []
     switched_agent: Any = None
     approvals = resume.approvals if resume is not None else {}
@@ -165,7 +166,7 @@ async def _run_message_tool_calls(
         result["tool_call_id"]: result
         for result in (resume.ready_results if resume is not None else [])
     }
-    runs: dict[int, Callable[[], Awaitable[TResponseInputItem | DelegatePaused]]] = {}
+    runs: dict[int, Callable[[], Awaitable[ConversationItem | DelegatePaused]]] = {}
 
     for call in message.get("tool_calls") or []:
         name = call["function"]["name"]
@@ -196,7 +197,7 @@ async def _run_message_tool_calls(
             continue
 
         args_json = call["function"]["arguments"] or "{}"
-        args = _parse_arguments(args_json)
+        args = _arguments_or_error(args_json)
         if isinstance(args, str):
             results.append({"role": "tool", "tool_call_id": call_id, "content": args})
             continue

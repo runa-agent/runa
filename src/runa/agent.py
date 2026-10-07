@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from runa import content
+from runa._items import ConversationItem
 from runa._models import DEFAULT_MODEL, ModelProvider
-from runa._types import MessageContent, ModelSettings, RunContextWrapper, TResponseInputItem, Usage
+from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import RunaError, UserError
 from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
@@ -103,10 +104,10 @@ def _resolve_session(session: SessionABC | str | None) -> SessionABC | None:
 
 def _turn_input(
     message: MessageContent | RunState,
-    history: list[TResponseInputItem],
+    history: list[ConversationItem],
     session: SessionABC | None,
     context: Any = None,
-) -> str | list[TResponseInputItem] | RunState:
+) -> str | list[ConversationItem] | RunState:
     """Build the `input` for the turn loop from this turn's `message`.
 
     A paused `RunState` passes straight through, to be resumed, carrying the `context` of the
@@ -394,7 +395,7 @@ class Agent:
         self.max_tokens: int | None = kwargs.get("max_tokens")
         self.timeout: float | None = kwargs.get("timeout")
 
-        self.history: list[TResponseInputItem] = []
+        self.history: list[ConversationItem] = []
         self.usage = Usage()
         self.last_usage = Usage()
         self._in_flight = 0

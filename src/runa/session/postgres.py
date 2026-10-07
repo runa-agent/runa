@@ -14,7 +14,7 @@ hatch for a database that is not this deployment's shared one.
 
 import json
 
-from runa._types import TResponseInputItem
+from runa._items import ConversationItem
 from runa.db.pool import Shared, sync
 from runa.db.schema import POSTGRES, ddl
 from runa.session import SessionABC
@@ -45,7 +45,7 @@ class PostgresSession(Shared, SessionABC):
         self.user_id = user_id
         super().__init__(url, DDL)
 
-    async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
+    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
         pool = await self._pool()
         if limit is None:
@@ -65,7 +65,7 @@ class PostgresSession(Shared, SessionABC):
             rows.reverse()
         return [json.loads(row["message_data"]) for row in rows]
 
-    async def add_items(self, items: list[TResponseInputItem]) -> None:
+    async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items`, creating the session row on first write."""
         if not items:
             return
@@ -85,7 +85,7 @@ class PostgresSession(Shared, SessionABC):
                 self.session_id,
             )
 
-    async def set_items(self, items: list[TResponseInputItem]) -> None:
+    async def set_items(self, items: list[ConversationItem]) -> None:
         """Replace this session's entire history with `items`, in one transaction."""
         pool = await self._pool()
         async with pool.acquire() as conn, conn.transaction():
@@ -107,7 +107,7 @@ class PostgresSession(Shared, SessionABC):
                 self.session_id,
             )
 
-    async def pop_item(self) -> TResponseInputItem | None:
+    async def pop_item(self) -> ConversationItem | None:
         """Remove and return this session's most recent item, or `None` if it has none."""
         pool = await self._pool()
         row = await pool.fetchrow(

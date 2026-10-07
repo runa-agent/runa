@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from runa._types import TResponseInputItem
+from runa._items import ConversationItem
 from runa.session import SessionABC
 from runa.session.store import (
     SessionMessage,
@@ -65,7 +65,7 @@ class EphemeralSession(SessionABC):
         self.session_id = session_id
         self.user_id = user_id
 
-    async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
+    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
         row = _sessions.get(self.session_id)
         if row is None:
@@ -73,19 +73,19 @@ class EphemeralSession(SessionABC):
         messages = row.messages if limit is None else row.messages[-limit:]
         return [json.loads(message_data) for _, message_data in messages]
 
-    async def add_items(self, items: list[TResponseInputItem]) -> None:
+    async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items`, creating the session row on first write."""
         if not items:
             return
         row = _touch(self.session_id)
         row.messages.extend((_now(), json.dumps(item)) for item in items)
 
-    async def set_items(self, items: list[TResponseInputItem]) -> None:
+    async def set_items(self, items: list[ConversationItem]) -> None:
         """Replace this session's entire history with `items`."""
         row = _touch(self.session_id)
         row.messages = [(_now(), json.dumps(item)) for item in items]
 
-    async def pop_item(self) -> TResponseInputItem | None:
+    async def pop_item(self) -> ConversationItem | None:
         """Remove and return this session's most recent item, or `None` if it has none."""
         row = _sessions.get(self.session_id)
         if row is None or not row.messages:

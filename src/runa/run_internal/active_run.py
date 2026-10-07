@@ -13,7 +13,8 @@ it has no business importing the loop that calls it.
 from dataclasses import dataclass, field
 from typing import Any
 
-from runa._types import RunContextWrapper, TResponseInputItem
+from runa._items import ConversationItem
+from runa._types import RunContextWrapper
 from runa.lifecycle import _Dispatch
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
@@ -35,10 +36,10 @@ class _Pending:
     the paused run already computed, which are reused as is instead of running twice.
     """
 
-    message: TResponseInputItem
+    message: ConversationItem
     approvals: dict[str, bool] = field(default_factory=dict)
     rejection_messages: dict[str, str] = field(default_factory=dict)
-    ready_results: list[TResponseInputItem] = field(default_factory=list)
+    ready_results: list[ConversationItem] = field(default_factory=list)
 
 
 @dataclass
@@ -52,15 +53,15 @@ class _Run:
     """
 
     shape: AgentShape
-    input: str | list[TResponseInputItem]
-    items: list[TResponseInputItem]
+    input: str | list[ConversationItem]
+    items: list[ConversationItem]
     context_wrapper: RunContextWrapper
     trace: Trace
     agent_span: Span
-    original_input: list[TResponseInputItem]
+    original_input: list[ConversationItem]
     session: SessionABC | None
-    session_input: list[TResponseInputItem]
-    generated: list[TResponseInputItem]
+    session_input: list[ConversationItem]
+    generated: list[ConversationItem]
     hooks: _Dispatch[Any]
     run_config: RunConfig
     emit: Emit | None = None

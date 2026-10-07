@@ -3,7 +3,8 @@
 from importlib.metadata import version
 
 from runa import db
-from runa._types import ModelSettings, Reasoning, TResponseInputItem, Usage
+from runa._items import ConversationItem
+from runa._types import ModelSettings, Reasoning, Usage
 from runa.agent import Agent
 from runa.approval import approval
 from runa.cache import Cache, MemoryCache, SQLiteCache
@@ -53,6 +54,7 @@ __all__ = [
     "Case",
     "CaseReport",
     "ConsoleExporter",
+    "ConversationItem",
     "Dataset",
     "EvaluationResult",
     "Interruption",
@@ -80,7 +82,6 @@ __all__ = [
     "Status",
     "StoreExporter",
     "StreamEvent",
-    "TResponseInputItem",
     "Trace",
     "Usage",
     "TraceExporter",

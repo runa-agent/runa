@@ -14,8 +14,9 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from runa._items import ConversationItem, item_text, latest_user_index, latest_user_text
 from runa._models import ModelRequest
-from runa._types import RunContextWrapper, TResponseInputItem, Usage
+from runa._types import RunContextWrapper, Usage
 from runa.exceptions import (
     MaxTokensExceeded,
     MaxTurnsExceeded,
@@ -65,28 +66,13 @@ def _parse_output(shape: AgentShape, text: str) -> Any:
         ) from exc
 
 
-def _latest_user_index(items: list[TResponseInputItem]) -> int | None:
-    """Where the most recent plain-text user message in `items` is, if any."""
-    for index in range(len(items) - 1, -1, -1):
-        item = items[index]
-        if item.get("role") == "user" and isinstance(item.get("content"), str):
-            return index
-    return None
-
-
-def _latest_user_text(items: list[TResponseInputItem]) -> str | None:
-    """The most recent plain-text user message in `items`, Memory's default search query."""
-    index = _latest_user_index(items)
-    return items[index]["content"] if index is not None else None
-
-
-def _memory_block(matches: list[Any]) -> TResponseInputItem:
+def _memory_block(matches: list[Any]) -> ConversationItem:
     """A small, clearly labeled system message carrying retrieved `MemoryMatch`es."""
     lines = "\n".join(f"- {match.text}" for match in matches)
     return {"role": "system", "content": f"Relevant memories:\n{lines}"}
 
 
-def _knowledge_block(matches: list[Any]) -> TResponseInputItem:
+def _knowledge_block(matches: list[Any]) -> ConversationItem:
     """A small, clearly labeled system message carrying retrieved `KnowledgeMatch`es."""
     lines = "\n".join(f"- {match.text}" for match in matches)
     return {"role": "system", "content": f"Relevant knowledge:\n{lines}"}
@@ -122,7 +108,7 @@ async def _retrieve(
 
 
 def _maybe_compact(
-    shape: AgentShape, items: list[TResponseInputItem], usage_tokens: int, spans: _Spans
+    shape: AgentShape, items: list[ConversationItem], usage_tokens: int, spans: _Spans
 ) -> None:
     """Run `agent.compact`'s `Compactor`, if any, and replace `items` in place if it trims them.
 
@@ -146,7 +132,7 @@ def _maybe_compact(
 async def _save_to_session(
     shape: AgentShape,
     session: SessionABC,
-    new_tail: list[TResponseInputItem],
+    new_tail: list[ConversationItem],
     context_tokens: int,
     spans: _Spans,
 ) -> None:
@@ -177,7 +163,7 @@ def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
         raise MaxTokensExceeded(f"max tokens ({max_tokens}) exceeded: {spent} used")
 
 
-async def _record_tool_results(run: _Run, results: list[TResponseInputItem], switched: Any) -> None:
+async def _record_tool_results(run: _Run, results: list[ConversationItem], switched: Any) -> None:
     """Fold one message's tool results into the run, following a handoff if there was one.
 
     The loop reaches this twice -- after a resumed message's calls, and after each turn's own --
@@ -245,7 +231,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         run.notify(RunItemStreamEvent(name="message_output_created", item=message))
 
         if not message.get("tool_calls"):
-            text = message.get("content") or ""
+            text = item_text(message)
             await _run_guardrails(run, Phase.OUTPUT, text)
             return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
 
@@ -297,7 +283,7 @@ async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
 async def _extract_memory(run: _Run, final_output: Any) -> None:
     """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
     memory = run.start.memory
-    query = _latest_user_text([*run.original_input, *run.session_input])
+    query = latest_user_text([*run.original_input, *run.session_input])
     if memory is None or query is None:
         return
     span = _Spans(run.trace).open("memory", "custom", input=query)  # the agent span is closed
@@ -388,7 +374,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
 
 async def _run_async(
     agent: Any,
-    input: str | list[TResponseInputItem] | RunState,
+    input: str | list[ConversationItem] | RunState,
     *,
     context: Any = None,
     hooks: RunHooks[Any] | None = None,
@@ -418,7 +404,7 @@ async def _run_async(
     turn_input = [{"role": "user", "content": input}] if isinstance(input, str) else list(input)
     history = await session.get_items() if session is not None else []
     items = [*history, *turn_input]
-    query = _latest_user_text(turn_input)
+    query = latest_user_text(turn_input)
     shape = await AgentShape.of(agent)
     run = _Run(
         shape=shape,
@@ -455,7 +441,7 @@ async def _run_async(
             else _no_matches(),
         )
         # Right before the message they were retrieved for, wherever it sits in `items`.
-        at = _latest_user_index(items)
+        at = latest_user_index(items)
         assert at is not None  # `query` came from that same message
         if knowledge_matches:
             items.insert(at, _knowledge_block(knowledge_matches))

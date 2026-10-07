@@ -100,7 +100,7 @@ def test_dict_guardrails_wire_by_key() -> None:
 
 
 def test_input_predicate_reduces_item_list_to_latest_text() -> None:
-    """`.input` hands the predicate plain text, even when the SDK passes an item list."""
+    """`.input` hands the predicate plain text, even when the run passes an item list."""
     turn_input = [{"role": "user", "content": ""}]
 
     result = _run(block_empty.input, turn_input)
