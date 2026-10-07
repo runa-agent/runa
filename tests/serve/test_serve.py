@@ -28,15 +28,15 @@ from runa._types import ModelResponse, Usage
 class StubModel:
     """Answers with the number of history items it was handed, so leakage is observable."""
 
-    async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:
-        items = args[1]
+    async def get_response(self, request: Any, **kwargs: Any) -> ModelResponse:
+        items = request.input
         return ModelResponse(
             output=[{"role": "assistant", "content": f"items={len(items)}", "tool_calls": None}],
             usage=Usage(input_tokens=3, output_tokens=4, total_tokens=7, requests=1),
         )
 
-    async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:
-        items = args[1]
+    async def stream_response(self, request: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:
+        items = request.input
         yield StreamDelta(text=f"items={len(items)}")
         yield StreamDelta(
             usage=Usage(input_tokens=3, output_tokens=4, total_tokens=7, requests=1)

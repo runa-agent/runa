@@ -16,7 +16,7 @@ import re
 from typing import Any, Protocol
 
 from runa import db
-from runa._types import ModelSettings
+from runa._models import ModelRequest
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.memory.sqlite import SQLiteMemoryStore
 from runa.memory.store import MemoryMatch, MemoryStore
@@ -155,7 +155,7 @@ class Memory:
         """
         prompt = _EXTRACTION_PROMPT.format(conversation=conversation)
         response = await model.get_response(
-            None, [{"role": "user", "content": prompt}], ModelSettings(), [], None, []
+            ModelRequest(input=[{"role": "user", "content": prompt}])
         )
         reply = response.output[0].get("content") or ""
         candidates = _extract_json_object(reply).get("memories") or []

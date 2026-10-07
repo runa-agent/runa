@@ -1,7 +1,11 @@
-"""interface.py: the `Model` protocol, `StreamDelta`, and wire-format bits both backends share."""
+"""interface.py: the `Model` protocol, the `ModelRequest` it takes, and what both backends share.
+
+Nothing here is wire-format-specific: a `ToolSchema` is neither provider's shape, and each
+backend wraps it in its own envelope exactly once.
+"""
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from pydantic import TypeAdapter
@@ -9,34 +13,37 @@ from pydantic import TypeAdapter
 from runa._types import ModelResponse, ModelSettings, TResponseInputItem, Usage
 
 
-class Model(Protocol):
-    """What `runa.run_internal` needs from a model backend: a non-streaming and a streaming call.
+@dataclass(frozen=True)
+class ModelRequest:
+    """One turn's worth of input: everything a backend needs to put a request on the wire.
 
     `tools`/`handoffs` are read structurally (see the package docstring); `output_schema` is
     `None` or `str` for plain-text output, or any other type to ask the backend for JSON output.
     """
 
-    async def get_response(
-        self,
-        system_instructions: str | None,
-        input: list[TResponseInputItem],
-        model_settings: ModelSettings,
-        tools: list[Any],
-        output_schema: type | None,
-        handoffs: list[Any],
-    ) -> ModelResponse:
+    input: list[TResponseInputItem]
+    system_instructions: str | None = None
+    model_settings: ModelSettings = field(default_factory=ModelSettings)
+    tools: list[Any] = field(default_factory=list)
+    output_schema: type | None = None
+    handoffs: list[Any] = field(default_factory=list)
+
+    @property
+    def messages(self) -> list[TResponseInputItem]:
+        """`input`, with `system_instructions` prepended as a system message if there are any."""
+        if not self.system_instructions:
+            return list(self.input)
+        return [{"role": "system", "content": self.system_instructions}, *self.input]
+
+
+class Model(Protocol):
+    """What `runa.run_internal` needs from a model backend: a non-streaming and a streaming call."""
+
+    async def get_response(self, request: ModelRequest) -> ModelResponse:
         """Send one turn to the model and return its full response."""
         ...
 
-    def stream_response(
-        self,
-        system_instructions: str | None,
-        input: list[TResponseInputItem],
-        model_settings: ModelSettings,
-        tools: list[Any],
-        output_schema: type | None,
-        handoffs: list[Any],
-    ) -> AsyncIterator[StreamDelta]:
+    def stream_response(self, request: ModelRequest) -> AsyncIterator[StreamDelta]:
         """Send one turn to the model and yield incremental `StreamDelta`s as it responds."""
         ...
 
@@ -60,36 +67,39 @@ class StreamDelta:
     usage: Usage | None = None
 
 
-def _tool_dict(tool: Any) -> dict[str, Any]:
-    """Convert a Runa `FunctionTool`-shaped object to a chat-completions tool definition."""
-    return {
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description or "",
-            "parameters": tool.params_json_schema or {"type": "object", "properties": {}},
-        },
-    }
+@dataclass(frozen=True)
+class ToolSchema:
+    """One callable the model is offered, in neither provider's wire shape."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
 
 
-def _handoff_dict(handoff: Any) -> dict[str, Any]:
-    """Convert a Runa `Handoff`-shaped object to a chat-completions tool definition.
+def tool_schemas(request: ModelRequest) -> list[ToolSchema]:
+    """Every tool and handoff on `request`, in the order the model is offered them.
 
     A handoff takes no structured input from the model: calling it is itself the signal to
-    switch agents, so its schema is always an empty object.
+    switch agents, so its `parameters` is always an empty object.
     """
-    return {
-        "type": "function",
-        "function": {
-            "name": handoff.tool_name,
-            "description": handoff.tool_description or "",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    }
+    return [
+        ToolSchema(
+            tool.name,
+            tool.description or "",
+            tool.params_json_schema or {"type": "object", "properties": {}},
+        )
+        for tool in request.tools
+    ] + [
+        ToolSchema(
+            handoff.tool_name, handoff.tool_description or "", {"type": "object", "properties": {}}
+        )
+        for handoff in request.handoffs
+    ]
 
 
-def _output_json_schema(output_schema: type | None) -> dict[str, Any] | None:
-    """The JSON schema a structured `output_schema` asks for; `None` for plain-text output."""
+def output_json_schema(request: ModelRequest) -> dict[str, Any] | None:
+    """The JSON schema `request.output_schema` asks for; `None` for plain-text output."""
+    output_schema = request.output_schema
     if output_schema is None or output_schema is str:
         return None
     return _closed(TypeAdapter(output_schema).json_schema())
@@ -108,4 +118,11 @@ def _closed(schema: Any) -> Any:
     return schema
 
 
-__all__ = ["Model", "StreamDelta", "_handoff_dict", "_output_json_schema", "_tool_dict"]
+__all__ = [
+    "Model",
+    "ModelRequest",
+    "StreamDelta",
+    "ToolSchema",
+    "output_json_schema",
+    "tool_schemas",
+]

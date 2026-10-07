@@ -1,4 +1,4 @@
-"""multi_provider.py: `ModelProvider`, routing a model name to one of two backends by its prefix."""
+"""provider.py: `ModelProvider`, routing a model name to one of two backends by its prefix."""
 
 import os
 from dataclasses import dataclass
@@ -8,15 +8,15 @@ from anthropic import AsyncAnthropic
 
 from runa._loop import LoopCache
 from runa._models.anthropic import AnthropicModel
+from runa._models.chat_completions import OpenAICompatibleModel
 from runa._models.interface import Model
-from runa._models.openai_chatcompletions import OpenAICompatibleModel
 from runa.exceptions import UserError
 
 DEFAULT_MODEL = "gpt-5.4-nano"
 
 
 @dataclass(frozen=True)
-class _Backend:
+class _Endpoint:
     """One chat-completions-shaped provider: where it lives and which env var holds its key."""
 
     prefix: str
@@ -24,32 +24,32 @@ class _Backend:
     api_key_env: str
 
 
-_OPENAI = _Backend("gpt", "https://api.openai.com/v1/", "OPENAI_API_KEY")
-_BACKENDS: tuple[_Backend, ...] = (
-    _Backend(
+_OPENAI = _Endpoint("gpt", "https://api.openai.com/v1/", "OPENAI_API_KEY")
+_ENDPOINTS: tuple[_Endpoint, ...] = (
+    _Endpoint(
         "gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"
     ),
-    _Backend("llama", "https://api.llama.com/compat/v1/", "LLAMA_API_KEY"),
-    _Backend("deepseek", "https://api.deepseek.com/v1/", "DEEPSEEK_API_KEY"),
-    _Backend(
+    _Endpoint("llama", "https://api.llama.com/compat/v1/", "LLAMA_API_KEY"),
+    _Endpoint("deepseek", "https://api.deepseek.com/v1/", "DEEPSEEK_API_KEY"),
+    _Endpoint(
         "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", "DASHSCOPE_API_KEY"
     ),
 )
 
 
-def _client_for(backend: _Backend) -> httpx.AsyncClient:
-    """An HTTP client pointed at `backend`, carrying the key its env var holds.
+def _client_for(endpoint: _Endpoint) -> httpx.AsyncClient:
+    """An HTTP client pointed at `endpoint`, carrying the key its env var holds.
 
     Raises `UserError` when that variable is unset, which is why the client is built lazily: an
     app that never asks for a `gemini-*` model should not need `GEMINI_API_KEY`.
     """
-    api_key = os.environ.get(backend.api_key_env)
+    api_key = os.environ.get(endpoint.api_key_env)
     if api_key is None:
         raise UserError(
-            f"{backend.api_key_env} is not set. Set it to use a {backend.prefix}-* model."
+            f"{endpoint.api_key_env} is not set. Set it to use a {endpoint.prefix}-* model."
         )
     return httpx.AsyncClient(
-        base_url=backend.base_url,
+        base_url=endpoint.base_url,
         headers={"Authorization": f"Bearer {api_key}"},
         timeout=600.0,
     )
@@ -83,11 +83,11 @@ class ModelProvider:
         if lower.startswith("claude"):
             return AnthropicModel(name, self._get_anthropic_client())
 
-        backend = next((b for b in _BACKENDS if lower.startswith(b.prefix)), _OPENAI)
-        return OpenAICompatibleModel(name, self._get_http_client(backend))
+        endpoint = next((e for e in _ENDPOINTS if lower.startswith(e.prefix)), _OPENAI)
+        return OpenAICompatibleModel(name, self._get_http_client(endpoint))
 
-    def _get_http_client(self, backend: _Backend) -> httpx.AsyncClient:
-        return self._http_clients.get(backend.prefix, lambda: _client_for(backend))
+    def _get_http_client(self, endpoint: _Endpoint) -> httpx.AsyncClient:
+        return self._http_clients.get(endpoint.prefix, lambda: _client_for(endpoint))
 
     def _get_anthropic_client(self) -> AsyncAnthropic:
         return self._anthropic_clients.get("claude", AsyncAnthropic)

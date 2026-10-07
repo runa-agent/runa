@@ -10,14 +10,19 @@ from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
 
-from runa._models.interface import StreamDelta, _handoff_dict, _output_json_schema, _tool_dict
+from runa._models.interface import (
+    ModelRequest,
+    StreamDelta,
+    ToolSchema,
+    output_json_schema,
+    tool_schemas,
+)
 from runa._types import (
     InputTokensDetails,
     ModelResponse,
     ModelSettings,
     OutputTokensDetails,
     ToolChoice,
-    TResponseInputItem,
     Usage,
 )
 from runa.exceptions import ModelBehaviorError
@@ -129,12 +134,12 @@ def _to_anthropic_image(image_url: Any) -> dict[str, Any]:
     return {"type": "image", "source": {"type": "url", "url": url}}
 
 
-def _to_anthropic_tool(tool: dict[str, Any]) -> dict[str, Any]:
-    function = tool["function"]
+def _to_anthropic_tool(schema: ToolSchema) -> dict[str, Any]:
+    """Map a `ToolSchema` to Anthropic's tool definition, which calls the schema `input_schema`."""
     return {
-        "name": function["name"],
-        "description": function.get("description") or "",
-        "input_schema": function.get("parameters") or {"type": "object", "properties": {}},
+        "name": schema.name,
+        "description": schema.description,
+        "input_schema": schema.parameters,
     }
 
 
@@ -195,61 +200,40 @@ class AnthropicModel:
             return self._client.messages
         return self._client.with_options(max_retries=max(0, model_settings.max_retries)).messages
 
-    def _request(
-        self,
-        system_instructions: str | None,
-        input: list[TResponseInputItem],
-        model_settings: ModelSettings,
-        tools: list[Any],
-        output_schema: type | None,
-        handoffs: list[Any],
-    ) -> dict[str, Any]:
-        messages = list(input)
-        if system_instructions:
-            messages = [{"role": "system", "content": system_instructions}, *messages]
-        system, turns = _to_anthropic_messages(messages)
+    def _body(self, request: ModelRequest) -> dict[str, Any]:
+        """The Messages API body one `request` puts on the wire."""
+        settings = request.model_settings
+        system, turns = _to_anthropic_messages(request.messages)
+        tools = [_to_anthropic_tool(schema) for schema in tool_schemas(request)]
 
-        wire_tools = [_tool_dict(t) for t in tools] + [_handoff_dict(h) for h in handoffs]
-
-        request: dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": self.model,
             "messages": turns,
-            "max_tokens": model_settings.max_tokens or 4096,
+            "max_tokens": settings.max_tokens or 4096,
         }
         if system:
-            request["system"] = system
-        if wire_tools:
-            request["tools"] = [_to_anthropic_tool(t) for t in wire_tools]
+            body["system"] = system
+        if tools:
+            body["tools"] = tools
         tool_choice = _to_anthropic_tool_choice(
-            model_settings.tool_choice,
-            model_settings.parallel_tool_calls if wire_tools else None,
+            settings.tool_choice, settings.parallel_tool_calls if tools else None
         )
         if tool_choice:
-            request["tool_choice"] = tool_choice
-        if model_settings.temperature is not None:
-            request["temperature"] = model_settings.temperature
-        if model_settings.top_p is not None:
-            request["top_p"] = model_settings.top_p
-        schema = _output_json_schema(output_schema)
+            body["tool_choice"] = tool_choice
+        if settings.temperature is not None:
+            body["temperature"] = settings.temperature
+        if settings.top_p is not None:
+            body["top_p"] = settings.top_p
+        schema = output_json_schema(request)
         if schema is not None:
-            request["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
-        return request
+            body["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
+        return body
 
-    async def get_response(
-        self,
-        system_instructions: str | None,
-        input: list[TResponseInputItem],
-        model_settings: ModelSettings,
-        tools: list[Any],
-        output_schema: type | None,
-        handoffs: list[Any],
-    ) -> ModelResponse:
+    async def get_response(self, request: ModelRequest) -> ModelResponse:
         """Send one turn to the model and return its full response."""
-        request = self._request(
-            system_instructions, input, model_settings, tools, output_schema, handoffs
-        )
+        body = self._body(request)
         try:
-            response = await self._messages(model_settings).create(**request)
+            response = await self._messages(request.model_settings).create(**body)
         except APIError as exc:
             raise ModelBehaviorError(f"model request failed: {exc}") from exc
 
@@ -257,21 +241,11 @@ class AnthropicModel:
         usage = _to_usage(response.usage)
         return ModelResponse(output=[message], usage=usage, response_id=response.id)
 
-    async def stream_response(
-        self,
-        system_instructions: str | None,
-        input: list[TResponseInputItem],
-        model_settings: ModelSettings,
-        tools: list[Any],
-        output_schema: type | None,
-        handoffs: list[Any],
-    ) -> AsyncIterator[StreamDelta]:
+    async def stream_response(self, request: ModelRequest) -> AsyncIterator[StreamDelta]:
         """Send one turn to the model and yield incremental `StreamDelta`s as it responds."""
-        request = self._request(
-            system_instructions, input, model_settings, tools, output_schema, handoffs
-        )
+        body = self._body(request)
         try:
-            raw_stream = await self._messages(model_settings).create(stream=True, **request)
+            raw_stream = await self._messages(request.model_settings).create(stream=True, **body)
             async for delta in _anthropic_deltas(raw_stream):
                 yield delta
         except APIError as exc:

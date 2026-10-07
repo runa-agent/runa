@@ -11,7 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from runa import content
-from runa._models import AnthropicModel, ModelProvider, OpenAICompatibleModel
+from runa._models import AnthropicModel, ModelProvider, ModelRequest, OpenAICompatibleModel
 from runa._types import ModelSettings
 from runa.exceptions import UserError
 
@@ -149,7 +149,7 @@ def test_openai_compatible_get_response_parses_text_and_tool_calls() -> None:
 
     async def call() -> Any:
         return await model.get_response(
-            None, [{"role": "user", "content": "hi"}], ModelSettings(), [_Tool("weather")], None, []
+            ModelRequest(input=[{"role": "user", "content": "hi"}], tools=[_Tool("weather")])
         )
 
     response = asyncio.run(call())
@@ -182,9 +182,7 @@ def test_openai_compatible_get_response_raises_on_error_status() -> None:
     model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
 
     async def call() -> Any:
-        return await model.get_response(
-            None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
-        )
+        return await model.get_response(ModelRequest(input=[{"role": "user", "content": "hi"}]))
 
     with pytest.raises(ModelBehaviorError, match="400"):
         asyncio.run(call())
@@ -210,7 +208,7 @@ def test_openai_compatible_stream_response_yields_text_and_tool_call_deltas() ->
         return [
             d
             async for d in model.stream_response(
-                None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
+                ModelRequest(input=[{"role": "user", "content": "hi"}])
             )
         ]
 
@@ -232,7 +230,7 @@ def _ok_response() -> httpx.Response:
 def _get_response(model: OpenAICompatibleModel, output_schema: Any = None) -> Any:
     return asyncio.run(
         model.get_response(
-            None, [{"role": "user", "content": "hi"}], ModelSettings(), [], output_schema, []
+            ModelRequest(input=[{"role": "user", "content": "hi"}], output_schema=output_schema)
         )
     )
 
@@ -245,7 +243,7 @@ def no_backoff(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     async def sleep(seconds: float) -> None:
         delays.append(seconds)
 
-    monkeypatch.setattr("runa._models.openai_chatcompletions.asyncio.sleep", sleep)
+    monkeypatch.setattr("runa._models.chat_completions.asyncio.sleep", sleep)
     return delays
 
 
@@ -304,7 +302,7 @@ def test_openai_compatible_stream_retries_before_the_first_event(no_backoff: lis
         return [
             d
             async for d in model.stream_response(
-                None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
+                ModelRequest(input=[{"role": "user", "content": "hi"}])
             )
         ]
 
@@ -379,7 +377,12 @@ def _anthropic_request(
     model = AnthropicModel("claude-sonnet-5", client)  # type: ignore[arg-type]
     asyncio.run(
         model.get_response(
-            None, input, model_settings or ModelSettings(), tools or [], output_schema, []
+            ModelRequest(
+                input=input,
+                model_settings=model_settings or ModelSettings(),
+                tools=tools or [],
+                output_schema=output_schema,
+            )
         )
     )
     return client.requests[0]
@@ -402,9 +405,7 @@ def test_anthropic_get_response_parses_text_and_tool_calls() -> None:
     model = AnthropicModel("claude-sonnet-5", _FakeAnthropic(reply))  # type: ignore[arg-type]
 
     async def call() -> Any:
-        return await model.get_response(
-            None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
-        )
+        return await model.get_response(ModelRequest(input=[{"role": "user", "content": "hi"}]))
 
     response = asyncio.run(call())
 
@@ -459,7 +460,7 @@ def test_anthropic_stream_response_yields_text_and_tool_call_deltas() -> None:
         return [
             d
             async for d in model.stream_response(
-                None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
+                ModelRequest(input=[{"role": "user", "content": "hi"}])
             )
         ]
 
@@ -502,11 +503,7 @@ def test_anthropic_api_errors_surface_as_model_behavior_errors() -> None:
     model = AnthropicModel("claude-sonnet-5", client=client)  # type: ignore[arg-type]
 
     with pytest.raises(ModelBehaviorError, match="model request failed"):
-        asyncio.run(
-            model.get_response(
-                None, [{"role": "user", "content": "hi"}], ModelSettings(), [], None, []
-            )
-        )
+        asyncio.run(model.get_response(ModelRequest(input=[{"role": "user", "content": "hi"}])))
 
 
 def test_anthropic_splits_system_and_merges_consecutive_tool_results() -> None:

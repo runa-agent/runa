@@ -29,9 +29,9 @@ MessageContent = str | Sequence[str | Path | dict[str, Any]]
 is a bare string (text, or an image when it is an image URL or `data:` URI -- `runa.content.parts`
 refuses to read a string as a local path, since the list may carry user input), a `Path` (a local
 image, read off disk), or an already-built content part dict (`runa.content.text`/`.image`, an
-escape hatch for a string the heuristic can't classify). `runa._models.openai_chatcompletions`
-passes the resulting parts straight through; `runa._models.anthropic` translates them into
-Claude's own content blocks.
+escape hatch for a string the heuristic can't classify). `runa._models.chat_completions` passes
+the resulting parts straight through; `runa._models.anthropic` translates them into Claude's own
+content blocks.
 
 `Sequence`, not `list`, so a `list[dict[str, Any]]` of already-built parts type-checks too --
 `list` is invariant, `Sequence` is covariant.

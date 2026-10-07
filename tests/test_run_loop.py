@@ -151,11 +151,9 @@ class _ScriptedModel:
         self.calls: list[list[Any]] = []
         self.received_handoffs: list[Any] = []
 
-    async def get_response(
-        self, system_instructions, input, model_settings, tools, output_schema, handoffs
-    ):  # noqa: ANN001, ARG002
-        self.calls.append(list(input))
-        self.received_handoffs = handoffs
+    async def get_response(self, request):  # noqa: ANN001
+        self.calls.append(list(request.input))
+        self.received_handoffs = request.handoffs
         return self._responses.pop(0)
 
     async def stream_response(self, *args: Any, **kwargs: Any):  # noqa: ANN001, ANN002, ANN003
@@ -171,9 +169,7 @@ class _ScriptedStreamingModel:
     async def get_response(self, *args: Any, **kwargs: Any):  # noqa: ANN001, ANN002, ANN003
         raise NotImplementedError
 
-    async def stream_response(
-        self, system_instructions, input, model_settings, tools, output_schema, handoffs
-    ):  # noqa: ANN001, ARG002
+    async def stream_response(self, request):  # noqa: ANN001, ARG002
         for delta in self._deltas:
             yield delta
 
@@ -354,8 +350,8 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
 def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
     """A raw `Agent` in `.handoffs` reaches the model wrapped as a `Handoff`, not as-is.
 
-    `Agent.__init__` stores bare `Agent`s in `.handoffs` (see `agent.py`), but `_handoff_dict`
-    (`_models/_base.py`) needs `.tool_name`/`.tool_description`, which a bare `Agent` doesn't have.
+    `Agent.__init__` stores bare `Agent`s in `.handoffs` (see `agent.py`), but `tool_schemas`
+    (`_models/interface.py`) needs `.tool_name`/`.tool_description`, which a bare `Agent` lacks.
     """
     target = _agent(name="Target", model=_ScriptedModel([_text_response("handled by target")]))
     model = _ScriptedModel([_text_response("hi")])

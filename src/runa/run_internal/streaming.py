@@ -9,20 +9,20 @@ emitting each raw delta as it arrives.
 from collections.abc import Callable
 from typing import Any
 
-from runa._models import Model
+from runa._models import Model, ModelRequest
 from runa._types import ModelResponse, Usage
 from runa.stream_events import RawResponsesStreamEvent, StreamEvent
 
 Emit = Callable[[StreamEvent], None]
 
 
-async def _stream_response(model: Model, request: tuple[Any, ...], emit: Emit) -> ModelResponse:
-    """Consume `model.stream_response(*request)` into a `ModelResponse`, emitting each delta."""
+async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> ModelResponse:
+    """Consume `model.stream_response(request)` into a `ModelResponse`, emitting each delta."""
     text_parts: list[str] = []
     tool_calls: dict[int, dict[str, Any]] = {}
     usage = Usage()
 
-    async for delta in model.stream_response(*request):
+    async for delta in model.stream_response(request):
         emit(RawResponsesStreamEvent(data=delta))
         if delta.text:
             text_parts.append(delta.text)

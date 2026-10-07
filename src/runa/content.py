@@ -7,7 +7,7 @@ file is refused rather than read, because a string in a message list is just as 
 user's own words as the program's own asset -- `Path("photo.png")` or `image("photo.png")` is
 how you say the path is yours. Those two are also the escape hatch for a string the extension
 heuristic can't classify (a signed URL with no file extension, say): build the part explicitly
-and mix it into the list. `runa._models.openai_chatcompletions` passes parts straight through;
+and mix it into the list. `runa._models.chat_completions` passes parts straight through;
 `runa._models.anthropic` translates them into Claude's own content blocks.
 """
 

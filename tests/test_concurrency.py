@@ -288,8 +288,8 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
         def __init__(self, messages: list[dict[str, Any]]) -> None:
             self._messages = list(messages)
 
-        async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
-            seen.append(len(args[1]))  # how many items this nested run was handed
+        async def get_response(self, request: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN003
+            seen.append(len(request.input))  # how many items this nested run was handed
             return ModelResponse(output=[self._messages.pop(0)], usage=Usage(total_tokens=1))
 
     worker.model = _RecordingModel([_final_message("x"), _final_message("y")])

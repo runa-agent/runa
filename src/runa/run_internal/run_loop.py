@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from runa._models import ModelRequest
 from runa._types import RunContextWrapper, TResponseInputItem, Usage
 from runa.exceptions import (
     MaxTokensExceeded,
@@ -217,16 +218,16 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         llm_span = run.span(str(shape.model), "llm", input=list(items))
         system_instructions = await _resolve_instructions(shape, context_wrapper)
         await hooks.on_llm_start(context_wrapper, agent, system_instructions, items)
-        request = (
-            system_instructions,
-            items,
-            shape.model_settings,
-            shape.tools,
-            shape.output_type,
-            list(shape.handoffs.values()),
+        request = ModelRequest(
+            input=items,
+            system_instructions=system_instructions,
+            model_settings=shape.model_settings,
+            tools=shape.tools,
+            output_schema=shape.output_type,
+            handoffs=list(shape.handoffs.values()),
         )
         if run.emit is None:
-            response = await model.get_response(*request)
+            response = await model.get_response(request)
         else:
             response = await _stream_response(model, request, run.emit)
         context_wrapper.usage.add(response.usage)

@@ -11,23 +11,27 @@ Conversation items are plain chat-completions-shaped message dicts everywhere in
 `runa._types.TResponseInputItem`); `AnthropicModel` is the only place that ever converts away from
 that shape. Tools/handoffs are read structurally here (`.name`/`.description`/`.params_json_schema`
 for a tool, `.tool_name`/`.tool_description` for a handoff) rather than importing their concrete
-types, so this package has no dependency on `runa.tool`/`runa.handoff`.
+types, so this package has no dependency on `runa.tool`/`runa.handoff`; both arrive at a backend
+as a `ToolSchema`, which belongs to neither provider's wire format.
 
-Split by concern: `interface` (the `Model` protocol, `StreamDelta`, shared wire-format helpers),
-`openai_chatcompletions` (the chat-completions backend), `anthropic` (the Claude backend), and
-`multi_provider` (`ModelProvider`, routing a model name to one of the two).
+A turn is one `ModelRequest`, so adding something a request carries doesn't re-thread a parameter
+through every backend. Split by concern: `interface` (the `Model` protocol, `ModelRequest`,
+`StreamDelta`, and what both backends share), `chat_completions` (the chat-completions backend),
+`anthropic` (the Claude backend), and `provider` (`ModelProvider`, routing a name to one of the
+two).
 """
 
 from runa._models.anthropic import AnthropicModel
-from runa._models.interface import Model, StreamDelta
-from runa._models.multi_provider import DEFAULT_MODEL, ModelProvider
-from runa._models.openai_chatcompletions import OpenAICompatibleModel
+from runa._models.chat_completions import OpenAICompatibleModel
+from runa._models.interface import Model, ModelRequest, StreamDelta
+from runa._models.provider import DEFAULT_MODEL, ModelProvider
 
 __all__ = [
     "DEFAULT_MODEL",
     "AnthropicModel",
     "Model",
     "ModelProvider",
+    "ModelRequest",
     "OpenAICompatibleModel",
     "StreamDelta",
 ]
