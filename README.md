@@ -22,7 +22,6 @@ directly:
 class SupportAgent(Agent):
     name = "support_agent"
     model = "claude-sonnet-5"
-    instruction = ""
     tools = [...]
 ```
 

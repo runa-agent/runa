@@ -28,6 +28,12 @@ class SupportAgent(Agent):
 
 `instructions` is loaded by default from `app/prompts/support_agent.md`.
 
+**The settings are a closed set.** A class attribute (or constructor keyword) that isn't one of
+them configures nothing, so it's a `UserError` naming the setting it most likely meant, rather
+than an agent that quietly runs on the default `model`. Enforced in code, for the declaration and
+the override alike. Only data is checked: methods, properties and `_`-prefixed attributes are the
+subclass's own business, as are a mixin's attributes.
+
 **An agent is run only through its own methods**: `run`, `run_sync` or `run_streamed`, each
 returning (or ending with) a `Run`: `.output`, `.status` (`"completed"`, `"paused"` or
 `"error"`), `.interruptions`, `.trace`, `.usage`, `.error`, and the guardrail audit trail. Errors never raise out of a run;

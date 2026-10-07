@@ -16,7 +16,7 @@ from runa._models import StreamDelta
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Subagent
 from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
-from runa.guardrail import guardrail
+from runa.guardrail import Phase, guardrail
 from runa.knowledge import Knowledge
 from runa.lifecycle import LoggingRunHooks
 from runa.memory import Memory
@@ -608,6 +608,115 @@ def test_model_rejects_a_value_that_is_neither_a_name_nor_a_model() -> None:
 
     with pytest.raises(UserError, match="model"):
         BadModel()
+
+
+def test_a_misspelled_class_attribute_is_rejected_by_name() -> None:
+    """A typo'd setting fails at construction instead of silently configuring nothing.
+
+    The regression this guards: `modell = "claude-sonnet-5"` used to leave the agent on the
+    default model, which surfaces as "the agent answers oddly" rather than as an error.
+    """
+    from runa.exceptions import UserError
+
+    class Typo(Agent):
+        name = "Typo"
+        instructions = "typo"
+        modell = "claude-sonnet-5"
+
+    with pytest.raises(UserError, match="'modell'.*Did you mean 'model'"):
+        Typo()
+
+
+def test_a_misspelled_constructor_kwarg_is_rejected_by_name() -> None:
+    """An override is checked against the same set the class body is, and suggests the same way."""
+    from runa.exceptions import UserError
+
+    class Fine(Agent):
+        name = "Fine"
+        instructions = "fine"
+
+    with pytest.raises(UserError, match="'tolls'.*Did you mean 'tools'"):
+        Fine(tolls=[])
+    with pytest.raises(UserError, match="'nonsense'.*Agent settings are:"):
+        Fine(nonsense=1)
+
+
+def test_a_subclass_keeps_its_own_methods_and_underscored_state() -> None:
+    """Only non-underscore data is checked, so helpers and private state stay free."""
+
+    class Helpful(Agent):
+        name = "Helpful"
+        instructions = "helpful"
+        _threshold = 3
+
+        def helper(self) -> int:
+            return self._threshold
+
+        @property
+        def doubled(self) -> int:
+            return self._threshold * 2
+
+        @staticmethod
+        def tripled() -> int:
+            return 9
+
+    assert Helpful().helper() == 3
+
+
+def test_a_mixin_may_carry_whatever_attributes_it_likes() -> None:
+    """Only Agent subclasses in the MRO are checked; a mixin isn't claiming to be Runa config."""
+
+    class Tenant:
+        tenant_id = "acme"
+
+    class Scoped(Tenant, Agent):
+        name = "Scoped"
+        instructions = "scoped"
+
+    assert Scoped().name == "Scoped"
+
+
+def test_an_inherited_setting_is_recognized_and_an_inherited_typo_is_not() -> None:
+    """The check walks the subclass chain: a shared base's settings pass, its typos don't."""
+    from runa.exceptions import UserError
+
+    class Base(Agent):
+        model = _ScriptedModel([_final_message("hi")])
+        max_turns = 3
+
+    class Child(Base):
+        name = "Child"
+        instructions = "child"
+
+    assert Child().max_turns == 3
+
+    class TypoBase(Agent):
+        instrucshions = "oops"
+
+    class TypoChild(TypoBase):
+        name = "TypoChild"
+        instructions = "child"
+
+    with pytest.raises(UserError, match="TypoBase declares 'instrucshions'"):
+        TypoChild()
+
+
+def test_subagents_and_guardrails_can_also_be_passed_to_the_constructor() -> None:
+    """Every accepted name works in both places, so neither list is quietly dropped as a kwarg."""
+
+    @guardrail
+    def block_empty(x: str) -> bool:
+        """Trip on an empty message."""
+        return not x.strip()
+
+    class Lead(Agent):
+        name = "Lead"
+        instructions = "lead"
+
+    agent = Lead(subagents=[Researcher.handoff], guardrails=[block_empty.input])
+
+    assert _handoff_names(agent) == ["Researcher"]
+    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
 
 
 def test_model_accepts_a_model_instance_without_a_provider() -> None:

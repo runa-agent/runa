@@ -37,6 +37,30 @@ class SupportAgent(Agent):
 `name` is the only required attribute. Everything else has a sane default, in the spirit of
 convention over configuration.
 
+That table is also the complete list. Since class attributes are the whole configuration surface,
+the one mistake the style invites is a misspelled name, so Runa refuses one rather than ignoring
+it:
+
+```python
+class SupportAgent(Agent):
+    name = "support_agent"
+    modell = "claude-sonnet-5"  # UserError: ... Did you mean 'model'?
+```
+
+Without that, the agent would quietly run on the default model and surface days later as "it
+answers oddly". The same check covers a constructor override (`SupportAgent(tolls=[...])`), and
+it only looks at data: methods, properties, `_`-prefixed attributes and anything a mixin brings
+along are yours to use freely.
+
+```python
+class SupportAgent(Agent):
+    name = "support_agent"
+    _escalation_threshold = 3  # not config, not checked
+
+    def escalate(self, severity: int) -> bool:
+        return severity >= self._escalation_threshold
+```
+
 ## Bounding a Run
 
 Three independent ceilings, each optional, each ending the run as `Run(status="error")` rather

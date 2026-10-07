@@ -10,6 +10,7 @@ refusal of two concurrent session-less runs. One door, so there is nothing to go
 
 import asyncio
 import copy
+import difflib
 import inspect
 import re
 from collections.abc import AsyncIterator, Iterable, Iterator
@@ -50,6 +51,9 @@ _AGENT_FIELDS = (
     "model",
     "model_settings",
     "tools",
+    "subagents",
+    "guardrails",
+    "mcp",
     "mcp_servers",
     "output_type",
     "hooks",
@@ -60,6 +64,12 @@ _AGENT_FIELDS = (
     "max_tokens",
     "timeout",
 )
+"""Every name that configures an Agent, whether declared on the subclass or passed to it.
+
+One tuple for both call sites, so the two ways of saying the same thing can't drift: the merge
+loop in `__init__` reads each of these off `type(self)` as the default for the matching kwarg,
+and `_reject_unknown_settings` refuses any other name in either place.
+"""
 
 _MODEL_PROVIDER = ModelProvider()
 
@@ -235,6 +245,59 @@ def _checked_model(model: Any) -> Any:
     )
 
 
+def _is_code(value: Any) -> bool:
+    """Is this class-body entry code (a method, a property, a nested class) rather than config?
+
+    Config is data -- a string, a list, a number, a `ModelSettings`. Everything a subclass
+    legitimately *writes* is callable or a descriptor, which is what keeps
+    `_reject_unknown_settings` from standing between a subclass and its own helper methods.
+    """
+    return callable(value) or isinstance(value, staticmethod | classmethod | property)
+
+
+def _reject_unknown_settings(cls: type[Agent], kwargs: dict[str, Any]) -> None:
+    """Refuse a name that isn't one of `_AGENT_FIELDS`, declared on `cls` or passed to it.
+
+    Class attributes are the whole configuration surface, so the one mistake that style invites
+    is a misspelled name -- and a silently ignored `modell = "claude-sonnet-5"` doesn't fail, it
+    runs the default model at a different price with different behaviour and surfaces days later
+    as "the agent answers oddly". The same promise `MCPServer`'s named parameters make (a
+    misspelled option is an error at the call site, not a server that ignores it) is made here,
+    for both the declaration and the constructor override, against one set of names.
+
+    Only data is checked: a name starting with `_`, a method, a property or a nested class is the
+    subclass's own business. Mixins in the MRO are skipped for the same reason -- their attributes
+    aren't claiming to be Runa settings.
+    """
+    for name in kwargs:
+        if name not in _AGENT_FIELDS:
+            raise UserError(
+                f"{cls.__name__}(...) got an unexpected keyword argument {name!r}."
+                f"{_did_you_mean(name)}"
+            )
+    for klass in cls.__mro__:
+        if klass is Agent:
+            break
+        if not issubclass(klass, Agent):
+            continue
+        for name, value in vars(klass).items():
+            if name.startswith("_") or name in _AGENT_FIELDS or _is_code(value):
+                continue
+            raise UserError(
+                f"{klass.__name__} declares {name!r}, which is not an Agent setting, so it "
+                f"would configure nothing.{_did_you_mean(name)} Prefix it with '_' if it is "
+                f"the agent's own state rather than Runa config."
+            )
+
+
+def _did_you_mean(name: str) -> str:
+    """Point a rejected name at the setting it most likely meant to be, or list them all."""
+    close = difflib.get_close_matches(name, _AGENT_FIELDS, n=1)
+    if close:
+        return f" Did you mean {close[0]!r}?"
+    return f" Agent settings are: {', '.join(sorted(_AGENT_FIELDS))}."
+
+
 def _resolve_retrieval_setting(
     setting: Any, cls: type[Memory] | type[Knowledge], tools: list[FunctionTool]
 ) -> Any:
@@ -304,6 +367,10 @@ class Agent:
     def __init__(self, **kwargs: Any) -> None:
         """Build config from class attributes and wire up any subagents and guardrails.
 
+        Every `_AGENT_FIELDS` name can be declared on the subclass or passed here, the kwarg
+        winning; any other name is a `UserError` in either place, naming the setting it was
+        probably meant to be (see `_reject_unknown_settings`).
+
         `mcp=[...]` (as a constructor kwarg, or a `mcp` class attribute) is sugar for
         `mcp_servers=[...]`; both are merged into `mcp_servers` if given together.
 
@@ -344,6 +411,7 @@ class Agent:
         if type(self) is Agent:
             raise TypeError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
 
+        _reject_unknown_settings(type(self), kwargs)
         for field_name in _AGENT_FIELDS:
             value = getattr(type(self), field_name, MISSING)
             if value is not MISSING:
@@ -355,11 +423,8 @@ class Agent:
 
         handoffs: list[Any] = []
         tools = list(kwargs.get("tools") or [])
-        mcp_servers = [
-            *(kwargs.get("mcp_servers") or []),
-            *(kwargs.pop("mcp", None) or getattr(type(self), "mcp", [])),
-        ]
-        for sub in _flatten_subagents(getattr(type(self), "subagents", [])):
+        mcp_servers = [*(kwargs.get("mcp_servers") or []), *(kwargs.get("mcp") or [])]
+        for sub in _flatten_subagents(kwargs.get("subagents") or []):
             if isinstance(sub, Subagent):
                 agent = sub.agent()
                 if sub.mode == "handoff":
@@ -371,7 +436,7 @@ class Agent:
                 handoffs.append(agent)
                 tools.append(agent.as_tool(None, None))
 
-        bound_guardrails = flatten_guardrails(getattr(type(self), "guardrails", []))
+        bound_guardrails = flatten_guardrails(kwargs.get("guardrails") or [])
 
         self.memory = _resolve_retrieval_setting(kwargs.get("memory"), Memory, tools)
         self.knowledge = _resolve_retrieval_setting(kwargs.get("knowledge"), Knowledge, tools)
