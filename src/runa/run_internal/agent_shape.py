@@ -56,11 +56,17 @@ class AgentShape:
     """One agent's surface as the turn loop needs it, resolved and named in one place.
 
     The two loose annotations are the ones `Agent` leaves open past construction: `model` is the
-    declared string (resolved per turn, since `RunConfig.model_provider` is the run's to override,
-    and kept as the string because it names the `llm` span) or a `Model` built directly; and
-    `agent` is whatever object user code is handed, which `run_internal` cannot name without
-    importing the class it implements. Everything else arrives already resolved -- a mode string
-    or a bool is `Agent.__init__`'s to turn into an object, not this module's.
+    declared name or a `Model` built directly; and `agent` is whatever object user code is handed,
+    which `run_internal` cannot name without importing the class it implements. Everything else
+    arrives already resolved -- a mode string or a bool is `Agent.__init__`'s to turn into an
+    object, not this module's.
+
+    `model` is the one declared attribute that is not, and the reason is where the credentials
+    are: resolving a name builds the provider's client, which is a `UserError` when its API key
+    is unset, so an `Agent` must be constructible without one and resolution waits for the run
+    (`resolve_model` below, which also keeps `RunConfig.model_provider` the run's to override).
+    `Agent.__init__` still rejects a value that is neither a name nor a `Model`, so the union
+    reaching here is only ever those two. The declared name is kept because it names the `llm` span.
     """
 
     name: str = "agent"

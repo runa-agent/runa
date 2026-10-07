@@ -592,6 +592,35 @@ def test_compact_rejects_a_value_that_is_neither_a_bool_nor_a_callable() -> None
         BadCompact()
 
 
+def test_model_rejects_a_value_that_is_neither_a_name_nor_a_model() -> None:
+    """A bad `model=` fails at construction, the way `compact=`/`memory=`/`knowledge=` do.
+
+    Resolving a model name has to wait for the run (an unset API key must not stop an agent from
+    being built), but rejecting a value no provider could ever resolve does not: without this the
+    first sign of it was an `AttributeError` inside the turn loop, an `llm` span already open.
+    """
+    from runa.exceptions import UserError
+
+    class BadModel(Agent):
+        name = "BadModel"
+        instructions = "bad model"
+        model = 3
+
+    with pytest.raises(UserError, match="model"):
+        BadModel()
+
+
+def test_model_accepts_a_model_instance_without_a_provider() -> None:
+    """A scripted `Model` passes through untouched: the check is structural, not an isinstance."""
+
+    class Scripted(Agent):
+        name = "Scripted"
+        instructions = "scripted"
+        model = _ScriptedModel([_final_message("hi")])
+
+    assert isinstance(Scripted().model, _ScriptedModel)
+
+
 def test_history_starts_empty() -> None:
     """A freshly constructed agent has no conversation history yet."""
     agent = Researcher()

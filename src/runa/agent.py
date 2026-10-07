@@ -214,6 +214,26 @@ def _resolve_compactor(compact: Any) -> Compactor | None:
     )
 
 
+def _checked_model(model: Any) -> Any:
+    """Check `model=` names a model or is one, without building it yet.
+
+    The exception to the rule the others follow: a declared attribute becomes a usable object at
+    construction (see `_resolve_compactor`), but a model name cannot, because resolving it builds
+    the provider's client and that is a `UserError` when the matching API key is unset -- which an
+    agent that `runa generate` just wrote, or `graph` renders, or no one ever runs has no business
+    needing. Resolution therefore waits for the run (`AgentShape.resolve_model`). Rejecting a
+    value that is neither a name nor a `Model` needs no client, though, so a mistyped `model=` is
+    still a `UserError` naming the attribute here rather than an `AttributeError` from inside the
+    turn loop, with an `llm` span already open. `Model` is checked structurally, the way
+    `run_internal` reads every backend.
+    """
+    if model is None or isinstance(model, str) or hasattr(model, "get_response"):
+        return model
+    raise UserError(
+        f"model must be a model name, a Model instance, or None for Runa's default, got {model!r}"
+    )
+
+
 def _resolve_retrieval_setting(
     setting: Any, cls: type[Memory] | type[Knowledge], tools: list[FunctionTool]
 ) -> Any:
@@ -357,7 +377,7 @@ class Agent:
 
         self.name: str = kwargs["name"]
         self.instructions = _adapt_instructions(kwargs.get("instructions"))
-        self.model: str | Any = kwargs["model"]
+        self.model: str | Any = _checked_model(kwargs["model"])
         self.model_settings: ModelSettings = kwargs.get("model_settings") or ModelSettings()
         self.tools: list[FunctionTool] = tools
         self.handoffs: list[Any] = handoffs
