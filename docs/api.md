@@ -102,6 +102,8 @@ signature-level reference.
 
 ::: runa.serve.create_app
 
+::: runa.serve.resolve_api_key
+
 ::: runa.serve.RunRequest
 
 ## Hooks

@@ -5,8 +5,8 @@ from typing import Any
 
 from runa import Trace
 from runa._types import ModelResponse, Usage
-from runa.run_config import RunConfig
 from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.tracing import observe
 

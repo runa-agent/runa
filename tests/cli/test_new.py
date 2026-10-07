@@ -18,7 +18,7 @@ def test_scaffold_project_creates_the_conventional_app_layout(tmp_path: Path) ->
         assert (project_dir / subdir / "__init__.py").is_file()
     assert (project_dir / "db").is_dir()
     assert (project_dir / "docs").is_dir()
-    for name in ("pyproject.toml", "main.py", "Dockerfile", ".gitignore", ".env"):
+    for name in ("pyproject.toml", "main.py", "asgi.py", "Dockerfile", ".gitignore", ".env"):
         assert (project_dir / name).is_file()
 
 
@@ -58,3 +58,17 @@ def test_main_py_only_loads_dotenv_with_no_configure_step(tmp_path: Path) -> Non
 
     assert "load_dotenv()" in main_py
     assert "configure(" not in main_py
+
+
+def test_asgi_py_builds_the_app_from_the_public_factory(tmp_path: Path) -> None:
+    """The generated `asgi.py` reaches the server the documented way, and authenticated.
+
+    `tests/serve` proves the file actually serves; this pins the shape, so a scaffold that drifts
+    into a private import or an open-by-default server fails here.
+    """
+    project_dir = scaffold_project("demo", root=tmp_path)
+
+    asgi_py = (project_dir / "asgi.py").read_text()
+
+    assert "from runa.serve import create_app, resolve_api_key" in asgi_py
+    assert "resolve_api_key(no_auth=False)" in asgi_py

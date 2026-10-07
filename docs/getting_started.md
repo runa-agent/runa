@@ -100,6 +100,7 @@ greeter/
 ├── evals/               # eval cases, run with `runa eval`
 ├── tests/               # deterministic tests, run with `runa test`
 ├── main.py              # application entry point, loads .env
+├── asgi.py              # the agents as an ASGI app, for your own server
 ├── Dockerfile
 ├── .env                  # your model's API key, fill this in, never commit it
 └── pyproject.toml

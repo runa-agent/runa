@@ -71,6 +71,42 @@ Clients send it as `Authorization: Bearer <token>`. A missing token is `401`, a 
 If something in front of the container already authenticates, `runa serve --no-auth` makes that
 choice explicit.
 
+### Your own server
+
+`runa serve` is the short way to run that app, not the only way. `runa new` scaffolds an `asgi.py`
+holding the app itself, which is the two lines you would otherwise have to go looking for:
+
+```python
+from pathlib import Path
+
+from dotenv import load_dotenv
+from runa.serve import create_app, resolve_api_key
+
+load_dotenv()
+
+app = create_app(Path(__file__).parent, api_key=resolve_api_key(no_auth=False))
+```
+
+Point any ASGI server at it, with whatever process model your platform expects:
+
+```bash
+uvicorn asgi:app --host 0.0.0.0 --port 8000 --workers 4
+gunicorn asgi:app -k uvicorn.workers.UvicornWorker -w 4
+```
+
+Or mount the agents inside an API you already have, under a path of your choosing:
+
+```python
+from asgi import app as agents
+
+api.mount("/ai", agents)
+```
+
+`runa serve` does not read `asgi.py` -- it calls `create_app` itself, so its `--host`/`--port`/
+`--no-auth` flags stay the CLI's contract. Editing `asgi.py` changes the server you run from
+`asgi.py`; reach for it when you want middleware, a mount path, or a process manager that
+`runa serve` does not give you, and stay on `runa serve` when you don't.
+
 ## One agent instance, one conversation
 
 An `Agent` instance holds the conversation it is running. Two overlapping runs on the same

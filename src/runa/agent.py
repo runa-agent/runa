@@ -29,7 +29,7 @@ from runa.knowledge import Knowledge
 from runa.lifecycle import RunHooks
 from runa.memory import Memory
 from runa.run import Run, RunStream
-from runa.run_config import DEFAULT_MAX_TURNS, RunConfig
+from runa.run_internal.run_config import DEFAULT_MAX_TURNS, RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.session import SessionABC

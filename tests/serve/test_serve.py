@@ -5,6 +5,7 @@ sessions rather than `self.history`, and authentication on by default -- plus th
 client actually depends on.
 """
 
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,7 @@ from fastapi.testclient import TestClient
 
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
-from runa.cli.serve import MissingAPIKey, resolve_api_key
-from runa.serve import create_app
+from runa.serve import MissingAPIKey, create_app, resolve_api_key
 
 _STUB_MODEL = '''
 from collections.abc import AsyncIterator
@@ -213,6 +213,28 @@ def test_resolve_api_key_returns_none_for_no_auth(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("RUNA_API_KEY", "ignored")
 
     assert resolve_api_key(no_auth=True) is None
+
+
+def test_the_scaffolded_asgi_module_is_a_working_app(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`runa new`'s `asgi.py` really serves the app, so the embedding path is not just documented.
+
+    Loaded the way a server loads it (`uvicorn asgi:app`), which also pins that its `app` is built
+    at import time and takes its token from the environment, not from `runa serve`'s flags.
+    """
+    monkeypatch.setenv("RUNA_API_KEY", "from-env")
+
+    spec = importlib.util.spec_from_file_location("demo_asgi", project / "asgi.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    client = TestClient(module.app)
+    assert client.get("/health").status_code == 200
+    assert client.get("/agents").status_code == 401
+    response = client.get("/agents", headers={"Authorization": "Bearer from-env"})
+    assert response.json() == {"agents": ["support_agent"]}
 
 
 def test_streaming_ends_with_the_finished_run(client: TestClient) -> None:

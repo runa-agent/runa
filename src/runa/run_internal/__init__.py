@@ -9,9 +9,10 @@ runs; there is no separate SDK trace to adapt from, so this is the one and only 
 Nothing here is public API, and there is no public class in front of it either: `Agent.run` calls
 `run_loop._run_async` directly, because a class whose whole body forwarded to it was a second way
 to run an agent and nothing more. What a caller does touch lives at the top level: `Run`/
-`RunStream`, `RunState`, `RunConfig`, `Interruption`, and the stream-event types (`runa.run`,
-`runa.run_state`, `runa.run_config`, `runa.stream_events`). This package holds only
-execution-time detail: `run_loop` (the turn loop itself), `guardrails`, `tool_execution`,
-`streaming`, `active_run` (`_Run`, the one value the loop passes down), `agent_shape` (what more
-than one of them reads off an Agent), and `spans` (tracing span helpers).
+`RunStream`, `RunState`, `Interruption`, and the stream-event types (`runa.run`, `runa.run_state`,
+`runa.stream_events`). This package holds only execution-time detail: `run_loop` (the turn loop
+itself), `guardrails`, `tool_execution`, `streaming`, `active_run` (`_Run`, the one value the loop
+passes down), `run_config` (`RunConfig`, what `Agent` settles before the loop starts -- no public
+signature takes one, so it belongs here and not beside `RunState`), `agent_shape` (what more than
+one of them reads off an Agent), and `spans` (tracing span helpers).
 """

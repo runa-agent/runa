@@ -27,10 +27,10 @@ from runa.exceptions import (
 from runa.guardrail import Phase
 from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
 from runa.run import Run
-from runa.run_config import RunConfig
 from runa.run_internal.active_run import _Pending, _Run
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.guardrails import _run_guardrails
+from runa.run_internal.run_config import RunConfig
 from runa.run_internal.spans import _close_span, _export, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutcome

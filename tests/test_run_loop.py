@@ -33,8 +33,8 @@ from runa.guardrail import (
 from runa.handoff import Handoff
 from runa.lifecycle import AgentHooks, RunHooks
 from runa.run import Run
-from runa.run_config import RunConfig
 from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.stream_events import StreamEvent

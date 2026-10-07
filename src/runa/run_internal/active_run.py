@@ -15,8 +15,8 @@ from typing import Any
 
 from runa._types import RunContextWrapper, TResponseInputItem
 from runa.lifecycle import _Dispatch
-from runa.run_config import RunConfig
 from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.run_config import RunConfig
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit
 from runa.session import SessionABC

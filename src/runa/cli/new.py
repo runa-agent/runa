@@ -19,6 +19,7 @@ _TOP_LEVEL_ENTRIES = (
     *_ROOT_PLAIN_SUBDIRS,
     "pyproject.toml",
     "main.py",
+    "asgi.py",
     "Dockerfile",
     ".gitignore",
     ".env",
@@ -54,6 +55,39 @@ if __name__ == "__main__":
     #
     # print(ExampleAgent().run_sync("...").output)
     pass
+'''
+
+_ASGI_TEMPLATE = '''"""asgi.py: this app's agents as an ASGI application.
+
+`runa serve` is the short way to run them and needs nothing from this file.
+This is the long way, for a deployment that brings its own server:
+
+    uvicorn asgi:app --host 0.0.0.0 --port 8000 --workers 4
+
+or that mounts these routes inside a larger app of its own:
+
+    from asgi import app as agents
+
+    api.mount("/ai", agents)
+
+Either way the endpoints are the agents under `app/agents/`, by declared name:
+POST /agents/<name>/runs, /agents/<name>/runs/stream, GET /agents, and an
+unauthenticated /health for the load balancer.
+
+`resolve_api_key` requires RUNA_API_KEY -- the token clients send as
+`Authorization: Bearer <token>` -- rather than defaulting to an open server.
+Pass `no_auth=True` to serve without it, which is right locally, and in
+production only behind something that already authenticates.
+"""
+
+from pathlib import Path
+
+from dotenv import load_dotenv
+from runa.serve import create_app, resolve_api_key
+
+load_dotenv()
+
+app = create_app(Path(__file__).parent, api_key=resolve_api_key(no_auth=False))
 '''
 
 _ENV_TEMPLATE = """# Loaded by main.py via load_dotenv(). Fill in the API key for whichever
@@ -133,6 +167,7 @@ def scaffold_project(name: str | None, *, root: Path) -> Path:
         _PYPROJECT_TEMPLATE.format(name=name or project_dir.resolve().name)
     )
     (project_dir / "main.py").write_text(_MAIN_TEMPLATE)
+    (project_dir / "asgi.py").write_text(_ASGI_TEMPLATE)
     (project_dir / "Dockerfile").write_text(_DOCKERFILE_TEMPLATE)
     (project_dir / ".gitignore").write_text(_GITIGNORE_TEMPLATE)
     (project_dir / ".env").write_text(_ENV_TEMPLATE)

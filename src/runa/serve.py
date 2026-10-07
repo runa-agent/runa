@@ -19,11 +19,14 @@ Three decisions this makes for you, each the one a production deployment wants:
   every route but `/health`. An agent endpoint spends money per call, so open-by-default is the
   wrong default, and `--no-auth` is one flag away for local use.
 
-`fastapi` is imported lazily by `cli/serve.py`, so a plain install still runs every other command;
-only `runa serve` itself needs the `serve` extra.
+`runa serve` is the short way to run this app, and `cli/serve.py` imports this module lazily so a
+plain install still runs every other command; only serving needs the `serve` extra. The app object
+itself is public, though: `runa new` scaffolds an `asgi.py` that builds it, for the deployment that
+brings its own server or mounts these routes inside a larger one.
 """
 
 import json
+import os
 from collections.abc import AsyncIterator
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -35,9 +38,16 @@ from pydantic import BaseModel, Field
 
 from runa import db
 from runa.agent import Agent
+from runa.exceptions import OperatorError
 from runa.lifecycle import logger
 from runa.project import iter_agent_classes, loaded_app, require_agents_dir
 from runa.run import Run
+
+API_KEY_ENV = "RUNA_API_KEY"
+
+
+class MissingAPIKey(OperatorError):
+    """Raised when a server is built with neither `RUNA_API_KEY` nor an explicit `no_auth`."""
 
 
 class RunRequest(BaseModel):
@@ -97,13 +107,37 @@ def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
     }
 
 
+def resolve_api_key(*, no_auth: bool) -> str | None:
+    """The token a server should require, read from `RUNA_API_KEY`, or `None` to serve open.
+
+    Refuses to start unauthenticated by accident: an agent endpoint costs money per call, so
+    "nobody set the variable" has to be an error rather than a silently open door. `no_auth=True`
+    (`runa serve --no-auth`, or the argument in a generated `asgi.py`) makes the same choice
+    explicit and is then perfectly fine for local use, or behind something that already
+    authenticates.
+
+    `create_app` takes the resolved token rather than calling this itself, so the environment is
+    read in exactly one place a deployment can see, and a test can pass a token outright.
+    """
+    if no_auth:
+        return None
+    api_key = os.environ.get(API_KEY_ENV)
+    if not api_key:
+        raise MissingAPIKey(
+            f"{API_KEY_ENV} is not set. Set it to the token clients must send as "
+            "`Authorization: Bearer <token>`, or pass --no-auth to serve without authentication."
+        )
+    return api_key
+
+
 def create_app(root: Path, *, api_key: str | None) -> FastAPI:
-    """Build the `runa serve` app for the project at `root`.
+    """Build the app serving the agents of the project at `root`.
 
     `api_key` is the bearer token every route but `/health` requires; `None` disables the check
     entirely (`runa serve --no-auth`). `create_app` takes it as a parameter rather than reading
     the environment itself, the same way every `cli/*.py` command takes `root` instead of
-    assuming `cwd`, so a test (or an app embedding this) can be explicit.
+    assuming `cwd`, so a test (or an app embedding this) can be explicit: `resolve_api_key` is
+    the conventional way to fill it in.
     """
     agents_dir = require_agents_dir(root)
 
@@ -228,4 +262,4 @@ def _constant_time_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left, right)
 
 
-__all__ = ["RunRequest", "create_app"]
+__all__ = ["API_KEY_ENV", "MissingAPIKey", "RunRequest", "create_app", "resolve_api_key"]

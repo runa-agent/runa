@@ -14,8 +14,8 @@ from helpers import context_of
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
 from runa.handoff import Handoff
-from runa.run_config import RunConfig
 from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.tool import tool

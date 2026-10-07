@@ -7,8 +7,8 @@ import pytest
 
 from runa import db
 from runa._types import ModelResponse, Usage
-from runa.run_config import RunConfig
 from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.tool import tool
 from runa.tracing import ConsoleExporter, Trace, config, observe

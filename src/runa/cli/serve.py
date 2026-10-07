@@ -1,42 +1,13 @@
-"""cli/serve.py: `runa serve`, the production entry point for this app's agents.
+"""cli/serve.py: `runa serve`, the short way to put this app's agents behind HTTP.
 
-`fastapi`/`uvicorn`/`runa.serve` are imported lazily inside `serve_agents`, so a plain `runa`
-install (no `serve` extra) still works for every other command, the same arrangement `cli/ui.py`
-uses for the dashboard.
+The server itself is `runa.serve`: this file only turns flags into its two arguments and hands the
+app to uvicorn, the same shape `cli/ui.py` has for the dashboard. `uvicorn`/`runa.serve` are
+imported inside `serve_agents`, so a plain install (no `serve` extra) still runs every other
+command; `cli/main.py` turns the `ModuleNotFoundError` that a missing extra raises into the
+one-line `uv add "runa-ai[serve]"` instruction.
 """
 
-import os
 from pathlib import Path
-
-from runa.exceptions import OperatorError
-
-API_KEY_ENV = "RUNA_API_KEY"
-
-
-class MissingAPIKey(OperatorError):
-    """Raised when `runa serve` starts with neither `RUNA_API_KEY` nor an explicit `--no-auth`."""
-
-
-def resolve_api_key(*, no_auth: bool) -> str | None:
-    """The token `runa serve` will require, or `None` for an open server.
-
-    Refuses to start unauthenticated by accident: an agent endpoint costs money per call, so
-    "nobody set the variable" has to be an error rather than a silently open door. `--no-auth`
-    makes the same choice explicit and is then perfectly fine for local use.
-
-    Lives here, not in `runa/serve.py`, so `MissingAPIKey` is raised without importing FastAPI:
-    a plain install has to be able to parse `runa serve --help` and to print a clean error,
-    neither of which should need the `serve` extra.
-    """
-    if no_auth:
-        return None
-    api_key = os.environ.get(API_KEY_ENV)
-    if not api_key:
-        raise MissingAPIKey(
-            f"{API_KEY_ENV} is not set. Set it to the token clients must send as "
-            "`Authorization: Bearer <token>`, or pass --no-auth to serve without authentication."
-        )
-    return api_key
 
 
 def serve_agents(
@@ -48,12 +19,11 @@ def serve_agents(
     workers: int = 1,
 ) -> None:
     """Serve `root`'s agents over HTTP until interrupted."""
-    api_key = resolve_api_key(no_auth=no_auth)  # before importing anything heavy
-
     import uvicorn
 
-    from runa.serve import create_app
+    from runa.serve import create_app, resolve_api_key
 
+    api_key = resolve_api_key(no_auth=no_auth)  # before binding the port
     app = create_app(root, api_key=api_key)
 
     auth = "no auth" if api_key is None else "bearer auth"
@@ -61,4 +31,4 @@ def serve_agents(
     uvicorn.run(app, host=host, port=port, workers=workers, log_level="info")
 
 
-__all__ = ["API_KEY_ENV", "MissingAPIKey", "resolve_api_key", "serve_agents"]
+__all__ = ["serve_agents"]
