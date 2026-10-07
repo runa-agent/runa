@@ -13,7 +13,10 @@ previous code or docs drifted to, so it is worth avoiding deliberately.
 **Backend.** One of the three answers `RUNA_DATABASE_URL` can give about where
 state lives: a local SQLite file, a shared Postgres database, or nothing beyond
 this process (`memory://`). Chosen once, in `runa.db`, so nothing above it names
-one. _Not_: driver, database (a backend is the choice, not the server).
+one. A backend serving a single concern is not one of the three and does not
+belong to `RUNA_DATABASE_URL` -- `RedisCache("redis://...")` is reached by name.
+See [ADR-0005](docs/adr/0005-runa-db-repeats-its-branch-per-concern.md).
+_Not_: driver, database (a backend is the choice, not the server).
 
 **Adapter.** The concrete module implementing one concern on one backend, for
 example `session/postgres.py`. _Not_: provider, which is the model-side word.

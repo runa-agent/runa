@@ -27,6 +27,11 @@ they call.
 
 Every adapter import is deferred into the function that needs it: an app without the `postgres`
 extra has to be able to ask the question and get the SQLite answer.
+
+Each factory repeats the same three-way branch rather than delegating to one resolved backend
+object. That is deliberate: backends are a closed set of three, concerns are the axis that
+grows, and inline branching keeps a new concern at one function in one file. See
+`docs/adr/0005-runa-db-repeats-its-branch-per-concern.md` before collapsing it.
 """
 
 import os
