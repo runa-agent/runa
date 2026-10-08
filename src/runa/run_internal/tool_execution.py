@@ -206,9 +206,7 @@ async def _run_message_tool_calls(
         )
         if gate.action == "interrupt":
             interruptions.append(
-                Interruption(
-                    name=name, arguments=args_json, call_id=call_id, tool=tool, agent=agent
-                )
+                Interruption(name=name, arguments=args_json, call_id=call_id, agent=agent)
             )
             continue
         if gate.action == "reject":

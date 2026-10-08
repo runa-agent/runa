@@ -1,11 +1,12 @@
 """Tests for `RunState`'s durable JSON serialization: `to_json`/`to_string`/`from_json`.
 
 These let a paused run survive a process restart -- see `RunState`'s docstring for what's
-preserved (agent/tool identity by name, the sticky approval ledger, usage) and what isn't
+preserved (agent identity by name, the sticky approval ledger, usage) and what isn't
 (guardrail results, trace spans, a dataclass context's original type).
 """
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -89,8 +90,8 @@ def _fresh_agent_like(agent: Any) -> Any:
     """A structurally equivalent but distinct agent object, standing in for a fresh instance.
 
     Carries `model` over too -- a real fresh instance of the same `Agent` subclass would have
-    the same `model` config; `from_json` re-resolving `.tool`/`.agent` by name is the behavior
-    under test, not needing to independently reconstruct the model too.
+    the same `model` config; `from_json` re-resolving `.agent` by name is the behavior under
+    test, not needing to independently reconstruct the model too.
     """
     return _agent(
         name=agent.name, tools=list(agent.tools), handoffs=dict(agent.handoffs), model=agent.model
@@ -104,7 +105,7 @@ def test_to_json_then_from_json_round_trips_a_paused_run() -> None:
     state.approve(state.pending[0])
 
     blob = state.to_json()
-    restored = asyncio.run(RunState.from_json(_fresh_agent_like(agent), blob))
+    restored = RunState.from_json(_fresh_agent_like(agent), blob)
 
     resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
     assert resumed.output == "all done"
@@ -118,7 +119,7 @@ def test_to_string_then_from_string_round_trips_the_same_way() -> None:
 
     blob = state.to_string()
     assert isinstance(blob, str)
-    restored = asyncio.run(RunState.from_string(_fresh_agent_like(agent), blob))
+    restored = RunState.from_string(_fresh_agent_like(agent), blob)
 
     resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
     assert resumed.output == "all done"
@@ -133,7 +134,7 @@ def test_from_json_rejects_an_unknown_schema_version() -> None:
     blob["schema_version"] = 999
 
     with pytest.raises(UserError):
-        asyncio.run(RunState.from_json(_fresh_agent_like(agent), blob))
+        RunState.from_json(_fresh_agent_like(agent), blob)
 
 
 def test_from_json_rejects_a_malformed_field() -> None:
@@ -145,7 +146,7 @@ def test_from_json_rejects_a_malformed_field() -> None:
     blob["approvals"] = "not-a-dict"
 
     with pytest.raises(UserError):
-        asyncio.run(RunState.from_json(_fresh_agent_like(agent), blob))
+        RunState.from_json(_fresh_agent_like(agent), blob)
 
 
 def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_pause() -> None:
@@ -176,24 +177,47 @@ def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_p
     assert blob["agent_name"] == "Target"
 
     fresh_main = _agent(name="Main", handoffs=[Handoff.from_agent(target)])
-    restored = asyncio.run(RunState.from_json(fresh_main, blob))
+    restored = RunState.from_json(fresh_main, blob)
     assert restored.agent.name == "Target"
 
     resumed = asyncio.run(_run_async(target, restored, run_config=_run_config()))
     assert resumed.output == "done"
 
 
-def test_from_json_resolves_the_paused_interruptions_tool_from_its_name() -> None:
-    """A pending interruption's `tool` is re-resolved by name against the fresh agent."""
+def test_from_json_resolves_the_paused_interruptions_agent_from_its_name() -> None:
+    """A pending interruption's `agent` is re-resolved by name against the fresh agent."""
     result, agent = _paused_result_and_agent()
     state = result.to_state()
 
     blob = state.to_json()
     fresh_agent = _fresh_agent_like(agent)
-    restored = asyncio.run(RunState.from_json(fresh_agent, blob))
+    restored = RunState.from_json(fresh_agent, blob)
 
-    assert restored.pending[0].tool is fresh_agent.tools[0]
-    assert restored.pending[0].tool.name == "dangerous"
+    assert restored.pending[0].agent is fresh_agent
+    assert restored.pending[0].name == "dangerous"
+
+
+def test_from_json_never_lists_an_agents_mcp_server_tools() -> None:
+    """Reading a blob resolves no tools, so an agent's MCP servers are left alone entirely.
+
+    The tool a pending call names is looked up by the resumed run, off the shape it builds
+    anyway -- which is what keeps `from_json` a synchronous, I/O-free read even when the paused
+    call was an MCP server's tool and the fresh agent declares nothing locally.
+    """
+
+    class _ExplodingServer:
+        async def list_tools(self) -> list[Any]:
+            raise AssertionError("from_json must not connect to an MCP server")
+
+    result, agent = _paused_result_and_agent()
+    blob = result.to_state().to_json()
+    fresh_agent = SimpleNamespace(
+        name=agent.name, tools=[], handoffs={}, mcp_servers=[_ExplodingServer()]
+    )
+
+    restored = RunState.from_json(fresh_agent, blob)
+
+    assert [item.name for item in restored.pending] == ["dangerous"]
 
 
 def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> None:
@@ -205,7 +229,7 @@ def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> N
     blob = state.to_json()
     assert blob["approval_ledger"] == {"dangerous": True}
 
-    restored = asyncio.run(RunState.from_json(_fresh_agent_like(agent), blob))
+    restored = RunState.from_json(_fresh_agent_like(agent), blob)
     assert restored.context_wrapper.approval_ledger == {"dangerous": True}
 
     resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))

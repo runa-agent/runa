@@ -100,8 +100,9 @@ delegate right where it stopped.
 `RunState` survives a process restart. `state.to_json()`/`.to_string()` serialize it, as a plain
 dict or a JSON string. `RunState.from_json(agent, blob)`/`.from_string(agent, blob)` rebuild it,
 given a fresh instance of the agent the run started with, used to re-resolve the current agent
-and each pending tool by name. A live `Agent` instance and a tool's closure cannot round-trip
-through JSON themselves.
+by name -- a live `Agent` instance cannot round-trip through JSON itself. Both are plain
+synchronous calls, like `to_json`/`to_string`: reading a blob resolves no tools and so never
+connects to an agent's MCP servers.
 
 A `context` that was a dataclass comes back as a plain dict, not its original class. The run's
 [guardrail audit trail](guardrails.md#audit-trail) and trace spans are not included in the serialized blob. Spans are

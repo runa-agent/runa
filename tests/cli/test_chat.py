@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -134,7 +134,6 @@ def test_run_agent_repl_with_a_message_rejects_approvals_once_stdin_is_used_up(
         name="delete_file",
         arguments="{}",
         call_id="call_1",
-        tool=cast(Any, None),
         agent=_SupportAgentStub(),
     )
     _feed_input(monkeypatch, [])
@@ -340,9 +339,7 @@ def test_run_agent_repl_approves_a_pending_tool_call_when_the_operator_says_yes(
     """Answering `y` to the approval prompt resumes the run with the item approved."""
     project_dir = _scaffold_with_agent(tmp_path)
     agent = _SupportAgentStub()
-    interruption = Interruption(
-        name="delete_file", arguments="{}", call_id="call_1", tool=cast(Any, None), agent=agent
-    )
+    interruption = Interruption(name="delete_file", arguments="{}", call_id="call_1", agent=agent)
     _feed_input(monkeypatch, ["delete it", "y"])
     state = _FakeApprovalState()
 
@@ -374,9 +371,7 @@ def test_run_agent_repl_rejects_a_pending_tool_call_by_default(
     """Any answer other than `y` rejects the tool call rather than approving it."""
     project_dir = _scaffold_with_agent(tmp_path)
     agent = _SupportAgentStub()
-    interruption = Interruption(
-        name="delete_file", arguments="{}", call_id="call_1", tool=cast(Any, None), agent=agent
-    )
+    interruption = Interruption(name="delete_file", arguments="{}", call_id="call_1", agent=agent)
     _feed_input(monkeypatch, ["delete it", "n"])
     state = _FakeApprovalState()
 
@@ -408,9 +403,7 @@ def test_run_agent_repl_always_approves_a_pending_tool_call_when_the_operator_sa
     """Answering `a` approves the item with `always=True`, not just a one-off approval."""
     project_dir = _scaffold_with_agent(tmp_path)
     agent = _SupportAgentStub()
-    interruption = Interruption(
-        name="delete_file", arguments="{}", call_id="call_1", tool=cast(Any, None), agent=agent
-    )
+    interruption = Interruption(name="delete_file", arguments="{}", call_id="call_1", agent=agent)
     _feed_input(monkeypatch, ["delete it", "a"])
     state = _FakeApprovalState()
 

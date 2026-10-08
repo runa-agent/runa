@@ -142,14 +142,15 @@ resumed with `agent.run_streamed(state)` (or `run`/`run_sync`).
 
 **Durability.** `RunState` survives a process restart: `state.to_json()`/`.to_string()`
 serialize it (as a plain dict, or a JSON string); `RunState.from_json(agent, blob)`/
-`.from_string(agent, blob)` rebuild it, given a fresh instance of the agent the run started
-with (used to re-resolve the current agent and each pending tool by name; a live `Agent`
-instance and a tool's closure can't round-trip through JSON themselves). A `context` that was a
-dataclass comes back as a plain dict, not its original class; the run's guardrail-result audit
-trail (see below) and trace spans aren't included in the serialized blob: spans are already
-durably persisted separately (see [Tracing](#14-tracing)). An unrecognized `schema_version`
-raises `UserError` rather than resuming from a blob a different, incompatible version of Runa
-produced.
+`.from_string(agent, blob)` rebuild it, synchronously, given a fresh instance of the agent the
+run started with (used to re-resolve the current agent by name; a live `Agent` instance can't
+round-trip through JSON itself). Reading a blob resolves no tools, so it never connects to an
+agent's MCP servers: the resumed run looks each pending call's tool up itself. A `context` that
+was a dataclass comes back as a plain dict, not its original class; the run's guardrail-result
+audit trail (see below) and trace spans aren't included in the serialized blob: spans are
+already durably persisted separately (see [Tracing](#14-tracing)). An unrecognized
+`schema_version` raises `UserError` rather than resuming from a blob a different, incompatible
+version of Runa produced.
 
 **Guardrail audit trail.** Every guardrail that ran (tripped or not, a delegate's included) is
 listed on the `Run`, whatever its status, as `input_guardrail_results`/`.output_guardrail_results`/

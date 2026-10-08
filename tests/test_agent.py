@@ -1493,10 +1493,7 @@ def test_a_paused_delegate_survives_a_json_round_trip() -> None:
     parent = _parent_with_paused_delegate(calls)
     blob = parent.run_sync("please refund").to_state().to_json()
 
-    async def restore() -> RunState:
-        return await RunState.from_json(parent, blob)
-
-    state = asyncio.run(restore())
+    state = RunState.from_json(parent, blob)
     state.reject(state.pending[0], rejection_message="not today")
     resumed = parent.run_sync(state)
 

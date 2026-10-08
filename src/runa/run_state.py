@@ -11,8 +11,8 @@ from runa._items import ConversationItem
 from runa._types import InputTokensDetails, OutputTokensDetails, RunContextWrapper, Usage
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
-from runa.run_internal.agent_shape import AgentShape, _normalized_handoffs
-from runa.tool import FunctionTool, ToolCall
+from runa.run_internal.agent_shape import _normalized_handoffs
+from runa.tool import ToolCall
 from runa.tracing.traces import Trace
 
 _SCHEMA_VERSION = 1
@@ -22,6 +22,11 @@ _SCHEMA_VERSION = 1
 class Interruption:
     """One tool call paused on `needs_approval`, surfaced to the caller to resolve.
 
+    `name` is the tool's own name, which is all a decision needs: the sticky ledger is keyed by
+    it, and the resumed run looks the tool itself up again off the agent's shape. Carrying the
+    `FunctionTool` here as well would mean `from_json` had to rebuild one from a name, which for
+    an MCP tool means connecting to the server just to read a deserialized blob.
+
     `owner` is the `RunState` the call belongs to: the caller's own, or a delegate's nested one
     when the paused call came from a `.delegate` subagent. Resolving it records the decision on
     both, so resuming the caller resumes the delegate right where it stopped.
@@ -30,15 +35,14 @@ class Interruption:
     name: str
     arguments: str
     call_id: str
-    tool: FunctionTool
     agent: Any
     owner: RunState | None = field(default=None, repr=False)
 
 
 # --- JSON schema (Pydantic) -------------------------------------------------------------
 #
-# `RunState`'s own dataclass fields hold live objects (an `Agent` instance, a `FunctionTool`
-# closure) that can't round-trip through JSON. These Pydantic models are the actual JSON
+# `RunState`'s own dataclass fields hold live objects (an `Agent` instance, a `Trace`'s spans)
+# that can't round-trip through JSON. These Pydantic models are the actual JSON
 # envelope `to_json`/`to_string`/`from_json`/`from_string` serialize through -- kept separate
 # from the runtime dataclasses above, which stay plain dataclasses (hot-path, mutated in place,
 # and partly non-serializable by nature). This is Runa's only use of Pydantic; everywhere else
@@ -57,7 +61,7 @@ class _UsageSchema(BaseModel):
 
 
 class _InterruptionSchema(BaseModel):
-    """JSON-safe mirror of `Interruption`; `tool`/`agent` become a name string to resolve later."""
+    """JSON-safe mirror of `Interruption`; `agent` becomes a name string to resolve later."""
 
     name: str
     arguments: str
@@ -170,8 +174,8 @@ class RunState(GuardrailAudit):
         """
         self.approvals[interruption.call_id] = True
         if always:
-            self.context_wrapper.approval_ledger[interruption.tool.name] = True
-            self.context_wrapper.approval_ledger_messages.pop(interruption.tool.name, None)
+            self.context_wrapper.approval_ledger[interruption.name] = True
+            self.context_wrapper.approval_ledger_messages.pop(interruption.name, None)
         if interruption.owner not in (None, self):
             interruption.owner.approve(interruption, always=always)
 
@@ -192,11 +196,9 @@ class RunState(GuardrailAudit):
         if rejection_message is not None:
             self.rejection_messages[interruption.call_id] = rejection_message
         if always:
-            self.context_wrapper.approval_ledger[interruption.tool.name] = False
+            self.context_wrapper.approval_ledger[interruption.name] = False
             if rejection_message is not None:
-                self.context_wrapper.approval_ledger_messages[interruption.tool.name] = (
-                    rejection_message
-                )
+                self.context_wrapper.approval_ledger_messages[interruption.name] = rejection_message
         if interruption.owner not in (None, self):
             interruption.owner.reject(
                 interruption, always=always, rejection_message=rejection_message
@@ -250,11 +252,10 @@ class RunState(GuardrailAudit):
     def to_json(self) -> dict[str, Any]:
         """Serialize this paused run to a JSON-compatible dict, to persist and resume later.
 
-        Not included: `Interruption.tool`/`.agent` and `agent` are recorded by name and
-        re-resolved by `from_json`/`from_string` against a fresh agent instance, since a
-        `FunctionTool`'s closure and a live `Agent` can't round-trip through JSON; the guardrail
-        audit trail and trace spans aren't included either (see `RunState`'s docstring and
-        `_RunStateSchema`'s).
+        Not included: `agent` and `Interruption.agent` are recorded by name and re-resolved by
+        `from_json`/`from_string` against a fresh agent instance, since a live `Agent` can't
+        round-trip through JSON; the guardrail audit trail and trace spans aren't included
+        either (see `RunState`'s docstring and `_RunStateSchema`'s).
         """
         return self._to_schema().model_dump(mode="json")
 
@@ -263,17 +264,19 @@ class RunState(GuardrailAudit):
         return self._to_schema().model_dump_json()
 
     @classmethod
-    async def from_json(cls, initial_agent: Any, state_json: dict[str, Any]) -> RunState:
+    def from_json(cls, initial_agent: Any, state_json: dict[str, Any]) -> RunState:
         """Rebuild a paused `RunState` from `to_json()`'s output.
 
         `initial_agent` is a fresh instance of the agent the run started with; the current agent
-        (possibly switched by a handoff before the pause) and each pending interruption's tool
-        are re-resolved from it by name -- a `FunctionTool`'s closure and a live `Agent` can't
-        round-trip through JSON, so they were never serialized as objects in the first place.
+        (possibly switched by a handoff before the pause) and each pending interruption's agent
+        are re-resolved from it by name -- a live `Agent` can't round-trip through JSON, so it
+        was never serialized as an object in the first place. Reading a blob is pure: the tools
+        themselves are resolved by the resumed run, off the shape it builds anyway, so rebuilding
+        a state never reaches out to an agent's MCP servers.
 
         A `context` that was a dataclass comes back as a plain dict, not reinstantiated as its
         original class -- there's no type registry to reverse that with. Raises `UserError` for
-        an unknown schema version, a malformed field, or a tool/agent name that can no longer be
+        an unknown schema version, a malformed field, or an agent name that can no longer be
         found -- never a raw `pydantic.ValidationError`.
         """
         try:
@@ -288,13 +291,13 @@ class RunState(GuardrailAudit):
             executed_call_ids=set(schema.executed_call_ids),
         )
         for call_id, delegate in schema.delegates.items():
-            context_wrapper.paused_delegates[call_id] = await cls._from_schema(
+            context_wrapper.paused_delegates[call_id] = cls._from_schema(
                 initial_agent, delegate, context_wrapper.fork()
             )
-        return await cls._from_schema(initial_agent, schema, context_wrapper)
+        return cls._from_schema(initial_agent, schema, context_wrapper)
 
     @classmethod
-    async def _from_schema(
+    def _from_schema(
         cls, initial_agent: Any, schema: _RunStateSchema, context_wrapper: RunContextWrapper
     ) -> RunState:
         """Rebuild one state (the caller's, or a paused delegate's) onto `context_wrapper`."""
@@ -322,12 +325,6 @@ class RunState(GuardrailAudit):
             output_tokens_details=OutputTokensDetails(**schema.usage.output_tokens_details),
         )
         for item in schema.pending:
-            item_agent = _find_agent_by_name(initial_agent, item.agent_name)
-            tool = (await AgentShape.of(item_agent)).find_tool(item.name)
-            if tool is None:
-                raise UserError(
-                    f"tool {item.name!r} not found on agent {item_agent.name!r} while resuming"
-                )
             owner = (
                 context_wrapper.paused_delegates.get(item.owner_call_id)
                 if item.owner_call_id is not None
@@ -338,21 +335,20 @@ class RunState(GuardrailAudit):
                     name=item.name,
                     arguments=item.arguments,
                     call_id=item.call_id,
-                    tool=tool,
-                    agent=item_agent,
+                    agent=_find_agent_by_name(initial_agent, item.agent_name),
                     owner=owner,
                 )
             )
         return state
 
     @classmethod
-    async def from_string(cls, initial_agent: Any, state_string: str) -> RunState:
+    def from_string(cls, initial_agent: Any, state_string: str) -> RunState:
         """As `from_json()`, but from a JSON string produced by `to_string()`."""
         try:
             state_json = json.loads(state_string)
         except json.JSONDecodeError as exc:
             raise UserError(f"invalid RunState JSON: {exc}") from exc
-        return await cls.from_json(initial_agent, state_json)
+        return cls.from_json(initial_agent, state_json)
 
 
 __all__ = ["Interruption", "RunState"]

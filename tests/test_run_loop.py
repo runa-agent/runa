@@ -723,7 +723,7 @@ def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
 
     result = asyncio.run(_run_async(agent, "go", session=session, run_config=_run_config()))
     blob = result.to_state().to_json()
-    state = asyncio.run(RunState.from_json(agent, blob))
+    state = RunState.from_json(agent, blob)
     state.approve(state.pending[0])
     asyncio.run(_run_async(agent, state, session=session, run_config=_run_config()))
 
