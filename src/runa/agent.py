@@ -28,7 +28,7 @@ from runa.exceptions import RunaError, UserError
 from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
 from runa.handoff import agent_as_tool
 from runa.knowledge import Knowledge
-from runa.lifecycle import RunHooks
+from runa.lifecycle import RunHooks, logger
 from runa.memory import Memory
 from runa.run import Run, RunStream
 from runa.run_internal.run_config import DEFAULT_MAX_TURNS, RunConfig
@@ -153,22 +153,19 @@ def _snake_case(name: str) -> str:
 
 _NO_SOURCE_FILE = (TypeError, OSError)
 
-_PROMPT_TEMPLATE = """TODO: write the prompt {name} uses.
-"""
-
 
 def _load_prompt(cls: type, name: str) -> str | None:
     """Read `<name>.md` from the `prompts/` directory next to `cls`'s `app/agents/` module.
 
     Mirrors `runa generate prompt`'s naming: `app/prompts/<snake_case(name)>.md`, a sibling of
-    the `agents/` directory the subclass is defined in. Missing, it's created from
-    `_PROMPT_TEMPLATE`, the same stub `runa generate prompt` (`cli/generate.py`, which imports
-    this constant rather than duplicating it) would write, so a fresh agent always has a prompt
-    file ready to edit instead of silently running with empty instructions.
+    the `agents/` directory the subclass is defined in. Reading only: constructing an Agent never
+    writes to the project tree, so an immutable image or a read-only `app/` is an ordinary way to
+    ship one. Writing that stub is `runa generate agent`/`runa generate prompt`'s job.
 
     Returns `None` (leaving `instructions` empty) when `cls` has no source file (e.g. defined at
-    a REPL) or its module doesn't live in an `agents/` directory, nothing is ever created outside
-    the one location `runa new`'s convention establishes for prompts.
+    a REPL), its module doesn't live in an `agents/` directory, or no prompt file is there --
+    logging the path `runa generate prompt` would write in that last case, so an agent running
+    on empty instructions says so instead of being a silent surprise.
     """
     try:
         module_file = Path(inspect.getfile(cls)).resolve()
@@ -176,12 +173,15 @@ def _load_prompt(cls: type, name: str) -> str | None:
         return None
     if module_file.parent.name != "agents":
         return None
-    stem = _snake_case(name)
-    prompts_dir = module_file.parent.parent / "prompts"
-    prompt_file = prompts_dir / f"{stem}.md"
+    prompt_file = module_file.parent.parent / "prompts" / f"{_snake_case(name)}.md"
     if not prompt_file.is_file():
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-        prompt_file.write_text(_PROMPT_TEMPLATE.format(name=stem))
+        logger.warning(
+            "%s has no instructions: write %s, or run `runa generate prompt %s`",
+            name,
+            prompt_file,
+            name,
+        )
+        return None
     return prompt_file.read_text().strip()
 
 

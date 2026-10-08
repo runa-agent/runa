@@ -25,7 +25,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from runa.agent import _PROMPT_TEMPLATE
 from runa.exceptions import OperatorError
 from runa.project import AgentNotFound, NotARunaProject
 
@@ -45,6 +44,9 @@ def {func_name}(value: str) -> bool:
     """TODO: describe what trips this guardrail."""
     raise NotImplementedError
 '''
+
+_PROMPT_TEMPLATE = """TODO: write the prompt {name} uses.
+"""
 
 _EVALUATION_TEMPLATE = '{"input": "Hello! What can you help me with?"}\n'
 
@@ -332,9 +334,9 @@ def generate_agent(
     default `app/tools/core.py`.
 
     Without an explicit `instructions`, the class gets no `instructions` attribute at all.
-    Instead a stub `app/prompts/<snake_case(name)>.md` is written alongside it, the same
-    file `Agent.__init__` would lazily create on first instantiation (`agent.py`'s
-    `_load_prompt`). Generating it upfront means it's there to edit before the first `runa chat`.
+    Instead a stub `app/prompts/<snake_case(name)>.md` is written alongside it, the file
+    `Agent.__init__` reads on construction (`agent.py`'s `_load_prompt`, which only ever reads).
+    Scaffolding it here is what keeps an agent from starting life on empty instructions.
     Likewise `evals/<snake_case(name)>.jsonl` starts with one case, so `runa eval` grades the new
     agent from day one (see `generate_evaluation`).
 

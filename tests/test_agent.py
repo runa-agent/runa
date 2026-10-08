@@ -102,7 +102,7 @@ def test_instructions_auto_load_from_a_sibling_prompts_file(tmp_path: Path) -> N
 
 
 def test_instructions_stay_empty_outside_an_agents_directory() -> None:
-    """A class not defined under an `agents/` directory never gets a prompt file auto-created."""
+    """A class not defined under an `agents/` directory looks for no prompt file at all."""
 
     class NoPrompt(Agent):
         name = "no_prompt_agent"
@@ -110,21 +110,23 @@ def test_instructions_stay_empty_outside_an_agents_directory() -> None:
     assert NoPrompt().instructions is None
 
 
-def test_missing_prompt_file_is_created_from_the_template(tmp_path: Path) -> None:
-    """No `instructions`, no prompt file: one is created from the `runa generate prompt` stub."""
+def test_a_missing_prompt_file_is_never_written(tmp_path: Path) -> None:
+    """Construction only reads: no prompt file means empty `instructions`, not a new file.
+
+    A constructor that scaffolds would make an immutable image (or any read-only `app/`) raise
+    `PermissionError` out of `Agent()`, before a run exists to report it as `status="error"`.
+    """
     agents_dir = tmp_path / "app" / "agents"
     agents_dir.mkdir(parents=True)
     (agents_dir / "greeter_agent.py").write_text(
         "from runa import Agent\n\n\nclass GreeterAgent(Agent):\n    name = 'greeter_agent'\n"
     )
 
-    module = _import_module_from_file("greeter_agent_autocreate", agents_dir / "greeter_agent.py")
+    module = _import_module_from_file("greeter_agent_no_prompt", agents_dir / "greeter_agent.py")
     agent = module.GreeterAgent()
 
-    prompt_file = tmp_path / "app" / "prompts" / "greeter_agent.md"
-    assert prompt_file.is_file()
-    assert agent.instructions == prompt_file.read_text().strip()
-    assert "TODO: write the prompt greeter_agent uses." in agent.instructions
+    assert agent.instructions is None
+    assert not (tmp_path / "app" / "prompts").exists()
 
 
 def test_explicit_instructions_skip_the_prompt_file(tmp_path: Path) -> None:
