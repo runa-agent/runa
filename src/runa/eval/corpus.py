@@ -16,7 +16,7 @@ from runa import db
 from runa.eval.dataset import Dataset
 from runa.exceptions import OperatorError
 from runa.project import NotARunaProject
-from runa.tracing import Trace, TraceNotFound
+from runa.tracing import Trace, require_trace
 
 
 class TraceHasNoInput(OperatorError):
@@ -62,9 +62,7 @@ def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None
     An input already in the file raises `CaseAlreadyInEvals` rather than adding it twice.
     """
     evals_dir = require_evals_dir(root)
-    trace = db.traces().get(trace_id)
-    if trace is None:
-        raise TraceNotFound(f"no trace found with id {trace_id!r}")
+    trace = require_trace(db.traces(), trace_id)
     traced = traced_input(trace)
     if traced is None:
         raise TraceHasNoInput(f"trace {trace_id!r} recorded no user input to add as a case")

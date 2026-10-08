@@ -67,7 +67,8 @@ class TraceNotFound(OperatorError):
     `TraceStore.get` returns `None` for a missing trace, since "is it there" is a question with
     an answer; this is for the surfaces above it -- `runa traces show`, `runa ui`'s trace page,
     `runa eval --add` -- where a missing trace is the end of the request. It lives with the store
-    rather than in each of them, so all three raise the same type for the same situation.
+    rather than in each of them, so all three raise the same type for the same situation, and
+    `require_trace` below is how they reach it, so they share the message too.
     """
 
 
@@ -102,6 +103,20 @@ class TraceStore(Protocol):
         passed one; `status` is `"ok"` or `"error"`.
         """
         ...
+
+
+def require_trace(store: TraceStore, trace_id: str) -> Trace:
+    """Look `trace_id` up in `store`, raising `TraceNotFound` when it has no such trace.
+
+    The raising form of `get`, which is the only form the three surfaces above a store want: each
+    of them used to ask `get` and then re-derive the same `if trace is None: raise` with the same
+    message, so rewording it meant rewording it three times. `get` stays as it is, since "is it
+    there" is still a question worth being able to ask.
+    """
+    trace = store.get(trace_id)
+    if trace is None:
+        raise TraceNotFound(f"no trace found with id {trace_id!r}")
+    return trace
 
 
 def as_text(value: object) -> str | None:
@@ -188,6 +203,7 @@ __all__ = [
     "TraceNotFound",
     "TraceStore",
     "as_text",
+    "require_trace",
     "span_values",
     "to_span",
     "to_trace",

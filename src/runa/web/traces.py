@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from runa import db
 from runa.eval.corpus import has_case, traced_input
-from runa.tracing import SpanRow, Trace, TraceNotFound
+from runa.tracing import SpanRow, Trace, require_trace
 from runa.tracing.spans import Span
 from runa.web._html import chip, empty, escape, page, pre
 
@@ -129,9 +129,7 @@ def render_detail(trace_id: str, *, root: Path) -> str:
     No nav tab is active here: this page is reached from a session's trace card ("open trace"), an
     evaluation case, or a direct link, not browsed from a list, so nothing in `NAV_ITEMS` does.
     """
-    trace = db.traces().get(trace_id)
-    if trace is None:
-        raise TraceNotFound(f"no trace found with id {trace_id!r}")
+    trace = require_trace(db.traces(), trace_id)
     status = "ok" if trace.status == "ok" else "error"
     session_link = (
         f' · session <a href="/sessions/{escape(trace.session_id)}">{escape(trace.session_id)}</a>'

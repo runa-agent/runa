@@ -7,7 +7,7 @@ command was dispatched.
 """
 
 from runa import db
-from runa.tracing import Trace, TraceNotFound
+from runa.tracing import Trace, require_trace
 
 
 def _summary(trace: Trace) -> str:
@@ -25,10 +25,7 @@ def list_traces_cli(*, limit: int = 50) -> str:
 
 def show_trace(trace_id: str) -> str:
     """Render one trace's full span tree."""
-    trace = db.traces().get(trace_id)
-    if trace is None:
-        raise TraceNotFound(f"no trace found with id {trace_id!r}")
-    return str(trace)
+    return str(require_trace(db.traces(), trace_id))
 
 
 def list_errors_cli(*, limit: int = 50) -> str:
