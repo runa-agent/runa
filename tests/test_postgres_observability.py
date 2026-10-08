@@ -129,10 +129,11 @@ def test_without_the_env_var_traces_stay_in_sqlite(
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
     trace = _trace(unique_id)
 
-    db.traces(tmp_path).save(trace)
+    db.use_project(tmp_path)
+    db.traces().save(trace)
 
     assert (tmp_path / "db" / "runa.db").exists()
-    assert db.traces(tmp_path).get(trace.id) is not None
+    assert db.traces().get(trace.id) is not None
 
 
 def test_sessions_are_readable_from_the_shared_database(

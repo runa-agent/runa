@@ -9,7 +9,6 @@ prints. It used to be this page reversing an oldest-first read of its own.
 """
 
 from datetime import UTC, datetime
-from pathlib import Path
 
 from runa import db
 from runa.session.store import SessionMessage, SessionNotFound
@@ -20,9 +19,9 @@ from runa.web.traces import _tree
 __all__ = ["SessionNotFound", "render_detail", "render_list"]
 
 
-def render_list(*, root: Path) -> str:
+def render_list() -> str:
     """Render `/sessions`: every session id this deployment has, most recently updated first."""
-    sessions = db.sessions(root).listing()
+    sessions = db.sessions().listing()
     if not sessions:
         body = empty_hint("no sessions yet, run", "runa chat <agent>")
     else:
@@ -73,10 +72,10 @@ def _trace_card(trace: Trace, turn: int) -> str:
     )
 
 
-def render_detail(session_id: str, *, root: Path) -> str:
+def render_detail(session_id: str) -> str:
     """Render `/sessions/{session_id}`: its messages and traces, merged into one timeline."""
-    messages = db.sessions(root).messages(session_id)
-    traces = db.traces(root).list(session_id=session_id)
+    messages = db.sessions().messages(session_id)
+    traces = db.traces().list(session_id=session_id)
     turn_of = {
         trace.id: turn
         for turn, trace in enumerate(sorted(traces, key=lambda trace: trace.start_time), start=1)

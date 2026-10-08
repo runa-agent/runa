@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from runa import db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.project import iter_agent_classes, loaded_app
@@ -131,6 +132,23 @@ def pausing_client(project: Path) -> TestClient:
 
 def _auth(token: str = "secret-token") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
+    """An app served from outside its own directory keeps all of its state in one file.
+
+    `create_app(root)` is public API -- `runa new` scaffolds an `asgi.py` that calls it for a
+    deployment bringing its own server -- and `root` is the only thing it is told about the
+    project. A session route resolving to `root` while the memory an agent writes during that
+    same request resolved to the server's cwd is the split `runa.db` exists to prevent, so the
+    assertion covers one concern from each side of that old divide.
+    """
+    db.use_project(None)
+
+    create_app(project, api_key="secret-token")
+
+    assert db.sessions().db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
+    assert db.memory_store(dimensions=4).db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
 
 
 def _paused_body(client: TestClient) -> dict[str, Any]:

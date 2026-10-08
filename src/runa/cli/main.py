@@ -12,6 +12,7 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from runa import db
 from runa.cli.chat import run_agent_repl
 from runa.cli.eval import run_project_evals
 from runa.cli.generate import (
@@ -222,8 +223,14 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
     where it is raised, in the module that already knows whose fault it is, so a new command's
     new error needs nothing added to this function. The other two clauses are the failures that
     earn a more specific message than `error: {exc}`, not a second copy of that decision.
+
+    `cwd` is this invocation's project, and telling `runa.db` once here is what makes every
+    command below read and write the same `db/runa.db` -- sessions, traces, eval history, memory,
+    knowledge and the cache alike. A command that passed it along itself could only reach the
+    concerns that take a parameter.
     """
     cwd = cwd or Path.cwd()
+    db.use_project(cwd)
     args = _build_parser().parse_args(argv)
 
     try:
@@ -333,10 +340,10 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
 
     if args.command == "chat":
         if args.list:
-            print(list_sessions(root=cwd))
+            print(list_sessions())
             return 0
         if args.show is not None:
-            print(show_session(args.show, root=cwd))
+            print(show_session(args.show))
             return 0
         if args.agent_name is None:
             print("error: runa chat needs an agent name, or --list/--show", file=sys.stderr)
@@ -395,9 +402,9 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.traces_action == "list":
-        print(list_traces_cli(root=cwd))
+        print(list_traces_cli())
     elif args.traces_action == "show":
-        print(show_trace(args.trace_id, root=cwd))
+        print(show_trace(args.trace_id))
     else:
-        print(list_errors_cli(root=cwd))
+        print(list_errors_cli())
     return 0

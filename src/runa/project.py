@@ -7,7 +7,8 @@ run, same as `python main.py` would), and which `Agent` subclasses does it decla
 asked first. They used to live in `cli/_project.py`, which meant `runa.serve` and `runa.web`
 importing a private module of the CLI for machinery that was never about argv.
 
-Where a project's *data* lives is still not here: that is `runa.db.sqlite_path(root)`'s answer.
+Where a project's *data* lives is still not here: that is `runa.db`'s answer, given a `root` of
+its own through `db.use_project`.
 
 No `Agent` is ever instantiated: `list_agents` reads class attributes only, so listing an app's
 agents never triggers memory/knowledge setup, prompt-file creation, or any API call.

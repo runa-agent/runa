@@ -100,10 +100,15 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
 
     `api_key` is the bearer token every route but `/health` requires; `None` disables the check
     entirely (`runa serve --no-auth`). `create_app` takes it as a parameter rather than reading
-    the environment itself, the same way every `cli/*.py` command takes `root` instead of
-    assuming `cwd`, so a test (or an app embedding this) can be explicit: `resolve_api_key` is
-    the conventional way to fill it in.
+    the environment itself, the same way this takes `root` instead of assuming `cwd`, so a test
+    (or an app embedding this) can be explicit: `resolve_api_key` is the conventional way to fill
+    it in.
+
+    `root` is also handed to `db.use_project`, so an embedded app served from outside its own
+    directory keeps all of its state together: a session route and the memory an agent writes
+    during that same request resolve to one file, not two.
     """
+    db.use_project(root)
     agents_dir = require_agents_dir(root)
 
     def _agent_classes() -> dict[str, type[Agent]]:
@@ -158,11 +163,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     async def run_agent(agent_name: str, body: RunRequest) -> dict[str, Any]:
         """Run one turn and return the whole `Run`."""
         agent = _build(agent_name)
-        session = (
-            db.session(body.session_id, user_id=body.user_id, root=root)
-            if body.session_id
-            else None
-        )
+        session = db.session(body.session_id, user_id=body.user_id) if body.session_id else None
         run = await agent.run(body.message, session=session)
         return _run_payload(run, agent_name)
 
@@ -175,11 +176,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         route returns, so a client gets the trace id and usage either way.
         """
         agent = _build(agent_name)
-        session = (
-            db.session(body.session_id, user_id=body.user_id, root=root)
-            if body.session_id
-            else None
-        )
+        session = db.session(body.session_id, user_id=body.user_id) if body.session_id else None
 
         async def events() -> AsyncIterator[str]:
             stream = agent.run_streamed(body.message, session=session)

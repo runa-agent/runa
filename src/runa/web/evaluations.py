@@ -1,12 +1,11 @@
 """web/evaluations.py: the Evaluations pages -- `agent.evaluate()` runs, from the eval store.
 
-Data comes from the `EvalStore` `runa.db.evals(root)` hands back; this module only turns
+Data comes from the `EvalStore` `runa.db.evals()` hands back; this module only turns
 `EvalRun`/`EvalCaseRow` into HTML. A case links to the trace of its run, and one
 that passed in the agent's previous run but failed here is marked regressed.
 """
 
 from datetime import datetime
-from pathlib import Path
 from urllib.parse import quote
 
 from runa import db
@@ -75,9 +74,9 @@ def _case_card(case: EvalCaseRow, *, regressed: bool) -> str:
 </div>"""
 
 
-def render_list(*, root: Path) -> str:
+def render_list() -> str:
     """Render `/evaluations`: the most recent `agent.evaluate()` runs, newest first."""
-    runs = db.evals(root).list(limit=100)
+    runs = db.evals().list(limit=100)
     if not runs:
         body = empty_hint("no evaluation runs yet, run", "runa eval")
     else:
@@ -96,9 +95,9 @@ def render_list(*, root: Path) -> str:
     )
 
 
-def render_detail(run_id: int, *, root: Path) -> str:
+def render_detail(run_id: int) -> str:
     """Render `/evaluations/{run_id}`: that run's summary plus every case it graded."""
-    store = db.evals(root)
+    store = db.evals()
     run: EvalRun | None = store.get(run_id)
     if run is None:
         raise EvalRunNotFound(f"no eval run found with id {run_id!r}")

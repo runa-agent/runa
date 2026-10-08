@@ -3,8 +3,9 @@
 Read-only except for one write: "Add to evals" on a trace page appends a case to `evals/`.
 
 Every route calls straight into one `web/<page>.py`'s render function; no route does its own
-data-fetching or HTML-building. `create_app(root)` closes over the app's directory, the same way
-every `cli/*.py` command takes `root` as a parameter instead of assuming `cwd`.
+data-fetching or HTML-building. `create_app(root)` takes the app's directory rather than assuming
+`cwd`, and hands it to `db.use_project` so every store this dashboard reads resolves to the same
+file; the two renderers that still take `root` want the filesystem, not the database.
 
 No standalone Traces tab: `web/sessions.py`'s merged timeline already shows a session's traces in
 context, and `/traces/{trace_id}` stays routable (unlinked from the nav) as the "open trace" target
@@ -17,6 +18,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from runa import db
 from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
 from runa.exceptions import OperatorError
 from runa.project import AppLoadError, NotARunaProject
@@ -45,7 +47,13 @@ def _trace_url(trace_id: str) -> str:
 
 
 def create_app(root: Path) -> FastAPI:
-    """Build the `runa ui` app for the project at `root`."""
+    """Build the `runa ui` app for the project at `root`.
+
+    Telling `runa.db` which project this is happens here, once, rather than in each route: the
+    dashboard reads six concerns out of `root/db/runa.db` and a route that forwarded `root` to a
+    reader could only move the four that took it.
+    """
+    db.use_project(root)
     app = FastAPI(title="runa ui", docs_url=None, redoc_url=None)
 
     @app.get("/", include_in_schema=False)
@@ -58,12 +66,12 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/sessions", response_class=HTMLResponse, include_in_schema=False)
     def sessions_list() -> str:
-        return sessions_page.render_list(root=root)
+        return sessions_page.render_list()
 
     @app.get("/sessions/{session_id}", response_class=HTMLResponse, include_in_schema=False)
     def session_detail(session_id: str) -> HTMLResponse:
         try:
-            return HTMLResponse(sessions_page.render_detail(session_id, root=root))
+            return HTMLResponse(sessions_page.render_detail(session_id))
         except sessions_page.SessionNotFound:
             return HTMLResponse(_error_page("Sessions", "Session not found."), status_code=404)
 
@@ -90,12 +98,12 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/evaluations", response_class=HTMLResponse, include_in_schema=False)
     def evaluations_list() -> str:
-        return evaluations_page.render_list(root=root)
+        return evaluations_page.render_list()
 
     @app.get("/evaluations/{run_id}", response_class=HTMLResponse, include_in_schema=False)
     def evaluation_detail(run_id: int) -> HTMLResponse:
         try:
-            return HTMLResponse(evaluations_page.render_detail(run_id, root=root))
+            return HTMLResponse(evaluations_page.render_detail(run_id))
         except evaluations_page.EvalRunNotFound:
             return HTMLResponse(
                 _error_page("Evaluations", "Evaluation run not found."), status_code=404

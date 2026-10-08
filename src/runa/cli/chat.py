@@ -26,12 +26,12 @@ def _new_session_id(agent_name: str) -> str:
     return f"{agent_name}-{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:4]}"
 
 
-def _pick_session(agent_name: str, *, root: Path) -> str:
+def _pick_session(agent_name: str) -> str:
     """Prompt the operator to choose one of `agent_name`'s past sessions, newest first.
 
     Falls back to starting a new session when there's no history to pick from.
     """
-    sessions = db.sessions(root).listing(agent=agent_name)
+    sessions = db.sessions().listing(agent=agent_name)
     if not sessions:
         print(f"no previous session for {agent_name!r}, starting a new one")
         return _new_session_id(agent_name)
@@ -51,7 +51,6 @@ def _pick_session(agent_name: str, *, root: Path) -> str:
 def _resolve_session_id(
     agent_name: str,
     *,
-    root: Path,
     session_id: str | None,
     continue_last: bool,
     resume: str | None,
@@ -65,13 +64,13 @@ def _resolve_session_id(
     if session_id is not None:
         return session_id
     if continue_last:
-        sessions = db.sessions(root).listing(agent=agent_name)
+        sessions = db.sessions().listing(agent=agent_name)
         if sessions:
             return sessions[0].id
         print(f"no previous session for {agent_name!r}, starting a new one")
         return _new_session_id(agent_name)
     if resume is not None:
-        return resume or _pick_session(agent_name, root=root)
+        return resume or _pick_session(agent_name)
     return _new_session_id(agent_name)
 
 
@@ -133,7 +132,13 @@ def run_agent_repl(
 
     With `message` (what `runa chat` reads from piped stdin), send just that one turn and return
     instead of looping. Approvals then get rejected, since stdin is already used up.
+
+    `root` is the project being chatted with, which makes this an entry point like the two
+    `create_app`s: it tells `runa.db` so, rather than taking a directory it only half applies.
+    `runa chat` has already said the same thing from `cwd`; saying it again costs nothing and is
+    what makes this callable on its own.
     """
+    db.use_project(root)
     agents_dir = require_agents_dir(root)
 
     with loaded_app(root):
@@ -141,12 +146,11 @@ def run_agent_repl(
         agent = agent_cls()
         resolved_session_id = _resolve_session_id(
             agent.name,
-            root=root,
             session_id=session_id,
             continue_last=continue_last,
             resume=resume,
         )
-        session = db.session(resolved_session_id, root=root)
+        session = db.session(resolved_session_id)
 
         if message is not None:
             if message.strip():

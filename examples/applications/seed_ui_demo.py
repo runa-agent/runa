@@ -45,7 +45,8 @@ project = scaffold_project("ui_demo", root=REPO_ROOT)
 generate_agent("SupportAgent", root=project, model="gpt-5.4-nano")
 generate_agent("BillingAgent", root=project, model="gpt-5.4-nano")
 generate_agent("PolicyResearcherAgent", root=project, model="gpt-5.4-nano")
-traces = db.traces(project)
+db.use_project(project)
+traces = db.traces()
 
 # Wire the real subagent relationships (`generate_agent` has no --subagent flag; you write these
 # by hand, same as tools/guardrails) so the Agents page's "Subagents" chip actually shows them --
@@ -71,8 +72,8 @@ traces = db.traces(project)
     "    subagents = [BillingAgent.handoff, PolicyResearcherAgent.delegate]\n"
 )
 
-session1 = db.session("support_agent-1", root=project)
-session2 = db.session("billing_agent-1", root=project)
+session1 = db.session("support_agent-1")
+session2 = db.session("billing_agent-1")
 
 
 async def add(session: Session, role: str, content: str) -> None:
@@ -249,7 +250,7 @@ time.sleep(1.1)
 # (support_agent, since that's who started the turn) and every span, before and after the
 # switch, stays a sibling under it -- `run_loop.py` never creates a second root span for the
 # agent that took over, it just keeps appending to the same one.
-session3 = db.session("support_agent-3", root=project)
+session3 = db.session("support_agent-3")
 root4_start = now()
 llm5_start = now()
 time.sleep(0.3)
@@ -325,7 +326,7 @@ time.sleep(1.1)
 # as its own trace, with no session (a delegate call is never given `session=`) and, today,
 # nothing in the outer trace's "delegate" span linking to it -- you'd only find it by knowing its
 # id.
-session4 = db.session("support_agent-4", root=project)
+session4 = db.session("support_agent-4")
 root5_start = now()
 llm7_start = now()
 time.sleep(0.3)
@@ -438,7 +439,7 @@ asyncio.run(
     )
 )
 
-db.evals(project).save(
+db.evals().save(
     Report(
         agent_name="support_agent",
         cases=[

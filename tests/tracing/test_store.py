@@ -25,14 +25,15 @@ def store(
 ) -> TraceStore:
     """A `TraceStore`, resolved by `runa.db` the way an app's would be.
 
-    Built through `db.traces(...)` rather than by naming an adapter, so the resolution the rest
+    Built through `db.traces()` rather than by naming an adapter, so the resolution the rest
     of Runa depends on is exercised by every check here too.
     """
     if request.param == "ephemeral":
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
         return db.traces()
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
-    return db.traces(tmp_path)
+    db.use_project(tmp_path)
+    return db.traces()
 
 
 @pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)

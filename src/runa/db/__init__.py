@@ -18,12 +18,23 @@ a file, and moving a deployment to Postgres stays one environment variable rathe
 Resolving here is also what keeps the promise honest, since a deployment where traces follow the
 variable but sessions don't is worse than one where neither does.
 
-`root` is the project directory a caller is reading: the process's cwd for every `runa` command,
-and whatever `create_app(root)`/`main(cwd=...)` was handed for an embedder or a test. It only
-changes where the *local* file is looked for; a shared deployment has one database and no such
-choice to make, so it goes unread. That convention -- `root/db/runa.db` -- lives here rather than
-in `cli/`, which is why `runa.web` and `runa.serve` no longer thread a path through every reader
-they call.
+Which project is being read is this module's one other decision, and it is asked once too:
+`use_project(root)` points the process at an app's directory, and every factory above resolves
+against it. The process's cwd is the default, which is what a bare `python main.py` wants. The
+rule for the rest is that a function handed someone else's project `root` says so here --
+`main(cwd=...)`, both `create_app(root)`s, `run_agent_repl`, `run_project_evals`,
+`run_project_tests` -- so that taking a `root` and reading that project's state are never two
+different things. Everything downstream of them (`runa ui`'s readers, `agent.evaluate()`, a
+`@tool` opening a session) gets the answer without naming a directory, and a `root` that survives
+elsewhere means a filesystem path, like `evals/`, rather than a second opinion about the database.
+
+A `root=` parameter per factory was the same promise made seven times and kept four: `Memory`
+and `Knowledge` are built inside `Agent.__init__`, which has no notion of a project root and
+should not grow one, so their stores silently used the cwd while sessions, traces and eval
+history followed the argument. One application's state split across two files is the exact
+failure this module exists to prevent, so the root is held here rather than threaded, the way
+`RUNA_DATABASE_URL` already is. It only moves the *local* file; a shared deployment has one
+database and no such choice to make, so it goes unread.
 
 Every adapter import is deferred into the function that needs it: an app without the `postgres`
 extra has to be able to ask the question and get the SQLite answer.
@@ -100,17 +111,37 @@ def ephemeral() -> bool:
     return url is not None and url.startswith(_MEMORY_SCHEME)
 
 
-def sqlite_path(root: Path | None = None) -> Path:
+_project_root: Path | None = None
+"""The project directory this process reads, or `None` for its cwd. Written by `use_project`."""
+
+
+def use_project(root: Path | None) -> None:
+    """Point this process's local state at the project in `root`; `None` means its cwd.
+
+    Startup configuration, called once, like `tracing.add_exporter` and for the same reason: a
+    process reads one app, and a root passed per call site is a root three of the seven concerns
+    below can't be passed at all. `runa` sets this from `cwd` before dispatching, and both
+    `create_app(root)`s set it while building, so an embedder serving an app from somewhere other
+    than its own working directory gets every concern moved, not four of them.
+
+    Unread unless this deployment's state is local: a `postgresql://` or `memory://` URL has no
+    file to place.
+    """
+    global _project_root
+    _project_root = root
+
+
+def sqlite_path() -> Path:
     """Where the local SQLite file lives: `RUNA_DATABASE_URL`'s path, or `db/runa.db`.
 
     Three slashes is a relative path and four is absolute, the form SQLAlchemy and every
     `DATABASE_URL` convention already use, so `sqlite:///data/runa.db` relocates the file without
     a `db_path=` argument on five different constructors.
 
-    `root` is the project being read, and a relative path is taken relative to it, so
-    `db.traces(Path("../other-app"))` reads `../other-app/db/runa.db` -- the same file that app's
-    own `runa chat` writes to. Absolute paths and `root=None` (an app running in its own
-    directory) are unaffected.
+    A relative path is taken relative to the project `use_project` named, so under
+    `use_project(Path("../other-app"))` this is `../other-app/db/runa.db` -- the same file that
+    app's own `runa chat` writes to. Absolute paths and an unset project (an app running in its
+    own directory) are unaffected.
     """
     url = os.environ.get(DATABASE_URL_ENV) or None
     if url is None or not url.startswith(_SQLITE_SCHEME):
@@ -118,12 +149,12 @@ def sqlite_path(root: Path | None = None) -> Path:
     else:
         tail = url.removeprefix(_SQLITE_SCHEME)
         path = Path(tail[1:]) if tail.startswith("//") else Path(tail.lstrip("/"))
-    if root is None or path.is_absolute():
+    if _project_root is None or path.is_absolute():
         return path
-    return root / path
+    return _project_root / path
 
 
-def session(session_id: str, *, user_id: str | None = None, root: Path | None = None) -> Session:
+def session(session_id: str, *, user_id: str | None = None) -> Session:
     """This deployment's session store for `session_id`.
 
     `user_id` scopes the session's automatic memory, if its agent has any; see `Session`.
@@ -138,10 +169,10 @@ def session(session_id: str, *, user_id: str | None = None, root: Path | None = 
         return PostgresSession(session_id, url, user_id=user_id)
     from runa.session.sqlite import SQLiteSession
 
-    return SQLiteSession(session_id, sqlite_path(root), user_id=user_id)
+    return SQLiteSession(session_id, sqlite_path(), user_id=user_id)
 
 
-def sessions(root: Path | None = None) -> SessionStore:
+def sessions() -> SessionStore:
     """This deployment's `SessionStore`: the read side of its conversation history."""
     if ephemeral():
         from runa.session.ephemeral import EphemeralSessionStore
@@ -153,10 +184,10 @@ def sessions(root: Path | None = None) -> SessionStore:
         return PostgresSessionStore(url)
     from runa.session.sqlite import SQLiteSessionStore
 
-    return SQLiteSessionStore(sqlite_path(root))
+    return SQLiteSessionStore(sqlite_path())
 
 
-def traces(root: Path | None = None) -> TraceStore:
+def traces() -> TraceStore:
     """This deployment's `TraceStore`: where finished traces are written and read back."""
     if ephemeral():
         from runa.tracing.ephemeral import EphemeralTraceStore
@@ -168,10 +199,10 @@ def traces(root: Path | None = None) -> TraceStore:
         return PostgresTraceStore(url)
     from runa.tracing.sqlite import SQLiteTraceStore
 
-    return SQLiteTraceStore(sqlite_path(root))
+    return SQLiteTraceStore(sqlite_path())
 
 
-def evals(root: Path | None = None) -> EvalStore:
+def evals() -> EvalStore:
     """This deployment's `EvalStore`: every `agent.evaluate()` run and its baseline."""
     if ephemeral():
         from runa.eval.ephemeral import EphemeralEvalStore
@@ -183,7 +214,7 @@ def evals(root: Path | None = None) -> EvalStore:
         return PostgresEvalStore(url)
     from runa.eval.sqlite import SQLiteEvalStore
 
-    return SQLiteEvalStore(sqlite_path(root))
+    return SQLiteEvalStore(sqlite_path())
 
 
 def memory_store(*, dimensions: int) -> MemoryStore:
@@ -302,5 +333,6 @@ __all__ = [
     "shared_url",
     "sqlite_path",
     "traces",
+    "use_project",
     "vector_store",
 ]

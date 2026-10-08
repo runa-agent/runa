@@ -1,6 +1,6 @@
 """web/traces.py: the trace detail page -- one run's span tree, from this deployment's store.
 
-Data comes straight from the `TraceStore` `runa.db.traces(root)` hands back, the same one
+Data comes straight from the `TraceStore` `runa.db.traces()` hands back, the same one
 `cli/traces.py show` reads; this module only turns a `Trace`'s `Span` tree into an HTML
 waterfall. No standalone list page: `web/sessions.py`'s merged timeline is the primary way to
 reach a trace; this is the "open trace"/direct-by-id destination (see `web/app.py`'s docstring).
@@ -129,7 +129,7 @@ def render_detail(trace_id: str, *, root: Path) -> str:
     No nav tab is active here: this page is reached from a session's trace card ("open trace"), an
     evaluation case, or a direct link, not browsed from a list, so nothing in `NAV_ITEMS` does.
     """
-    trace = db.traces(root).get(trace_id)
+    trace = db.traces().get(trace_id)
     if trace is None:
         raise TraceNotFound(f"no trace found with id {trace_id!r}")
     status = "ok" if trace.status == "ok" else "error"

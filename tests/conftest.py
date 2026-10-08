@@ -39,3 +39,16 @@ def _empty_ephemeral_stores():
     db.reset_ephemeral()
     yield
     db.reset_ephemeral()
+
+
+@pytest.fixture(autouse=True)
+def _default_project():
+    """Reset the project `runa.db` resolves against, so a test's `use_project` can't leak.
+
+    Process-wide is what `db.use_project` means (see `runa.db`), the same way `observe(...)`'s
+    bare form is: a test that points it at a `tmp_path` is standing in for the `runa` command or
+    the `create_app` that would normally have set it at startup. Restoring the default here is
+    what keeps the next test's `db/runa.db` from being the previous test's temporary directory.
+    """
+    yield
+    db.use_project(None)

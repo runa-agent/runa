@@ -25,7 +25,8 @@ def _save_agent_trace(project_dir: Path, trace_id: str, input: str | None) -> No
             input=input,
         )
     ]
-    db.traces(project_dir).save(trace)
+    db.use_project(project_dir)
+    db.traces().save(trace)
 
 
 def test_add_trace_to_evals_appends_the_run_s_input_to_its_agent_s_dataset(

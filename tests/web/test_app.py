@@ -26,7 +26,8 @@ def project(tmp_path: Path) -> Path:
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("SupportAgent", root=project_dir)
 
-    session = db.session("support_agent-1", root=project_dir)
+    db.use_project(project_dir)
+    session = db.session("support_agent-1")
     asyncio.run(session.add_items([{"role": "user", "content": "hi there"}]))
 
     trace = Trace(
@@ -59,7 +60,7 @@ def project(tmp_path: Path) -> Path:
             end_time=1.0,
         ),
     ]
-    db.traces(project_dir).save(trace)
+    db.traces().save(trace)
 
     trace2 = Trace(
         id="trace_2",
@@ -79,9 +80,9 @@ def project(tmp_path: Path) -> Path:
             end_time=2.5,
         )
     ]
-    db.traces(project_dir).save(trace2)
+    db.traces().save(trace2)
 
-    db.evals(project_dir).save(
+    db.evals().save(
         Report(
             agent_name="support_agent",
             cases=[
@@ -105,6 +106,23 @@ def project(tmp_path: Path) -> Path:
 def client(project: Path) -> TestClient:
     """A `TestClient` for `create_app(project)`."""
     return TestClient(create_app(project))
+
+
+def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
+    """`create_app(root)` is the whole configuration an embedded dashboard gets.
+
+    The `project` fixture sets the project itself to seed data, so clearing it first is what makes
+    this an assertion about `create_app` rather than about the fixture. `create_app` is public
+    API (`runa new` scaffolds an `asgi.py` around its `serve` counterpart), and the root it is
+    handed has to reach every concern: a dashboard reading sessions out of `root` while the agents
+    it serves wrote memory to the cwd is the split `runa.db` exists to prevent.
+    """
+    db.use_project(None)
+
+    TestClient(create_app(project))
+
+    assert db.sqlite_path() == project / "db" / "runa.db"
+    assert db.memory_store(dimensions=4).db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
 
 
 def test_index_redirects_to_agents(client: TestClient) -> None:
@@ -242,7 +260,7 @@ def test_evaluation_detail_links_cases_to_traces_and_flags_regressions(
         ),
         results=[EvaluationResult(metric="task_completion", status=Status.FAIL, reason="bad")],
     )
-    run_id = db.evals(project).save(Report(agent_name="support_agent", cases=[failing]))
+    run_id = db.evals().save(Report(agent_name="support_agent", cases=[failing]))
 
     detail = client.get(f"/evaluations/{run_id}").text
 

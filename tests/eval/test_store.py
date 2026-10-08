@@ -33,7 +33,8 @@ def store(
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
         return db.evals()
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
-    return db.evals(tmp_path)
+    db.use_project(tmp_path)
+    return db.evals()
 
 
 @pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
@@ -59,7 +60,8 @@ def test_adds_trace_id_to_an_older_local_file(tmp_path: Path) -> None:
         results=[EvaluationResult(metric="task_completion", status=Status.PASS, reason="r")],
     )
 
-    store = db.evals(tmp_path)
+    db.use_project(tmp_path)
+    store = db.evals()
     store.save(Report("A", [graded]))
 
     assert store.baseline("A") == {"hi": True}

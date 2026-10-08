@@ -62,7 +62,7 @@ def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None
     An input already in the file raises `CaseAlreadyInEvals` rather than adding it twice.
     """
     evals_dir = require_evals_dir(root)
-    trace = db.traces(root).get(trace_id)
+    trace = db.traces().get(trace_id)
     if trace is None:
         raise TraceNotFound(f"no trace found with id {trace_id!r}")
     traced = traced_input(trace)
