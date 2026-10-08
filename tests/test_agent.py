@@ -2,14 +2,16 @@
 
 import asyncio
 import importlib.util
+import json
 import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 import pytest
+from pydantic import BaseModel
 
 from runa import Agent, tracing
 from runa._models import StreamDelta
@@ -1338,6 +1340,106 @@ def test_run_sync_pauses_for_approval_and_resumes_from_its_state() -> None:
     assert calls == [75]
     assert agent.history[0] == {"role": "user", "content": "refund $75"}
     assert agent.history[-1]["content"] == "refunded"
+
+
+def test_to_payload_is_the_one_wire_shape_of_a_run() -> None:
+    """`Run.to_payload()` owns what a run looks like as JSON, so no transport re-derives it.
+
+    Every field is read off `Run` by attribute: a renamed or removed one is an `AttributeError`
+    here rather than a `null` on the wire, which is how `runa serve` shipped a `tool_name` that
+    `Interruption` never had.
+    """
+
+    class Support(Agent):
+        name = "Support"
+        instructions = "Refund when asked."
+        tools = [_refund_tool([])]
+        model = _ScriptedModel(
+            [_tool_call_message("refund", '{"amount": 75}'), _final_message("refunded")]
+        )
+
+    agent = Support()
+    paused = agent.run_sync("refund $75").to_payload()
+
+    assert paused["status"] == "paused"
+    assert paused["output"] is None
+    assert paused["trace_id"]
+    assert paused["usage"]["total_tokens"] == 2
+    assert paused["interruptions"] == [
+        {
+            "name": "refund",
+            "arguments": '{"amount": 75}',
+            "call_id": "call_1",
+            "agent": "Support",
+        }
+    ]
+    assert paused["state"]["pending"][0]["name"] == "refund"
+    assert json.loads(json.dumps(paused)) == paused  # the whole payload is JSON, not just a dict
+
+
+def test_to_payload_carries_the_output_and_no_state_once_completed() -> None:
+    """A completed run has an answer and nothing left to resume."""
+
+    class Echo(Agent):
+        name = "Echo"
+        instructions = "echo"
+        model = _ScriptedModel([_final_message("hi")])
+
+    payload = Echo().run_sync("hello").to_payload()
+
+    assert payload["status"] == "completed"
+    assert payload["output"] == "hi"
+    assert payload["error"] is None
+    assert payload["interruptions"] == []
+    assert payload["state"] is None
+
+
+def test_to_payload_renders_a_dataclass_output_type() -> None:
+    """An `output_type` is rendered as JSON data, not `str()`-ed into prose."""
+
+    @dataclass
+    class Answer:
+        city: str
+        celsius: int
+
+    class Weather(Agent):
+        name = "Weather"
+        instructions = "report"
+        output_type = Answer
+        model = _ScriptedModel([_final_message('{"city": "Paris", "celsius": 18}')])
+
+    payload = Weather().run_sync("paris?").to_payload()
+
+    assert payload["output"] == {"city": "Paris", "celsius": 18}
+
+
+def test_to_payload_renders_the_other_output_types_as_data_too() -> None:
+    """A Pydantic `output_type` and a `TypedDict` one are data on the wire, same as a dataclass."""
+
+    class PydanticAnswer(BaseModel):
+        city: str
+
+    class TypedDictAnswer(TypedDict):
+        city: str
+        highlights: list[str]
+
+    class Pydantic(Agent):
+        name = "Pydantic"
+        instructions = "report"
+        output_type = PydanticAnswer
+        model = _ScriptedModel([_final_message('{"city": "Paris"}')])
+
+    class Typed(Agent):
+        name = "Typed"
+        instructions = "report"
+        output_type = TypedDictAnswer
+        model = _ScriptedModel([_final_message('{"city": "Paris", "highlights": ["Louvre"]}')])
+
+    assert Pydantic().run_sync("paris?").to_payload()["output"] == {"city": "Paris"}
+    assert Typed().run_sync("paris?").to_payload()["output"] == {
+        "city": "Paris",
+        "highlights": ["Louvre"],
+    }
 
 
 def test_resuming_with_a_context_is_refused() -> None:

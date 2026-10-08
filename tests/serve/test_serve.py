@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
+from runa.project import iter_agent_classes, loaded_app
+from runa.run_state import RunState
 from runa.serve import MissingAPIKey, create_app, resolve_api_key
 
 _STUB_MODEL = '''
@@ -44,6 +46,58 @@ class StubModel:
 '''
 
 
+_PAUSING_AGENT = '''
+"""An agent that pauses on an approval-gated tool, to pin the paused wire shape."""
+
+from typing import Any
+
+from runa import Agent, tool
+from runa._types import ModelResponse, Usage
+
+
+@tool(needs_approval=True)
+def issue_refund(amount: float) -> str:
+    """Refund `amount` dollars.
+
+    amount: dollars to refund
+    """
+    return f"refunded {amount}"
+
+
+class ScriptedModel:
+    """Asks for one approval-gated refund, then answers once it has run."""
+
+    def __init__(self) -> None:
+        self._messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "issue_refund", "arguments": '{"amount": 75}'},
+                    }
+                ],
+            },
+            {"role": "assistant", "content": "refunded 75.0", "tool_calls": None},
+        ]
+
+    async def get_response(self, request: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(
+            output=[self._messages.pop(0)],
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
+        )
+
+
+class RefundAgent(Agent):
+    name = "refund_agent"
+    instructions = "Refund when asked."
+    model = ScriptedModel()
+    tools = [issue_refund]
+'''
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     """A scaffolded project whose one agent answers from a stub model, never a real provider."""
@@ -68,8 +122,27 @@ def client(project: Path) -> TestClient:
     return TestClient(create_app(project, api_key="secret-token"))
 
 
+@pytest.fixture
+def pausing_client(project: Path) -> TestClient:
+    """A client for a project whose second agent pauses on an approval-gated refund."""
+    (project / "app" / "agents" / "refund_agent.py").write_text(_PAUSING_AGENT)
+    return TestClient(create_app(project, api_key="secret-token"))
+
+
 def _auth(token: str = "secret-token") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _paused_body(client: TestClient) -> dict[str, Any]:
+    """Run the refund agent far enough to pause, and return the payload it answered with."""
+    response = client.post(
+        "/agents/refund_agent/runs", json={"message": "refund $75"}, headers=_auth()
+    )
+
+    assert response.status_code == 200
+    body: dict[str, Any] = response.json()
+    assert body["status"] == "paused"
+    return body
 
 
 def test_health_needs_no_token(client: TestClient) -> None:
@@ -115,6 +188,48 @@ def test_a_run_returns_output_status_usage_and_a_trace_id(client: TestClient) ->
     assert body["output"] == "items=1"
     assert body["usage"]["total_tokens"] == 7
     assert body["trace_id"]
+
+
+def test_a_paused_run_names_the_tool_awaiting_approval(pausing_client: TestClient) -> None:
+    """The fields a human decision needs: which tool, with which arguments, on whose behalf.
+
+    This is the shape `Interruption` actually has. `serve` used to name the tool `tool_name`,
+    which no interruption has ever carried, so every paused run reported `null` here.
+    """
+    interruptions = _paused_body(pausing_client)["interruptions"]
+
+    assert len(interruptions) == 1
+    assert interruptions[0]["name"] == "issue_refund"
+    assert interruptions[0]["call_id"] == "call_1"
+    assert interruptions[0]["agent"] == "refund_agent"
+    assert json.loads(interruptions[0]["arguments"]) == {"amount": 75}
+
+
+def test_a_paused_run_carries_the_state_that_resolves_it(
+    pausing_client: TestClient, project: Path
+) -> None:
+    """A status of `"paused"` is useless without the blob that resumes it, so it travels too.
+
+    Rebuilt here the way the other side of an HTTP boundary would: `RunState.from_json` against a
+    fresh instance of the agent that started the run.
+    """
+    state_json = _paused_body(pausing_client)["state"]
+
+    with loaded_app(project):
+        classes = {
+            getattr(cls, "name", None): cls
+            for cls in iter_agent_classes(project / "app" / "agents")
+        }
+        state = RunState.from_json(classes["refund_agent"](), state_json)
+
+    assert [item.name for item in state.pending] == ["issue_refund"]
+
+
+def test_a_completed_run_carries_no_state(client: TestClient) -> None:
+    """Only a paused run has something to resume, so `state` is `None` for every other status."""
+    response = client.post("/agents/support_agent/runs", json={"message": "hi"}, headers=_auth())
+
+    assert response.json()["state"] is None
 
 
 def test_an_unknown_agent_is_404(client: TestClient) -> None:

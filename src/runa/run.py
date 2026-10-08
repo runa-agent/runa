@@ -9,8 +9,10 @@ private fields on the one result, rather than a second result shape to convert f
 """
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from runa._items import ConversationItem
 from runa._types import RunContextWrapper, Usage
@@ -22,6 +24,21 @@ from runa.tool import ToolCall
 from runa.tracing import Trace
 
 Status = Literal["completed", "paused", "error"]
+
+
+def _jsonable(value: Any) -> Any:
+    """Render an agent's `output` for JSON, including a dataclass or Pydantic `output_type`."""
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    return str(value)
 
 
 @dataclass
@@ -42,6 +59,9 @@ class Run(GuardrailAudit):
     delegate's included), keyed by the `Phase` it ran in, whatever the `status`. The four
     `*_guardrail_results` lists `GuardrailAudit` reads off it are the documented way in. The same
     trail is on a paused `RunState`.
+
+    `to_payload()` is how a transport renders all of this as JSON -- one wire shape, owned here
+    rather than re-derived per transport.
     """
 
     output: Any
@@ -65,6 +85,49 @@ class Run(GuardrailAudit):
         if self._state is None:
             raise UserError(f"to_state() needs a paused run, this one is {self.status!r}")
         return self._state
+
+    def to_payload(self) -> dict[str, Any]:
+        """This run as plain JSON-compatible data: what a `Run` looks like over the wire.
+
+        A transport (`runa serve`'s routes, `runa.web`, whatever ships next) renders a run by
+        calling this, not by re-listing the fields itself. The shape is a fact about `Run`, so it
+        belongs where `Run` is defined: the alternative is each transport re-deriving it, which is
+        how `serve` came to report a `tool_name` that `Interruption` never had.
+
+        `status` is the `Run`'s own, so a caller distinguishes "the agent answered" from "it needs
+        an approval" from "it failed" without parsing prose. `trace_id` is the handle for
+        `runa traces show`, which is what makes a production incident debuggable. A paused run
+        carries `state`, `RunState.to_json()`'s blob: the one thing that can resolve the pause,
+        handed back through `RunState.from_json` to resume (see `runa.run_state`). It is `None`
+        for any other status.
+
+        One-way, unlike `RunState.to_json()`: a `Run` holds live objects (an `Agent`, a `Trace`'s
+        spans) and there is no `from_payload`. The guardrail audit trail is left out for the same
+        reason `RunState` omits it -- a guardrail's `output_info` is arbitrary and not guaranteed
+        JSON-safe. Plain dicts only, no transport imported here, so this stays a runtime concern.
+        """
+        return {
+            "status": self.status,
+            "output": _jsonable(self.output),
+            "error": self.error,
+            "trace_id": self.trace.id if self.trace else None,
+            "usage": {
+                "input_tokens": self.usage.input_tokens,
+                "output_tokens": self.usage.output_tokens,
+                "total_tokens": self.usage.total_tokens,
+                "requests": self.usage.requests,
+            },
+            "interruptions": [
+                {
+                    "name": item.name,
+                    "arguments": item.arguments,
+                    "call_id": item.call_id,
+                    "agent": item.agent.name,
+                }
+                for item in self.interruptions
+            ],
+            "state": self._state.to_json() if self._state is not None else None,
+        }
 
     def _history(self) -> list[ConversationItem]:
         """`original_input + generated_items`: the conversation as it stands after this run.

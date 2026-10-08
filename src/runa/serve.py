@@ -28,7 +28,6 @@ brings its own server or mounts these routes inside a larger one.
 import json
 import os
 from collections.abc import AsyncIterator
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -63,48 +62,14 @@ class RunRequest(BaseModel):
     )
 
 
-def _jsonable(value: Any) -> Any:
-    """Render an agent's output for JSON, including a dataclass `output_type`."""
-    if value is None or isinstance(value, str | int | float | bool):
-        return value
-    if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
-    if isinstance(value, BaseModel):
-        return value.model_dump()
-    if isinstance(value, dict):
-        return {key: _jsonable(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_jsonable(item) for item in value]
-    return str(value)
-
-
 def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
-    """The wire shape of a finished (or paused, or failed) `Run`.
+    """A `Run` on the wire, plus the one thing HTTP knows and the run doesn't: which agent ran it.
 
-    `status` is the `Run`'s own, so a caller distinguishes "the agent answered" from "it needs an
-    approval" from "it failed" without parsing prose. `trace_id` is what makes a production
-    incident debuggable: it is the handle for `runa traces show`.
+    `Run.to_payload()` owns the rest. Re-listing a `Run`'s fields here is what let this module
+    report an `Interruption.tool_name` that never existed, so the mapping lives next to the type
+    it maps and a transport adds only what is genuinely its own.
     """
-    return {
-        "agent": agent_name,
-        "status": run.status,
-        "output": _jsonable(run.output),
-        "error": run.error,
-        "trace_id": run.trace.id if run.trace else None,
-        "usage": {
-            "input_tokens": run.usage.input_tokens,
-            "output_tokens": run.usage.output_tokens,
-            "total_tokens": run.usage.total_tokens,
-            "requests": run.usage.requests,
-        },
-        "interruptions": [
-            {
-                "tool_name": getattr(item, "tool_name", None),
-                "call_id": getattr(item, "call_id", None),
-            }
-            for item in run.interruptions
-        ],
-    }
+    return {"agent": agent_name, **run.to_payload()}
 
 
 def resolve_api_key(*, no_auth: bool) -> str | None:
