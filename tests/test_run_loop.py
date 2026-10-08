@@ -25,9 +25,8 @@ from runa.exceptions import (
 )
 from runa.guardrail import (
     BoundGuardrail,
-    GuardrailFunctionOutput,
+    GuardrailVerdict,
     Phase,
-    ToolGuardrailFunctionOutput,
     ToolInputGuardrailData,
 )
 from runa.handoff import Handoff
@@ -370,8 +369,8 @@ def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
 def test_input_guardrail_tripwire_halts_the_run() -> None:
     """A tripped input guardrail raises before the model is ever called."""
 
-    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
-        return GuardrailFunctionOutput(output_info="blocked", tripwire_triggered=True)
+    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailVerdict:
+        return GuardrailVerdict(output_info="blocked", tripped=True)
 
     agent = _agent(
         guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},
@@ -385,8 +384,8 @@ def test_input_guardrail_tripwire_halts_the_run() -> None:
 def test_output_guardrail_tripwire_halts_the_run() -> None:
     """A tripped output guardrail raises after the model responds, before returning."""
 
-    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
-        return GuardrailFunctionOutput(output_info="too long", tripwire_triggered=len(value) > 3)
+    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailVerdict:
+        return GuardrailVerdict(output_info="too long", tripped=len(value) > 3)
 
     agent = _agent(
         guardrails={Phase.OUTPUT: [BoundGuardrail(_trip, Phase.OUTPUT, "block_long")]},
@@ -885,8 +884,8 @@ def test_resuming_the_same_state_twice_raises_duplicate_call_id_error() -> None:
 def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> None:
     """A guardrail that runs and doesn't trip still shows up in `input_guardrail_results`."""
 
-    async def _pass(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
-        return GuardrailFunctionOutput(output_info="ok", tripwire_triggered=False)
+    async def _pass(ctx: Any, agent: Any, value: Any) -> GuardrailVerdict:
+        return GuardrailVerdict(output_info="ok", tripped=False)
 
     agent = _agent(
         guardrails={Phase.INPUT: [BoundGuardrail(_pass, Phase.INPUT, "check")]},
@@ -902,11 +901,11 @@ def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> 
 def test_a_tripped_input_guardrail_still_records_the_guardrails_that_passed_before_it() -> None:
     """Earlier passing guardrails aren't lost when a later one trips and raises."""
 
-    async def _pass(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
-        return GuardrailFunctionOutput(output_info="ok", tripwire_triggered=False)
+    async def _pass(ctx: Any, agent: Any, value: Any) -> GuardrailVerdict:
+        return GuardrailVerdict(output_info="ok", tripped=False)
 
-    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
-        return GuardrailFunctionOutput(output_info="blocked", tripwire_triggered=True)
+    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailVerdict:
+        return GuardrailVerdict(output_info="blocked", tripped=True)
 
     agent = _agent(
         guardrails={
@@ -958,9 +957,9 @@ def test_a_tool_guardrail_is_told_which_tool_and_call_it_is_checking() -> None:
     """Both sides of a tool's guardrails see the call: its tool name, id, arguments, output."""
     seen: list[ToolInputGuardrailData] = []
 
-    async def _record(data: ToolInputGuardrailData) -> ToolGuardrailFunctionOutput:
+    async def _record(data: ToolInputGuardrailData) -> GuardrailVerdict:
         seen.append(data)
-        return ToolGuardrailFunctionOutput.allow()
+        return GuardrailVerdict(output_info=None, tripped=False)
 
     @tool
     def search(query: str) -> str:
@@ -1198,8 +1197,8 @@ def _consume(result: Any) -> list[Any]:
 def test_stream_runs_input_guardrails() -> None:
     """`run_streamed` shares `run`'s loop, so a tripped input guardrail halts it too."""
 
-    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailFunctionOutput:
-        return GuardrailFunctionOutput(output_info="blocked", tripwire_triggered=True)
+    async def _trip(ctx: Any, agent: Any, value: Any) -> GuardrailVerdict:
+        return GuardrailVerdict(output_info="blocked", tripped=True)
 
     agent = _agent(
         guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},

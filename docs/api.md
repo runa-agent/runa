@@ -26,13 +26,11 @@ signature-level reference.
 
 ::: runa.guardrail.Phase
 
-::: runa.guardrail.GuardrailFunctionOutput
+::: runa.guardrail.GuardrailVerdict
 
 ::: runa.guardrail.GuardrailResult
 
 ::: runa.guardrail.GuardrailResults
-
-::: runa.guardrail.ToolGuardrailFunctionOutput
 
 ## Human Approval
 

@@ -7,19 +7,14 @@ import pytest
 from helpers import run as run_awaitable
 
 from runa import guardrail, tool
-from runa.guardrail import BoundGuardrail, Phase, ToolGuardrailFunctionOutput
+from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase
 from runa.tool import FunctionTool
 
 
-def _run(g: BoundGuardrail, data: Any) -> ToolGuardrailFunctionOutput:
+def _run(g: BoundGuardrail, data: Any) -> GuardrailVerdict:
     """Call a wrapped tool guardrail's function directly, awaiting its always-async wrapper."""
-    coro = cast(Awaitable[ToolGuardrailFunctionOutput], g.guardrail_function(data))
+    coro = cast(Awaitable[GuardrailVerdict], g.guardrail_function(data))
     return run_awaitable(coro)
-
-
-def _tripped(output: ToolGuardrailFunctionOutput) -> bool:
-    """Whether a `ToolGuardrailFunctionOutput` halts execution rather than allowing it."""
-    return output.behavior["type"] == "raise_exception"
 
 
 class _Data:
@@ -122,8 +117,8 @@ def test_tool_input_guardrail_sees_parsed_arguments() -> None:
         return "now"
 
     (bound,) = now.guardrails[Phase.TOOL_INPUT]
-    assert _tripped(_run(bound, _Data(tool_arguments='{"x": 1}')))
-    assert not _tripped(_run(bound, _Data(tool_arguments="{}")))
+    assert _run(bound, _Data(tool_arguments='{"x": 1}')).tripped
+    assert not _run(bound, _Data(tool_arguments="{}")).tripped
 
 
 def test_tool_output_guardrail_sees_return_value() -> None:
@@ -135,5 +130,5 @@ def test_tool_output_guardrail_sees_return_value() -> None:
         return "now"
 
     (bound,) = now.guardrails[Phase.TOOL_OUTPUT]
-    assert _tripped(_run(bound, _Data(tool_arguments="{}", output="x" * 101)))
-    assert not _tripped(_run(bound, _Data(tool_arguments="{}", output="short")))
+    assert _run(bound, _Data(tool_arguments="{}", output="x" * 101)).tripped
+    assert not _run(bound, _Data(tool_arguments="{}", output="short")).tripped

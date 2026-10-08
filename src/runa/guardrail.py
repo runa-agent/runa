@@ -2,9 +2,9 @@
 
 Agent-or-tool by input-or-output is a fact about guardrails, so it lives here as data -- one
 `Phase` -- rather than as structure spread across the codebase. One entry type carries its phase,
-one runner (`run_internal.guardrails`) takes it as an argument, one exception reports it, and a
-run's audit trail is one mapping keyed by it. A fifth phase is a member of `Phase`, not a new
-field, class and list in nine modules.
+one verdict type comes back from every phase, one runner (`run_internal.guardrails`) takes it as
+an argument, one exception reports it, and a run's audit trail is one mapping keyed by it. A fifth
+phase is a member of `Phase`, not a new field, class and list in nine modules.
 """
 
 import asyncio
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from runa._items import ConversationItem, latest_text, parsed_arguments
 
 _Predicate = Callable[[Any], bool | Awaitable[bool]]
-_GuardrailFunction = Callable[..., Awaitable[Any]]
+_GuardrailFunction = Callable[..., Awaitable["GuardrailVerdict"]]
 
 
 class Phase(StrEnum):
@@ -50,39 +50,17 @@ class Phase(StrEnum):
 
 
 @dataclass
-class GuardrailFunctionOutput:
-    """What an agent guardrail function returns: whatever it wants recorded, plus trip/no-trip."""
+class GuardrailVerdict:
+    """What a guardrail function returns: whatever it wants recorded, plus trip/no-trip.
+
+    One shape for all four phases, because `tripped` is the only question anyone asks a verdict.
+    Whether the guardrail watched an agent's turn or one tool call is `Phase`'s to say -- the
+    runner branches on `phase.on_tool` for the call shape, `GuardrailResult.phase` records it for
+    the audit trail -- so the verdict doesn't re-encode it as a second type.
+    """
 
     output_info: Any
-    tripwire_triggered: bool
-
-    @property
-    def tripped(self) -> bool:
-        """Whether this verdict stops the run; the one question the runner asks a verdict."""
-        return self.tripwire_triggered
-
-
-@dataclass
-class ToolGuardrailFunctionOutput:
-    """What a tool guardrail function returns: whatever it wants recorded, plus its verdict."""
-
-    output_info: Any
-    behavior: dict[str, Any]
-
-    @classmethod
-    def raise_exception(cls, output_info: Any = None) -> ToolGuardrailFunctionOutput:
-        """Build a verdict that halts the tool call and raises a tripwire exception."""
-        return cls(output_info=output_info, behavior={"type": "raise_exception"})
-
-    @classmethod
-    def allow(cls, output_info: Any = None) -> ToolGuardrailFunctionOutput:
-        """Build a verdict that lets the tool call proceed."""
-        return cls(output_info=output_info, behavior={"type": "allow"})
-
-    @property
-    def tripped(self) -> bool:
-        """Whether this verdict stops the tool call; `behavior` is the only place that says so."""
-        return self.behavior["type"] == "raise_exception"
+    tripped: bool
 
 
 @dataclass
@@ -94,7 +72,7 @@ class GuardrailResult:
     """
 
     guardrail: Any
-    output: Any
+    output: GuardrailVerdict
     tripped: bool
     phase: Phase
 
@@ -238,19 +216,10 @@ def _checked(phase: Phase, args: tuple[Any, ...]) -> Any:
     return data.output if phase.on_output else _tool_args(data)
 
 
-def _verdict(phase: Phase, tripped: bool, output_info: Any) -> Any:
-    """Spell a predicate's `bool` the way `phase`'s caller expects to read it back."""
-    if not phase.on_tool:
-        return GuardrailFunctionOutput(output_info=output_info, tripwire_triggered=tripped)
-    if tripped:
-        return ToolGuardrailFunctionOutput.raise_exception(output_info=output_info)
-    return ToolGuardrailFunctionOutput.allow(output_info=output_info)
-
-
 def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:
     """Wrap a `(value) -> bool` predicate into the call shape `phase` is invoked with."""
 
-    async def wrapper(*args: Any) -> Any:
+    async def wrapper(*args: Any) -> GuardrailVerdict:
         checked = _checked(phase, args)
         if inspect.iscoroutinefunction(func):
             tripped = await func(checked)
@@ -258,7 +227,7 @@ def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:
             # Off the event loop: a sync predicate that does blocking I/O (a moderation API
             # call, ...) would otherwise stall every other concurrent run/tool call.
             tripped = await asyncio.to_thread(func, checked)
-        return _verdict(phase, bool(tripped), func.__doc__)
+        return GuardrailVerdict(output_info=func.__doc__, tripped=bool(tripped))
 
     return wrapper
 
@@ -391,6 +360,7 @@ __all__ = [
     "GuardrailAudit",
     "GuardrailResult",
     "GuardrailResults",
+    "GuardrailVerdict",
     "GuardrailsDict",
     "GuardrailsList",
     "Phase",
