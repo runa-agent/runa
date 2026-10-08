@@ -14,11 +14,15 @@ the TODOs.
 Writing one of those files is a single recipe, `scaffold`, which the
 `generate_*` functions parameterize; `generate_agent` reaches its
 companion prompt and dataset by calling their own generators, so where
-each convention lives is stated once.
+each convention lives is stated once. Each one returns a `Generated`
+rather than a bare path, so that stays true of the import line too: `runa
+generate`'s next-step instructions are printed from what the generator
+reports, not rebuilt from the filename it returned.
 """
 
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from runa.agent import _PROMPT_TEMPLATE
@@ -60,6 +64,37 @@ class ScaffoldExists(OperatorError):
 
 class AmbiguousComponent(OperatorError):
     """Raised when a `--tool`/`--guardrail` name matches more than one file."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Generated:
+    """What a `generate_*` wrote, and how application code reaches it.
+
+    Where a generated file goes and what it's imported as are one decision, so a caller is
+    handed the import line instead of assembling it out of `file` -- move `app/tools/` and
+    every surface that prints an import follows, rather than printing a line that no longer
+    resolves while the file itself is still written correctly.
+
+    `symbol`/`import_line` are `None` for a file that isn't Python: a prompt, an eval dataset.
+    """
+
+    file: Path
+    symbol: str | None = None
+    import_line: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class GeneratedAgent(Generated):
+    """A generated agent, plus the companion files written alongside it.
+
+    `name` is the identity the class declares, the one `runa chat <name>` takes; `symbol` is its
+    class name. `prompt` is `None` exactly when `instructions` was inlined, so no stub was
+    written -- a caller naming the prompt file doesn't re-derive that from its own flags.
+    """
+
+    name: str
+    prompt: Path | None
+    dataset: Path
 
 
 def _snake_case(name: str) -> str:
@@ -169,6 +204,16 @@ def _module_path(root: Path, file: Path) -> str:
     return ".".join(file.relative_to(root).with_suffix("").parts)
 
 
+def _import_line(root: Path, file: Path, symbol: str) -> str:
+    """How application code imports `symbol` out of a generated `file`.
+
+    Stated once, for both the `tools = [...]`/`guardrails = [...]` imports written into a new
+    agent file and the import line `runa generate` prints as a next step. `file` may be a
+    directory, for a symbol re-exported from a package's `__init__.py` (see `_export_agent`).
+    """
+    return f"from {_module_path(root, file)} import {symbol}"
+
+
 def _export_agent(agents_dir: Path, file_stem: str, class_name: str) -> None:
     """Re-export `class_name` from `app/agents/__init__.py`.
 
@@ -188,7 +233,7 @@ def _resolve_components(
     root: Path,
     base_dir: Path,
     kind: str,
-    generate: Callable[..., Path],
+    generate: Callable[..., Generated],
     confirm: Callable[[str], bool],
 ) -> tuple[list[str], list[str]]:
     """Resolve `--tool`/`--guardrail` names to (import lines, bare references).
@@ -209,11 +254,11 @@ def _resolve_components(
         if existing is None:
             relative_dir = base_dir.relative_to(root)
             if confirm(f"{kind} '{snake_name}' not found in {relative_dir}/, create it?"):
-                existing = generate(raw_name, root=root)
+                existing = generate(raw_name, root=root).file
             else:
                 module_name = split_tool_name(raw_name)[0] if kind == "tool" else snake_name
                 existing = base_dir / f"{module_name}.py"
-        imports.append(f"from {_module_path(root, existing)} import {snake_name}")
+        imports.append(_import_line(root, existing, snake_name))
         refs.append(snake_name)
     return imports, refs
 
@@ -265,7 +310,7 @@ def generate_agent(
     knowledge: str | None = None,
     compact: bool = False,
     confirm: Callable[[str], bool] = _prompt_yes_no,
-) -> Path:
+) -> GeneratedAgent:
     """Write a new Agent subclass into `root/app/agents/`.
 
     `name` must be an UpperCamelCase class name ending in `Agent` (e.g. `SupportAgent`), the
@@ -349,16 +394,24 @@ def generate_agent(
         )
     )
 
+    prompt = None
     if instructions is None:
-        generate_prompt(file_stem, root=root, exist_ok=True)
-    generate_evaluation(file_stem, root=root, exist_ok=True)
+        prompt = generate_prompt(file_stem, root=root, exist_ok=True).file
+    dataset = generate_evaluation(file_stem, root=root, exist_ok=True).file
 
     _export_agent(agents_dir, file_stem, class_name)
 
-    return agent_file
+    return GeneratedAgent(
+        file=agent_file,
+        symbol=class_name,
+        import_line=_import_line(root, agents_dir, class_name),
+        name=agent_name,
+        prompt=prompt,
+        dataset=dataset,
+    )
 
 
-def generate_tool(name: str, *, root: Path, description: str | None = None) -> Path:
+def generate_tool(name: str, *, root: Path, description: str | None = None) -> Generated:
     """Write a new `@tool`-decorated function into `root/app/tools/`.
 
     `name` is `module:function` (e.g. `research:search_web`, landing in `app/tools/research.py`)
@@ -384,13 +437,17 @@ def generate_tool(name: str, *, root: Path, description: str | None = None) -> P
     )
     header = existing_source.rstrip("\n") if existing_source else _TOOL_IMPORT
     tool_file.write_text(f"{header}\n\n\n{function_source}")
-    return tool_file
+    return Generated(
+        file=tool_file,
+        symbol=func_name,
+        import_line=_import_line(root, tool_file, func_name),
+    )
 
 
-def generate_guardrail(name: str, *, root: Path) -> Path:
+def generate_guardrail(name: str, *, root: Path) -> Generated:
     """Write a new `@guardrail`-decorated function into `root/app/guardrails/`."""
     func_name = _snake_case(name)
-    return scaffold(
+    guardrail_file = scaffold(
         root,
         "app",
         "guardrails",
@@ -398,9 +455,14 @@ def generate_guardrail(name: str, *, root: Path) -> Path:
         suffix=".py",
         template=_GUARDRAIL_TEMPLATE.format(func_name=func_name),
     )
+    return Generated(
+        file=guardrail_file,
+        symbol=func_name,
+        import_line=_import_line(root, guardrail_file, func_name),
+    )
 
 
-def generate_prompt(name: str, *, root: Path, exist_ok: bool = False) -> Path:
+def generate_prompt(name: str, *, root: Path, exist_ok: bool = False) -> Generated:
     """Write a new prompt file into `root/app/prompts/`.
 
     Plain markdown, not Python: a prompt is text an agent's `instructions` can load, kept out
@@ -411,18 +473,20 @@ def generate_prompt(name: str, *, root: Path, exist_ok: bool = False) -> Path:
     the file goes and what it starts out saying.
     """
     file_stem = _snake_case(name)
-    return scaffold(
-        root,
-        "app",
-        "prompts",
-        stem=file_stem,
-        suffix=".md",
-        template=_PROMPT_TEMPLATE.format(name=file_stem),
-        exist_ok=exist_ok,
+    return Generated(
+        file=scaffold(
+            root,
+            "app",
+            "prompts",
+            stem=file_stem,
+            suffix=".md",
+            template=_PROMPT_TEMPLATE.format(name=file_stem),
+            exist_ok=exist_ok,
+        )
     )
 
 
-def generate_evaluation(name: str, *, root: Path, exist_ok: bool = False) -> Path:
+def generate_evaluation(name: str, *, root: Path, exist_ok: bool = False) -> Generated:
     """Write a new eval dataset into `root/evals/<name>.jsonl`.
 
     `generate_agent` calls this with `exist_ok=True` for every agent it creates, so running it
@@ -437,11 +501,13 @@ def generate_evaluation(name: str, *, root: Path, exist_ok: bool = False) -> Pat
     file_stem = _snake_case(name)
     if _find_agent_name(_require_dir(root, "app", "agents"), file_stem) is None:
         raise AgentNotFound(f"no Agent named {file_stem!r} found under app/agents/")
-    return scaffold(
-        root,
-        "evals",
-        stem=file_stem,
-        suffix=".jsonl",
-        template=_EVALUATION_TEMPLATE,
-        exist_ok=exist_ok,
+    return Generated(
+        file=scaffold(
+            root,
+            "evals",
+            stem=file_stem,
+            suffix=".jsonl",
+            template=_EVALUATION_TEMPLATE,
+            exist_ok=exist_ok,
+        )
     )

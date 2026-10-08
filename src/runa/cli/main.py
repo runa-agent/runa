@@ -20,7 +20,6 @@ from runa.cli.generate import (
     generate_guardrail,
     generate_prompt,
     generate_tool,
-    split_tool_name,
 )
 from runa.cli.new import scaffold_project
 from runa.cli.serve import serve_agents
@@ -54,6 +53,11 @@ the command being run decides which one to name, since telling a `runa ui` user 
 def _split_names(value: str | None) -> list[str]:
     """Split a `--tool`/`--guardrail` value ("a, b,c") into trimmed, non-empty names."""
     return [part.strip() for part in value.split(",") if part.strip()] if value else []
+
+
+def _relative(path: Path, root: Path) -> str:
+    """Name a generated file the way a developer would type it: relative to the app root."""
+    return str(path.relative_to(root))
 
 
 def _runa_version() -> str:
@@ -265,7 +269,7 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.command == "generate" and args.kind == "agent":
-        agent_file = generate_agent(
+        agent = generate_agent(
             args.name,
             root=cwd,
             model=args.model,
@@ -276,58 +280,50 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
             knowledge=args.knowledge,
             compact=args.compact,
         )
-        print(f"created {agent_file}")
-        class_name = args.name
-        tool_step = "add tools with\n  runa generate tool <name>\n"
-        eval_step = f"add eval cases to evals/{agent_file.stem}.jsonl, "
-        prompt_step = (
-            f"write app/prompts/{agent_file.stem}.md, {eval_step}{tool_step}"
-            if args.instructions is None
-            else f"{eval_step}{tool_step}"
-        )
+        print(f"created {agent.file}")
+        prompt_step = f"write {_relative(agent.prompt, cwd)}, " if agent.prompt else ""
         print(
             f"\nnext: {prompt_step}"
+            f"add eval cases to {_relative(agent.dataset, cwd)}, "
+            "add tools with\n  runa generate tool <name>\n"
             "then chat with it:\n"
-            f"  runa chat {agent_file.stem}\n"
+            f"  runa chat {agent.name}\n"
             "or call it from your own code:\n"
-            f"  from app.agents import {class_name}\n"
-            f"  {class_name}().run_sync('...')"
+            f"  {agent.import_line}\n"
+            f"  {agent.symbol}().run_sync('...')"
         )
         return 0
 
     if args.command == "generate" and args.kind == "tool":
-        tool_file = generate_tool(args.name, root=cwd, description=args.description)
-        _, func_name = split_tool_name(args.name)
-        print(f"created {tool_file}")
+        generated_tool = generate_tool(args.name, root=cwd, description=args.description)
+        print(f"created {generated_tool.file}")
         print(
             "\nnext: implement it, then declare it on an Agent, e.g.\n"
-            f"  from app.tools.{tool_file.stem} import {func_name}\n\n"
+            f"  {generated_tool.import_line}\n\n"
             "  class MyAgent(Agent):\n"
             '      name = "my_agent"\n'
             '      model = "gpt-5.4-nano"\n'
-            f"      tools = [{func_name}]"
+            f"      tools = [{generated_tool.symbol}]"
         )
         return 0
 
     if args.command == "generate" and args.kind == "guardrail":
-        guardrail_file = generate_guardrail(args.name, root=cwd)
-        print(f"created {guardrail_file}")
+        generated_guardrail = generate_guardrail(args.name, root=cwd)
+        print(f"created {generated_guardrail.file}")
         print(
             "\nnext: implement it, then bind it to an Agent or @tool, e.g.\n"
-            f"  from app.guardrails.{guardrail_file.stem} import {guardrail_file.stem}\n"
-            f"  guardrails = [{guardrail_file.stem}.input]"
+            f"  {generated_guardrail.import_line}\n"
+            f"  guardrails = [{generated_guardrail.symbol}.input]"
         )
         return 0
 
     if args.command == "generate" and args.kind == "prompt":
-        prompt_file = generate_prompt(args.name, root=cwd)
-        print(f"created {prompt_file}")
+        print(f"created {generate_prompt(args.name, root=cwd).file}")
         print("\nnext: write the prompt, then load it from an Agent's `instructions`")
         return 0
 
     if args.command == "generate" and args.kind == "evaluation":
-        eval_file = generate_evaluation(args.name, root=cwd)
-        print(f"created {eval_file}")
+        print(f"created {generate_evaluation(args.name, root=cwd).file}")
         print(
             "\nnext: add one case per line, e.g. "
             '{"input": "...", "expected": "..."}, then\n'

@@ -143,6 +143,9 @@ def test_generate_agent_next_steps_point_to_the_prompt_file_and_generate_tool(
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "app/prompts/support_agent.md" in out
+    assert "evals/support_agent.jsonl" in out
+    assert "runa chat support_agent" in out
+    assert "from app.agents import SupportAgent" in out
     assert "runa generate tool <name>" in out
     assert "instructions" not in out
 
