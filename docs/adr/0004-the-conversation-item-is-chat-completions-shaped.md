@@ -49,7 +49,7 @@ model of a conversation wearing different field names.
 
 `TResponseInputItem` is gone rather than aliased to the new name. It is exported
 from `runa/__init__.py`, so this is a breaking rename for code that imported it
--- in practice a custom `SessionABC` or `Compactor` annotation, since nothing is
+-- in practice a custom `Session` or `Compactor` annotation, since nothing is
 constructed from it. Progress over stability: a vestigial name from a removed
 dependency, kept as a second way to spell the public one, is precisely what
 RUNA.md's closing rule says to close.
@@ -59,7 +59,7 @@ Rejected alternatives:
 - **A typed item hierarchy** (`UserMessage`/`AssistantMessage`/`ToolResult`
   dataclasses, or a Pydantic union). This is the change the four parsers argue
   for, and it is the wrong one here. The item's plainness is load-bearing in
-  three public places: `RunState.to_json` round-trips it, every `SessionABC`
+  three public places: `RunState.to_json` round-trips it, every `Session`
   stores it as a JSON blob, and application code reads `agent.history` without
   importing a Runa type. A hierarchy buys exhaustiveness at the cost of a
   serializer, a deserializer, and a vocabulary an app has to learn to read its
@@ -87,7 +87,7 @@ Rejected alternatives:
   `tool`/`handoff`/`mcp` accepted a non-object JSON body and failed later,
   inside argument binding, instead of as a tool error the model can read.
 - `runa.ConversationItem` replaces `runa.TResponseInputItem`, with no alias. An
-  out-of-tree `SessionABC` or `Compactor` updates one import; neither's runtime
+  out-of-tree `Session` or `Compactor` updates one import; neither's runtime
   behavior changes, since the value is still the same plain dict.
 - `session/store.py` no longer owns "how a stored message is flattened to text"
   -- one of the three rules its docstring existed to state. It owns the two that

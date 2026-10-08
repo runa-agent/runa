@@ -42,7 +42,7 @@ signature-level reference.
 
 ::: runa.SQLiteSession
 
-::: runa.session.SessionABC
+::: runa.session.Session
 
 ## Memory
 

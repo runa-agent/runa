@@ -33,7 +33,7 @@ from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
 from runa.eval.tracing.adapter import AgentRun
-from runa.session import SessionABC
+from runa.session import Session
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -75,7 +75,7 @@ session1 = db.session("support_agent-1", root=project)
 session2 = db.session("billing_agent-1", root=project)
 
 
-async def add(session: SessionABC, role: str, content: str) -> None:
+async def add(session: Session, role: str, content: str) -> None:
     """Append one message to `session`'s history."""
     await session.add_items([{"role": role, "content": content}])
 

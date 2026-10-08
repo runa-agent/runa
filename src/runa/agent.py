@@ -34,7 +34,7 @@ from runa.run import Run, RunStream
 from runa.run_internal.run_config import DEFAULT_MAX_TURNS, RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
-from runa.session import SessionABC
+from runa.session import Session
 from runa.stream_events import StreamEvent
 from runa.tool import FunctionTool
 from runa.tracing.manual import current_trace
@@ -94,14 +94,14 @@ def _adapt_instructions(instructions: Any) -> Any:
     return _resolved
 
 
-def _resolve_session(session: SessionABC | str | None) -> SessionABC | None:
+def _resolve_session(session: Session | str | None) -> Session | None:
     """Turn a `session_id` into this deployment's session for it, passing an object through.
 
     A conversation id is all an app actually knows: which backend holds it is
     `RUNA_DATABASE_URL`'s answer, asked here through `runa.db` so that `session="user-42"` keeps
     following the variable the way traces, memory and the cache already do. Naming a backend at
     the call site (`SQLiteSession(...)`) stays available for pointing at a specific file, and a
-    custom `SessionABC` is passed straight through.
+    custom `Session` is passed straight through.
 
     Imported inside the function because `runa.db` resolves lazily by design; see its docstring.
     """
@@ -115,7 +115,7 @@ def _resolve_session(session: SessionABC | str | None) -> SessionABC | None:
 def _turn_input(
     message: MessageContent | RunState,
     history: list[ConversationItem],
-    session: SessionABC | None,
+    session: Session | None,
     context: Any = None,
 ) -> str | list[ConversationItem] | RunState:
     """Build the `input` for the turn loop from this turn's `message`.
@@ -480,7 +480,7 @@ class Agent:
 
         return draw_graph(self)
 
-    def _run_config(self, session: SessionABC | None) -> RunConfig:
+    def _run_config(self, session: Session | None) -> RunConfig:
         """Group this run under an enclosing `tracing.trace` block, else under its session."""
         outer = current_trace()
         return RunConfig(
@@ -492,7 +492,7 @@ class Agent:
             timeout=self.timeout,
         )
 
-    def _completed(self, run: Run, session: SessionABC | None) -> Run:
+    def _completed(self, run: Run, session: Session | None) -> Run:
         """Record `run`'s usage (and, unless paused or session-backed, its history), and return it.
 
         The loop builds the `Run` itself, so all that is left here is the bookkeeping only an
@@ -538,7 +538,7 @@ class Agent:
         return clone
 
     @contextmanager
-    def _exclusive(self, session: SessionABC | None) -> Iterator[None]:
+    def _exclusive(self, session: Session | None) -> Iterator[None]:
         """Hold this instance for one run, refusing a second concurrent run over `self.history`.
 
         Concurrent runs on one instance are safe exactly when their history lives somewhere
@@ -566,7 +566,7 @@ class Agent:
         message: MessageContent | RunState,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
-        session: SessionABC | str | None = None,
+        session: Session | str | None = None,
         *,
         _context_wrapper: RunContextWrapper[Any] | None = None,
     ) -> Run:
@@ -594,7 +594,7 @@ class Agent:
 
         A `session` is normally the conversation's id: `session="user-42"` persists to whichever
         backend `RUNA_DATABASE_URL` names, so an app moves to Postgres without naming one here.
-        Pass a `SessionABC` instead when the run needs more than the id -- `db.session(id,
+        Pass a `Session` instead when the run needs more than the id -- `db.session(id,
         user_id=...)` to scope automatic memory, or your own store.
 
         Returns a `Run` exposing `.output`, `.status`, `.interruptions`, `.trace`, `.usage` and
@@ -640,7 +640,7 @@ class Agent:
         message: MessageContent | RunState,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
-        session: SessionABC | str | None = None,
+        session: Session | str | None = None,
     ) -> Run:
         """Synchronous `run`, for callers not already inside an event loop."""
         return asyncio.run(self.run(message, context, hooks, session))
@@ -650,7 +650,7 @@ class Agent:
         message: MessageContent | RunState,
         context: Any = None,
         hooks: RunHooks[Any] | None = None,
-        session: SessionABC | str | None = None,
+        session: Session | str | None = None,
     ) -> RunStream:
         """Run a turn as a stream of events: the same run as `run`, with the same arguments.
 

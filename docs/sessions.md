@@ -75,7 +75,7 @@ conversations; `set_items` replaces its history instead. Both are `async`, hence
 ## Writing Your Own Backend
 
 Runa ships one implementation per backend `RUNA_DATABASE_URL` understands, and `db.session`
-picks between them. A custom store subclasses `SessionABC`'s four abstract methods (`get_items`,
+picks between them. A custom store subclasses `Session`'s four abstract methods (`get_items`,
 `add_items`, `pop_item`, `clear_session`), nothing less.
 
 For a deployment where multiple processes share one store, set `RUNA_DATABASE_URL` and change

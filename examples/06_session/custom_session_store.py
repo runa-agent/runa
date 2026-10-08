@@ -1,4 +1,4 @@
-"""Writing your own session backend: `SessionABC`'s four abstract methods, nothing less.
+"""Writing your own session backend: `Session`'s four abstract methods, nothing less.
 
 See RUNA.md #6 and docs/sessions.md ("Writing Your Own Backend").
 
@@ -14,11 +14,11 @@ Run it:
 import asyncio
 
 from runa import Agent, ConversationItem
-from runa.session import SessionABC
+from runa.session import Session
 
 
-class DictSession(SessionABC):
-    """The minimal `SessionABC` implementation: one dict, keyed by `session_id`."""
+class DictSession(Session):
+    """The minimal `Session` implementation: one dict, keyed by `session_id`."""
 
     _store: dict[str, list[ConversationItem]] = {}
 

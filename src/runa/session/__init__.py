@@ -1,4 +1,4 @@
-"""`runa.session`: `SessionABC`, the conversation history a run reads and appends to.
+"""`runa.session`: `Session`, the conversation history a run reads and appends to.
 
 Which implementation a deployment gets is `runa.db`'s decision, not the call site's:
 `session/sqlite.py` locally, `session/postgres.py` when `RUNA_DATABASE_URL` points at a shared
@@ -14,8 +14,13 @@ from abc import ABC, abstractmethod
 from runa._items import ConversationItem
 
 
-class SessionABC(ABC):
+class Session(ABC):
     """What `run_internal` needs to persist and replay conversation history across turns.
+
+    A base class, where the read side (`SessionStore`) and `Cache` are protocols a backend
+    satisfies by shape alone: inheritance is what lets `set_items` below hand a default
+    implementation out, so a custom backend writes four methods and gets `Agent(compact=...)`
+    without a fifth.
 
     `user_id` is optional and unrelated to history: `run_internal` reads it (when set) to scope
     automatic `Agent.memory` retrieval/persistence to one user, so app code doesn't have to
@@ -46,7 +51,7 @@ class SessionABC(ABC):
         """Replace this session's entire history with `items`, `Agent(compact=...)`'s hook.
 
         A concrete default built from `clear_session`/`add_items`, not `@abstractmethod`: an
-        existing custom `SessionABC` gets this for free, with no new method it's forced to
+        existing custom `Session` gets this for free, with no new method it's forced to
         implement. Override for a single-transaction replace if that matters for your store, the
         way `SQLiteSession` does.
         """
@@ -54,9 +59,9 @@ class SessionABC(ABC):
         await self.add_items(items)
 
 
-# Below `SessionABC`, not above: `session/sqlite.py` subclasses it, so the name has to exist
+# Below `Session`, not above: `session/sqlite.py` subclasses it, so the name has to exist
 # first. Re-exported because the local adapter is always importable, where `PostgresSession`
 # needs the `postgres` extra and so stays an explicit `runa.session.postgres` import.
 from runa.session.sqlite import SQLiteSession  # noqa: E402
 
-__all__ = ["SQLiteSession", "SessionABC"]
+__all__ = ["SQLiteSession", "Session"]

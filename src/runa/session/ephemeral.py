@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from runa._items import ConversationItem
-from runa.session import SessionABC
+from runa.session import Session
 from runa.session.store import (
     SessionMessage,
     SessionNotFound,
@@ -54,13 +54,13 @@ def _touch(session_id: str) -> _Row:
     return row
 
 
-class EphemeralSession(SessionABC):
+class EphemeralSession(Session):
     """Conversation history for one `session_id`, held in this process only."""
 
     def __init__(self, session_id: str, *, user_id: str | None = None) -> None:
         """Store `session_id`; its history is this module's, not this object's.
 
-        `user_id` scopes this session's automatic memory, if its agent has any; see `SessionABC`.
+        `user_id` scopes this session's automatic memory, if its agent has any; see `Session`.
         """
         self.session_id = session_id
         self.user_id = user_id

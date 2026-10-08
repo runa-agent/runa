@@ -1,6 +1,6 @@
 """contracts/session.py: the one session contract, both sides of it, for every backend.
 
-A session has two halves in Runa: `SessionABC`, which a run appends to, and `SessionStore`, which
+A session has two halves in Runa: `Session`, which a run appends to, and `SessionStore`, which
 `runa sessions`, `runa chat --list/--show` and the Sessions page read it back through. They are
 only useful as a pair -- a run writes through one and an operator reads through the other -- so
 one contract covers both, and a check gets a `SessionPair` rather than a single store.
@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from runa.session import SessionABC
+from runa.session import Session
 from runa.session.store import SessionNotFound, SessionStore
 
 
@@ -35,7 +35,7 @@ class SessionPair:
     and `runa.db.session(...)` is how an app gets each of them.
     """
 
-    write: Callable[[str], SessionABC]
+    write: Callable[[str], Session]
     read: SessionStore
     tag: str
 
@@ -43,7 +43,7 @@ class SessionPair:
         """One session id of this check's own, unique to it."""
         return f"{self.tag}{suffix}"
 
-    def session(self, suffix: str = "") -> SessionABC:
+    def session(self, suffix: str = "") -> Session:
         """The write side for one of this check's session ids."""
         return self.write(self.id(suffix))
 
@@ -51,7 +51,7 @@ class SessionPair:
 Check = Callable[[SessionPair], Coroutine[Any, Any, None]]
 
 
-async def _write(pair: SessionPair, suffix: str, *texts: str) -> SessionABC:
+async def _write(pair: SessionPair, suffix: str, *texts: str) -> Session:
     """One session with one user message per text, through the write side."""
     session = pair.session(suffix)
     await session.add_items([{"role": "user", "content": text} for text in texts])

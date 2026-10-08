@@ -1,7 +1,7 @@
 """session/store.py: `SessionStore`, the read side of `agent_sessions`/`agent_messages`.
 
 What `runa sessions`, `runa chat --list/--continue/--resume` and `runa ui`'s Sessions pages read.
-The write side is `SessionABC` itself; this is the transcript view over whatever it wrote.
+The write side is `Session` itself; this is the transcript view over whatever it wrote.
 
 One interface, three adapters: `session/sqlite.py`, `session/postgres.py`, `session/ephemeral.py`.
 Which one a caller gets is `runa.db.sessions(...)`'s decision, asked once, so no reader here or

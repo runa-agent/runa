@@ -38,7 +38,7 @@ class Cache(Protocol):
     """What application code needs from a cache: get/set/delete/clear, nothing lower.
 
     No inheritance required, every backend satisfies this by matching shape, the same escape
-    hatch as `MemoryStore`/`SessionABC`'s custom-backend story. The two local backends expire
+    hatch as `MemoryStore`/`SessionStore`'s custom-backend story. The two local backends expire
     entries lazily: an expired key is only evicted (and reported as a miss) the next time `get`
     looks it up, not by a background sweep.
     """

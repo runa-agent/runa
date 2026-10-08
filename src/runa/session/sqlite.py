@@ -23,7 +23,7 @@ from runa._items import ConversationItem
 from runa.db import sqlite_path
 from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
-from runa.session import SessionABC
+from runa.session import Session
 from runa.session.store import (
     MESSAGES,
     SESSIONS,
@@ -38,7 +38,7 @@ from runa.session.store import (
 DDL = ddl(SQLITE, SESSIONS, MESSAGES)
 
 
-class SQLiteSession(SessionABC):
+class SQLiteSession(Session):
     """Conversation history for one `session_id`, persisted to the local `db/runa.db`."""
 
     def __init__(
@@ -54,7 +54,7 @@ class SQLiteSession(SessionABC):
         file as every other concern's -- including when `RUNA_DATABASE_URL` relocates it. Pass
         one to point at some other file.
 
-        `user_id` scopes this session's automatic memory, if its agent has any; see `SessionABC`.
+        `user_id` scopes this session's automatic memory, if its agent has any; see `Session`.
         """
         self.session_id = session_id
         self.db_path = Path(db_path) if db_path is not None else sqlite_path()

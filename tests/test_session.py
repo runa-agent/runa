@@ -4,7 +4,7 @@ The round-trip, `limit`, `pop_item`, `set_items`, `clear_session` and isolation 
 `tests/contracts/session.py`, driven over this adapter (among others) by
 `tests/test_session_store.py`. What is left here is this adapter's own: that clearing a session
 removes its `agent_sessions` row rather than just its messages, and that a hand-written
-`SessionABC` gets `set_items` without implementing it.
+`Session` gets `set_items` without implementing it.
 """
 
 import asyncio
@@ -13,7 +13,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from runa.session import SessionABC, SQLiteSession
+from runa.session import Session, SQLiteSession
 
 
 def test_clear_session_drops_its_items_and_row(tmp_path: Path) -> None:
@@ -33,13 +33,13 @@ def test_clear_session_drops_its_items_and_row(tmp_path: Path) -> None:
 
 
 def test_sessionabc_default_set_items_works_without_an_override(tmp_path: Path) -> None:
-    """A custom `SessionABC` gets `set_items` for free from `clear_session`/`add_items`.
+    """A custom `Session` gets `set_items` for free from `clear_session`/`add_items`.
 
     No new abstract method to implement -- an existing subclass that predates `set_items` still
     gets correct (if not transactional) behavior for it, unlike `SQLiteSession`'s own override.
     """
 
-    class PlainSession(SessionABC):
+    class PlainSession(Session):
         def __init__(self) -> None:
             self.session_id = "s1"
             self.user_id = None

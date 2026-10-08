@@ -16,7 +16,7 @@ from uuid import uuid4
 from runa import db
 from runa.agent import Agent
 from runa.project import find_agent_class, loaded_app, require_agents_dir
-from runa.session import SessionABC
+from runa.session import Session
 
 _BLOCK = '"""'
 
@@ -98,7 +98,7 @@ def _ask(prompt: str) -> str:
         return ""
 
 
-def _run_turn(agent: Agent, message: str, session: SessionABC) -> None:
+def _run_turn(agent: Agent, message: str, session: Session) -> None:
     """Send `message`, prompt for any approvals it pauses on, and print the final reply."""
     run = agent.run_sync(message, session=session)
     while run.status == "paused":

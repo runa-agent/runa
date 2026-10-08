@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from runa.eval.store import EvalStore
     from runa.knowledge import KnowledgeStore
     from runa.memory import MemoryStore
-    from runa.session import SessionABC
+    from runa.session import Session
     from runa.session.store import SessionStore
     from runa.tracing.store import TraceStore
 
@@ -123,10 +123,10 @@ def sqlite_path(root: Path | None = None) -> Path:
     return root / path
 
 
-def session(session_id: str, *, user_id: str | None = None, root: Path | None = None) -> SessionABC:
+def session(session_id: str, *, user_id: str | None = None, root: Path | None = None) -> Session:
     """This deployment's session store for `session_id`.
 
-    `user_id` scopes the session's automatic memory, if its agent has any; see `SessionABC`.
+    `user_id` scopes the session's automatic memory, if its agent has any; see `Session`.
     """
     if ephemeral():
         from runa.session.ephemeral import EphemeralSession

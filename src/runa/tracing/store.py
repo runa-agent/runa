@@ -98,7 +98,7 @@ class TraceStore(Protocol):
         """Return the most recent `limit` traces, newest first, optionally filtered.
 
         `agent` matches `Trace.name` (the workflow name `Agent.run` sets to the agent's class
-        name); `session_id` matches the `SessionABC` a session-backed run was passed, when it was
+        name); `session_id` matches the `Session` a session-backed run was passed, when it was
         passed one; `status` is `"ok"` or `"error"`.
         """
         ...

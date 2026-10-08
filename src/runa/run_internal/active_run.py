@@ -20,7 +20,7 @@ from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit
-from runa.session import SessionABC
+from runa.session import Session
 from runa.stream_events import StreamEvent
 from runa.tool import ToolCall
 from runa.tracing.spans import Span
@@ -59,7 +59,7 @@ class _Run:
     trace: Trace
     agent_span: Span
     original_input: list[ConversationItem]
-    session: SessionABC | None
+    session: Session | None
     session_input: list[ConversationItem]
     generated: list[ConversationItem]
     hooks: _Dispatch[Any]

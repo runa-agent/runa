@@ -206,7 +206,7 @@ agent.run_sync("...", session="user-42")
 resolved through `db.session(...)`, so one call persists to a local
 file, a shared Postgres, or nothing at all, according to
 `RUNA_DATABASE_URL` -- a backend is never named at the call site. Pass a
-`SessionABC` instead only when a run needs more than the id:
+`Session` instead only when a run needs more than the id:
 `db.session(id, user_id=...)` to scope automatic memory, or
 `SQLiteSession(id, "other/runa.db")` to point at one specific file.
 
@@ -222,7 +222,7 @@ earlier conversation through the seam the chosen mode already has:
 before the first run with a session.
 `db.session` is how every shipped implementation is reached, so which one
 a deployment gets is never a call site's decision; a custom store
-subclasses `SessionABC`'s four methods, nothing less.
+subclasses `Session`'s four methods, nothing less.
 
 ## 7. Memory
 

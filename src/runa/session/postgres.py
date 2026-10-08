@@ -17,7 +17,7 @@ import json
 from runa._items import ConversationItem
 from runa.db.pool import Shared, sync
 from runa.db.schema import POSTGRES, ddl
-from runa.session import SessionABC
+from runa.session import Session
 from runa.session.store import (
     MESSAGES,
     SESSIONS,
@@ -32,11 +32,11 @@ from runa.session.store import (
 DDL = ddl(POSTGRES, SESSIONS, MESSAGES)
 
 
-class PostgresSession(Shared, SessionABC):
-    """`SessionABC` backed by Postgres, for a deployment sharing history across processes.
+class PostgresSession(Shared, Session):
+    """`Session` backed by Postgres, for a deployment sharing history across processes.
 
     `Shared` comes first so `super().__init__` reaches the one that takes `(url, ddl)`; the
-    identity that matters to a caller is still `SessionABC`, which this is the write side of.
+    identity that matters to a caller is still `Session`, which this is the write side of.
     """
 
     def __init__(self, session_id: str, url: str, *, user_id: str | None = None) -> None:

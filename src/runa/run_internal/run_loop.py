@@ -36,7 +36,7 @@ from runa.run_internal.spans import _close_span, _export, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutcome
 from runa.run_state import RunState
-from runa.session import SessionABC
+from runa.session import Session
 from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
@@ -131,7 +131,7 @@ def _maybe_compact(
 
 async def _save_to_session(
     shape: AgentShape,
-    session: SessionABC,
+    session: Session,
     new_tail: list[ConversationItem],
     context_tokens: int,
     spans: _Spans,
@@ -379,7 +379,7 @@ async def _run_async(
     context: Any = None,
     hooks: RunHooks[Any] | None = None,
     run_config: RunConfig | None = None,
-    session: SessionABC | None = None,
+    session: Session | None = None,
     _context_wrapper: RunContextWrapper[Any] | None = None,
     emit: Emit | None = None,
 ) -> Run:
@@ -461,7 +461,7 @@ async def _resume(
     state: RunState,
     dispatch: _Dispatch[Any],
     run_config: RunConfig,
-    session: SessionABC | None,
+    session: Session | None,
     emit: Emit | None = None,
 ) -> Run:
     """Continue a paused run once its interruptions are resolved.
