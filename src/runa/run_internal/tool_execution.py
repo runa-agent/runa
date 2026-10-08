@@ -5,7 +5,7 @@ import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Literal
+from typing import Any
 
 from runa._items import ConversationItem, parsed_arguments
 from runa._types import RunContextWrapper
@@ -30,9 +30,8 @@ async def _run_tool_call(
     """
     context_wrapper = run.context_wrapper
     call_id = call["id"]
-    if call_id in context_wrapper.executed_call_ids:
+    if not context_wrapper.approval_ledger.claim(call_id):
         raise DuplicateToolCallError(call_id, tool.name)
-    context_wrapper.executed_call_ids.add(call_id)
 
     args_json = call["function"]["arguments"] or "{}"
     span_type = "delegate" if tool.delegate is not None else "tool"
@@ -46,7 +45,7 @@ async def _run_tool_call(
             result = await tool.on_invoke_tool(context_wrapper, args_json, call_id)
             error: str | None = None
         except DelegatePaused as paused:
-            context_wrapper.executed_call_ids.discard(call_id)
+            context_wrapper.approval_ledger.release(call_id)
             _close_span(span, output="paused for approval")
             return paused
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
@@ -81,52 +80,11 @@ def _arguments_or_error(args_json: str) -> dict[str, Any] | str:
 async def _needs_approval(
     tool: FunctionTool, context_wrapper: RunContextWrapper, args: dict[str, Any], call_id: str
 ) -> bool:
+    """Ask the tool itself whether this call needs a human, `bool` or predicate alike."""
     if isinstance(tool.needs_approval, bool):
         return tool.needs_approval
     verdict = tool.needs_approval(context_wrapper, args, call_id)
     return bool(await verdict if inspect.isawaitable(verdict) else verdict)
-
-
-@dataclass
-class _ApprovalGate:
-    """What `_gate_tool_call` decided for one tool call."""
-
-    action: Literal["run", "reject", "interrupt"]
-    message: str | None = None
-
-
-async def _gate_tool_call(
-    tool: FunctionTool,
-    args: dict[str, Any],
-    call_id: str,
-    context_wrapper: RunContextWrapper,
-    approvals: dict[str, bool] | None = None,
-    rejection_messages: dict[str, str] | None = None,
-) -> _ApprovalGate:
-    """Decide whether a tool call should run, be rejected, or pause for approval.
-
-    Consults `context_wrapper.approval_ledger` first -- the sticky "always approve"/"always
-    reject" decisions set via `RunState.approve`/`.reject(..., always=True)` -- before falling
-    back to `_needs_approval` and the per-call-id `approvals` dict.
-    """
-    sticky = context_wrapper.approval_ledger.get(tool.name)
-    if sticky is True:
-        return _ApprovalGate("run")
-    if sticky is False:
-        return _ApprovalGate(
-            "reject",
-            context_wrapper.approval_ledger_messages.get(tool.name, "rejected by the operator"),
-        )
-    if not await _needs_approval(tool, context_wrapper, args, call_id):
-        return _ApprovalGate("run")
-    verdict = (approvals or {}).get(call_id)
-    if verdict is None:
-        return _ApprovalGate("interrupt")
-    if verdict is False:
-        return _ApprovalGate(
-            "reject", (rejection_messages or {}).get(call_id, "rejected by the operator")
-        )
-    return _ApprovalGate("run")
 
 
 @dataclass
@@ -201,8 +159,12 @@ async def _run_message_tool_calls(
         if isinstance(args, str):
             results.append({"role": "tool", "tool_call_id": call_id, "content": args})
             continue
-        gate = await _gate_tool_call(
-            tool, args, call_id, context_wrapper, approvals, rejection_messages
+        gate = await context_wrapper.approval_ledger.decide(
+            tool.name,
+            call_id,
+            needs_approval=partial(_needs_approval, tool, context_wrapper, args, call_id),
+            approvals=approvals,
+            rejection_messages=rejection_messages,
         )
         if gate.action == "interrupt":
             interruptions.append(

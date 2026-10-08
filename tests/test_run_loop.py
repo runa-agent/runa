@@ -1072,7 +1072,7 @@ def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
     )
 
     result = _Stream(agent, "do it", run_config=_run_config())
-    result.context_wrapper.approval_ledger["dangerous"] = True
+    result.context_wrapper.approval_ledger.record("dangerous", approved=True)
 
     async def collect() -> list[Any]:
         return [event async for event in result]

@@ -230,8 +230,8 @@ def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> N
     assert blob["approval_ledger"] == {"dangerous": True}
 
     restored = RunState.from_json(_fresh_agent_like(agent), blob)
-    assert restored.context_wrapper.approval_ledger == {"dangerous": True}
+    assert restored.context_wrapper.approval_ledger.sticky == {"dangerous": True}
 
     resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
     assert resumed.output == "all done"
-    assert "call_1" in context_of(resumed).executed_call_ids
+    assert "call_1" in context_of(resumed).approval_ledger.executed

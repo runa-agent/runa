@@ -9,6 +9,7 @@ from pydantic import BaseModel, ValidationError
 
 from runa._items import ConversationItem
 from runa._types import InputTokensDetails, OutputTokensDetails, RunContextWrapper, Usage
+from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_internal.agent_shape import _normalized_handoffs
@@ -174,8 +175,7 @@ class RunState(GuardrailAudit):
         """
         self.approvals[interruption.call_id] = True
         if always:
-            self.context_wrapper.approval_ledger[interruption.name] = True
-            self.context_wrapper.approval_ledger_messages.pop(interruption.name, None)
+            self.context_wrapper.approval_ledger.record(interruption.name, approved=True)
         if interruption.owner not in (None, self):
             interruption.owner.approve(interruption, always=always)
 
@@ -188,17 +188,17 @@ class RunState(GuardrailAudit):
     ) -> None:
         """Mark `interruption` rejected; its tool is skipped when the run is resumed.
 
-        `rejection_message`, if given, is fed back to the model instead of the default
-        "rejected by the operator" text. `always=True` sticks the rejection (and message, if
+        `rejection_message`, if given, is fed back to the model instead of
+        `ApprovalLedger.DEFAULT_REJECTION`. `always=True` sticks the rejection (and message, if
         any) for every future call to this tool, the same way `approve(always=True)` does.
         """
         self.approvals[interruption.call_id] = False
         if rejection_message is not None:
             self.rejection_messages[interruption.call_id] = rejection_message
         if always:
-            self.context_wrapper.approval_ledger[interruption.name] = False
-            if rejection_message is not None:
-                self.context_wrapper.approval_ledger_messages[interruption.name] = rejection_message
+            self.context_wrapper.approval_ledger.record(
+                interruption.name, approved=False, message=rejection_message
+            )
         if interruption.owner not in (None, self):
             interruption.owner.reject(
                 interruption, always=always, rejection_message=rejection_message
@@ -207,6 +207,7 @@ class RunState(GuardrailAudit):
     def _to_schema(self, *, nested: bool = False) -> _RunStateSchema:
         """This state as JSON; `nested` for a delegate's, whose shared context the caller holds."""
         usage = self.context_wrapper.usage
+        ledger = self.context_wrapper.approval_ledger
         delegates = self.context_wrapper.paused_delegates
         owners = {id(state): call_id for call_id, state in delegates.items()}
         return _RunStateSchema(
@@ -238,9 +239,9 @@ class RunState(GuardrailAudit):
                 input_tokens_details=dataclasses.asdict(usage.input_tokens_details),
                 output_tokens_details=dataclasses.asdict(usage.output_tokens_details),
             ),
-            approval_ledger=self.context_wrapper.approval_ledger,
-            approval_ledger_messages=self.context_wrapper.approval_ledger_messages,
-            executed_call_ids=sorted(self.context_wrapper.executed_call_ids),
+            approval_ledger=ledger.sticky,
+            approval_ledger_messages=ledger.sticky_messages,
+            executed_call_ids=sorted(ledger.executed),
             trace_id=self.trace.id,
             trace_name=self.trace.name,
             trace_start_time=self.trace.start_time,
@@ -286,9 +287,11 @@ class RunState(GuardrailAudit):
 
         context_wrapper = RunContextWrapper(
             context=schema.context,
-            approval_ledger=dict(schema.approval_ledger),
-            approval_ledger_messages=dict(schema.approval_ledger_messages),
-            executed_call_ids=set(schema.executed_call_ids),
+            approval_ledger=ApprovalLedger(
+                sticky=dict(schema.approval_ledger),
+                sticky_messages=dict(schema.approval_ledger_messages),
+                executed=set(schema.executed_call_ids),
+            ),
         )
         for call_id, delegate in schema.delegates.items():
             context_wrapper.paused_delegates[call_id] = cls._from_schema(

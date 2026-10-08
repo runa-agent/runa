@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from runa._items import ConversationItem
+from runa.approval import ApprovalLedger
 from runa.guardrail import GuardrailResults
 
 MessageContent = str | Sequence[str | Path | dict[str, Any]]
@@ -118,37 +119,33 @@ class RunContextWrapper[TContext]:
     `context` is never sent to the model; it's how tools, guardrails, `needs_approval`, and a
     single-argument `instructions` callable receive whatever the caller passed to `run`/`run_sync`.
 
-    `approval_ledger`/`approval_ledger_messages` hold sticky ("always approve"/"always reject")
-    per-tool-name decisions; `executed_call_ids` guards against executing the same tool-call id
-    twice (e.g. from resuming a stale `RunState`). `paused_delegates` maps a delegate tool call's
-    id to the nested `RunState` it paused on, so resuming the caller resumes the delegate too.
-    `guardrail_results` is every `GuardrailResult` produced this run, tripped or not, keyed by
-    the `Phase` it ran in -- an audit trail, not just the one that stopped the run.
+    `approval_ledger` is the run's approval protocol -- sticky per-tool decisions, the replay
+    guard, and the rules for reading them; see `runa.approval.ApprovalLedger`, which owns all of
+    it. `paused_delegates` maps a delegate tool call's id to the nested `RunState` it paused on,
+    so resuming the caller resumes the delegate too. `guardrail_results` is every
+    `GuardrailResult` produced this run, tripped or not, keyed by the `Phase` it ran in -- an
+    audit trail, not just the one that stopped the run.
     """
 
     context: TContext = None  # pyright: ignore[reportAssignmentType]
     usage: Usage = field(default_factory=Usage)
-    approval_ledger: dict[str, bool] = field(default_factory=dict)
-    approval_ledger_messages: dict[str, str] = field(default_factory=dict)
-    executed_call_ids: set[str] = field(default_factory=set)
+    approval_ledger: ApprovalLedger = field(default_factory=ApprovalLedger)
     paused_delegates: dict[str, Any] = field(default_factory=dict)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
 
     def fork(self) -> RunContextWrapper[TContext]:
         """Build a child context for a nested delegate-agent call (`agent_as_tool`).
 
-        Shares `context` and every governance list/dict by reference -- so an approval, a
-        replayed call id, or a guardrail result recorded in either the parent or the delegate is
-        visible to both -- but starts `usage` at zero: the caller merges the delegate's usage
-        back explicitly (`ctx.usage.add(forked.usage)`), so it isn't double-counted against
+        Shares `context` and every governance object by reference -- so an approval, a replayed
+        call id, or a guardrail result recorded in either the parent or the delegate is visible
+        to both -- but starts `usage` at zero: the caller merges the delegate's usage back
+        explicitly (`ctx.usage.add(forked.usage)`), so it isn't double-counted against
         `Agent.run`'s own usage accumulation.
         """
         return RunContextWrapper(
             context=self.context,
             usage=Usage(),
             approval_ledger=self.approval_ledger,
-            approval_ledger_messages=self.approval_ledger_messages,
-            executed_call_ids=self.executed_call_ids,
             paused_delegates=self.paused_delegates,
             guardrail_results=self.guardrail_results,
         )

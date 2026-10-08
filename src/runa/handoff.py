@@ -62,8 +62,9 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
     instead of raising, so the calling agent's turn can still continue and decide how to respond.
 
     The delegate's context is `ctx.fork()`ed, not just `ctx.context` unwrapped: this shares the
-    sticky approval ledger, the call-id replay guard, and the guardrail-result audit trail with
-    the delegate (and back), and merges the delegate's usage into the caller's afterward.
+    `ApprovalLedger` (so the sticky decisions and the call-id replay guard are one ledger, not
+    two) and the guardrail-result audit trail with the delegate and back, and merges the
+    delegate's usage into the caller's afterward.
 
     A delegate run that pauses for approval raises `DelegatePaused`: the caller's run pauses on
     the same interruptions, and the nested `RunState` waits in `ctx.paused_delegates` under this

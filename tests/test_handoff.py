@@ -60,7 +60,7 @@ def test_agent_as_tool_forks_context_so_sticky_approvals_apply_to_the_delegate()
 
     tool_fn = agent_as_tool(Delegate(), None, None)
     ctx = RunContextWrapper(context=None)
-    ctx.approval_ledger["dangerous"] = True
+    ctx.approval_ledger.record("dangerous", approved=True)
 
     result = run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
 
