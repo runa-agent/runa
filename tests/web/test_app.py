@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import finished_run
 
 from runa import db
 from runa.cli.generate import generate_agent
@@ -13,7 +14,6 @@ from runa.cli.new import scaffold_project
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
-from runa.eval.tracing.adapter import AgentRun
 from runa.exceptions import OperatorError
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -89,7 +89,7 @@ def project(tmp_path: Path) -> Path:
                 CaseReport(
                     index=0,
                     case=Case(input="hi", expected="hi"),
-                    run=AgentRun(input="hi", final_output="hi"),
+                    run=finished_run("hi"),
                     results=[
                         EvaluationResult(
                             metric="task_completion", status=Status.PASS, reason="ok", score=1.0
@@ -253,11 +253,7 @@ def test_evaluation_detail_links_cases_to_traces_and_flags_regressions(
     failing = CaseReport(
         index=0,
         case=Case(input="hi"),
-        run=AgentRun(
-            input="hi",
-            final_output="no",
-            trace=Trace(id="trace_1", name="support_agent", start_time=0.0),
-        ),
+        run=finished_run("no", trace=Trace(id="trace_1", name="support_agent", start_time=0.0)),
         results=[EvaluationResult(metric="task_completion", status=Status.FAIL, reason="bad")],
     )
     run_id = db.evals().save(Report(agent_name="support_agent", cases=[failing]))

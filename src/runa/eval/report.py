@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult
-from runa.eval.tracing.adapter import AgentRun
+from runa.run import Run
 
 _METRIC_ORDER = [
     "task_completion",
@@ -24,11 +24,11 @@ _METRIC_LABELS = {
 
 @dataclass
 class CaseReport:
-    """One `Case`'s run plus every `EvaluationResult` graded against it."""
+    """One `Case`'s `Run` plus every `EvaluationResult` graded against it."""
 
     index: int
     case: Case
-    run: AgentRun
+    run: Run
     results: list[EvaluationResult] = field(default_factory=list)
 
     @property
@@ -76,7 +76,7 @@ class Report:
     def regressions(self) -> list[CaseReport]:
         """Every failed case whose input passed in the previous run (see `baseline`)."""
         baseline = self.baseline or {}
-        return [case for case in self.failed if baseline.get(case.run.input)]
+        return [case for case in self.failed if baseline.get(case.case.input)]
 
     @property
     def pass_rate(self) -> float:

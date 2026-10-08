@@ -104,11 +104,11 @@ def case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
     return (
         run_id,
         case.index,
-        case.run.input,
-        case.run.final_output,
+        case.case.input,
+        case.run.output,
         bool(case.passed),
         json.dumps([asdict(result) for result in case.results], default=str),
-        case.run.trace.id or None,
+        case.run.trace.id if case.run.trace else None,
     )
 
 

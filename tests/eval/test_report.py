@@ -1,16 +1,17 @@
 """Tests for `runa.eval.report`: `CaseReport` and `Report` aggregation."""
 
+from helpers import finished_run
+
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
-from runa.eval.tracing.adapter import AgentRun
 
 
 def _case_report(index: int, results: list[EvaluationResult]) -> CaseReport:
     return CaseReport(
         index=index,
         case=Case(input=f"input {index}"),
-        run=AgentRun(input=f"input {index}", final_output="ok"),
+        run=finished_run("ok"),
         results=results,
     )
 

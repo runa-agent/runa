@@ -3,7 +3,7 @@
 `run`/`run_sync`/`run_streamed` are the only way to run an Agent, and `Run` the only thing they
 return. The turn loop under them (`run_internal/run_loop._run_async`) is this class's
 implementation, not a second entry point: a `Runner` that forwarded to it used to sit here, which
-is how `eval/judge.py` and `eval/tracing/adapter.py` came to run agents without an Agent's own
+is how `eval/judge.py` and `eval/evaluate.py` came to run agents without an Agent's own
 wiring -- its guardrail flattening, its memory and knowledge resolution, its `RunConfig`, its
 refusal of two concurrent session-less runs. One door, so there is nothing to go around.
 """

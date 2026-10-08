@@ -4,9 +4,19 @@ import asyncio
 from collections.abc import Awaitable
 from typing import Any
 
-from runa._types import RunContextWrapper
+from runa._types import RunContextWrapper, Usage
 from runa.run import Run
 from runa.tracing import Trace
+
+
+def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides: Any) -> Run:
+    """A finished `Run`, for a test that grades or renders one without driving the turn loop.
+
+    `Run`'s required fields are the turn loop's to fill (`run_internal/run_loop._finish`), and a
+    test asserting on an eval metric or an evaluation page cares about one or two of them. Pass
+    `status=`/`error=`/`_tool_calls=` for the rest.
+    """
+    return Run(output=output, trace=trace, usage=Usage(), **overrides)
 
 
 def trace_of(result: Run) -> Trace:

@@ -1,5 +1,16 @@
 """eval/evaluate.py: `evaluate_agent()`, the implementation behind `agent.evaluate(dataset)`.
 
+A case runs through `Agent.run`, the same door an application's own call uses, so an agent is
+evaluated with the wiring it actually ships with: its guardrails, its memory and knowledge, its
+`max_turns`/`max_tokens`/`timeout`. What comes back is graded as the `Run` it already is: every
+metric past here takes a `Run`, so an application can grade a run it produced itself. There used
+to be an `AgentRun` in between, re-flattening five of `Run`'s fields, which meant every new
+graded fact cost two edits whose only job was keeping the two shapes in step.
+
+Each case gets a `_fresh()` copy of the agent for the same reason `agent_as_tool` does: a
+dataset's cases are independent, and up to `concurrency` of them run at once, so sharing one
+instance would let one case's conversation leak into the next.
+
 Deterministic checks run first and cheaply; semantic metrics only run for a case whose run
 actually completed, so a case that errors doesn't also burn a judge-model call. See
 `eval/evaluation/deterministic.py` and `eval/evaluation/semantic.py` for what each layer covers.
@@ -15,7 +26,6 @@ from runa.eval.evaluation.defaults import DEFAULT_THRESHOLDS
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.eval.evaluation.semantic import evaluate_semantic
 from runa.eval.report import CaseReport, Report
-from runa.eval.tracing.adapter import run_agent_for_eval
 
 
 def _resolve_thresholds(
@@ -43,9 +53,12 @@ def _resolve_judge(judge: str | None, agent: Agent) -> str:
 async def _evaluate_case(
     agent: Agent, index: int, case: Case, *, judge: str, thresholds: dict[str, float]
 ) -> CaseReport:
-    run = await run_agent_for_eval(agent, case)
+    # A run that fails (a guardrail tripwire, `MaxTurnsExceeded`, ...) comes back as
+    # `status="error"` rather than raising, so a bad case doesn't stop the rest of a dataset from
+    # evaluating: there is nothing here to catch `RunaError` a second time for.
+    run = await agent._fresh().run(case.input)
     results = [check_run_completed(run)]
-    if run.error is None:
+    if run.status == "completed":
         tool_result = check_expected_tool_called(case, run)
         if tool_result is not None:
             results.append(tool_result)

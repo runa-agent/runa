@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from helpers import finished_run
 
 from runa.eval.case import Case
 from runa.eval.evaluation.core import Status
@@ -15,7 +16,6 @@ from runa.eval.evaluation.semantic import (
     _grade_task_completion,
     evaluate_semantic,
 )
-from runa.eval.tracing.adapter import AgentRun
 
 
 class _ScriptedJudge:
@@ -50,7 +50,7 @@ def test_grade_task_completion_extracts_then_scores() -> None:
         ]
     )
     case = Case(input="cancel order 123")
-    run = AgentRun(input=case.input, final_output="Order 123 is cancelled.")
+    run = finished_run("Order 123 is cancelled.")
 
     score, reason = asyncio.run(_grade_task_completion(judge, case, run))
 
@@ -75,7 +75,7 @@ def test_grade_answer_relevance_scores_the_fraction_not_irrelevant() -> None:
         ]
     )
     case = Case(input="what's the weather?")
-    run = AgentRun(input=case.input, final_output="sunny, also I like cats, maybe rain later")
+    run = finished_run("sunny, also I like cats, maybe rain later")
 
     score, reason = asyncio.run(_grade_answer_relevance(judge, case, run))
 
@@ -87,7 +87,7 @@ def test_grade_answer_relevance_treats_no_statements_as_perfect() -> None:
     """An empty output makes no statements, matching DeepEval's `number_of_verdicts == 0 -> 1`."""
     judge = _ScriptedJudge([('"statements":', '{"statements": []}')])
     case = Case(input="hi")
-    run = AgentRun(input="hi", final_output="")
+    run = finished_run("")
 
     score, reason = asyncio.run(_grade_answer_relevance(judge, case, run))
 
@@ -104,7 +104,7 @@ def test_grade_answer_correctness_generates_steps_then_scores_out_of_ten() -> No
         ]
     )
     case = Case(input="who won?", expected="the home team won")
-    run = AgentRun(input=case.input, final_output="the home team won 3-1")
+    run = finished_run("the home team won 3-1")
 
     score, reason = asyncio.run(_grade_answer_correctness(judge, case, run))
 
@@ -127,7 +127,7 @@ def test_grade_faithfulness_scores_the_fraction_not_contradicted() -> None:
         ]
     )
     case = Case(input="what's the refund policy?", context=["refunds are processed within 30 days"])
-    run = AgentRun(input=case.input, final_output="refunds within 30 days, no fee applies")
+    run = finished_run("refunds within 30 days, no fee applies")
 
     score, reason = asyncio.run(_grade_faithfulness(judge, case, run))
 
@@ -144,7 +144,7 @@ def test_grade_faithfulness_treats_no_claims_as_perfect() -> None:
         ]
     )
     case = Case(input="hi", context=["x"])
-    run = AgentRun(input="hi", final_output="ok")
+    run = finished_run("ok")
 
     score, reason = asyncio.run(_grade_faithfulness(judge, case, run))
 
@@ -165,7 +165,7 @@ def test_evaluate_semantic_skips_answer_correctness_without_an_expected_answer(
     monkeypatch.setattr("runa.eval.evaluation.semantic.judge_model", lambda model: judge)
 
     case = Case(input="hi")
-    run = AgentRun(input="hi", final_output="ok")
+    run = finished_run("ok")
     results = asyncio.run(
         evaluate_semantic(case, run, model="gpt-5.4-nano", thresholds=DEFAULT_THRESHOLDS)
     )
@@ -187,7 +187,7 @@ def test_evaluate_semantic_maps_a_raised_exception_to_error_not_a_score(
     monkeypatch.setattr("runa.eval.evaluation.semantic.judge_model", lambda model: _BrokenJudge())
 
     case = Case(input="hi")
-    run = AgentRun(input="hi", final_output="ok")
+    run = finished_run("ok")
     results = asyncio.run(
         evaluate_semantic(case, run, model="gpt-5.4-nano", thresholds=DEFAULT_THRESHOLDS)
     )

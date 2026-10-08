@@ -26,7 +26,7 @@ _AGENT = _TestAgent()
 
 
 def _run(output: Any) -> Run:
-    """The `Run` a faked `Agent.run` hands `run_agent_for_eval`."""
+    """The `Run` a faked `Agent.run` hands `_evaluate_case`."""
     return Run(
         output=output,
         trace=Trace(id="t", name="t", start_time=0.0, spans=[]),
@@ -84,6 +84,30 @@ def test_evaluate_agent_runs_every_case_in_a_mixed_dataset(
     assert report.cases[0].passed
     assert not report.cases[1].passed
     assert report.cases[1].run.error is not None
+
+
+def test_evaluate_agent_runs_each_case_on_its_own_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each case gets a `_fresh()` copy, so one case's history never reaches the next.
+
+    `evaluate_agent` runs up to `concurrency` cases at once over one `Agent`, which is exactly
+    what `Agent._exclusive` refuses for session-less runs and what would otherwise let two cases
+    overwrite each other's conversation.
+    """
+    _patch_run_and_storage(monkeypatch, {})
+    _stub_semantic(monkeypatch)
+    ran_on: list[Agent] = []
+
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        ran_on.append(self)
+        return _run(message)
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+
+    asyncio.run(evaluate_agent(_AGENT, [Case(input="one"), Case(input="two")]))
+
+    assert len(ran_on) == 2
+    assert ran_on[0] is not ran_on[1]
+    assert _AGENT not in ran_on
 
 
 def test_evaluate_agent_skips_semantic_metrics_after_a_deterministic_failure(

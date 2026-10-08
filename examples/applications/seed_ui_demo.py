@@ -26,13 +26,13 @@ import shutil
 import time
 from pathlib import Path
 
-from runa import db
+from runa import Usage, db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
-from runa.eval.tracing.adapter import AgentRun
+from runa.run import Run
 from runa.session import Session
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -446,7 +446,7 @@ db.evals().save(
             CaseReport(
                 index=0,
                 case=Case(input="my invoice looks wrong", expected="looks up the invoice"),
-                run=AgentRun(input="my invoice looks wrong", final_output="your total is $42.00"),
+                run=Run(output="your total is $42.00", trace=None, usage=Usage()),
                 results=[
                     EvaluationResult(
                         metric="task_completion", status=Status.PASS, reason="resolved", score=1.0
@@ -456,7 +456,7 @@ db.evals().save(
             CaseReport(
                 index=1,
                 case=Case(input="refund me $500", expected="declines politely"),
-                run=AgentRun(input="refund me $500", final_output="sure, here's the refund"),
+                run=Run(output="sure, here's the refund", trace=None, usage=Usage()),
                 results=[
                     EvaluationResult(
                         metric="task_completion",

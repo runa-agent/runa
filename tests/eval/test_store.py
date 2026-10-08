@@ -15,13 +15,13 @@ from pathlib import Path
 
 import pytest
 from contracts.eval import CONTRACT, Check
+from helpers import finished_run
 
 from runa import db
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
 from runa.eval.store import EvalStore
-from runa.eval.tracing.adapter import AgentRun
 
 
 @pytest.fixture(params=["sqlite", "ephemeral"])
@@ -56,7 +56,7 @@ def test_adds_trace_id_to_an_older_local_file(tmp_path: Path) -> None:
     graded = CaseReport(
         index=0,
         case=Case(input="hi"),
-        run=AgentRun(input="hi", final_output="ok"),
+        run=finished_run("ok"),
         results=[EvaluationResult(metric="task_completion", status=Status.PASS, reason="r")],
     )
 

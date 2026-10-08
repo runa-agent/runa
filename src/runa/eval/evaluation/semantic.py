@@ -1,6 +1,6 @@
 """eval/evaluation/semantic.py: the default semantic metrics, activated by evidence.
 
-Each metric only runs when the `Case`/`AgentRun` actually supplies what it needs to judge:
+Each metric only runs when the `Case`/`Run` actually supplies what it needs to judge:
 correctness needs a reference answer, faithfulness needs retrieval context. Task completion and
 answer relevance need neither, so they always run. (Tool correctness needs no judge at all --
 see `eval/evaluation/deterministic.py`'s `check_expected_tool_called`.)
@@ -18,7 +18,7 @@ from typing import Any
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.judge import JudgeModel, extract_json, judge_model
-from runa.eval.tracing.adapter import AgentRun
+from runa.run import Run
 
 _CORRECTNESS_CRITERIA = (
     "Determine whether the actual output is substantively correct relative to the expected "
@@ -26,11 +26,12 @@ _CORRECTNESS_CRITERIA = (
 )
 
 
-def _format_tool_calls(run: AgentRun) -> str:
-    if not run.tool_calls:
+def _format_tool_calls(run: Run) -> str:
+    if not run._tool_calls:
         return "(no tools were called)"
     return "\n".join(
-        f"- {call.name}(arguments={call.arguments!r}) -> {call.output!r}" for call in run.tool_calls
+        f"- {call.name}(arguments={call.arguments!r}) -> {call.output!r}"
+        for call in run._tool_calls
     )
 
 
@@ -46,7 +47,7 @@ async def _graded(
     return EvaluationResult(metric=name, status=status, reason=reason, score=score)
 
 
-async def _grade_task_completion(judge: JudgeModel, case: Case, run: AgentRun) -> tuple[float, str]:
+async def _grade_task_completion(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
     extracted = extract_json(
         await judge.ask(
             "Given a user's request, the tools an AI called while handling it, and the AI's "
@@ -55,7 +56,7 @@ async def _grade_task_completion(judge: JudgeModel, case: Case, run: AgentRun) -
             "judgment of quality.\n\n"
             f"Request:\n{case.input}\n\n"
             f"Tools called:\n{_format_tool_calls(run)}\n\n"
-            f"Response:\n{run.final_output}\n\n"
+            f"Response:\n{run.output}\n\n"
             'Reply with JSON only: {"task": "...", "outcome": "..."}'
         )
     )
@@ -71,14 +72,12 @@ async def _grade_task_completion(judge: JudgeModel, case: Case, run: AgentRun) -
     return float(verdict["verdict"]), str(verdict["reason"])
 
 
-async def _grade_answer_relevance(
-    judge: JudgeModel, case: Case, run: AgentRun
-) -> tuple[float, str]:
+async def _grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
     statements = extract_json(
         await judge.ask(
             "Break the following text down into a list of the individual statements it makes. "
             "An ambiguous fragment counts as its own statement.\n\n"
-            f"Text:\n{run.final_output}\n\n"
+            f"Text:\n{run.output}\n\n"
             'Reply with JSON only: {"statements": ["...", ...]}'
         )
     )["statements"]
@@ -114,9 +113,7 @@ async def _grade_answer_relevance(
     return score, reason
 
 
-async def _grade_answer_correctness(
-    judge: JudgeModel, case: Case, run: AgentRun
-) -> tuple[float, str]:
+async def _grade_answer_correctness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
     steps = extract_json(
         await judge.ask(
             "Given the evaluation criteria below, write 3-4 concise steps for judging how well "
@@ -132,7 +129,7 @@ async def _grade_answer_correctness(
             "reasoning in specific details, without stating the score itself in it.\n\n"
             f"Evaluation steps:\n{steps}\n\n"
             f"Input:\n{case.input}\n\n"
-            f"Actual output:\n{run.final_output}\n\n"
+            f"Actual output:\n{run.output}\n\n"
             f"Expected output:\n{case.expected}\n\n"
             'Reply with JSON only: {"score": <int 0-10>, "reason": "..."}'
         )
@@ -140,7 +137,7 @@ async def _grade_answer_correctness(
     return float(graded["score"]) / 10, str(graded["reason"])
 
 
-async def _grade_faithfulness(judge: JudgeModel, case: Case, run: AgentRun) -> tuple[float, str]:
+async def _grade_faithfulness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
     context = "\n\n".join(case.context or [])
     truths_reply, claims_reply = await asyncio.gather(
         judge.ask(
@@ -153,7 +150,7 @@ async def _grade_faithfulness(judge: JudgeModel, case: Case, run: AgentRun) -> t
         judge.ask(
             "List the factual claims made in the following AI output, taken at face value. "
             "Each claim should keep the full context it was made in, not be cherry-picked.\n\n"
-            f"Output:\n{run.final_output}\n\n"
+            f"Output:\n{run.output}\n\n"
             'Reply with JSON only: {"claims": ["...", ...]}'
         ),
     )
@@ -191,7 +188,7 @@ async def _grade_faithfulness(judge: JudgeModel, case: Case, run: AgentRun) -> t
 
 
 async def evaluate_semantic(
-    case: Case, run: AgentRun, *, model: str, thresholds: dict[str, float]
+    case: Case, run: Run, *, model: str, thresholds: dict[str, float]
 ) -> list[EvaluationResult]:
     """Run every semantic metric that applies to `case`, recording `SKIPPED` for the rest."""
     judge = judge_model(model)

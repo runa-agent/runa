@@ -9,11 +9,12 @@ asserts on is its own, not whatever else a shared database already holds.
 
 from collections.abc import Callable
 
+from helpers import finished_run
+
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
 from runa.eval.store import EvalStore
-from runa.eval.tracing.adapter import AgentRun
 from runa.tracing import Trace
 
 Check = Callable[[EvalStore, str], None]
@@ -24,7 +25,7 @@ def _graded(input: str, status: Status, *, index: int = 0, output: str = "ok") -
     return CaseReport(
         index=index,
         case=Case(input=input),
-        run=AgentRun(input=input, final_output=output),
+        run=finished_run(output),
         results=[EvaluationResult(metric="task_completion", status=status, reason="r")],
     )
 
