@@ -16,7 +16,7 @@ from runa.run_internal.agent_shape import _normalized_handoffs
 from runa.tool import ToolCall
 from runa.tracing.traces import Trace
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -28,16 +28,16 @@ class Interruption:
     `FunctionTool` here as well would mean `from_json` had to rebuild one from a name, which for
     an MCP tool means connecting to the server just to read a deserialized blob.
 
-    `owner` is the `RunState` the call belongs to: the caller's own, or a delegate's nested one
-    when the paused call came from a `.delegate` subagent. Resolving it records the decision on
-    both, so resuming the caller resumes the delegate right where it stopped.
+    Which run a paused call belongs to isn't here either: a call surfaced by a `.delegate`
+    subagent appears in its caller's `interruptions` as the very same `Interruption`, so it is
+    the stash of paused delegates that knows whose it is (`runa.paused_delegates`), not the
+    interruption and not whichever `RunState` happens to be holding it.
     """
 
     name: str
     arguments: str
     call_id: str
     agent: Any
-    owner: RunState | None = field(default=None, repr=False)
 
 
 # --- JSON schema (Pydantic) -------------------------------------------------------------
@@ -68,7 +68,6 @@ class _InterruptionSchema(BaseModel):
     arguments: str
     call_id: str
     agent_name: str
-    owner_call_id: str | None = None
 
 
 class _RunStateSchema(BaseModel):
@@ -77,9 +76,13 @@ class _RunStateSchema(BaseModel):
     `context` and the guardrail audit trail (see `GuardrailResults`) aren't included: a
     guardrail's `output_info` isn't guaranteed JSON-safe, and a dataclass `context` loses its
     original type on the way back out (see `RunState.from_json`'s docstring).
+
+    `delegates` and `delegate_owners` are the paused-delegate stash's two halves, straight off
+    `PausedDelegates` and handed back to it by `from_json` -- which run owns a pending call is
+    recorded here rather than left to be inferred from the shape of what came back.
     """
 
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     agent_name: str
     original_input: list[dict[str, Any]]
     generated_items: list[dict[str, Any]]
@@ -98,6 +101,7 @@ class _RunStateSchema(BaseModel):
     trace_name: str
     trace_start_time: float
     delegates: dict[str, _RunStateSchema] = {}
+    delegate_owners: dict[str, str] = {}
 
 
 def _context_to_json(context: Any) -> Any:
@@ -173,11 +177,9 @@ class RunState(GuardrailAudit):
         every future call to this tool (by name), in this run or a nested delegate call sharing
         this context (see `RunContextWrapper.fork()`), skips the approval prompt entirely.
         """
-        self.approvals[interruption.call_id] = True
         if always:
             self.context_wrapper.approval_ledger.record(interruption.name, approved=True)
-        if interruption.owner not in (None, self):
-            interruption.owner.approve(interruption, always=always)
+        self._deciding(interruption).approvals[interruption.call_id] = True
 
     def reject(
         self,
@@ -192,24 +194,30 @@ class RunState(GuardrailAudit):
         `ApprovalLedger.DEFAULT_REJECTION`. `always=True` sticks the rejection (and message, if
         any) for every future call to this tool, the same way `approve(always=True)` does.
         """
-        self.approvals[interruption.call_id] = False
-        if rejection_message is not None:
-            self.rejection_messages[interruption.call_id] = rejection_message
         if always:
             self.context_wrapper.approval_ledger.record(
                 interruption.name, approved=False, message=rejection_message
             )
-        if interruption.owner not in (None, self):
-            interruption.owner.reject(
-                interruption, always=always, rejection_message=rejection_message
-            )
+        deciding = self._deciding(interruption)
+        deciding.approvals[interruption.call_id] = False
+        if rejection_message is not None:
+            deciding.rejection_messages[interruption.call_id] = rejection_message
+
+    def _deciding(self, interruption: Interruption) -> RunState:
+        """The state a decision about `interruption` belongs on: a paused delegate's, or this one.
+
+        A `.delegate` subagent's paused call rides up into its caller's `interruptions`, but it is
+        the delegate's own run that will execute it, so the decision is recorded there and this
+        state keeps only the calls it will run itself. Which is which is the paused-delegate
+        stash's to say (`runa.paused_delegates`).
+        """
+        return self.context_wrapper.paused_delegates.owner_of(interruption) or self
 
     def _to_schema(self, *, nested: bool = False) -> _RunStateSchema:
         """This state as JSON; `nested` for a delegate's, whose shared context the caller holds."""
         usage = self.context_wrapper.usage
         ledger = self.context_wrapper.approval_ledger
         delegates = self.context_wrapper.paused_delegates
-        owners = {id(state): call_id for call_id, state in delegates.items()}
         return _RunStateSchema(
             schema_version=_SCHEMA_VERSION,
             agent_name=self.agent.name,
@@ -220,11 +228,7 @@ class RunState(GuardrailAudit):
             session_input=self.session_input,
             pending=[
                 _InterruptionSchema(
-                    name=i.name,
-                    arguments=i.arguments,
-                    call_id=i.call_id,
-                    agent_name=i.agent.name,
-                    owner_call_id=owners.get(id(i.owner)),
+                    name=i.name, arguments=i.arguments, call_id=i.call_id, agent_name=i.agent.name
                 )
                 for i in self.pending
             ],
@@ -247,7 +251,11 @@ class RunState(GuardrailAudit):
             trace_start_time=self.trace.start_time,
             delegates={}
             if nested
-            else {call_id: state._to_schema(nested=True) for call_id, state in delegates.items()},
+            else {
+                call_id: state._to_schema(nested=True)
+                for call_id, state in delegates.waiting.items()
+            },
+            delegate_owners={} if nested else dict(delegates.owners),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -293,10 +301,13 @@ class RunState(GuardrailAudit):
                 executed=set(schema.executed_call_ids),
             ),
         )
-        for call_id, delegate in schema.delegates.items():
-            context_wrapper.paused_delegates[call_id] = cls._from_schema(
-                initial_agent, delegate, context_wrapper.fork()
-            )
+        context_wrapper.paused_delegates.restore(
+            {
+                call_id: cls._from_schema(initial_agent, delegate, context_wrapper.fork())
+                for call_id, delegate in schema.delegates.items()
+            },
+            schema.delegate_owners,
+        )
         return cls._from_schema(initial_agent, schema, context_wrapper)
 
     @classmethod
@@ -327,21 +338,15 @@ class RunState(GuardrailAudit):
             input_tokens_details=InputTokensDetails(**schema.usage.input_tokens_details),
             output_tokens_details=OutputTokensDetails(**schema.usage.output_tokens_details),
         )
-        for item in schema.pending:
-            owner = (
-                context_wrapper.paused_delegates.get(item.owner_call_id)
-                if item.owner_call_id is not None
-                else state
+        state.pending = [
+            Interruption(
+                name=item.name,
+                arguments=item.arguments,
+                call_id=item.call_id,
+                agent=_find_agent_by_name(initial_agent, item.agent_name),
             )
-            state.pending.append(
-                Interruption(
-                    name=item.name,
-                    arguments=item.arguments,
-                    call_id=item.call_id,
-                    agent=_find_agent_by_name(initial_agent, item.agent_name),
-                    owner=owner,
-                )
-            )
+            for item in schema.pending
+        ]
         return state
 
     @classmethod

@@ -68,13 +68,15 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
 
     A delegate run that pauses for approval raises `DelegatePaused`: the caller's run pauses on
     the same interruptions, and the nested `RunState` waits in `ctx.paused_delegates` under this
-    call's id, so resuming the caller resumes the delegate instead of starting it over.
+    call's id, so resuming the caller resumes the delegate instead of starting it over. Stashing
+    it there is also what makes those interruptions the delegate's to resolve rather than the
+    caller's -- `runa.paused_delegates` owns that whole protocol.
     """
     resolved_name = tool_name or _slugify(agent.name)
     resolved_description = tool_description or f"Delegate a task to {agent.name}."
 
     async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
-        paused = ctx.paused_delegates.pop(call_id, None)
+        paused = ctx.paused_delegates.take(call_id)
         if paused is not None:
             forked = paused.context_wrapper
             run = await agent.run(paused)
@@ -86,7 +88,7 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
         if run.status == "paused":
             forked.usage = Usage()  # already merged into the caller's
             state = run.to_state()
-            ctx.paused_delegates[call_id] = state
+            ctx.paused_delegates.stash(call_id, state)
             raise DelegatePaused(state.pending)
         return run.output if run.status == "completed" else f"error: {run.error}"
 

@@ -12,11 +12,14 @@ spread across the turn loop and `RunState`:
 `RunContextWrapper` holds one `ApprovalLedger`, shared by reference with every delegate it
 forks (`RunContextWrapper.fork`), which is what makes a caller's "always" answer cover the
 delegate's matching tool. `run_internal.tool_execution` asks it `decide`/`claim`; `RunState`
-tells it `record` when an operator answers "always". Where a *paused delegate* is stashed and
-re-entered is `runa.handoff`'s concern, not the ledger's.
+tells it `record` when an operator answers "always". Where a *paused delegate* is stashed, which
+of a run's interruptions are really its, and how both survive a restart belong to
+`runa.paused_delegates.PausedDelegates`, held on the context the same way this is.
 
 This module imports nothing from `runa` at runtime, on purpose: `_types` imports it to put a
-ledger on the context, and `runa.exceptions` imports `_types`.
+ledger on the context, and `runa.exceptions` imports `_types`. `runa.paused_delegates` is the
+other half of pausing a run, kept out of here for the same reason: a delegate's pause is about
+which *run* resolves a call, not which decision applies to it.
 """
 
 import inspect

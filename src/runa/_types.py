@@ -16,6 +16,7 @@ from typing import Any, Literal
 from runa._items import ConversationItem
 from runa.approval import ApprovalLedger
 from runa.guardrail import GuardrailResults
+from runa.paused_delegates import PausedDelegates
 
 MessageContent = str | Sequence[str | Path | dict[str, Any]]
 """One user message's `content`: plain text, or a list for a multimodal message. Each list item
@@ -121,8 +122,9 @@ class RunContextWrapper[TContext]:
 
     `approval_ledger` is the run's approval protocol -- sticky per-tool decisions, the replay
     guard, and the rules for reading them; see `runa.approval.ApprovalLedger`, which owns all of
-    it. `paused_delegates` maps a delegate tool call's id to the nested `RunState` it paused on,
-    so resuming the caller resumes the delegate too. `guardrail_results` is every
+    it. `paused_delegates` is the delegate-pause protocol -- which delegate runs this one paused
+    on and whose decision each of their interruptions is; see
+    `runa.paused_delegates.PausedDelegates`, which owns all of that. `guardrail_results` is every
     `GuardrailResult` produced this run, tripped or not, keyed by the `Phase` it ran in -- an
     audit trail, not just the one that stopped the run.
     """
@@ -130,7 +132,7 @@ class RunContextWrapper[TContext]:
     context: TContext = None  # pyright: ignore[reportAssignmentType]
     usage: Usage = field(default_factory=Usage)
     approval_ledger: ApprovalLedger = field(default_factory=ApprovalLedger)
-    paused_delegates: dict[str, Any] = field(default_factory=dict)
+    paused_delegates: PausedDelegates = field(default_factory=PausedDelegates)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
 
     def fork(self) -> RunContextWrapper[TContext]:

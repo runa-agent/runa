@@ -1591,6 +1591,19 @@ def test_a_delegate_that_pauses_pauses_its_caller_and_resumes_where_it_stopped()
     assert parent.history[-2]["content"] == "refunded 5"  # the delegate's answer, as a tool result
 
 
+def test_a_delegates_approval_is_recorded_on_the_delegates_own_state() -> None:
+    """A decision lands on the run that will execute the call, not on whoever surfaced it."""
+    parent = _parent_with_paused_delegate([])
+
+    run = parent.run_sync("please refund")
+    state = run.to_state()
+    state.approve(run.interruptions[0])
+
+    delegate = state.context_wrapper.paused_delegates.waiting["outer_1"]
+    assert delegate.approvals == {"inner_1": True}
+    assert state.approvals == {}  # the child's call is never the parent's to run
+
+
 def test_a_paused_delegate_survives_a_json_round_trip() -> None:
     """`to_json`/`from_json` carry the child's paused state, so a restart resumes it too."""
     calls: list[float] = []
@@ -1603,6 +1616,81 @@ def test_a_paused_delegate_survives_a_json_round_trip() -> None:
 
     assert resumed.status == "completed"
     assert calls == []
+
+
+def _parent_with_a_paused_grandchild(calls: list[float]) -> Agent:
+    """A parent delegating to a child that delegates to the agent holding the gated tool."""
+
+    class Grandchild(Agent):
+        name = "Grandchild"
+        instructions = "Refund when asked."
+
+    class Child(Agent):
+        name = "Child"
+        instructions = "Pass refunds down."
+        subagents = [Grandchild.delegate]
+
+    class Parent(Agent):
+        name = "Parent"
+        instructions = "Delegate refunds."
+        subagents = [Child.delegate]
+
+    parent = Parent()
+    parent.model = _ScriptedModel(
+        [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
+    )
+    child = next(t.delegate for t in parent.tools if t.delegate is not None)
+    child.model = _ScriptedModel(
+        [
+            _tool_call_message("grandchild", '{"input": "refund $5"}', "mid_1"),
+            _final_message("passed on"),
+        ]
+    )
+    grandchild = next(t.delegate for t in child.tools if t.delegate is not None)
+    grandchild.tools = [_refund_tool(calls)]
+    grandchild.model = _ScriptedModel(
+        [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
+    )
+    return parent
+
+
+def test_a_delegate_of_a_delegate_pauses_the_whole_chain_and_resumes_it() -> None:
+    """Every depth pauses on the same call, and the deepest run is the one that owns it."""
+    calls: list[float] = []
+    parent = _parent_with_a_paused_grandchild(calls)
+
+    run = parent.run_sync("please refund")
+
+    assert run.status == "paused"
+    assert [(i.name, i.agent.name) for i in run.interruptions] == [("refund", "Grandchild")]
+
+    state = run.to_state()
+    state.approve(run.interruptions[0])
+    stash = state.context_wrapper.paused_delegates
+
+    assert state.approvals == {}  # neither the parent's call to run...
+    assert stash.waiting["outer_1"].approvals == {}  # ...nor the child's
+    assert stash.waiting["mid_1"].approvals == {"inner_1": True}
+
+    resumed = parent.run_sync(state)
+
+    assert resumed.status == "completed"
+    assert resumed.output == "ok"
+    assert calls == [5]
+
+
+def test_a_paused_delegate_of_a_delegate_survives_a_json_round_trip() -> None:
+    """Ownership is serialized, so a restart still resolves the call against the deepest run."""
+    calls: list[float] = []
+    parent = _parent_with_a_paused_grandchild(calls)
+    blob = parent.run_sync("please refund").to_state().to_json()
+
+    state = RunState.from_json(parent, blob)
+    state.approve(state.pending[0])
+    resumed = parent.run_sync(state)
+
+    assert resumed.status == "completed"
+    assert calls == [5]
 
 
 def test_output_type_parses_the_final_answer() -> None:

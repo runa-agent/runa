@@ -327,8 +327,6 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             guardrail_results=context_wrapper.guardrail_results.snapshot(),
             tool_calls=list(run.tool_calls),
         )
-        for interruption in outcome.interruptions:
-            interruption.owner = interruption.owner or state  # a delegate's keeps its own
         _export(run.trace)
         return Run(
             output=None,
