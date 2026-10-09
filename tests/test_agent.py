@@ -924,6 +924,60 @@ def test_run_sync_returns_a_completed_run(monkeypatch: pytest.MonkeyPatch) -> No
     assert run.usage == Usage(input_tokens=1, output_tokens=2)
 
 
+def test_run_sync_closes_the_mcp_servers_it_opened(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`run_sync` owns the loop it made, so it shuts down connections bound to it.
+
+    A session cannot outlive its loop (see `runa.mcp`), so leaving it open would leave a
+    `.stdio` server's subprocess running for every turn `runa chat` takes.
+    """
+
+    class _Server:
+        def __init__(self) -> None:
+            self.closes = 0
+
+        async def list_tools(self) -> list[Any]:
+            return []
+
+        async def close(self) -> None:
+            self.closes += 1
+
+    def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
+        return _loop_run()
+
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
+    server = _Server()
+    agent = Researcher(mcp=[server])
+
+    agent.run_sync("hi")
+    agent.run_sync("again")
+
+    assert server.closes == 2
+
+
+def test_run_sync_closes_the_mcp_servers_even_when_the_turn_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run that blows up still takes its connections down, rather than leaking them."""
+
+    class _Server:
+        def __init__(self) -> None:
+            self.closes = 0
+
+        async def close(self) -> None:
+            self.closes += 1
+
+    def explode(*args: Any, **kwargs: Any) -> Run:
+        raise MaxTurnsExceeded("too many turns")
+
+    monkeypatch.setattr("runa.agent._run_async", _async(explode))
+    server = _Server()
+
+    run = Researcher(mcp=[server]).run_sync("hi")
+
+    assert run.status == "error"
+    assert server.closes == 1
+
+
 def test_run_sync_passes_multimodal_message_content_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

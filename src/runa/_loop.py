@@ -1,20 +1,21 @@
 """_loop.py: one resource per event loop, for the clients and pools that cannot outlive theirs.
 
-An `asyncpg.Pool`, a `redis.asyncio.Redis` and an `httpx.AsyncClient` all open their connections
-on the event loop that was running when they first used them, and none of them survives that loop
-being closed. A second `asyncio.run()` in the same process is enough to hit it -- `Agent.run_sync`
-makes one per call -- and the symptom is a hang acquiring a connection tied to a dead loop, or
-"Event loop is closed" on the next request.
+An `asyncpg.Pool`, a `redis.asyncio.Redis`, an `httpx.AsyncClient` and an MCP `ClientSession` all
+open their connections on the event loop that was running when they first used them, and none of
+them survives that loop being closed. A second `asyncio.run()` in the same process is enough to
+hit it -- `Agent.run_sync` makes one per call -- and the symptom is a hang acquiring a connection
+tied to a dead loop, or "Event loop is closed" on the next request.
 
-The rule is the same for all three: hold the resource against the loop it belongs to, and build a
+The rule is the same for all four: hold the resource against the loop it belongs to, and build a
 new one when the current loop is not that one. It was written three times, in three slightly
 different ways, and the oldest of them keyed by `id(loop)`, which both kept an entry per
 closed loop forever and could in principle hand a resource to an unrelated loop that happened to
-reuse the address. This is that rule, once.
+reuse the address. This is that rule, once. A new long-lived client belongs here too: if it holds
+a connection, it is loop-scoped, and the exception is the one that has to be argued for.
 
 Nothing here knows what it is holding. `db/pool.py` keys pools by URL, `cache/redis.py` its client
-by URL, and `ModelProvider` its HTTP clients by provider prefix; what they share is the lifetime,
-not the resource.
+by URL, `mcp.py` its sessions by the server's address, and `ModelProvider` its HTTP clients by
+provider prefix; what they share is the lifetime, not the resource.
 """
 
 import asyncio

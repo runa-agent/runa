@@ -33,7 +33,7 @@ class RedisCache:
         so a client left over from a now-closed loop (e.g. a second `asyncio.run()` call reusing
         this same `RedisCache`, as `Agent.run_sync` makes easy to hit) would crash with "Event
         loop is closed" instead of reconnecting. `LoopCache` is that lifetime, shared with
-        `db/pool.py`'s pools and `ModelProvider`'s HTTP clients.
+        `db/pool.py`'s pools, `mcp.py`'s sessions and `ModelProvider`'s HTTP clients.
         """
         return self._clients.get(self.url, lambda: redis.from_url(self.url))
 

@@ -642,8 +642,22 @@ class Agent:
         hooks: RunHooks[Any] | None = None,
         session: Session | str | None = None,
     ) -> Run:
-        """Synchronous `run`, for callers not already inside an event loop."""
-        return asyncio.run(self.run(message, context, hooks, session))
+        """Synchronous `run`, for callers not already inside an event loop.
+
+        The event loop is this call's own, and an MCP server's session cannot outlive the loop it
+        was opened on (see `runa.mcp`), so each is closed before that loop goes: a `runa chat`
+        turn shuts its `.stdio` servers down instead of leaving a subprocess per turn behind.
+        `await agent.run(...)` on an app's own loop keeps them open for the agent's lifetime.
+        """
+
+        async def turn() -> Run:
+            try:
+                return await self.run(message, context, hooks, session)
+            finally:
+                for server in self.mcp_servers:
+                    await server.close()
+
+        return asyncio.run(turn())
 
     def run_streamed(
         self,

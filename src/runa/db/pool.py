@@ -10,7 +10,7 @@ a memory store and an exporter on the same database reuse one pool instead of ea
 own -- the same "just works" ergonomics as `db/sqlite.py`'s shared file, here applied to pool
 reuse instead of file reuse. Per *loop* as well as per URL, because a pool's connections belong
 to the loop that opened them; that lifetime rule is `runa._loop.LoopCache`, shared with the other
-two resources in Runa that have it.
+three resources in Runa that have it.
 """
 
 import asyncio

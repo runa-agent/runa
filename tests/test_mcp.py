@@ -1,14 +1,22 @@
 """Tests for `runa.mcp`: the bridge from an MCP server's tools to `FunctionTool`."""
 
 import asyncio
-from typing import Any
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any, cast
 
 import pytest
 from mcp_types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from runa import mcp
 from runa._types import RunContextWrapper
-from runa.mcp import MCPServer, MCPServerStdio, MCPServerStreamableHttp, _MCPServerBase
+from runa.mcp import (
+    MCPServer,
+    MCPServerStdio,
+    MCPServerStreamableHttp,
+    _Connection,
+    _MCPServerBase,
+)
 
 
 class _FakeSession:
@@ -28,14 +36,37 @@ class _FakeSession:
 
 
 class _FakeServer(_MCPServerBase):
-    """An `_MCPServerBase` whose `connect()` plugs in a `_FakeSession` instead of a real one."""
+    """An `_MCPServerBase` opening onto a `_FakeSession` instead of a real transport.
+
+    `_open` is what a transport would supply, so overriding it leaves everything this file is
+    testing -- the per-loop caching in `connect`, the tool mapping, `close` -- as written.
+    """
 
     def __init__(self, session: _FakeSession) -> None:
-        super().__init__(name="fake")
+        super().__init__(name="fake", address="fake://server")
         self._fake_session = session
+        self.opens = 0
+        self.closed = 0
 
-    async def connect(self) -> None:
-        self._session = self._fake_session  # pyright: ignore[reportAttributeAccessIssue]
+    async def _open(self) -> _Connection:
+        self.opens += 1
+        listed = await self._fake_session.list_tools()
+        stack = AsyncExitStack()
+        await stack.enter_async_context(_count_close(self))
+        return _Connection(
+            stack=stack,
+            session=cast(Any, self._fake_session),
+            tools=[self._as_function_tool(tool) for tool in listed.tools],
+        )
+
+
+@asynccontextmanager
+async def _count_close(server: _FakeServer) -> AsyncIterator[None]:
+    """Stand in for a transport, recording that its connection was actually shut down."""
+    try:
+        yield
+    finally:
+        server.closed += 1
 
 
 def test_list_tools_maps_mcp_tools_to_function_tools() -> None:
@@ -60,10 +91,54 @@ def test_list_tools_caches_after_the_first_call() -> None:
     session = _FakeSession([Tool(name="add", input_schema={"type": "object"})], {})
     server = _FakeServer(session)
 
+    async def twice() -> tuple[list[Any], list[Any]]:
+        return await server.list_tools(), await server.list_tools()
+
+    first, second = asyncio.run(twice())
+
+    assert first is second
+    assert server.opens == 1
+
+
+def test_a_second_event_loop_gets_its_own_connection() -> None:
+    """A session cannot outlive the loop it was opened on, so a new loop opens a new one.
+
+    `Agent.run_sync` is an `asyncio.run` per call, so this is the shape of every `runa chat`
+    turn after the first: reusing turn 1's session here is a hang or "Event loop is closed".
+    """
+    session = _FakeSession([Tool(name="add", input_schema={"type": "object"})], {})
+    server = _FakeServer(session)
+
     first = asyncio.run(server.list_tools())
     second = asyncio.run(server.list_tools())
 
-    assert first is second
+    assert server.opens == 2
+    assert first is not second
+
+
+def test_close_shuts_the_connection_down_and_reconnects_on_demand() -> None:
+    """`close()` closes the transport and forgets the tools; the next call opens a fresh one."""
+    session = _FakeSession([Tool(name="add", input_schema={"type": "object"})], {})
+    server = _FakeServer(session)
+
+    async def use_close_and_use_again() -> None:
+        await server.list_tools()
+        await server.close()
+        assert server.closed == 1
+        await server.list_tools()
+
+    asyncio.run(use_close_and_use_again())
+
+    assert server.opens == 2
+
+
+def test_close_is_a_no_op_when_this_loop_never_connected() -> None:
+    """Closing a server that was never used on this loop does nothing, rather than failing."""
+    server = _FakeServer(_FakeSession([], {}))
+
+    asyncio.run(server.close())
+
+    assert (server.opens, server.closed) == (0, 0)
 
 
 def test_on_invoke_tool_extracts_text_from_a_successful_call() -> None:
