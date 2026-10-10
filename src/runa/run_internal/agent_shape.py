@@ -35,7 +35,7 @@ from runa.compact import Compactor
 from runa.guardrail import BoundGuardrail, Phase
 from runa.handoff import Handoff
 from runa.knowledge import KnowledgeLike
-from runa.lifecycle import AgentHooks
+from runa.lifecycle import Hooks
 from runa.memory import MemoryLike
 from runa.tool import FunctionTool
 
@@ -69,7 +69,7 @@ class AgentShape:
     memory: MemoryLike | None = None
     knowledge: KnowledgeLike | None = None
     compactor: Compactor | None = None
-    hooks: AgentHooks[Any] | None = None
+    hooks: Hooks[Any] | None = None
     agent: Any = None
 
     def __post_init__(self) -> None:

@@ -8,10 +8,6 @@ signature-level reference.
 
 ::: runa.Agent
 
-::: runa.lifecycle.AgentHooks
-
-::: runa.lifecycle.LoggingAgentHooks
-
 ## Tool
 
 ::: runa.tool.tool
@@ -106,9 +102,9 @@ signature-level reference.
 
 ## Hooks
 
-::: runa.RunHooks
+::: runa.Hooks
 
-::: runa.LoggingRunHooks
+::: runa.LoggingHooks
 
 ## Streaming
 

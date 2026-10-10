@@ -20,7 +20,7 @@ from runa.agent import Subagent
 from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
 from runa.guardrail import Phase, guardrail
 from runa.knowledge import Knowledge
-from runa.lifecycle import AgentHooks, LoggingRunHooks
+from runa.lifecycle import Hooks, LoggingHooks
 from runa.memory import Memory
 from runa.run import Run
 from runa.run_state import RunState
@@ -713,7 +713,7 @@ def _every_setting_agent() -> Agent:
         guardrails = [block_empty.input]
         mcp = [_Server()]
         output_type = Answer
-        hooks = AgentHooks[Any]()
+        hooks = Hooks[Any]()
         memory = "auto"
         knowledge = "auto"
         compact = True
@@ -968,16 +968,16 @@ def _streaming(*events: Any, **overrides: Any) -> Any:
     return run
 
 
-def test_every_run_shape_defaults_to_logging_run_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no `hooks=`, `run_sync` and `run_streamed` both log through `LoggingRunHooks`."""
+def test_every_run_shape_defaults_to_logging_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no `hooks=`, `run_sync` and `run_streamed` both log through `LoggingHooks`."""
     created: list[Any] = []
 
-    class _Recording(LoggingRunHooks):
+    class _Recording(LoggingHooks):
         def __init__(self) -> None:
             super().__init__()
             created.append(self)
 
-    monkeypatch.setattr("runa.run_internal.run_loop.LoggingRunHooks", _Recording)
+    monkeypatch.setattr("runa.run_internal.run_loop.LoggingHooks", _Recording)
 
     class Echo(Agent):
         name = "Echo"
@@ -1000,7 +1000,7 @@ def test_every_run_shape_defaults_to_logging_run_hooks(monkeypatch: pytest.Monke
 def test_run_sync_explicit_hooks_override_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """An explicit `hooks` argument is used instead of the default combined hooks."""
     captured: dict[str, Any] = {}
-    custom_hooks = LoggingRunHooks()
+    custom_hooks = LoggingHooks()
 
     def fake_run_sync(*args: Any, hooks: Any, **kwargs: Any) -> Run:
         captured["hooks"] = hooks
@@ -1213,7 +1213,7 @@ def test_run_sync_trace_populated_regardless_of_hooks(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
-    run = Researcher().run_sync("hi", hooks=LoggingRunHooks())
+    run = Researcher().run_sync("hi", hooks=LoggingHooks())
 
     assert run.trace is not None
     assert run.trace.name == "Researcher"

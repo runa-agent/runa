@@ -1,6 +1,9 @@
-"""`RunHooks`: an observer passed per-call, firing for every agent in the run, subagents included.
+"""`Hooks` passed per-call: an observer firing for every agent in the run, subagents included.
 
 See RUNA.md #11 and docs/tracing.md ("Hooks").
+
+Passing an instance to `run` is what makes it run-scoped; the same class assigned to an
+`Agent`'s `hooks` watches that one agent instead (see agent_hooks.py).
 
 Tracing is unconditional and separate from this -- hooks are for your own logic: metrics, a
 single audit log for the whole run. Every method is a no-op unless overridden.
@@ -10,7 +13,7 @@ Run it:
     uv run python examples/11_hooks/run_hooks.py
 """
 
-from runa import Agent, RunHooks, tool
+from runa import Agent, Hooks, tool
 
 
 @tool
@@ -22,7 +25,7 @@ def look_up_order(order_id: str) -> str:
     return "shipped, arriving Thursday"
 
 
-class ToolLogger(RunHooks):
+class ToolLogger(Hooks):
     """Prints every tool call made during the run, as it happens."""
 
     async def on_tool_end(

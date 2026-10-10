@@ -30,7 +30,7 @@ from runa.guardrail import (
     ToolInputGuardrailData,
 )
 from runa.handoff import Handoff
-from runa.lifecycle import AgentHooks, RunHooks
+from runa.lifecycle import Hooks
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
@@ -1767,49 +1767,26 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
     assert tool_span.name == "answer"
 
 
-class _RecordingRunHooks(RunHooks[Any]):
-    """Records every run-scoped callback into a log shared with the agent-scoped recorders."""
+class _RecordingHooks(Hooks[Any]):
+    """Records every callback into a log, tagged with the scope the instance was installed at.
 
-    def __init__(self, log: list[str]) -> None:
-        self.log = log
-
-    async def on_agent_start(self, context: Any, agent: Any) -> None:
-        self.log.append(f"run:agent_start:{agent.name}")
-
-    async def on_agent_end(self, context: Any, agent: Any, output: Any) -> None:
-        self.log.append(f"run:agent_end:{agent.name}")
-
-    async def on_handoff(self, context: Any, from_agent: Any, to_agent: Any) -> None:
-        self.log.append(f"run:handoff:{from_agent.name}->{to_agent.name}")
-
-    async def on_tool_start(self, context: Any, agent: Any, tool: Any) -> None:
-        self.log.append(f"run:tool_start:{tool.name}")
-
-    async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: object) -> None:
-        self.log.append(f"run:tool_end:{tool.name}")
-
-    async def on_llm_start(self, context: Any, agent: Any, prompt: Any, items: Any) -> None:
-        self.log.append(f"run:llm_start:{agent.name}")
-
-    async def on_llm_end(self, context: Any, agent: Any, response: Any) -> None:
-        self.log.append(f"run:llm_end:{agent.name}")
-
-
-class _RecordingAgentHooks(AgentHooks[Any]):
-    """Records every agent-scoped callback into the same log, tagged with the owning agent."""
+    One recorder for both scopes, because there is one `Hooks` class: the same subclass is
+    passed as `hooks=` for the run and assigned to an agent's `hooks`, and only the `label`
+    it was built with says which of the two a line came from.
+    """
 
     def __init__(self, log: list[str], label: str) -> None:
         self.log = log
         self.label = label
 
-    async def on_start(self, context: Any, agent: Any) -> None:
-        self.log.append(f"{self.label}:start:{agent.name}")
+    async def on_agent_start(self, context: Any, agent: Any) -> None:
+        self.log.append(f"{self.label}:agent_start:{agent.name}")
 
-    async def on_end(self, context: Any, agent: Any, output: Any) -> None:
-        self.log.append(f"{self.label}:end:{agent.name}")
+    async def on_agent_end(self, context: Any, agent: Any, output: Any) -> None:
+        self.log.append(f"{self.label}:agent_end:{agent.name}")
 
-    async def on_handoff(self, context: Any, agent: Any, source: Any) -> None:
-        self.log.append(f"{self.label}:handoff:{source.name}->{agent.name}")
+    async def on_handoff(self, context: Any, from_agent: Any, to_agent: Any) -> None:
+        self.log.append(f"{self.label}:handoff:{from_agent.name}->{to_agent.name}")
 
     async def on_tool_start(self, context: Any, agent: Any, tool: Any) -> None:
         self.log.append(f"{self.label}:tool_start:{tool.name}")
@@ -1828,21 +1805,23 @@ def test_every_lifecycle_event_reaches_both_hook_scopes() -> None:
     """Each event fires on the run's hooks first, then on the agent's own `hooks`."""
     log: list[str] = []
     agent = _agent(
-        hooks=_RecordingAgentHooks(log, "own"),
+        hooks=_RecordingHooks(log, "own"),
         model=_ScriptedModel([_text_response("hi there")]),
     )
 
-    asyncio.run(_run_async(agent, "hi", hooks=_RecordingRunHooks(log), run_config=_run_config()))
+    asyncio.run(
+        _run_async(agent, "hi", hooks=_RecordingHooks(log, "run"), run_config=_run_config())
+    )
 
     assert log == [
         "run:agent_start:TestAgent",
-        "own:start:TestAgent",
+        "own:agent_start:TestAgent",
         "run:llm_start:TestAgent",
         "own:llm_start:TestAgent",
         "run:llm_end:TestAgent",
         "own:llm_end:TestAgent",
         "run:agent_end:TestAgent",
-        "own:end:TestAgent",
+        "own:agent_end:TestAgent",
     ]
 
 
@@ -1857,11 +1836,13 @@ def test_tool_events_reach_both_hook_scopes() -> None:
 
     agent = _agent(
         tools=[lookup],
-        hooks=_RecordingAgentHooks(log, "own"),
+        hooks=_RecordingHooks(log, "own"),
         model=_ScriptedModel([_tool_call_response("lookup", "{}"), _text_response("done")]),
     )
 
-    asyncio.run(_run_async(agent, "look", hooks=_RecordingRunHooks(log), run_config=_run_config()))
+    asyncio.run(
+        _run_async(agent, "look", hooks=_RecordingHooks(log, "run"), run_config=_run_config())
+    )
 
     assert [entry for entry in log if "tool_" in entry] == [
         "run:tool_start:lookup",
@@ -1871,41 +1852,42 @@ def test_tool_events_reach_both_hook_scopes() -> None:
     ]
 
 
-def test_agent_hooks_fire_only_for_their_own_agent_across_a_handoff() -> None:
+def test_agent_scoped_hooks_fire_only_for_their_own_agent_across_a_handoff() -> None:
     """Each agent's `hooks` see only that agent; the target's `on_handoff` names its source."""
     log: list[str] = []
     target = _agent(
         name="Target",
-        hooks=_RecordingAgentHooks(log, "target"),
+        hooks=_RecordingHooks(log, "target"),
         model=_ScriptedModel([_text_response("handled by target")]),
     )
     handoff = Handoff.from_agent(target)
     main = _agent(
         name="Main",
         handoffs=[handoff],
-        hooks=_RecordingAgentHooks(log, "main"),
+        hooks=_RecordingHooks(log, "main"),
         model=_ScriptedModel([_tool_call_response(handoff.tool_name, "{}")]),
     )
 
     asyncio.run(
-        _run_async(main, "transfer", hooks=_RecordingRunHooks(log), run_config=_run_config())
+        _run_async(main, "transfer", hooks=_RecordingHooks(log, "run"), run_config=_run_config())
     )
 
     assert "run:handoff:Main->Target" in log
     assert "target:handoff:Main->Target" in log
-    # `main` is never told about the handoff: `AgentHooks.on_handoff` notifies the target only.
+    # `main` is never told about the handoff: an agent-scoped `on_handoff` notifies the target
+    # only, and is told both ends of it in the same argument order the run scope reads.
     assert not any(entry.startswith("main:handoff") for entry in log)
     assert [entry for entry in log if entry.startswith("main:")] == [
-        "main:start:Main",
+        "main:agent_start:Main",
         "main:llm_start:Main",
         "main:llm_end:Main",
     ]
     assert [entry for entry in log if entry.startswith("target:")] == [
         "target:handoff:Main->Target",
-        "target:start:Target",
+        "target:agent_start:Target",
         "target:llm_start:Target",
         "target:llm_end:Target",
-        "target:end:Target",
+        "target:agent_end:Target",
     ]
 
 
@@ -1920,32 +1902,35 @@ def test_a_resumed_run_pairs_agent_start_with_agent_end() -> None:
 
     agent = _agent(
         tools=[dangerous],
-        hooks=_RecordingAgentHooks(log, "own"),
+        hooks=_RecordingHooks(log, "own"),
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
 
     result = asyncio.run(
-        _run_async(agent, "do it", hooks=_RecordingRunHooks(log), run_config=_run_config())
+        _run_async(agent, "do it", hooks=_RecordingHooks(log, "run"), run_config=_run_config())
     )
     state = result.to_state()
     state.approve(result.interruptions[0])
     log.clear()
-    asyncio.run(_run_async(agent, state, hooks=_RecordingRunHooks(log), run_config=_run_config()))
+    asyncio.run(
+        _run_async(agent, state, hooks=_RecordingHooks(log, "run"), run_config=_run_config())
+    )
 
-    starts = [entry for entry in log if entry.endswith("start:TestAgent") and ":agent" in entry]
-    assert starts == ["run:agent_start:TestAgent"]
-    assert log[0] == "run:agent_start:TestAgent"
-    assert log[1] == "own:start:TestAgent"
-    assert log[-2:] == ["run:agent_end:TestAgent", "own:end:TestAgent"]
+    assert [entry for entry in log if "agent_start" in entry] == [
+        "run:agent_start:TestAgent",
+        "own:agent_start:TestAgent",
+    ]
+    assert log[:2] == ["run:agent_start:TestAgent", "own:agent_start:TestAgent"]
+    assert log[-2:] == ["run:agent_end:TestAgent", "own:agent_end:TestAgent"]
 
 
 def test_an_agent_without_hooks_still_runs() -> None:
-    """`hooks` is opt-in: an agent that never sets it fires the run-scoped hooks only."""
+    """An agent's own `hooks` is opt-in: unset, only the run-scoped instance fires."""
     log: list[str] = []
     agent = _agent(model=_ScriptedModel([_text_response("fine")]))
 
     result = asyncio.run(
-        _run_async(agent, "hi", hooks=_RecordingRunHooks(log), run_config=_run_config())
+        _run_async(agent, "hi", hooks=_RecordingHooks(log, "run"), run_config=_run_config())
     )
 
     assert result.output == "fine"

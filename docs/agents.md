@@ -31,7 +31,7 @@ class SupportAgent(Agent):
 | `max_turns` | `10` | How many model calls one run may make before it errors. |
 | `max_tokens` | `None` | Total tokens one run may spend. See [Bounding a run](#bounding-a-run). |
 | `timeout` | `None` | Wall-clock seconds one run may take. See [Bounding a run](#bounding-a-run). |
-| `hooks` | `None` | An `AgentHooks` instance scoped to this agent. See [Tracing and Hooks](tracing.md). |
+| `hooks` | `None` | A `Hooks` instance scoped to this agent. See [Tracing and Hooks](tracing.md). |
 | `compact` | `False` | Keep long-running history from growing without bound. See below. |
 
 `name` is the only required attribute. Everything else has a sane default, in the spirit of

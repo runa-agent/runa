@@ -334,24 +334,26 @@ provider-specific kwargs on `model` itself.
 
 ## 11. Hooks
 
-**Override only the lifecycle methods you need; every other method stays
-a no-op.** Two scopes, chosen by what the callback should see, not by
-which one is "newer":
+**Always one `Hooks` subclass, overriding only the lifecycle methods you
+need; every other method stays a no-op.** There is one class and one set
+of event names. Scope is where you put the instance, not a second class
+to pick:
 
-* `RunHooks`, passed as `Agent.run(hooks=...)`, fires for every agent in
-  that run, including ones reached by handoff/delegate. Use this for
-  cross-cutting concerns (metrics, a single audit log for the whole run).
-* `AgentHooks`, assigned to an `Agent` subclass's `hooks` attribute,
-  fires only for that one agent. Use this for a concern that belongs to
-  one agent's identity, not the run as a whole.
+* Passed as `Agent.run(hooks=...)`, it fires for every agent in that run,
+  including ones reached by handoff/delegate. Use this for cross-cutting
+  concerns (metrics, a single audit log for the whole run).
+* Assigned to an `Agent` subclass's `hooks` attribute, it fires only for
+  that one agent. Use this for a concern that belongs to one agent's
+  identity, not the run as a whole.
 
-Both scopes fire for the same event, the run's first. `AgentHooks.on_handoff`
-is the one that differs: it fires on the target's hooks, not the sender's,
-and is told `(agent, source)` rather than `(from_agent, to_agent)`.
+Both scopes fire for the same event, with the same arguments, the run's
+first. `on_handoff` is the one event an agent-scoped instance doesn't see
+for every turn of its own agent: it fires on the target's hooks, not the
+sender's, and is told `(from_agent, to_agent)` either way.
 
-Don't subclass `LoggingRunHooks`/`LoggingAgentHooks` to add behavior;
-subclass `RunHooks`/`AgentHooks` directly and pass your own: the
-`Logging*` classes are the framework's default, not a base to build on.
+Don't subclass `LoggingHooks` to add behavior; subclass `Hooks` directly
+and pass your own: `LoggingHooks` is the framework's default, not a base
+to build on.
 
 ## 12. Test
 
@@ -416,5 +418,5 @@ There is no flag for that.
 
 When a change would let a user reach the same result through a second
 shape (a new `Handoff(...)` call site, a hand-built tool schema, a
-`RunHooks` subclass that overrides `Logging*`), that's a sign to close the
+`Hooks` subclass that overrides `LoggingHooks`), that's a sign to close the
 second path, not to document it alongside the first.

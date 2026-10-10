@@ -21,7 +21,7 @@ from runa import (
     Agent,
     Case,
     ConsoleExporter,
-    RunHooks,
+    Hooks,
     SQLiteExporter,
     approval,
     guardrail,
@@ -100,7 +100,7 @@ class BillingAgent(Agent):
 # --------------------------------------------------------------------------------------------
 
 
-class ToolLogger(RunHooks):
+class ToolLogger(Hooks):
     """Prints every tool call made during a run, as it happens."""
 
     async def on_tool_end(

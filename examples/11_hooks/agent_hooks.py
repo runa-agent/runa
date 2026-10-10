@@ -1,26 +1,26 @@
-"""`AgentHooks`: scoped to one `Agent` subclass, via its `hooks` class attribute.
+"""`Hooks` on an `Agent` subclass: scoped to that one agent, via its `hooks` class attribute.
 
 See RUNA.md #11 and docs/tracing.md ("Hooks").
 
-Unlike `RunHooks`, this fires only for the agent it's attached to, not for the whole run
-(subagents included).
+Same class as run_hooks.py passes to `run`; living here is what scopes it. It fires only for
+the agent it's attached to, not for every agent in the run.
 
 Run it:
 
     uv run python examples/11_hooks/agent_hooks.py
 """
 
-from runa import Agent, AgentHooks
+from runa import Agent, Hooks
 
 
-class LoggingHooks(AgentHooks):
+class StartEndLogger(Hooks):
     """Prints when this agent starts and finishes a run."""
 
-    async def on_start(self, context: object, agent: object) -> None:
+    async def on_agent_start(self, context: object, agent: object) -> None:
         """Print that the agent started."""
         print(f"  [hook] {agent.name} started")  # type: ignore[attr-defined]
 
-    async def on_end(self, context: object, agent: object, output: object) -> None:
+    async def on_agent_end(self, context: object, agent: object, output: object) -> None:
         """Print the agent's final output."""
         print(f"  [hook] {agent.name} finished -> {output!r}")  # type: ignore[attr-defined]
 
@@ -30,7 +30,7 @@ class SupportAgent(Agent):
 
     name = "support_agent"
     instructions = "You are a helpful support assistant."
-    hooks = LoggingHooks()
+    hooks = StartEndLogger()
 
 
 run = SupportAgent().run_sync("My order hasn't arrived.")

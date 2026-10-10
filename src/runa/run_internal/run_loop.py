@@ -26,7 +26,7 @@ from runa.exceptions import (
     RunTimeout,
 )
 from runa.guardrail import Phase
-from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
+from runa.lifecycle import Hooks, LoggingHooks, _Dispatch, logger
 from runa.run import Run
 from runa.run_internal.active_run import _Run
 from runa.run_internal.agent_shape import AgentShape
@@ -375,14 +375,14 @@ async def _run_async(
     input: str | list[ConversationItem] | RunState,
     *,
     context: Any = None,
-    hooks: RunHooks[Any] | None = None,
+    hooks: Hooks[Any] | None = None,
     run_config: RunConfig | None = None,
     session: Session | None = None,
     _context_wrapper: RunContextWrapper[Any] | None = None,
     emit: Emit | None = None,
 ) -> Run:
     run_config = run_config or RunConfig()
-    dispatch = _Dispatch(hooks or LoggingRunHooks())
+    dispatch = _Dispatch(hooks or LoggingHooks())
 
     if isinstance(input, RunState):
         return await _resume(input, dispatch, run_config, session, emit)

@@ -209,7 +209,7 @@ data is your decision, not the framework's. See [Deployment](deployment.md#reten
 
 ## Logs and the Privacy Policy
 
-The privacy policy above governs the default log output too, not just spans. `LoggingRunHooks`
+The privacy policy above governs the default log output too, not just spans. `LoggingHooks`
 (the default `hooks`) logs at INFO without ever carrying content: an agent's answer and a tool's
 result are user data, and a production app running at INFO should not be writing them to stdout.
 Content is logged at DEBUG only, and passes through the same `redact`/`redactor`/`capture_outputs`
@@ -224,13 +224,18 @@ observe(capture_outputs=False)  # no outputs in traces, and none in the DEBUG lo
 Tracing is unconditional. Hooks are optional lifecycle callbacks for your own logic: logging,
 metrics, side effects.
 
-`RunHooks` is passed per-call and fires for every agent involved in a run, including subagents:
+There is one class, `Hooks`, with one set of event names. It fires `on_agent_start`,
+`on_agent_end`, `on_handoff`, `on_tool_start`, `on_tool_end`, `on_llm_start`, and `on_llm_end`;
+every method is a no-op unless overridden.
+
+What scopes an instance is where you put it, not which class you subclass. Passed per-call, it
+fires for every agent involved in a run, including subagents:
 
 ```python
-from runa import RunHooks
+from runa import Hooks
 
 
-class MyHooks(RunHooks):
+class MyHooks(Hooks):
     async def on_tool_end(self, context, agent, tool, result):
         print(f"{tool.name} -> {result!r}")
 
@@ -238,30 +243,24 @@ class MyHooks(RunHooks):
 agent.run_sync("...", hooks=MyHooks())
 ```
 
-`RunHooks` fires `on_agent_start`, `on_agent_end`, `on_handoff`, `on_tool_start`, `on_tool_end`,
-`on_llm_start`, and `on_llm_end`. Every method is a no-op unless overridden.
-
-`AgentHooks` is scoped to a single `Agent` subclass instead, via its `hooks` class attribute. It
-fires only for that agent, not for the whole run:
+Assigned to a single `Agent` subclass's `hooks` class attribute instead, the same class fires
+only for that agent, in every run it takes part in:
 
 ```python
 class SupportAgent(Agent):
     name = "support_agent"
-    hooks = MyAgentHooks()
+    hooks = MyHooks()
 ```
 
-`AgentHooks` fires `on_start`, `on_end`, `on_handoff`, `on_tool_start`, `on_tool_end`,
-`on_llm_start`, and `on_llm_end`.
+The two scopes are not alternatives: both fire for the same event, with the same arguments, the
+run's hooks first, so a run-wide audit log records an event before any one agent's callback can
+raise out of it. `on_handoff` is the one event an agent-scoped instance doesn't see for every
+turn of its own agent: it fires on the target's hooks, the agent the run was handed *to*, and
+never the sender's. It is told `(from_agent, to_agent)` at either scope.
 
-The two scopes are not alternatives: both fire for the same event, the run's hooks first, so a
-run-wide audit log records an event before any one agent's callback can raise out of it. The one
-place they disagree is direction. `RunHooks.on_handoff` watches the run, so it is told
-`(from_agent, to_agent)`; `AgentHooks.on_handoff` belongs to the agent being handed *to*, so it is
-told `(agent, source)` and fires only on the target's hooks, never the sender's.
-
-`LoggingRunHooks`/`LoggingAgentHooks` are the framework's defaults, logging each event through
-the standard `logging` module under the `"runa"` logger name. Don't subclass them to add
-behavior; subclass `RunHooks`/`AgentHooks` directly and pass your own instance instead.
+`LoggingHooks` is the framework's default, logging each event through the standard `logging`
+module under the `"runa"` logger name. Don't subclass it to add behavior; subclass `Hooks`
+directly and pass your own instance instead.
 
 ### Example
 

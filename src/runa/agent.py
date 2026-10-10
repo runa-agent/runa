@@ -28,7 +28,7 @@ from runa.exceptions import RunaError, UserError
 from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
 from runa.handoff import agent_as_tool
 from runa.knowledge import Knowledge
-from runa.lifecycle import RunHooks, logger
+from runa.lifecycle import Hooks, logger
 from runa.memory import Memory
 from runa.run import Run, RunStream
 from runa.run_internal.run_config import DEFAULT_MAX_TURNS, RunConfig
@@ -575,7 +575,7 @@ class Agent:
         self,
         message: MessageContent | RunState,
         context: Any = None,
-        hooks: RunHooks[Any] | None = None,
+        hooks: Hooks[Any] | None = None,
         session: Session | str | None = None,
         *,
         _context_wrapper: RunContextWrapper[Any] | None = None,
@@ -595,7 +595,7 @@ class Agent:
 
         `context` is available to a single-argument `instructions` callable (and to tools,
         guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle
-        callbacks (`on_agent_start`, `on_tool_end`, etc.); it defaults to `LoggingRunHooks`.
+        callbacks (`on_agent_start`, `on_tool_end`, etc.); it defaults to `LoggingHooks`.
 
         Pass a `session` to persist conversation history there instead of on `self.history`; the
         session supplies prior turns automatically, so only the new `message` is sent as input,
@@ -649,7 +649,7 @@ class Agent:
         self,
         message: MessageContent | RunState,
         context: Any = None,
-        hooks: RunHooks[Any] | None = None,
+        hooks: Hooks[Any] | None = None,
         session: Session | str | None = None,
     ) -> Run:
         """Synchronous `run`, for callers not already inside an event loop.
@@ -673,7 +673,7 @@ class Agent:
         self,
         message: MessageContent | RunState,
         context: Any = None,
-        hooks: RunHooks[Any] | None = None,
+        hooks: Hooks[Any] | None = None,
         session: Session | str | None = None,
     ) -> RunStream:
         """Run a turn as a stream of events: the same run as `run`, with the same arguments.

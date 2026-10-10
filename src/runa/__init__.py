@@ -19,7 +19,7 @@ from runa.eval import (
 )
 from runa.guardrail import guardrail
 from runa.knowledge import Knowledge, KnowledgeMatch
-from runa.lifecycle import AgentHooks, LoggingAgentHooks, LoggingRunHooks, RunHooks
+from runa.lifecycle import Hooks, LoggingHooks
 from runa.mcp import MCPServer
 from runa.memory import Memory, MemoryMatch
 from runa.run import Run, RunStream
@@ -48,7 +48,6 @@ __version__ = version("runa-ai")
 __all__ = [
     "DEFAULT_THRESHOLDS",
     "Agent",
-    "AgentHooks",
     "AgentUpdatedStreamEvent",
     "Cache",
     "Case",
@@ -57,11 +56,11 @@ __all__ = [
     "ConversationItem",
     "Dataset",
     "EvaluationResult",
+    "Hooks",
     "Interruption",
     "Knowledge",
     "KnowledgeMatch",
-    "LoggingAgentHooks",
-    "LoggingRunHooks",
+    "LoggingHooks",
     "MCPServer",
     "Memory",
     "MemoryCache",
@@ -72,7 +71,6 @@ __all__ = [
     "Report",
     "Run",
     "RunStream",
-    "RunHooks",
     "RunItemStreamEvent",
     "RunState",
     "SQLiteCache",
