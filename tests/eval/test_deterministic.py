@@ -18,11 +18,16 @@ def test_check_run_completed_passes_for_a_completed_run() -> None:
 
 
 def test_check_run_completed_fails_and_reports_the_error() -> None:
-    """An errored run fails, carrying the error message as the reason."""
+    """An errored run fails, carrying the error message as the reason and a score of 0.0.
+
+    It scores rather than leaving the metric unscored so a report's "Run completed" line is the
+    fraction of runs that finished, not a constant 100% among the ones that did.
+    """
     result = check_run_completed(finished_run(None, status="error", error="boom"))
 
     assert result.status == Status.FAIL
     assert result.reason == "boom"
+    assert result.score == 0.0
 
 
 def test_check_run_completed_fails_a_run_paused_for_approval() -> None:

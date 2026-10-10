@@ -12,15 +12,17 @@ from runa.eval.case import Case
 from runa.eval.dataset import Dataset
 from runa.eval.evaluate import evaluate_agent
 from runa.eval.evaluation.core import EvaluationResult, Status
-from runa.eval.evaluation.defaults import DEFAULT_THRESHOLDS
+from runa.eval.evaluation.metrics import DEFAULT_THRESHOLDS, METRICS, Metric
 from runa.eval.report import CaseReport, Report
 
 __all__ = [
     "DEFAULT_THRESHOLDS",
+    "METRICS",
     "Case",
     "CaseReport",
     "Dataset",
     "EvaluationResult",
+    "Metric",
     "Report",
     "Status",
     "evaluate_agent",

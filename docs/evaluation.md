@@ -107,8 +107,9 @@ dataset = Dataset.from_jsonl(Path(__file__).with_suffix(".jsonl"))
 
 ## Choosing a Judge
 
-Semantic metrics (task completion, answer correctness, answer relevance, faithfulness, tool
-correctness) are graded by a judge model, by default the agent's own `model`:
+Semantic metrics (task completion, answer correctness, answer relevance, faithfulness) are graded
+by a judge model, by default the agent's own `model`. Run completion and tool correctness are
+plain-code checks, so no judge grades them and no threshold applies:
 
 ```python
 report = await agent.evaluate(dataset, judge="gpt-5.4")

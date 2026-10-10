@@ -1,4 +1,7 @@
-"""Tests for `runa.eval.evaluation.semantic`: the judge-model-backed metrics."""
+"""Tests for `runa.eval.evaluation.semantic`: each judged metric's own pipeline.
+
+Plus the loop over `METRICS` that runs them, declared in `eval/evaluation/metrics.py`.
+"""
 
 import asyncio
 from typing import Any
@@ -8,13 +11,12 @@ from helpers import finished_run
 
 from runa.eval.case import Case
 from runa.eval.evaluation.core import Status
-from runa.eval.evaluation.defaults import DEFAULT_THRESHOLDS
+from runa.eval.evaluation.metrics import DEFAULT_THRESHOLDS, evaluate_semantic
 from runa.eval.evaluation.semantic import (
-    _grade_answer_correctness,
-    _grade_answer_relevance,
-    _grade_faithfulness,
-    _grade_task_completion,
-    evaluate_semantic,
+    grade_answer_correctness,
+    grade_answer_relevance,
+    grade_faithfulness,
+    grade_task_completion,
 )
 
 
@@ -52,7 +54,7 @@ def test_grade_task_completion_extracts_then_scores() -> None:
     case = Case(input="cancel order 123")
     run = finished_run("Order 123 is cancelled.")
 
-    score, reason = asyncio.run(_grade_task_completion(judge, case, run))
+    score, reason = asyncio.run(grade_task_completion(judge, case, run))
 
     assert score == 0.9
     assert reason == "fully achieved"
@@ -77,7 +79,7 @@ def test_grade_answer_relevance_scores_the_fraction_not_irrelevant() -> None:
     case = Case(input="what's the weather?")
     run = finished_run("sunny, also I like cats, maybe rain later")
 
-    score, reason = asyncio.run(_grade_answer_relevance(judge, case, run))
+    score, reason = asyncio.run(grade_answer_relevance(judge, case, run))
 
     assert score == pytest.approx(2 / 3)
     assert reason == "mostly relevant, one aside"
@@ -89,7 +91,7 @@ def test_grade_answer_relevance_treats_no_statements_as_perfect() -> None:
     case = Case(input="hi")
     run = finished_run("")
 
-    score, reason = asyncio.run(_grade_answer_relevance(judge, case, run))
+    score, reason = asyncio.run(grade_answer_relevance(judge, case, run))
 
     assert score == 1.0
     assert len(judge.calls) == 1
@@ -106,7 +108,7 @@ def test_grade_answer_correctness_generates_steps_then_scores_out_of_ten() -> No
     case = Case(input="who won?", expected="the home team won")
     run = finished_run("the home team won 3-1")
 
-    score, reason = asyncio.run(_grade_answer_correctness(judge, case, run))
+    score, reason = asyncio.run(grade_answer_correctness(judge, case, run))
 
     assert score == pytest.approx(0.8)
     assert reason == "matches the key claim"
@@ -129,7 +131,7 @@ def test_grade_faithfulness_scores_the_fraction_not_contradicted() -> None:
     case = Case(input="what's the refund policy?", context=["refunds are processed within 30 days"])
     run = finished_run("refunds within 30 days, no fee applies")
 
-    score, reason = asyncio.run(_grade_faithfulness(judge, case, run))
+    score, reason = asyncio.run(grade_faithfulness(judge, case, run))
 
     assert score == pytest.approx(0.5)
     assert reason == "one unsupported claim about fees"
@@ -146,7 +148,7 @@ def test_grade_faithfulness_treats_no_claims_as_perfect() -> None:
     case = Case(input="hi", context=["x"])
     run = finished_run("ok")
 
-    score, reason = asyncio.run(_grade_faithfulness(judge, case, run))
+    score, reason = asyncio.run(grade_faithfulness(judge, case, run))
 
     assert score == 1.0
 
@@ -162,7 +164,7 @@ def test_evaluate_semantic_skips_answer_correctness_without_an_expected_answer(
             ('"statements":', '{"statements": []}'),
         ]
     )
-    monkeypatch.setattr("runa.eval.evaluation.semantic.judge_model", lambda model: judge)
+    monkeypatch.setattr("runa.eval.evaluation.metrics.judge_model", lambda model: judge)
 
     case = Case(input="hi")
     run = finished_run("ok")
@@ -184,7 +186,7 @@ def test_evaluate_semantic_maps_a_raised_exception_to_error_not_a_score(
         async def ask(self, prompt: str) -> Any:
             raise RuntimeError("judge call failed")
 
-    monkeypatch.setattr("runa.eval.evaluation.semantic.judge_model", lambda model: _BrokenJudge())
+    monkeypatch.setattr("runa.eval.evaluation.metrics.judge_model", lambda model: _BrokenJudge())
 
     case = Case(input="hi")
     run = finished_run("ok")

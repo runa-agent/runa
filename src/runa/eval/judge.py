@@ -46,9 +46,9 @@ class Judge:
         """Send `prompt` to `self.model` through a bare, tool-less `Agent`.
 
         A judge run that didn't complete raises rather than returning its empty `output`:
-        `semantic.py`'s `_grade` turns a raised exception into an `ERROR` metric carrying the
-        reason, which is the difference between "the judge model is unreachable" and a
-        `NoneType` error three frames later.
+        `Metric.evaluate` turns a raised exception into an `ERROR` result carrying the reason,
+        which is the difference between "the judge model is unreachable" and a `NoneType` error
+        three frames later.
         """
         judge_agent = _JudgeAgent(model=self.model, tools=[])
         run = await judge_agent.run(prompt)

@@ -22,9 +22,8 @@ from collections.abc import Iterable
 from runa import db
 from runa.agent import Agent
 from runa.eval.case import Case
-from runa.eval.evaluation.defaults import DEFAULT_THRESHOLDS
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
-from runa.eval.evaluation.semantic import evaluate_semantic
+from runa.eval.evaluation.metrics import DEFAULT_THRESHOLDS, evaluate_semantic
 from runa.eval.report import CaseReport, Report
 
 

@@ -6,6 +6,7 @@ model call can't answer these more reliably than plain code can.
 
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.metrics import RUN_COMPLETED, TOOL_CORRECTNESS
 from runa.run import Run
 
 
@@ -17,14 +18,10 @@ def check_run_completed(run: Run) -> EvaluationResult:
     `None` the judge can only mark down.
     """
     if run.status != "completed":
-        return EvaluationResult(
-            metric="run_completed",
-            status=Status.FAIL,
-            reason=run.error or f"run ended {run.status!r}",
+        return RUN_COMPLETED.result(
+            Status.FAIL, run.error or f"run ended {run.status!r}", score=0.0
         )
-    return EvaluationResult(
-        metric="run_completed", status=Status.PASS, reason="run completed successfully", score=1.0
-    )
+    return RUN_COMPLETED.result(Status.PASS, "run completed successfully", score=1.0)
 
 
 def check_expected_tool_called(case: Case, run: Run) -> EvaluationResult | None:
@@ -33,15 +30,9 @@ def check_expected_tool_called(case: Case, run: Run) -> EvaluationResult | None:
         return None
     called = {tool_call.name for tool_call in run._tool_calls}
     if case.expected_tool in called:
-        return EvaluationResult(
-            metric="tool_correctness",
-            status=Status.PASS,
-            reason=f"called {case.expected_tool!r}",
-            score=1.0,
-        )
-    return EvaluationResult(
-        metric="tool_correctness",
-        status=Status.FAIL,
-        reason=f"expected {case.expected_tool!r} to be called, got {sorted(called)}",
+        return TOOL_CORRECTNESS.result(Status.PASS, f"called {case.expected_tool!r}", score=1.0)
+    return TOOL_CORRECTNESS.result(
+        Status.FAIL,
+        f"expected {case.expected_tool!r} to be called, got {sorted(called)}",
         score=0.0,
     )

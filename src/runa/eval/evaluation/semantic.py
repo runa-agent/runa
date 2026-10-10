@@ -1,23 +1,23 @@
-"""eval/evaluation/semantic.py: the default semantic metrics, activated by evidence.
+"""eval/evaluation/semantic.py: how each judge-graded metric reaches a score.
 
-Each metric only runs when the `Case`/`Run` actually supplies what it needs to judge:
-correctness needs a reference answer, faithfulness needs retrieval context. Task completion and
-answer relevance need neither, so they always run. (Tool correctness needs no judge at all --
-see `eval/evaluation/deterministic.py`'s `check_expected_tool_called`.)
+One `grade_*` pipeline per judged metric, each a `(score, reason)` for one case. Which of them
+run, what they're called, and what score counts as a pass are not here: that's the metric's
+identity, declared once in `eval/evaluation/metrics.py`, which pairs each entry with its pipeline
+and iterates them. What's here is the prompts, which are a metric's content.
 
-Each metric is a small multi-step judge pipeline rather than a single "grade this" prompt: an
-extraction step pulls out what needs grading (statements, claims, a task/outcome pair), a verdict
-step grades each extracted piece, and the score is a plain aggregate of those verdicts. This
-mirrors how LLM-judge frameworks get more reliable scores than a single holistic call would.
+A pipeline is several judge calls rather than a single "grade this" prompt: an extraction step
+pulls out what needs grading (statements, claims, a task/outcome pair), a verdict step grades each
+extracted piece, and the score is a plain aggregate of those verdicts. This mirrors how LLM-judge
+frameworks get more reliable scores than a single holistic call would.
+
+A pipeline raises rather than scoring a case it couldn't grade; `Metric.evaluate` turns that into
+an `ERROR` result.
 """
 
 import asyncio
-from collections.abc import Coroutine
-from typing import Any
 
 from runa.eval.case import Case
-from runa.eval.evaluation.core import EvaluationResult, Status
-from runa.eval.judge import JudgeModel, extract_json, judge_model
+from runa.eval.judge import JudgeModel, extract_json
 from runa.run import Run
 
 _CORRECTNESS_CRITERIA = (
@@ -35,19 +35,8 @@ def _format_tool_calls(run: Run) -> str:
     )
 
 
-async def _graded(
-    name: str, threshold: float, grade: Coroutine[Any, Any, tuple[float, str]]
-) -> EvaluationResult:
-    """Run one metric's grading pipeline, mapping a raised exception to `ERROR`, never a score."""
-    try:
-        score, reason = await grade
-    except Exception as exc:
-        return EvaluationResult(metric=name, status=Status.ERROR, reason=str(exc))
-    status = Status.PASS if score >= threshold else Status.FAIL
-    return EvaluationResult(metric=name, status=status, reason=reason, score=score)
-
-
-async def _grade_task_completion(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+async def grade_task_completion(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+    """Score how completely the outcome the run achieved matches the task the input asked for."""
     extracted = extract_json(
         await judge.ask(
             "Given a user's request, the tools an AI called while handling it, and the AI's "
@@ -72,7 +61,8 @@ async def _grade_task_completion(judge: JudgeModel, case: Case, run: Run) -> tup
     return float(verdict["verdict"]), str(verdict["reason"])
 
 
-async def _grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+async def grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+    """Score the fraction of the output's statements that address the input."""
     statements = extract_json(
         await judge.ask(
             "Break the following text down into a list of the individual statements it makes. "
@@ -113,7 +103,8 @@ async def _grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tu
     return score, reason
 
 
-async def _grade_answer_correctness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+async def grade_answer_correctness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+    """Score the output against `case.expected`, on steps derived from the criteria."""
     steps = extract_json(
         await judge.ask(
             "Given the evaluation criteria below, write 3-4 concise steps for judging how well "
@@ -137,7 +128,8 @@ async def _grade_answer_correctness(judge: JudgeModel, case: Case, run: Run) -> 
     return float(graded["score"]) / 10, str(graded["reason"])
 
 
-async def _grade_faithfulness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+async def grade_faithfulness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
+    """Score the fraction of the output's claims that `case.context` doesn't contradict."""
     context = "\n\n".join(case.context or [])
     truths_reply, claims_reply = await asyncio.gather(
         judge.ask(
@@ -187,51 +179,9 @@ async def _grade_faithfulness(judge: JudgeModel, case: Case, run: Run) -> tuple[
     return score, reason
 
 
-async def evaluate_semantic(
-    case: Case, run: Run, *, model: str, thresholds: dict[str, float]
-) -> list[EvaluationResult]:
-    """Run every semantic metric that applies to `case`, recording `SKIPPED` for the rest."""
-    judge = judge_model(model)
-
-    results = [
-        await _graded(
-            "task_completion",
-            thresholds["task_completion"],
-            _grade_task_completion(judge, case, run),
-        ),
-        await _graded(
-            "answer_relevance",
-            thresholds["answer_relevance"],
-            _grade_answer_relevance(judge, case, run),
-        ),
-    ]
-
-    if case.expected is not None:
-        results.append(
-            await _graded(
-                "answer_correctness",
-                thresholds["answer_correctness"],
-                _grade_answer_correctness(judge, case, run),
-            )
-        )
-    else:
-        results.append(
-            EvaluationResult(
-                metric="answer_correctness", status=Status.SKIPPED, reason="no expected answer"
-            )
-        )
-
-    if case.context:
-        results.append(
-            await _graded(
-                "faithfulness", thresholds["faithfulness"], _grade_faithfulness(judge, case, run)
-            )
-        )
-    else:
-        results.append(
-            EvaluationResult(
-                metric="faithfulness", status=Status.SKIPPED, reason="no retrieval context"
-            )
-        )
-
-    return results
+__all__ = [
+    "grade_answer_correctness",
+    "grade_answer_relevance",
+    "grade_faithfulness",
+    "grade_task_completion",
+]

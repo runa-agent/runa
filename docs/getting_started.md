@@ -438,6 +438,7 @@ runa eval
 greeter_agent Evaluation
 ────────────────────────────────
 
+Run completed        100%
 Task completion      100%
 Answer correctness   90%
 Answer relevance     100%

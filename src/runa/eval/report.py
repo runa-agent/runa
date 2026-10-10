@@ -4,22 +4,8 @@ from dataclasses import dataclass, field
 
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult
+from runa.eval.evaluation.metrics import TASK_COMPLETION, in_display_order
 from runa.run import Run
-
-_METRIC_ORDER = [
-    "task_completion",
-    "answer_correctness",
-    "answer_relevance",
-    "faithfulness",
-    "tool_correctness",
-]
-_METRIC_LABELS = {
-    "task_completion": "Task completion",
-    "answer_correctness": "Answer correctness",
-    "answer_relevance": "Answer relevance",
-    "faithfulness": "Faithfulness",
-    "tool_correctness": "Tool correctness",
-}
 
 
 @dataclass
@@ -97,16 +83,20 @@ class Report:
     def score(self) -> float:
         """The headline score: mean task completion, falling back to the overall pass rate."""
         metrics = self.metrics
-        return metrics.get("task_completion", self.pass_rate)
+        return metrics.get(TASK_COMPLETION.name, self.pass_rate)
 
     def __str__(self) -> str:
-        """Render the report roughly as `report.score`/`report.metrics`/`report.failures` show."""
+        """Render the report roughly as `report.score`/`report.metrics`/`report.failures` show.
+
+        Every metric the cases scored is shown, labeled and ordered by its declaration in
+        `eval/evaluation/metrics.py`: there is no list here to forget a metric from, which is how
+        a metric could decide whether cases passed while never appearing above their failures.
+        """
         rule = "─" * 32
         lines = [f"{self.agent_name} Evaluation", rule, ""]
         metrics = self.metrics
-        for name in _METRIC_ORDER:
-            if name in metrics:
-                lines.append(f"{_METRIC_LABELS[name]:<20} {metrics[name]:.0%}")
+        for metric in in_display_order(metrics):
+            lines.append(f"{metric.label:<20} {metrics[metric.name]:.0%}")
         lines.append("")
         lines.append(f"{len(self.passed)} passed")
         lines.append(f"{len(self.failed)} failed")

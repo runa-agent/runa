@@ -112,6 +112,66 @@ def test_report_str_lists_metrics_and_failures() -> None:
     assert "case_41  answer_correctness: unsupported claim" in rendered
 
 
+def test_report_str_shows_every_metric_the_cases_scored() -> None:
+    """No metric decides whether cases pass without appearing above their failures.
+
+    `run_completed` used to: it scores like any other metric, but the renderer kept its own list
+    of metric names and that one wasn't on it, so a dataset full of runs that never finished
+    printed failures under metric lines that didn't mention them.
+    """
+    report = Report(
+        agent_name="SupportAgent",
+        cases=[
+            _case_report(
+                0,
+                [
+                    EvaluationResult(
+                        metric="run_completed", status=Status.FAIL, reason="boom", score=0.0
+                    )
+                ],
+            ),
+            _case_report(
+                1,
+                [
+                    EvaluationResult(
+                        metric="run_completed", status=Status.PASS, reason="ok", score=1.0
+                    )
+                ],
+            ),
+        ],
+    )
+
+    rendered = str(report)
+
+    assert set(report.metrics) == {"run_completed"}
+    assert "Run completed" in rendered
+    assert "50%" in rendered
+
+
+def test_report_str_orders_metrics_by_declaration_not_by_result_order() -> None:
+    """Display order is `METRICS`', whichever order a case's results came back in."""
+    report = Report(
+        agent_name="SupportAgent",
+        cases=[
+            _case_report(
+                0,
+                [
+                    EvaluationResult(
+                        metric="faithfulness", status=Status.PASS, reason="ok", score=1.0
+                    ),
+                    EvaluationResult(
+                        metric="task_completion", status=Status.PASS, reason="ok", score=1.0
+                    ),
+                ],
+            )
+        ],
+    )
+
+    rendered = str(report)
+
+    assert rendered.index("Task completion") < rendered.index("Faithfulness")
+
+
 def test_report_flags_a_failure_that_passed_last_run_as_a_regression() -> None:
     """A failed case whose input passed in `baseline` regressed, a new or still-failing one not."""
     fail = [EvaluationResult(metric="task_completion", status=Status.FAIL, reason="wrong")]
