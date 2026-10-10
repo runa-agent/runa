@@ -37,7 +37,8 @@ class PostgresVectorStore(Shared):
         """The two `CREATE TABLE IF NOT EXISTS` this store needs, and its partition index if any.
 
         `{name}_meta` holds at most one row, the version `reset` stamped; see `sqlite.py` for why
-        it is a table of its own rather than a column on `{name}_items`.
+        it is a table of its own rather than a column on `{name}_items`, and for why both of these
+        are raw SQL that `db/schema.py`'s `reconcile` does not read.
         """
         lines = ["id BIGSERIAL PRIMARY KEY"]
         lines += [

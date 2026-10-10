@@ -7,6 +7,11 @@ every other local adapter writes to (`db/sqlite.py`). Every `agent.evaluate()` c
 The tables are `eval/store.py`'s `RUNS`/`CASES`, rendered here in SQLite's dialect. This side
 carried no index at all while the two schemas were written out separately, though `baseline`
 filters and orders on `agent_name` and `id` on every call.
+
+It also carried this repository's one hand-rolled migration, a `PRAGMA table_info` and an
+`ALTER TABLE` adding `eval_cases.trace_id` to a `runa.db` from before that column existed. That
+is `db/schema.py`'s `reconcile` now, applied by `db/sqlite.py` to every local adapter's tables:
+the same diff, taken from the declaration rather than written out for one known column.
 """
 
 import sqlite3
@@ -15,14 +20,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from runa.db import sqlite_path
-from runa.db.schema import SQLITE, ddl
+from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
 from runa.eval.report import Report
 from runa.eval.store import CASES, RUNS, EvalRun, case_values, to_run
 
 _NO_LIMIT = 2**63 - 1  # SQLite's largest integer, above every `eval_runs.id`
-
-_DDL = ddl(SQLITE, RUNS, CASES)
 
 
 class SQLiteEvalStore:
@@ -36,18 +39,8 @@ class SQLiteEvalStore:
         self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def _connect(self) -> sqlite3.Connection:
-        """Open the file, adding `eval_cases.trace_id` to a `runa.db` from before it existed.
-
-        The one migration either backend needs, and only this one can need it: a shared Postgres
-        is created by whichever replica connects first and has had the column from the start,
-        where a local file can be older than the release that linked a case to its trace.
-        """
-        conn = _connect_db(self.db_path, _DDL)
+        conn = _connect_db(self.db_path, RUNS, CASES)
         conn.row_factory = sqlite3.Row
-        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({CASES.name})")}
-        if "trace_id" not in columns:
-            conn.execute(f"ALTER TABLE {CASES.name} ADD COLUMN trace_id TEXT")
-            conn.commit()
         return conn
 
     def save(self, report: Report) -> int:

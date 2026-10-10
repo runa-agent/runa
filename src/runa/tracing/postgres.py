@@ -16,7 +16,7 @@ fetch.
 from typing import Any
 
 from runa.db.pool import Shared, sync
-from runa.db.schema import POSTGRES, ddl
+from runa.db.schema import POSTGRES
 from runa.tracing.config import StoreExporter
 from runa.tracing.store import (
     SPANS,
@@ -26,8 +26,6 @@ from runa.tracing.store import (
     trace_values,
 )
 from runa.tracing.traces import Trace
-
-_DDL = ddl(POSTGRES, TRACES, SPANS)
 
 
 def _assignments(columns: tuple[str, ...], *, keep: str = "id") -> str:
@@ -44,7 +42,7 @@ class PostgresTraceStore(Shared):
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this history lives in; connected lazily."""
-        super().__init__(url, _DDL)
+        super().__init__(url, TRACES, SPANS)
 
     @sync
     async def save(self, trace: Trace) -> None:

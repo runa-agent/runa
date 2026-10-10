@@ -308,6 +308,32 @@ def test_a_local_connection_enforces_foreign_keys(tmp_path: Path) -> None:
         assert conn.execute("SELECT COUNT(*) FROM child").fetchone()[0] == 0
 
 
+def test_a_local_connection_grows_a_file_that_predates_a_column(tmp_path: Path) -> None:
+    """A `runa.db` outlives the release that created it, so a connect has to catch it up.
+
+    `CREATE TABLE IF NOT EXISTS` alone can't: on the existing table it is a no-op and the next
+    query is `no such column`. This is `eval_cases.trace_id`'s story, told with `agent_sessions`
+    so it holds for whichever concern's declaration grows next.
+    """
+    from contextlib import closing
+    from dataclasses import replace
+
+    from runa.db.schema import Column
+    from runa.db.sqlite import connect
+    from runa.session.store import MESSAGES, SESSIONS
+
+    db_path = tmp_path / "db" / "runa.db"
+    with closing(connect(db_path, SESSIONS, MESSAGES)) as conn:
+        conn.execute(f"INSERT INTO {SESSIONS.name} (session_id) VALUES ('s1')")
+        conn.commit()
+
+    grown = replace(SESSIONS, columns=(*SESSIONS.columns, Column("agent_name", "text", null=True)))
+    with closing(connect(db_path, grown, MESSAGES)) as conn:
+        rows = conn.execute(f"SELECT session_id, agent_name FROM {grown.name}").fetchall()
+
+    assert rows == [("s1", None)]
+
+
 def test_deleting_a_trace_takes_its_spans(tmp_path: Path) -> None:
     """The retention pass documented for `traces` reaches `spans` without naming them."""
     import sqlite3

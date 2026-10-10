@@ -21,7 +21,7 @@ from pathlib import Path
 
 from runa._items import ConversationItem
 from runa.db import sqlite_path
-from runa.db.schema import SQLITE, ddl
+from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
 from runa.session import Session
 from runa.session.store import (
@@ -34,8 +34,6 @@ from runa.session.store import (
     as_timestamp,
     to_message,
 )
-
-DDL = ddl(SQLITE, SESSIONS, MESSAGES)
 
 
 class SQLiteSession(Session):
@@ -61,7 +59,7 @@ class SQLiteSession(Session):
         self.user_id = user_id
 
     def _connect(self) -> sqlite3.Connection:
-        return _connect_db(self.db_path, DDL)
+        return _connect_db(self.db_path, SESSIONS, MESSAGES)
 
     async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
@@ -197,7 +195,6 @@ class SQLiteSessionStore:
 
 
 __all__ = [
-    "DDL",
     "SQLiteSession",
     "SQLiteSessionStore",
 ]

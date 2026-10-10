@@ -24,10 +24,22 @@ A concern whose adapters must phrase one predicate identically can keep that fra
 own tables -- `session/store.py`'s `agent_filter` is the whole `WHERE` matching an agent's session
 ids, placeholders and `ESCAPE` clause included, because half of that rule is not usable on its own.
 That is a predicate a concern owns, not a query builder growing here.
+
+Declaring a table is only half of owning it: `db/runa.db` outlives installs by design (that is the
+whole point of `--continue`, of trace history, of eval baselines), so a column added to a
+declaration below has to reach databases that already exist. `CREATE TABLE IF NOT EXISTS` does not
+do that -- on an existing table it is a no-op, and the next query fails with `no such column`.
+`reconcile` is the other half: it diffs what the declaration says against what the database has
+and emits the `ALTER TABLE ... ADD COLUMN` the difference needs, so the two halves answer from the
+same declaration. `eval/sqlite.py` used to hand-roll that diff for its one column inside its own
+`_connect`, which worked exactly until a second column landed.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
+
+from runa.exceptions import OperatorError
 
 ColumnType = Literal["text", "int", "bigint", "float", "bool", "timestamp", "serial"]
 """The logical column types these four concerns actually store.
@@ -54,6 +66,12 @@ class Dialect:
     """The expression a `default_now` column defaults to."""
     numbered_placeholders: bool
     """`$1, $2, ...` rather than `?, ?, ...`."""
+    columns_query: str
+    """Every column this database actually has, as `(table, column)` rows, for `reconcile`.
+
+    One query for the whole database rather than one per table: both backends can answer it that
+    way, and it keeps the only connection-aware step in `reconcile`'s plumbing to a single fetch.
+    """
 
 
 SQLITE = Dialect(
@@ -70,6 +88,10 @@ SQLITE = Dialect(
     serial="INTEGER PRIMARY KEY AUTOINCREMENT",
     now="CURRENT_TIMESTAMP",
     numbered_placeholders=False,
+    columns_query=(
+        "SELECT m.name, p.name FROM sqlite_master AS m "
+        "JOIN pragma_table_info(m.name) AS p WHERE m.type = 'table'"
+    ),
 )
 
 POSTGRES = Dialect(
@@ -86,6 +108,10 @@ POSTGRES = Dialect(
     serial="BIGSERIAL PRIMARY KEY",
     now="now()",
     numbered_placeholders=True,
+    columns_query=(
+        "SELECT table_name, column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema()"
+    ),
 )
 
 
@@ -108,6 +134,19 @@ class Column:
     primary_key: bool = False
     default_now: bool = False
     references: str | None = None
+
+    @property
+    def addable(self) -> bool:
+        """Whether `reconcile` can add this column to a table that already exists.
+
+        A nullable column with no default, which is every column so far added to a shipped table.
+        The other three kinds are what `ALTER TABLE ... ADD COLUMN` refuses outright, in the same
+        words in both backends: a `NOT NULL` column has no value for the rows already there, a
+        `PRIMARY KEY` (`serial` included) cannot be added at all, and `DEFAULT CURRENT_TIMESTAMP`
+        is a non-constant default. Each of those needs a human and a backfill, so `reconcile`
+        raises `SchemaOutOfDate` rather than emitting SQL the database will reject anyway.
+        """
+        return self.null and not self.primary_key and not self.default_now and self.type != "serial"
 
     def sql(self, dialect: Dialect) -> str:
         """This column's definition, in `dialect`."""
@@ -177,14 +216,93 @@ class Table:
         return "\n".join(statements)
 
 
-def ddl(dialect: Dialect, *tables: Table) -> str:
+type Declaration = Table | str
+"""One piece of a concern's schema: a declared `Table`, or raw SQL for the few that can't be one.
+
+`db/vectors`'s two SQL stores are the raw case, and the only one: a `vec0` virtual table and a
+`pgvector` column have no logical `ColumnType` here, so those adapters build their own `CREATE`
+text from a `VectorSpec`. Raw SQL is created like a declared table and reconciled like nothing --
+that's the price of staying outside the declaration, and the reason to stay inside it.
+"""
+
+
+class SchemaOutOfDate(OperatorError):
+    """Raised when a database is missing a declared column that can't be added additively.
+
+    The one case `reconcile` hands back to a human: a `NOT NULL` column, a primary key or a
+    non-constant default has no value for rows that already exist, so there is a backfill to
+    decide and nobody but the operator can decide it. Loud rather than skipped, because skipped
+    means `no such column` on the next query instead.
+    """
+
+    def __init__(self, table: str, column: Column) -> None:
+        """Name the table and column, and say what the two ways out are."""
+        self.table = table
+        self.column = column
+        super().__init__(
+            f"this database's {table} table has no {column.name} column, and only a nullable "
+            f"column with no default can be added to a table that already exists. Add "
+            f"{table}.{column.name} by hand (with whatever value its existing rows should get), "
+            f"or delete the database to recreate it from the current schema."
+        )
+
+
+def ddl(dialect: Dialect, *tables: Declaration) -> str:
     """The `CREATE TABLE`/`CREATE INDEX` script for `tables`, in `dialect`.
 
     Idempotent (every statement is `IF NOT EXISTS`), which is what lets both `db/sqlite.py` and
     `db/pool.py` apply it on every connect instead of tracking whether a database is new.
     Declaration order is creation order, so a table referencing another is declared after it.
+
+    Creation only: what this leaves for `reconcile` is a table that already exists and whose
+    declaration has since grown a column.
     """
-    return "\n".join(table._ddl(dialect) for table in tables) + "\n"
+    return (
+        "\n".join(table if isinstance(table, str) else table._ddl(dialect) for table in tables)
+        + "\n"
+    )
 
 
-__all__ = ["POSTGRES", "SQLITE", "Column", "Dialect", "Index", "Table", "ddl"]
+def reconcile(
+    dialect: Dialect, columns: Iterable[tuple[str, str]], *tables: Declaration
+) -> list[str]:
+    """The `ALTER TABLE` statements bringing an existing database up to `tables`'s declaration.
+
+    `columns` is `dialect.columns_query`'s rows: one `(table, column)` pair per column the
+    database actually has. Pure, like `ddl` -- the caller fetches the rows and executes what comes
+    back, which is the whole of what `db/sqlite.py` and `db/pool.py` add to applying a script.
+
+    Only columns need this. A new table and a new index are already covered by `ddl`'s
+    `IF NOT EXISTS`, and a table the declaration no longer mentions, or a column it doesn't,
+    is left alone: every adapter here selects columns by name, so an older release reading a
+    newer database is not a failure. What isn't additive raises `SchemaOutOfDate`; see
+    `Column.addable`.
+    """
+    existing: dict[str, set[str]] = {}
+    for table_name, column_name in columns:
+        existing.setdefault(table_name, set()).add(column_name)
+    statements = []
+    for table in tables:
+        if isinstance(table, str) or table.name not in existing:
+            continue  # raw SQL this module can't read, or a table `ddl` just created
+        for column in table.columns:
+            if column.name in existing[table.name]:
+                continue
+            if not column.addable:
+                raise SchemaOutOfDate(table.name, column)
+            statements.append(f"ALTER TABLE {table.name} ADD COLUMN {column.sql(dialect)}")
+    return statements
+
+
+__all__ = [
+    "POSTGRES",
+    "SQLITE",
+    "Column",
+    "Declaration",
+    "Dialect",
+    "Index",
+    "SchemaOutOfDate",
+    "Table",
+    "ddl",
+    "reconcile",
+]

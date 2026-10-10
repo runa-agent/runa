@@ -254,6 +254,31 @@ observe(redact=["email", "card_number"])  # scrub these keys wherever they appea
 observe(capture_outputs=False)            # keep outputs out of traces and logs entirely
 ```
 
+## Upgrading Runa with a database already in place
+
+Tables are created on first use, and brought up to date on every connect after that. A release
+that adds a column to one of Runa's own tables -- sessions, traces, eval history, the cache --
+reaches databases that already exist: each connect diffs what Runa declares against what the
+database has and adds what's missing. Nothing to run, no migration directory, and the same
+behavior for the local `db/runa.db` and a shared Postgres.
+
+Only additive changes are automatic, and that is deliberate. A column that cannot be filled in
+for the rows already there -- a `NOT NULL` column, a new primary key -- has a backfill to decide,
+and Runa refuses to guess it:
+
+```text
+runa.db.schema.SchemaOutOfDate: this database's eval_cases table has no tier column, and only a
+nullable column with no default can be added to a table that already exists. Add
+eval_cases.tier by hand (with whatever value its existing rows should get), or delete the
+database to recreate it from the current schema.
+```
+
+Both ways out are in the message. For a local file, deleting it is usually the honest answer;
+for a shared Postgres, run the `ALTER TABLE` through whatever migration tooling you already
+have. A column Runa no longer declares is left alone, so rolling a replica back is safe.
+
+Your own tables are your own business: Runa reconciles what it declares and nothing else.
+
 ## Retention
 
 Everything Runa persists is append-only: every run adds a trace and its spans, every turn adds

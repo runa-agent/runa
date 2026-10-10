@@ -3,7 +3,7 @@
 `db/sqlite.py`'s counterpart for the other side of `runa.db`'s one decision. Every Postgres
 adapter (`session/postgres.py`, `memory/postgres.py`, `knowledge/postgres.py`,
 `cache/postgres.py`, `tracing/postgres.py`, `eval/postgres.py`) owns a different set of tables in
-the same database; this only hands out the pool and applies each caller's DDL.
+the same database; this only hands out the pool and applies each caller's tables.
 
 One pool per URL, cached at module level and shared by every adapter built from it, so a session,
 a memory store and an exporter on the same database reuse one pool instead of each opening their
@@ -22,6 +22,7 @@ from typing import Any
 import asyncpg
 
 from runa._loop import LoopCache
+from runa.db.schema import POSTGRES, Declaration, ddl, reconcile
 
 _loop: asyncio.AbstractEventLoop | None = None
 _loop_lock = threading.Lock()
@@ -110,31 +111,39 @@ async def close_pool(url: str) -> None:
         await pool.close()
 
 
-async def connect(url: str, ddl: str) -> asyncpg.Pool:
-    """Return `url`'s shared pool, applying `ddl` (idempotent) first."""
+async def connect(url: str, *tables: Declaration) -> asyncpg.Pool:
+    """Return `url`'s shared pool, with `tables` created and reconciled (idempotent) first.
+
+    `db/sqlite.py`'s `connect` applied to the shared side: `db/schema.py`'s `ddl` creates what's
+    missing, then `reconcile` adds the columns a declaration has grown since this database was
+    created. A Postgres is usually created by whichever replica connects first and so is already
+    current, but "usually" is not the same promise as asking it.
+    """
     pool = await get_pool(url)
     async with pool.acquire() as conn:
-        await conn.execute(ddl)
+        await conn.execute(ddl(POSTGRES, *tables))
+        for statement in reconcile(POSTGRES, await conn.fetch(POSTGRES.columns_query), *tables):
+            await conn.execute(statement)
     return pool
 
 
 class Shared:
     """A store that lives in the shared Postgres: which database it's in, and its own tables.
 
-    What every Postgres adapter needs and all it needs: the URL it was built with, and its DDL
+    What every Postgres adapter needs and all it needs: the URL it was built with, and its tables
     applied once before its first query. Subclassing this is what keeps the lifetime rule above
     (one pool per URL per loop, tables created on first use) a fact of this module instead of
     something each adapter rediscovers -- five of them had, in twelve places.
     """
 
-    def __init__(self, url: str, ddl: str) -> None:
+    def __init__(self, url: str, *tables: Declaration) -> None:
         """Store which Postgres database this store's tables live in; connected lazily."""
         self.url = url
-        self._ddl = ddl
+        self.tables = tables
 
     async def _pool(self) -> asyncpg.Pool:
         """This store's shared pool, with its own tables created on first use."""
-        return await connect(self.url, self._ddl)
+        return await connect(self.url, *self.tables)
 
 
 __all__ = ["Shared", "close_pool", "connect", "get_pool", "run_sync", "sync"]

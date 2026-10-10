@@ -15,7 +15,7 @@ from contextlib import closing
 from pathlib import Path
 
 from runa.db import sqlite_path
-from runa.db.schema import SQLITE, ddl
+from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
 from runa.tracing.store import (
     SPANS,
@@ -25,8 +25,6 @@ from runa.tracing.store import (
     trace_values,
 )
 from runa.tracing.traces import Trace
-
-_DDL = ddl(SQLITE, TRACES, SPANS)
 
 
 class SQLiteTraceStore:
@@ -40,7 +38,7 @@ class SQLiteTraceStore:
         self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = _connect_db(self.db_path, _DDL)
+        conn = _connect_db(self.db_path, TRACES, SPANS)
         conn.row_factory = sqlite3.Row
         return conn
 

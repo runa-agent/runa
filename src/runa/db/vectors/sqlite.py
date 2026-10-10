@@ -42,6 +42,11 @@ class SQLiteVectorStore:
         `{name}_meta` holds at most one row, the version `reset` stamped. A one-row table rather
         than a column on `{name}_items` because it has to survive having no rows at all: an empty
         corpus is still an ingested one.
+
+        Raw SQL rather than `db/schema.py`'s `Table`s, because a `vec0` virtual table has no
+        logical column type there and a payload column's shape is a `VectorSpec`'s to state. The
+        price is that `reconcile` can't read this: a payload column added to a spec reaches no
+        existing `runa.db`, so changing one is `reset`'s business, not a connect's.
         """
         payload = ["id INTEGER PRIMARY KEY"]
         payload += [

@@ -12,11 +12,9 @@ two tables and the row marshalling are `eval/store.py`'s, shared with the SQLite
 from datetime import UTC, datetime
 
 from runa.db.pool import Shared, sync
-from runa.db.schema import POSTGRES, ddl
+from runa.db.schema import POSTGRES
 from runa.eval.report import Report
 from runa.eval.store import CASES, RUNS, EvalRun, case_values, to_run
-
-_DDL = ddl(POSTGRES, RUNS, CASES)
 
 
 class PostgresEvalStore(Shared):
@@ -24,7 +22,7 @@ class PostgresEvalStore(Shared):
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this history lives in; connected lazily."""
-        super().__init__(url, _DDL)
+        super().__init__(url, RUNS, CASES)
 
     @sync
     async def save(self, report: Report) -> int:

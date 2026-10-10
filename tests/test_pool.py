@@ -49,30 +49,32 @@ def test_sync_keeps_the_async_bodys_name_and_docstring() -> None:
     assert "latest run" in PostgresEvalStore.baseline.__doc__
 
 
-def test_a_shared_store_connects_to_its_own_url_with_its_own_ddl(
+def test_a_shared_store_connects_to_its_own_url_with_its_own_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`_pool` is the one place `(url, ddl)` becomes a pool, where twelve call sites used to be."""
+    """`_pool` is the one place `(url, tables)` becomes a pool; twelve call sites used to be."""
     pytest.importorskip("asyncpg")
     from runa.db import pool
+    from runa.db.schema import Declaration
 
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, tuple[Declaration, ...]]] = []
 
-    async def _fake_connect(url: str, ddl: str) -> str:
-        calls.append((url, ddl))
+    async def _fake_connect(url: str, *tables: Declaration) -> str:
+        calls.append((url, tables))
         return "pool"
 
     monkeypatch.setattr(pool, "connect", _fake_connect)
     store = pool.Shared("postgresql://example/db", "CREATE TABLE IF NOT EXISTS mine ()")
 
     assert asyncio.run(store._pool()) == "pool"
-    assert calls == [("postgresql://example/db", "CREATE TABLE IF NOT EXISTS mine ()")]
+    assert calls == [("postgresql://example/db", ("CREATE TABLE IF NOT EXISTS mine ()",))]
 
 
 def test_every_postgres_adapter_brings_its_own_tables() -> None:
-    """Each adapter hands up the DDL for the tables it owns, five concerns in one database."""
+    """Each adapter hands up the tables it owns, five concerns in one database."""
     pytest.importorskip("asyncpg")
     from runa.cache.postgres import PostgresCache
+    from runa.db.schema import POSTGRES, ddl
     from runa.db.vectors.postgres import PostgresVectorStore
     from runa.eval.postgres import PostgresEvalStore
     from runa.memory.vector import spec
@@ -81,14 +83,17 @@ def test_every_postgres_adapter_brings_its_own_tables() -> None:
 
     url = "postgresql://example/db"
 
-    assert "cache_entries" in PostgresCache(url)._ddl
-    assert "eval_runs" in PostgresEvalStore(url)._ddl
-    assert "spans" in PostgresTraceStore(url)._ddl
-    assert "agent_messages" in PostgresSessionStore(url)._ddl
+    def script(store: object) -> str:
+        return ddl(POSTGRES, *store.tables)  # type: ignore[attr-defined]
+
+    assert "cache_entries" in script(PostgresCache(url))
+    assert "eval_runs" in script(PostgresEvalStore(url))
+    assert "spans" in script(PostgresTraceStore(url))
+    assert "agent_messages" in script(PostgresSessionStore(url))
     # Both sides of the session pair reach the same two tables, from different base `__init__`s.
-    assert PostgresSession("s", url)._ddl == PostgresSessionStore(url)._ddl
+    assert PostgresSession("s", url).tables == PostgresSessionStore(url).tables
     # The vector store's DDL is computed from its spec, so it can only be handed over once the
     # spec is stored: a store built before that would create a table named `_items`.
     vectors = PostgresVectorStore(spec(4), url)
-    assert "memory_items" in vectors._ddl
-    assert "vector(4)" in vectors._ddl
+    assert "memory_items" in script(vectors)
+    assert "vector(4)" in script(vectors)

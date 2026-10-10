@@ -14,10 +14,7 @@ from typing import Any
 
 from runa.cache import ENTRIES
 from runa.db import sqlite_path
-from runa.db.schema import SQLITE, ddl
 from runa.db.sqlite import connect as _connect_db
-
-_DDL = ddl(SQLITE, ENTRIES)
 
 
 class SQLiteCache:
@@ -31,7 +28,7 @@ class SQLiteCache:
         self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def _connect(self) -> sqlite3.Connection:
-        return _connect_db(self.db_path, _DDL)
+        return _connect_db(self.db_path, ENTRIES)
 
     async def get(self, key: str) -> Any:
         """Return the value stored for `key`, or `None` if it's missing or expired."""

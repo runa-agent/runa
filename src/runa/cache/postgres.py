@@ -16,9 +16,6 @@ from typing import Any
 
 from runa.cache import ENTRIES
 from runa.db.pool import Shared
-from runa.db.schema import POSTGRES, ddl
-
-_DDL = ddl(POSTGRES, ENTRIES)
 
 
 class PostgresCache(Shared):
@@ -26,7 +23,7 @@ class PostgresCache(Shared):
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this cache's entries live in; connected lazily."""
-        super().__init__(url, _DDL)
+        super().__init__(url, ENTRIES)
 
     async def get(self, key: str) -> Any:
         """Return the value stored for `key`, or `None` if it's missing or expired."""

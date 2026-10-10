@@ -16,7 +16,7 @@ import json
 
 from runa._items import ConversationItem
 from runa.db.pool import Shared, sync
-from runa.db.schema import POSTGRES, ddl
+from runa.db.schema import POSTGRES
 from runa.session import Session
 from runa.session.store import (
     MESSAGES,
@@ -29,13 +29,11 @@ from runa.session.store import (
     to_message,
 )
 
-DDL = ddl(POSTGRES, SESSIONS, MESSAGES)
-
 
 class PostgresSession(Shared, Session):
     """`Session` backed by Postgres, for a deployment sharing history across processes.
 
-    `Shared` comes first so `super().__init__` reaches the one that takes `(url, ddl)`; the
+    `Shared` comes first so `super().__init__` reaches the one that takes `(url, *tables)`; the
     identity that matters to a caller is still `Session`, which this is the write side of.
     """
 
@@ -43,7 +41,7 @@ class PostgresSession(Shared, Session):
         """Store `session_id` and which Postgres database its history lives in."""
         self.session_id = session_id
         self.user_id = user_id
-        super().__init__(url, DDL)
+        super().__init__(url, SESSIONS, MESSAGES)
 
     async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
@@ -146,7 +144,7 @@ class PostgresSessionStore(Shared):
 
     def __init__(self, url: str) -> None:
         """Store which Postgres database this history lives in; connected lazily."""
-        super().__init__(url, DDL)
+        super().__init__(url, SESSIONS, MESSAGES)
 
     @sync
     async def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
@@ -181,7 +179,6 @@ class PostgresSessionStore(Shared):
 
 
 __all__ = [
-    "DDL",
     "PostgresSession",
     "PostgresSessionStore",
 ]
