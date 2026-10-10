@@ -1,4 +1,8 @@
-"""Tests for `agent_as_tool`'s context-forking: sticky approvals, usage, and `context` sharing."""
+"""Tests for `agent_as_tool` and the shared agent-graph walk.
+
+`agent_as_tool`'s context-forking (sticky approvals, usage, `context` sharing), and the walk
+every module needing "reachable from here" shares (`reachable`/`subagent_edges`).
+"""
 
 from typing import Any
 
@@ -6,7 +10,7 @@ from helpers import run as run_awaitable
 
 from runa._types import ModelResponse, RunContextWrapper, Usage
 from runa.agent import Agent
-from runa.handoff import agent_as_tool
+from runa.handoff import agent_as_tool, reachable, subagent_edges
 from runa.tool import tool
 
 
@@ -107,3 +111,39 @@ def test_agent_as_tool_shares_the_same_context_object_with_the_delegate() -> Non
     run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
 
     assert seen == [marker]
+
+
+def test_reachable_names_every_agent_once_even_through_a_cycle() -> None:
+    """Two agents handing off to each other terminate the walk, each named exactly once."""
+
+    class First(Agent):
+        name = "first"
+        instructions = "First."
+
+    class Second(Agent):
+        name = "second"
+        instructions = "Second."
+
+    first, second = First(), Second()
+    first.handoffs.append(second)
+    second.handoffs.append(first)  # a back-edge the walk must not follow forever
+
+    assert [agent.name for agent in reachable(first)] == ["first", "second"]
+
+
+def test_subagent_edges_reports_an_auto_subagent_under_both_modes() -> None:
+    """A bare (auto) subagent is wired up as a handoff *and* a delegate: an edge of each."""
+
+    class Helper(Agent):
+        name = "helper"
+        instructions = "Helper."
+
+    class Lead(Agent):
+        name = "lead"
+        instructions = "Lead."
+        subagents = [Helper]
+
+    edges = list(subagent_edges(Lead()))
+
+    assert [mode for mode, _ in edges] == ["handoff", "delegate"]
+    assert {agent.name for _, agent in edges} == {"helper"}

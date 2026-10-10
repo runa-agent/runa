@@ -5,15 +5,28 @@ Both wrap a sub-`Agent` as something the model can call, differing in what happe
 `.handoff` mode); calling an `agent_as_tool()` tool runs the sub-agent to completion and hands its
 output back to the *calling* agent, which keeps going (`.delegate` mode). See `runa.agent.Subagent`
 for how a class wires either mode up from its `subagents` list.
+
+The two modes are the only edges between agents, so this module also names them (`Mode`) and walks
+them: `subagent_edges` is one agent's outgoing edges and `reachable` the whole graph below it. A
+module that needs "everything reachable from this agent" asks here rather than re-reading
+`handoffs` and `tools` itself, which is what keeps a third mode from being a change in five places.
 """
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from runa._items import parsed_arguments
 from runa._types import RunContextWrapper, Usage
 from runa.tool import FunctionTool
+
+Mode = Literal["handoff", "delegate"]
+"""Which of the two mechanisms above wires a subagent up: `Agent.subagents`' `.handoff`/`.delegate`.
+
+Named here, beside both of them, rather than in `runa.agent`: a declaration spells the mode and
+`Subagent` carries it, but what each one *means* is this module's.
+"""
 
 _DELEGATE_INPUT_SCHEMA = {
     "type": "object",
@@ -54,9 +67,9 @@ class Handoff:
 
         What a `handoffs` list may hold is this class's own knowledge, so turning one into the
         map the run loop reads lives here rather than in whichever caller needs it next -- both
-        `run_internal.agent_shape` (once per agent, when it starts running) and
-        `run_state._find_agent_by_name` (walking a graph of agents, where a candidate may be an
-        `Agent` or an `AgentShape` standing in for one) ask for it. An already-keyed `dict` --
+        `run_internal.agent_shape` (once per agent, when it starts running) and `subagent_edges`
+        below (walking a graph of agents, where a node may be an `Agent` or an `AgentShape`
+        standing in for one) ask for it. An already-keyed `dict` --
         an `AgentShape`'s `handoffs` -- is what that map is, so it passes straight through and
         neither caller has to know which of the two it is looking at.
         """
@@ -121,6 +134,44 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
     )
 
 
+def subagent_edges(agent: Any) -> Iterator[tuple[Mode, Any]]:
+    """`agent`'s outgoing edges in the agent graph: one `(mode, target)` per subagent of it.
+
+    Handoffs first, then delegates, each in declaration order. An `auto`-mode subagent is wired
+    up as both, so it is yielded twice, once per mode -- which is what it is: two tools the model
+    picks between.
+
+    What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), and
+    so is a delegate being a tool carrying the agent behind it (`agent_as_tool` sets it), so
+    reading both lives here and not in each module that needs the graph: `run_state` resolves a
+    paused run's agent by name, `_graph` draws the edges. Takes an `Agent` or an `AgentShape`
+    standing in for one, the two being the same shape from here (`Handoff.by_tool_name` absorbs
+    the one field where they differ).
+    """
+    for handoff in Handoff.by_tool_name(getattr(agent, "handoffs", None) or []).values():
+        yield "handoff", handoff.agent
+    for tool in getattr(agent, "tools", None) or []:
+        if getattr(tool, "delegate", None) is not None:
+            yield "delegate", tool.delegate
+
+
+def reachable(agent: Any) -> Iterator[Any]:
+    """`agent`, then every agent reachable from it through handoffs and delegates, breadth-first.
+
+    Each agent once, by identity, so a cycle (two agents listing each other, an agent listing
+    itself) terminates rather than recursing forever.
+    """
+    seen: set[int] = set()
+    queue: list[Any] = [agent]
+    while queue:
+        candidate = queue.pop(0)
+        if id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        yield candidate
+        queue.extend(target for _, target in subagent_edges(candidate))
+
+
 class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
     """Raised by a delegate tool whose nested run paused: carries its `interruptions` up."""
 
@@ -130,4 +181,4 @@ class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
         self.interruptions = interruptions
 
 
-__all__ = ["DelegatePaused", "Handoff", "agent_as_tool"]
+__all__ = ["DelegatePaused", "Handoff", "Mode", "agent_as_tool", "reachable", "subagent_edges"]

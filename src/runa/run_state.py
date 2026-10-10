@@ -12,7 +12,7 @@ from runa._types import InputTokensDetails, OutputTokensDetails, RunContextWrapp
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
-from runa.handoff import Handoff
+from runa.handoff import reachable
 from runa.tool import ToolCall
 from runa.tracing.traces import Trace
 
@@ -121,30 +121,16 @@ def _context_to_json(context: Any) -> Any:
 
 
 def _find_agent_by_name(root: Any, name: str) -> Any:
-    """BFS `root` and everything reachable via its handoffs and delegates, matching on `.name`.
+    """`root`, or the agent reachable from it, that is named `name`.
 
     Deserialization carries an agent as a name string, so resuming has to find the instance
     again: a handoff may have switched the current agent before the pause, or the paused call
-    may belong to a delegate, so the match isn't necessarily `root` itself.
+    may belong to a delegate, so the match isn't necessarily `root` itself. What reachable means
+    is `runa.handoff`'s to say, not this module's -- resuming and `Agent.graph` walk one graph.
     """
-    seen: set[int] = set()
-    queue: list[Any] = [root]
-    while queue:
-        candidate = queue.pop(0)
-        if id(candidate) in seen:
-            continue
-        seen.add(id(candidate))
+    for candidate in reachable(root):
         if getattr(candidate, "name", None) == name:
             return candidate
-        queue.extend(
-            handoff.agent
-            for handoff in Handoff.by_tool_name(getattr(candidate, "handoffs", [])).values()
-        )
-        queue.extend(
-            tool.delegate
-            for tool in getattr(candidate, "tools", [])
-            if getattr(tool, "delegate", None) is not None
-        )
     raise UserError(f"no agent named {name!r} reachable from {getattr(root, 'name', root)!r}")
 
 

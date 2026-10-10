@@ -4,12 +4,22 @@ Not a port of `agents.extensions.visualization` -- just enough to show an agent'
 delegates and handoffs (recursively) as a Graphviz digraph, since that's all `Agent.graph` ever
 promised. A delegate is drawn as the agent it wraps (dotted edge), not as a plain tool box; a
 handoff gets a dashed edge.
+
+Which agents those are comes from `runa.handoff.subagent_edges`, the same walk `run_state` resumes
+a paused run through; only the recursion stays here, because drawing needs each agent's tools and
+MCP servers too, which a walk over agents alone doesn't carry.
 """
 
 from typing import TYPE_CHECKING, Any
 
+from runa.handoff import Mode, subagent_edges
+
 if TYPE_CHECKING:
     from graphviz import Digraph
+
+_EDGE_STYLE: dict[Mode, str] = {"handoff": "dashed", "delegate": "dotted"}
+"""How each subagent mode is drawn. A mode `runa.handoff` grows and this doesn't is a `KeyError`
+here, not a plausible-looking edge in the wrong style."""
 
 
 def _agent_node_id(agent: Any) -> str:
@@ -25,9 +35,7 @@ def _add_agent(dot: Digraph, agent: Any, seen: set[int]) -> None:
 
     for tool in getattr(agent, "tools", []) or []:
         if getattr(tool, "delegate", None) is not None:
-            dot.edge(node_id, _agent_node_id(tool.delegate), style="dotted")
-            _add_agent(dot, tool.delegate, seen)
-            continue
+            continue  # an agent, drawn as one by the subagent loop below, not a tool box
         tool_id = f"tool_{id(tool)}"
         dot.node(
             tool_id,
@@ -49,9 +57,8 @@ def _add_agent(dot: Digraph, agent: Any, seen: set[int]) -> None:
         )
         dot.edge(node_id, server_id)
 
-    for handoff in getattr(agent, "handoffs", []) or []:
-        target = getattr(handoff, "agent", handoff)
-        dot.edge(node_id, _agent_node_id(target), style="dashed")
+    for mode, target in subagent_edges(agent):
+        dot.edge(node_id, _agent_node_id(target), style=_EDGE_STYLE[mode])
         _add_agent(dot, target, seen)
 
 

@@ -32,7 +32,7 @@ from runa.guardrail import (
     Phase,
     flatten_guardrails,
 )
-from runa.handoff import agent_as_tool
+from runa.handoff import Mode, agent_as_tool
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks, logger
 from runa.memory import Memory, MemoryLike
@@ -177,7 +177,7 @@ def _load_prompt(cls: type, name: str) -> str | None:
 
 
 SubagentsList = list["type[Agent] | Subagent"]
-SubagentsDict = dict[Literal["handoff", "delegate", "auto"], SubagentsList]
+SubagentsDict = dict[Mode | Literal["auto"], SubagentsList]
 
 
 def _flatten_subagents(subagents: SubagentsList | SubagentsDict) -> SubagentsList:
@@ -330,8 +330,8 @@ class _Mode:
     Accessed on a subclass (`SomeAgent.handoff`), builds a `Subagent` bound to that mode.
     """
 
-    def __init__(self, mode: Literal["handoff", "delegate"]) -> None:
-        self.mode: Literal["handoff", "delegate"] = mode
+    def __init__(self, mode: Mode) -> None:
+        self.mode: Mode = mode
 
     def __get__(self, instance: object, owner: type[Agent]) -> Subagent:
         return Subagent(owner, self.mode)
@@ -814,7 +814,7 @@ class Subagent:
     """A wired-up subagent, attached as a handoff or a delegate tool."""
 
     agent: type[Agent]
-    mode: Literal["handoff", "delegate"]
+    mode: Mode
     tool_name: str | None = None
     tool_description: str | None = None
 
