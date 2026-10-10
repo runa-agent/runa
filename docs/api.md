@@ -100,6 +100,8 @@ signature-level reference.
 
 ::: runa.serve.RunRequest
 
+::: runa.serve.Decision
+
 ## Hooks
 
 ::: runa.Hooks

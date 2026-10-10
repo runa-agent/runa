@@ -1,10 +1,11 @@
 """Tests for `runa.serve`: the HTTP surface `runa serve` puts in front of this app's agents.
 
-Covers the three decisions the module makes on a deployment's behalf -- an agent per request,
-sessions rather than `self.history`, and authentication on by default -- plus the wire shape a
-client actually depends on.
+Covers the four decisions the module makes on a deployment's behalf -- an agent per request,
+sessions rather than `self.history`, authentication on by default, and a paused run resumed
+through the route it paused on -- plus the wire shape a client actually depends on.
 """
 
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -50,9 +51,11 @@ class StubModel:
 _PAUSING_AGENT = '''
 """An agent that pauses on an approval-gated tool, to pin the paused wire shape."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 from runa import Agent, tool
+from runa._models import StreamDelta
 from runa._types import ModelResponse, Usage
 
 
@@ -66,28 +69,51 @@ def issue_refund(amount: float) -> str:
 
 
 class ScriptedModel:
-    """Asks for one approval-gated refund, then answers once it has run."""
+    """Asks for one approval-gated refund, then reports back whatever the refund call answered.
 
-    def __init__(self) -> None:
-        self._messages = [
+    Stateless, deliberately: `runa serve` builds a fresh agent per request, so a resumed run
+    gets a new model instance and a script popped off a list would ask for the refund all over
+    again. What is in the input is the only thing either turn depends on.
+    """
+
+    _REFUND_CALL = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
             {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "issue_refund", "arguments": '{"amount": 75}'},
-                    }
-                ],
-            },
-            {"role": "assistant", "content": "refunded 75.0", "tool_calls": None},
-        ]
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "issue_refund", "arguments": '{"amount": 75}'},
+            }
+        ],
+    }
+
+    def _message(self, request: Any) -> dict[str, Any]:
+        """Ask for the refund, or answer with the result (or refusal) already in the input."""
+        settled = [item for item in request.input if item.get("role") == "tool"]
+        if not settled:
+            return self._REFUND_CALL
+        return {"role": "assistant", "content": settled[-1]["content"], "tool_calls": None}
 
     async def get_response(self, request: Any, **kwargs: Any) -> ModelResponse:
         return ModelResponse(
-            output=[self._messages.pop(0)],
+            output=[self._message(request)],
             usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
+        )
+
+    async def stream_response(self, request: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:
+        message = self._message(request)
+        for call in message["tool_calls"] or []:
+            yield StreamDelta(
+                tool_call_index=0,
+                tool_call_id=call["id"],
+                tool_call_name=call["function"]["name"],
+                tool_call_arguments=call["function"]["arguments"],
+            )
+        if message["content"] is not None:
+            yield StreamDelta(text=message["content"])
+        yield StreamDelta(
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1)
         )
 
 
@@ -241,6 +267,180 @@ def test_a_paused_run_carries_the_state_that_resolves_it(
         state = RunState.from_json(classes["refund_agent"](), state_json)
 
     assert [item.name for item in state.pending] == ["issue_refund"]
+
+
+def _stream_run(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
+    """Stream a turn for the refund agent and return the `run` event that ends it."""
+    with client.stream(
+        "POST", "/agents/refund_agent/runs/stream", json=body, headers=_auth()
+    ) as response:
+        assert response.status_code == 200
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ") and not line.endswith("[DONE]")
+        ]
+
+    runs = [event for event in events if event.get("type") == "run"]
+    assert len(runs) == 1
+    return runs[0]
+
+
+def _resume(
+    client: TestClient, paused: dict[str, Any], decisions: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Hand a paused payload's `state` back with `decisions`, the way a client resolves a pause."""
+    response = client.post(
+        "/agents/refund_agent/runs",
+        json={"state": paused["state"], "decisions": decisions},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def test_an_approved_pause_resumes_through_the_route_it_paused_on(
+    pausing_client: TestClient,
+) -> None:
+    """The inverse of a paused response: the `state` it carried, plus what the human decided.
+
+    `serve` used to report a pause and accept nothing back, which left every deploying app to
+    re-derive `RunState.from_json`, the decisions and the re-render for itself.
+    """
+    paused = _paused_body(pausing_client)
+
+    body = _resume(pausing_client, paused, [{"call_id": "call_1", "approve": True}])
+
+    assert body["status"] == "completed"
+    assert body["output"] == "refunded 75"
+    assert body["interruptions"] == []
+    assert body["state"] is None
+
+
+def test_a_rejected_pause_tells_the_model_why(pausing_client: TestClient) -> None:
+    """`approve: false` skips the call, and `rejection_message` is what the model is told."""
+    paused = _paused_body(pausing_client)
+
+    body = _resume(
+        pausing_client,
+        paused,
+        [{"call_id": "call_1", "approve": False, "rejection_message": "not authorized"}],
+    )
+
+    assert body["status"] == "completed"
+    assert body["output"] == "not authorized"
+
+
+def test_an_undecided_interruption_pauses_again(pausing_client: TestClient) -> None:
+    """Nothing is invented for a call nobody decided: the run comes back paused on it."""
+    paused = _paused_body(pausing_client)
+
+    body = _resume(pausing_client, paused, [])
+
+    assert body["status"] == "paused"
+    assert [item["call_id"] for item in body["interruptions"]] == ["call_1"]
+
+
+def test_a_streamed_run_pauses_and_resumes_on_its_own_route(pausing_client: TestClient) -> None:
+    """A streaming client resumes streaming: the state travels on the route it came from.
+
+    Which is why a resume is the same route taking a different body rather than a second pair of
+    endpoints -- those would strand exactly this client.
+    """
+    paused = _stream_run(pausing_client, {"message": "refund $75"})
+    assert paused["status"] == "paused"
+
+    resumed = _stream_run(
+        pausing_client,
+        {"state": paused["state"], "decisions": [{"call_id": "call_1", "approve": True}]},
+    )
+
+    assert resumed["status"] == "completed"
+    assert resumed["output"] == "refunded 75"
+
+
+def test_a_resume_carries_the_session_the_run_paused_on(pausing_client: TestClient) -> None:
+    """A session-backed run saves nothing while paused: the whole turn lands on resume.
+
+    Which is why `session_id` belongs on a resume at all -- the same one the pause started with,
+    exactly as `Agent.run` wants it.
+    """
+    first = pausing_client.post(
+        "/agents/refund_agent/runs",
+        json={"message": "refund $75", "session_id": "conv-refund"},
+        headers=_auth(),
+    ).json()
+    assert first["status"] == "paused"
+    assert asyncio.run(db.session("conv-refund").get_items()) == []
+
+    resumed = pausing_client.post(
+        "/agents/refund_agent/runs",
+        json={
+            "state": first["state"],
+            "decisions": [{"call_id": "call_1", "approve": True}],
+            "session_id": "conv-refund",
+        },
+        headers=_auth(),
+    ).json()
+
+    assert resumed["status"] == "completed"
+    stored = asyncio.run(db.session("conv-refund").get_items())
+    assert stored[0]["content"] == "refund $75"
+    assert stored[-1]["content"] == "refunded 75"
+
+
+def test_a_decision_for_a_call_this_pause_does_not_have_is_a_422(
+    pausing_client: TestClient,
+) -> None:
+    """Dropping it silently would pause the run again with nothing saying why."""
+    paused = _paused_body(pausing_client)
+
+    response = pausing_client.post(
+        "/agents/refund_agent/runs",
+        json={"state": paused["state"], "decisions": [{"call_id": "call_9", "approve": True}]},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 422
+    assert "call_9" in json.dumps(response.json())
+
+
+def test_an_unreadable_state_is_a_422(pausing_client: TestClient) -> None:
+    """The blob is the client's, so a version this Runa cannot read is its error, not a 500."""
+    paused = _paused_body(pausing_client)
+    stale = {**paused["state"], "schema_version": 99}
+
+    response = pausing_client.post(
+        "/agents/refund_agent/runs", json={"state": stale}, headers=_auth()
+    )
+
+    assert response.status_code == 422
+
+
+def test_a_message_and_a_state_together_are_a_422(pausing_client: TestClient) -> None:
+    """They are the same argument of `Agent.run`, so a body carrying both is not a guess."""
+    paused = _paused_body(pausing_client)
+
+    response = pausing_client.post(
+        "/agents/refund_agent/runs",
+        json={"message": "refund $75", "state": paused["state"]},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 422
+
+
+def test_decisions_without_a_state_are_a_422(client: TestClient) -> None:
+    """A decision resolves an interruption of a specific paused run, or it resolves nothing."""
+    response = client.post(
+        "/agents/support_agent/runs",
+        json={"message": "hi", "decisions": [{"call_id": "call_1", "approve": True}]},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 422
 
 
 def test_a_completed_run_carries_no_state(client: TestClient) -> None:

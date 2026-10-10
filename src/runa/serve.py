@@ -2,10 +2,11 @@
 
 The missing half of a deployment. Runa could always *build* an agent, but putting one in front of
 users meant writing the web layer yourself, and every app wrote the same one: resolve the agent,
-build it per request, pass a session, stream or don't, turn a `Run` into JSON. That is convention,
-not application code, so it lives here.
+build it per request, pass a session, stream or don't, hand a paused run's state back once a
+human has decided, turn a `Run` into JSON. That is convention, not application code, so it lives
+here.
 
-Three decisions this makes for you, each the one a production deployment wants:
+Four decisions this makes for you, each the one a production deployment wants:
 
 * **An `Agent` is built per request.** An instance carries the conversation it is running (see
   `Agent.run`), so a module-level agent shared across requests would interleave users' histories.
@@ -18,6 +19,14 @@ Three decisions this makes for you, each the one a production deployment wants:
 * **Authentication is on unless you turn it off.** A bearer token from `RUNA_API_KEY`, checked on
   every route but `/health`. An agent endpoint spends money per call, so open-by-default is the
   wrong default, and `--no-auth` is one flag away for local use.
+* **A paused run resumes through the route it paused on.** `Agent.run` takes a `RunState` in
+  place of a message, so the request body does literally that: `state` plus the `decisions` a
+  human made, instead of `message`. Reporting a pause without accepting one back would leave
+  every app to re-derive the five steps `RunState.from_json` exists for; a second pair of
+  `/resume` endpoints would leave a streaming client unable to resume streaming. The blob a
+  client sends back is a capability -- it carries the run's context and its approval ledger, and
+  nothing here records that one was already spent -- which is the other reason `RUNA_API_KEY` is
+  a server-to-server credential rather than something to hand a browser.
 
 `runa serve` is the short way to run this app, and `cli/serve.py` imports this module lazily so a
 plain install still runs every other command; only serving needs the `serve` extra. The app object
@@ -29,18 +38,19 @@ import json
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from runa import db
 from runa.agent import Agent
-from runa.exceptions import OperatorError
+from runa.exceptions import OperatorError, UserError
 from runa.lifecycle import logger
 from runa.project import iter_agent_classes, loaded_app, require_agents_dir
 from runa.run import Run
+from runa.run_state import RunState
 
 API_KEY_ENV = "RUNA_API_KEY"
 
@@ -49,10 +59,45 @@ class MissingAPIKey(OperatorError):
     """Raised when a server is built with neither `RUNA_API_KEY` nor an explicit `no_auth`."""
 
 
-class RunRequest(BaseModel):
-    """One turn for an agent to run."""
+class Decision(BaseModel):
+    """What a human decided about one `Interruption` of a paused run.
 
-    message: str = Field(description="The user's message, one turn, never a transcript.")
+    `call_id` is the one the paused payload reported, and the only handle a client needs: the
+    tool, its arguments and the agent it belongs to are the server's to look back up off the
+    `state`. `always` and `rejection_message` are `RunState.approve`/`.reject`'s own keywords,
+    named the same here on purpose -- the wire shape of an approval is the Python one.
+    """
+
+    call_id: str = Field(description="The interruption being decided, by the id it reported.")
+    approve: bool = Field(description="True runs the paused call, False skips it.")
+    always: bool = Field(
+        default=False,
+        description="Apply this decision to every future call to that tool, not just this one.",
+    )
+    rejection_message: str | None = Field(
+        default=None, description="Fed back to the model instead of the default rejection text."
+    )
+
+
+class RunRequest(BaseModel):
+    """One turn for an agent to run: a new message, or a paused run and the decisions resolving it.
+
+    Exactly one of `message`/`state` -- the two are the same argument of `Agent.run`, which takes
+    a message or the `RunState` of a paused run, so a body carrying both (or neither) is a `422`
+    rather than a guess about which one was meant.
+    """
+
+    message: str | None = Field(
+        default=None, description="The user's message, one turn, never a transcript."
+    )
+    state: dict[str, Any] | None = Field(
+        default=None,
+        description="A paused run's `state`, sent back in place of a message to resume it.",
+    )
+    decisions: list[Decision] = Field(
+        default_factory=list,
+        description="Approvals and rejections for the paused `state`'s interruptions.",
+    )
     session_id: str | None = Field(
         default=None,
         description="Continue (or start) this conversation. Omitted, the turn is stateless.",
@@ -60,6 +105,15 @@ class RunRequest(BaseModel):
     user_id: str | None = Field(
         default=None, description="Scopes an agent's memory to one user, when it has memory."
     )
+
+    @model_validator(mode="after")
+    def _exactly_one_turn(self) -> Self:
+        """Reject a body that is neither a turn nor a resume, or tries to be both."""
+        if (self.message is None) == (self.state is None):
+            raise ValueError("send either a `message` to run or the `state` of a paused run")
+        if self.decisions and self.state is None:
+            raise ValueError("`decisions` resolve a paused run, so they need its `state` too")
+        return self
 
 
 def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
@@ -70,6 +124,43 @@ def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
     it maps and a transport adds only what is genuinely its own.
     """
     return {"agent": agent_name, **run.to_payload()}
+
+
+def _turn(agent: Agent, body: RunRequest) -> str | RunState:
+    """What this request asks `agent` to do: run a message, or finish the paused run it carries.
+
+    The two are one argument to `Agent.run`, so they are one argument here too, and the
+    forward and the inverse direction stay the same route (see this module's docstring).
+
+    A blob that no longer rebuilds -- a schema version this Runa doesn't know, an agent renamed
+    since it paused -- is the client's `state`, so its `UserError` is a `422` naming what was
+    wrong, not a `500`. An `Interruption` left undecided keeps pausing the run, which the next
+    response reports the same way as the first: the decisions a client sends are the ones a human
+    has actually made, and nothing here invents the rest.
+    """
+    if body.state is None:
+        # `RunRequest` has already rejected a body with neither; this is for the type checker.
+        return body.message or ""
+    try:
+        state = RunState.from_json(agent, body.state)
+    except UserError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    pending = {item.call_id: item for item in state.pending}
+    for decision in body.decisions:
+        interruption = pending.get(decision.call_id)
+        if interruption is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"this run has no interruption awaiting {decision.call_id!r}",
+            )
+        if decision.approve:
+            state.approve(interruption, always=decision.always)
+        else:
+            state.reject(
+                interruption, always=decision.always, rejection_message=decision.rejection_message
+            )
+    return state
 
 
 def resolve_api_key(*, no_auth: bool) -> str | None:
@@ -161,10 +252,15 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
 
     @api.post("/agents/{agent_name}/runs")
     async def run_agent(agent_name: str, body: RunRequest) -> dict[str, Any]:
-        """Run one turn and return the whole `Run`."""
+        """Run one turn -- or finish a paused one -- and return the whole `Run`.
+
+        A `Run` that paused for approval comes back with `status="paused"`, its `interruptions`
+        and the `state` that resolves them; posting that `state` back with a `decisions` list
+        (and the same `session_id`) resumes it here.
+        """
         agent = _build(agent_name)
         session = db.session(body.session_id, user_id=body.user_id) if body.session_id else None
-        run = await agent.run(body.message, session=session)
+        run = await agent.run(_turn(agent, body), session=session)
         return _run_payload(run, agent_name)
 
     @api.post("/agents/{agent_name}/runs/stream")
@@ -173,13 +269,17 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
 
         Each `data:` line is one JSON object: `{"type": "token", "text": ...}` as the answer is
         produced, then a single `{"type": "run", ...}` carrying the same payload the non-streaming
-        route returns, so a client gets the trace id and usage either way.
+        route returns, so a client gets the trace id and usage either way -- including the `state`
+        of a run that paused, which this route takes back the same way the other one does. That
+        body is resolved before the response starts, so an unreadable `state` is still a `422`
+        rather than an error event in a stream that already answered `200`.
         """
         agent = _build(agent_name)
         session = db.session(body.session_id, user_id=body.user_id) if body.session_id else None
+        turn = _turn(agent, body)
 
         async def events() -> AsyncIterator[str]:
-            stream = agent.run_streamed(body.message, session=session)
+            stream = agent.run_streamed(turn, session=session)
             try:
                 async for event in stream:
                     text = _token_text(event)
@@ -224,4 +324,11 @@ def _constant_time_equal(left: str, right: str) -> bool:
     return hmac.compare_digest(left, right)
 
 
-__all__ = ["API_KEY_ENV", "MissingAPIKey", "RunRequest", "create_app", "resolve_api_key"]
+__all__ = [
+    "API_KEY_ENV",
+    "Decision",
+    "MissingAPIKey",
+    "RunRequest",
+    "create_app",
+    "resolve_api_key",
+]

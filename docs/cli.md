@@ -79,7 +79,8 @@ runa serve --workers 4                  # uvicorn worker processes
 
 Requires `RUNA_API_KEY` and refuses to start without it, unless `--no-auth` is passed. Routes:
 `GET /health` (unauthenticated), `GET /agents`, `POST /agents/{name}/runs` and
-`POST /agents/{name}/runs/stream`.
+`POST /agents/{name}/runs/stream`. A run that pauses for approval resumes through the same route
+it paused on, by posting its `state` back with the decisions a human made.
 
 ## `runa ui`
 

@@ -18,4 +18,3 @@ conventions: @RUNA.md
 - Value integrated systems: Prefer cohesive, integrated solutions over assembling many independent abstractions and tools.
 - Progress over stability: Prefer meaningful improvement and evolution over preserving imperfect designs merely because they already exist. Keep compatibility when it is valuable, not as an absolute.
 - Push up a big tent: Keep Runa broadly useful. Support different approaches when they fit naturally rather than making the framework ideological or unnecessarily restrictive.
-- 

@@ -104,6 +104,10 @@ by name -- a live `Agent` instance cannot round-trip through JSON itself. Both a
 synchronous calls, like `to_json`/`to_string`: reading a blob resolves no tools and so never
 connects to an agent's MCP servers.
 
+Over HTTP that round trip is already written: a paused run served by `runa serve` reports its
+`state`, and posting that back with a decision per interruption resumes it (see
+[Deployment](deployment.md#resuming-a-paused-run)).
+
 A `context` that was a dataclass comes back as a plain dict, not its original class. The run's
 [guardrail audit trail](guardrails.md#audit-trail) and trace spans are not included in the serialized blob. Spans are
 already persisted separately (see [Tracing and Hooks](tracing.md)). An unrecognized
