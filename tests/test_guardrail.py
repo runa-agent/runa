@@ -7,7 +7,7 @@ import pytest
 from helpers import run as run_awaitable
 
 from runa import Agent, guardrail
-from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase
+from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase, declared_names
 
 _CTX = cast(Any, None)
 _AGENT = cast(Any, None)
@@ -141,3 +141,13 @@ def test_async_predicate_is_awaited() -> None:
     result = _run(block_async.input, "x")
 
     assert result.tripped is True
+
+
+def test_declared_names_covers_every_declaration_shape() -> None:
+    """`declared_names` names a bound entry, a bare `Guardrail` and a dict bucket alike."""
+    assert declared_names([block_empty.input]) == ["block_empty"]
+    assert declared_names([block_empty]) == ["block_empty"]
+    assert declared_names({"input": [block_empty], "output": [block_long.output]}) == [
+        "block_empty",
+        "block_long",
+    ]

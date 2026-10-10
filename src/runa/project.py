@@ -24,6 +24,7 @@ from pathlib import Path
 
 from runa.agent import Agent, Subagent, _flatten_subagents
 from runa.exceptions import OperatorError
+from runa.guardrail import declared_names
 
 
 class NotARunaProject(OperatorError):
@@ -152,14 +153,6 @@ def _tool_name(tool: object) -> str:
     return getattr(tool, "name", None) or getattr(tool, "__name__", None) or str(tool)
 
 
-def _guardrail_name(guardrail: object) -> str:
-    name = getattr(guardrail, "name", None)
-    if name:
-        return str(name)
-    function = getattr(guardrail, "guardrail_function", None)
-    return getattr(function, "__name__", None) or str(guardrail)
-
-
 def _subagent_label(subagent: Subagent | type[Agent]) -> str:
     """Label one flattened subagent entry, `Subagent`-wrapped or bare (auto mode).
 
@@ -193,7 +186,7 @@ def _describe(agent_cls: type[Agent]) -> AgentInfo:
         class_name=agent_cls.__name__,
         model=getattr(agent_cls, "model", Agent.model),
         tools=[_tool_name(tool) for tool in getattr(agent_cls, "tools", [])],
-        guardrails=[_guardrail_name(g) for g in getattr(agent_cls, "guardrails", [])],
+        guardrails=declared_names(getattr(agent_cls, "guardrails", [])),
         subagents=[_subagent_label(sub) for sub in _flatten_subagents(subagents_raw)],
         memory=_retrieval_label(getattr(agent_cls, "memory", None)),
         knowledge=_retrieval_label(getattr(agent_cls, "knowledge", None)),

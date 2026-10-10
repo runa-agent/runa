@@ -354,6 +354,27 @@ def flatten_guardrails(
     return bound
 
 
+def _entry_name(entry: Any) -> str:
+    """One declared entry's name: a bound entry's own, or a bare `Guardrail`'s predicate's."""
+    if isinstance(entry, Guardrail):
+        return entry._func.__name__
+    if isinstance(entry, BoundGuardrail):
+        return entry.get_name()
+    return str(entry)
+
+
+def declared_names(guardrails: GuardrailsList | GuardrailsDict) -> list[str]:
+    """Name every guardrail a `guardrails=` declaration lists, in the order it lists them.
+
+    What such a declaration may hold -- a flat list or an `{"input": [...], "output": [...]}`
+    dict, holding bound entries or bare `Guardrail`s -- is this module's own knowledge, so
+    naming them for display lives here beside `flatten_guardrails` rather than in whichever
+    caller (`runa ui`'s Agents page, today) needs it next. The dict form and the bare entry are
+    exactly what a caller re-deriving this gets wrong, and what `_entries` exists to normalize.
+    """
+    return [_entry_name(entry) for entry in _entries(guardrails)]
+
+
 __all__ = [
     "BoundGuardrail",
     "Guardrail",
@@ -364,6 +385,7 @@ __all__ = [
     "GuardrailsDict",
     "GuardrailsList",
     "Phase",
+    "declared_names",
     "flatten_guardrails",
     "guardrail",
 ]
