@@ -28,7 +28,7 @@ from runa.exceptions import (
 from runa.guardrail import Phase
 from runa.lifecycle import LoggingRunHooks, RunHooks, _Dispatch, logger
 from runa.run import Run
-from runa.run_internal.active_run import _Pending, _Run
+from runa.run_internal.active_run import _Run
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.run_config import RunConfig
@@ -189,9 +189,9 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     items, hooks, run_config = run.items, run.hooks, run.run_config
     context_wrapper = run.context_wrapper
 
-    if run.pending is not None:
+    if run.resumed is not None:
         results, interruptions, switched = await _run_message_tool_calls(
-            run, run.pending.message, run.pending
+            run, run.resumed.paused_message, run.resumed
         )
         if interruptions:
             return _TurnOutcome(None, interruptions, results)
@@ -483,12 +483,7 @@ async def _resume(
         run_config=run_config,
         emit=emit,
         tool_calls=list(state.tool_calls),
-        pending=_Pending(
-            message=state.generated_items[-1],
-            approvals=state.approvals,
-            rejection_messages=state.rejection_messages,
-            ready_results=state.ready_results,
-        ),
+        resumed=state,
     )
     await dispatch.on_agent_start(state.context_wrapper, state.agent)
     outcome = await _guarded(run, _run_turns(run))

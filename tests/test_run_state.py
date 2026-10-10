@@ -6,6 +6,7 @@ preserved (agent identity by name, the sticky approval ledger, usage) and what i
 """
 
 import asyncio
+from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,7 +19,7 @@ from runa.handoff import Handoff
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
-from runa.run_state import RunState
+from runa.run_state import RunState, _RunStateSchema
 from runa.tool import tool
 
 
@@ -96,6 +97,72 @@ def _fresh_agent_like(agent: Any) -> Any:
     return _agent(
         name=agent.name, tools=list(agent.tools), handoffs=dict(agent.handoffs), model=agent.model
     )
+
+
+_SERIALIZED_AS = {
+    "agent": ("agent_name",),
+    "original_input": ("original_input",),
+    "generated_items": ("generated_items",),
+    "ready_results": ("ready_results",),
+    "pending": ("pending",),
+    "new_items": ("new_items",),
+    "session_input": ("session_input",),
+    "approvals": ("approvals",),
+    "rejection_messages": ("rejection_messages",),
+    "context_wrapper": (
+        "context",
+        "usage",
+        "approval_ledger",
+        "approval_ledger_messages",
+        "executed_call_ids",
+        "delegates",
+        "delegate_owners",
+    ),
+    "trace": ("trace_id", "trace_name", "trace_start_time"),
+}
+"""Each `RunState` field and the `_RunStateSchema` field(s) `_to_schema` writes it to.
+
+Mostly one to one, under the same name. The two that aren't are the two holding an object rather
+than data: the context wrapper flattens into its `context`, its `usage` and the contents of the
+two protocol objects on it (`ApprovalLedger`, `PausedDelegates`), and a `Trace` into the three
+fields that identify it, its spans being exported separately.
+"""
+
+_NOT_SERIALIZED = {
+    "guardrail_results": "a guardrail's `output_info` is arbitrary, so not guaranteed JSON-safe",
+    "tool_calls": "a restored run reports the calls it makes itself, as its trace does",
+}
+"""`RunState` fields deliberately left out of the JSON envelope, and why.
+
+Both reasons are also written where a reader meets the field -- `RunState.tool_calls`' docstring
+and `_RunStateSchema`'s -- and this is the list that makes leaving a *third* field out a
+deliberate act rather than an omission nothing notices.
+"""
+
+
+def test_every_run_state_field_is_serialized_or_named_as_not() -> None:
+    """A field carried through a pause, in memory but not through a restart, by accident.
+
+    `_to_schema` and `_from_schema` map `RunState` to its JSON envelope field by field, and that
+    is the drift this pins down from the dataclass's side: a field added to `RunState` is either
+    mapped to the schema or named above as one that isn't. The other side is covered twice over
+    -- `_RunStateSchema` requires every field, so pyright rejects a `_to_schema` that skips one,
+    and the next test asserts no schema field is written from nothing.
+    """
+    state_fields = {field.name for field in fields(RunState)}
+
+    assert state_fields == set(_SERIALIZED_AS) | set(_NOT_SERIALIZED)
+
+
+def test_every_schema_field_is_written_from_a_run_state_field() -> None:
+    """The envelope's side: a field read back by `_from_schema` that nothing ever writes.
+
+    `schema_version` is the exception, and the only one: it describes the envelope itself rather
+    than anything the paused run holds.
+    """
+    written = {name for names in _SERIALIZED_AS.values() for name in names}
+
+    assert set(_RunStateSchema.model_fields) == written | {"schema_version"}
 
 
 def test_to_json_then_from_json_round_trips_a_paused_run() -> None:

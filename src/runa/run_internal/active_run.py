@@ -20,26 +20,12 @@ from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit
+from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import StreamEvent
 from runa.tool import ToolCall
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
-
-
-@dataclass
-class _Pending:
-    """A resumed run's unfinished tool-call message, and the decisions that unblock it.
-
-    Named rather than tupled because the loop reads all four back out: the message whose calls
-    never finished, which of them the operator approved or rejected (and why), and the results
-    the paused run already computed, which are reused as is instead of running twice.
-    """
-
-    message: ConversationItem
-    approvals: dict[str, bool] = field(default_factory=dict)
-    rejection_messages: dict[str, str] = field(default_factory=dict)
-    ready_results: list[ConversationItem] = field(default_factory=list)
 
 
 @dataclass
@@ -65,7 +51,11 @@ class _Run:
     hooks: _Dispatch[Any]
     run_config: RunConfig
     emit: Emit | None = None
-    pending: _Pending | None = None
+    resumed: RunState | None = None
+    """The paused state this run is continuing, if it is one: the unfinished tool-call message,
+    the decisions that unblock its calls, and the results already computed for the rest of them.
+    The loop reads those off the state itself rather than off a shape built from it -- a resumed
+    turn needs no fact the state it came from doesn't already carry."""
     tool_calls: list[ToolCall] = field(default_factory=list)
     """Every tool call this run has executed, in the order they finished: what the tool was given
     and what it returned, before the tracing privacy policy gets a say (see `ToolCall`). A resumed
@@ -95,4 +85,4 @@ class _Run:
             self.emit(event)
 
 
-__all__ = ["_Pending", "_Run"]
+__all__ = ["_Run"]

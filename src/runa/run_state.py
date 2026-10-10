@@ -73,9 +73,18 @@ class _InterruptionSchema(BaseModel):
 class _RunStateSchema(BaseModel):
     """The JSON envelope a `RunState` actually serializes through.
 
-    `context` and the guardrail audit trail (see `GuardrailResults`) aren't included: a
-    guardrail's `output_info` isn't guaranteed JSON-safe, and a dataclass `context` loses its
-    original type on the way back out (see `RunState.from_json`'s docstring).
+    **Every field is required, deliberately.** `_to_schema` is the only writer, so a field it
+    forgets to pass is a type error at that one call site instead of a key silently defaulted on
+    the way out -- which is the whole guard against this mapping drifting from the dataclass it
+    mirrors. A blob missing a key is then a `UserError` from `from_json`, not a half-read state;
+    every blob this version writes carries all of them, and an older one is refused by
+    `schema_version` anyway. `tests/test_run_state.py` checks the other direction, that no field
+    here is written from nothing and no `RunState` field is left out unnamed.
+
+    The guardrail audit trail (see `GuardrailResults`) and `RunState.tool_calls` are the fields
+    with no counterpart here at all: a guardrail's `output_info` isn't guaranteed JSON-safe, and
+    a restored run reports the calls it makes itself. A dataclass `context` does travel, but
+    loses its original type on the way back out (see `RunState.from_json`'s docstring).
 
     `delegates` and `delegate_owners` are the paused-delegate stash's two halves, straight off
     `PausedDelegates` and handed back to it by `from_json` -- which run owns a pending call is
@@ -87,21 +96,21 @@ class _RunStateSchema(BaseModel):
     original_input: list[dict[str, Any]]
     generated_items: list[dict[str, Any]]
     ready_results: list[dict[str, Any]]
-    new_items: list[dict[str, Any]] = []
-    session_input: list[dict[str, Any]] = []
+    new_items: list[dict[str, Any]]
+    session_input: list[dict[str, Any]]
     pending: list[_InterruptionSchema]
     approvals: dict[str, bool]
-    rejection_messages: dict[str, str] = {}
-    context: Any = None
+    rejection_messages: dict[str, str]
+    context: Any
     usage: _UsageSchema
-    approval_ledger: dict[str, bool] = {}
-    approval_ledger_messages: dict[str, str] = {}
-    executed_call_ids: list[str] = []
+    approval_ledger: dict[str, bool]
+    approval_ledger_messages: dict[str, str]
+    executed_call_ids: list[str]
     trace_id: str
     trace_name: str
     trace_start_time: float
-    delegates: dict[str, _RunStateSchema] = {}
-    delegate_owners: dict[str, str] = {}
+    delegates: dict[str, _RunStateSchema]
+    delegate_owners: dict[str, str]
 
 
 def _context_to_json(context: Any) -> Any:
@@ -169,6 +178,17 @@ class RunState(GuardrailAudit):
     """The calls that already ran before the pause, so the resumed run's `Run` reports the whole
     turn's. Not serialized, for the same reason `trace`'s spans aren't: a restored run reports
     what it did after being restored."""
+
+    @property
+    def paused_message(self) -> ConversationItem:
+        """The assistant message whose calls paused the run: `generated_items`' last, always.
+
+        Where a resumed run picks the turn back up -- it finishes this one message's calls before
+        calling the model again, with `approvals`/`rejection_messages` as the decisions about them
+        and `ready_results` as the results it already has. The turn loop reads the four from here
+        rather than from a resumed-turn shape of its own.
+        """
+        return self.generated_items[-1]
 
     def approve(self, interruption: Interruption, *, always: bool = False) -> None:
         """Mark `interruption` approved; its tool runs when the run is resumed.

@@ -12,10 +12,10 @@ from runa._types import RunContextWrapper
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase, ToolInputGuardrailData
 from runa.handoff import DelegatePaused
-from runa.run_internal.active_run import _Pending, _Run
+from runa.run_internal.active_run import _Run
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.spans import _close_span
-from runa.run_state import Interruption
+from runa.run_state import Interruption, RunState
 from runa.tool import FunctionTool, ToolCall
 
 
@@ -102,14 +102,15 @@ class _TurnOutcome:
 
 
 async def _run_message_tool_calls(
-    run: _Run, message: dict[str, Any], resume: _Pending | None = None
+    run: _Run, message: dict[str, Any], resume: RunState | None = None
 ) -> tuple[list[ConversationItem], list[Interruption], Any]:
     """Execute (or defer for approval) every tool call in `message`; returns results so far.
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
     agent's `model_settings.parallel_tool_calls` is `False`. Results keep the message's call
-    order either way. `resume` carries a paused run's decisions, including results it already
-    computed for calls in `message`: those are reused as is, never executed a second time.
+    order either way. `resume` is the paused state being continued, read for its decisions about
+    the calls in `message` and the results it already computed for the rest of them: those are
+    reused as is, never executed a second time.
     """
     shape = run.shape
     agent = shape.agent
