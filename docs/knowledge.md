@@ -50,7 +50,9 @@ storage are entirely internal. Put Markdown, PDF, plain text, or CSV files under
 not on first use, and not after an edit either. Each search compares a fingerprint of the
 directory, the embedding model and the chunk shape against the one the store recorded, and
 re-ingests only when they differ. Edit a file and the next search picks it up; change nothing and
-the corpus is embedded once, however many processes, replicas or requests search it.
+the corpus is embedded once, however many processes, replicas or requests search it. That check
+costs one `stat` per file, in a worker thread, and only re-reads the corpus when one of them has
+actually changed, so a large `app/knowledge/` does not slow down every turn.
 
 ```python
 await knowledge.ingest()  # returns how many chunks it stored

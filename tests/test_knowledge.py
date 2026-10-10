@@ -7,6 +7,7 @@ PDF extraction, lazy ingest, and the search tool it hands a model.
 """
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,12 @@ def _fake_embed(monkeypatch: pytest.MonkeyPatch) -> None:
         return [vectors.get(text, [0.0, 0.0, 0.0, 0.0]) for text in texts]
 
     monkeypatch.setattr(knowledge_module, "embed", fake_embed)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_digest_cache() -> None:
+    """Start each test with no cached corpus digests, so none of them depends on an earlier one."""
+    knowledge_module._digests.clear()
 
 
 def _knowledge(tmp_path: Path, directory: Path | None = None) -> Knowledge:
@@ -251,6 +258,73 @@ def test_search_reingests_after_the_embedding_model_changes(tmp_path: Path) -> N
     assert "cats are great pets" in _embedded
 
 
+def test_fingerprint_rereads_the_corpus_only_when_a_file_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unchanged corpus is answered from its `(path, size, mtime)`, not read again.
+
+    `search` fingerprints before every turn of every knowledge-backed run, so this is counted in
+    file reads: the corpus is read once, and not again until a file actually changes.
+    """
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    know = _knowledge(tmp_path, source_dir)
+    reads: list[str] = []
+    read_bytes = Path.read_bytes
+
+    def recording(self: Path) -> bytes:
+        reads.append(self.name)
+        return read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", recording)
+
+    first = asyncio.run(know._fingerprint())
+    second = asyncio.run(know._fingerprint())
+
+    assert second == first
+    assert reads == ["pets.md"]
+
+
+def test_fingerprint_changes_after_a_same_sized_edit(tmp_path: Path) -> None:
+    """A same-length edit still invalidates the cached digest: mtime is part of the check."""
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    know = _knowledge(tmp_path, source_dir)
+    before = asyncio.run(know._fingerprint())
+
+    (source_dir / "pets.md").write_text("dogs are great pets")
+
+    assert asyncio.run(know._fingerprint()) != before
+
+
+def test_fingerprint_runs_off_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hashing the corpus is blocking I/O, so it runs in a thread, like a sync `@tool` does."""
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    know = _knowledge(tmp_path, source_dir)
+    hashed_on: list[int] = []
+    discover = knowledge_module._discover
+
+    def recording(directory: Path) -> list[Path]:
+        hashed_on.append(threading.get_ident())
+        return discover(directory)
+
+    monkeypatch.setattr(knowledge_module, "_discover", recording)
+
+    async def _run() -> int:
+        await know._fingerprint()
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(_run())
+
+    assert hashed_on and loop_thread not in hashed_on
+
+
 def test_ingest_again_reflects_edited_and_removed_files(tmp_path: Path) -> None:
     """Calling `ingest()` again fully rebuilds -- edits and removals aren't left as stale chunks."""
     source_dir = tmp_path / "knowledge"
@@ -328,7 +402,7 @@ def test_custom_store_can_be_injected() -> None:
     async def _run() -> list[KnowledgeMatch]:
         # Stamping the store with this corpus's fingerprint is what tells `search` not to
         # rebuild, the same way an earlier process's `ingest()` would have.
-        await store.reset(version=know._fingerprint())
+        await store.reset(version=await know._fingerprint())
         await store.add(text="cats are great pets", source="manual", embedding=[0.0])
         return await know.search("anything")
 

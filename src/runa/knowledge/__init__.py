@@ -13,7 +13,10 @@ Kept deliberately separate: `Memory` is durable facts about a user, learned from
 Whether the corpus has been ingested is the store's answer, not a flag on the `Knowledge` object:
 `Agent(knowledge="auto")` builds a fresh `Knowledge` per agent and `runa.serve` builds an agent
 per request, so instance state would have every request re-embed the whole directory into the one
-shared store. `KnowledgeStore.reset`/`.version` is where that decision lives instead.
+shared store. `KnowledgeStore.reset`/`.version` is where that decision lives instead. The one
+piece of process-local state here, `_digests`, answers a different question -- "what would I
+write", a pure function of the files on disk -- so an empty cache costs a re-read and never a
+re-embed.
 
 `run_internal.run_loop._run_async` is what makes retrieval automatic during `run`, see its
 `knowledge`/`_knowledge_block` handling. `KnowledgeLike` is the contract a wholesale custom
@@ -21,6 +24,7 @@ shared store. `KnowledgeStore.reset`/`.version` is where that decision lives ins
 swapping just the storage backend.
 """
 
+import asyncio
 import hashlib
 from pathlib import Path
 from typing import Any, Protocol
@@ -36,6 +40,8 @@ DEFAULT_KNOWLEDGE_DIR = Path("app/knowledge")
 _SUPPORTED_EXTENSIONS = {".md", ".markdown", ".txt", ".csv", ".pdf"}
 _CHUNK_SIZE = 1000
 _CHUNK_OVERLAP = 200
+
+_Stats = tuple[tuple[str, int, int], ...]
 
 
 class KnowledgeLike(Protocol):
@@ -61,6 +67,51 @@ def _discover(directory: Path) -> list[Path]:
         for path in directory.rglob("*")
         if path.is_file() and path.suffix.lower() in _SUPPORTED_EXTENSIONS
     )
+
+
+# Per process, not per instance: a `Knowledge` is built per agent and an agent per request, so an
+# instance-scoped cache would never be read twice. Keyed by everything the digest is built from
+# besides the files, so two `Knowledge` objects over one directory with different `model=`s don't
+# read each other's entry.
+_digests: dict[tuple[Path, str], tuple[_Stats, str]] = {}
+
+
+def _stats(paths: list[Path]) -> _Stats:
+    """Each file's path, size and mtime: enough to tell that none of them has been edited."""
+    stats = []
+    for path in paths:
+        info = path.stat()
+        stats.append((str(path), info.st_size, info.st_mtime_ns))
+    return tuple(stats)
+
+
+def _digest(directory: Path, header: str) -> str:
+    """Hash `header` and every supported file under `directory`, as `Knowledge._fingerprint` does.
+
+    Contents, not `(size, mtime)`: a container build or a fresh checkout rewrites every
+    timestamp, so a timestamp-keyed fingerprint would re-embed the whole corpus on each deploy.
+
+    Which is why the timestamps are only a cache key here, never the hash: an unchanged
+    `(path, size, mtime)` for every file means the digest this process computed last time still
+    stands, and a fresh checkout invalidates the cache, re-reads the corpus once, and arrives at
+    the same digest -- so it still doesn't re-embed. Losing this cache costs one hash; it can
+    never cost a rebuild, and it can never skip one a changed file calls for.
+    """
+    paths = _discover(directory)
+    stats = _stats(paths)
+    cached = _digests.get((directory, header))
+    if cached is not None and cached[0] == stats:
+        return cached[1]
+    digest = hashlib.sha256(header.encode())
+    for path in paths:
+        # Relative, so the same corpus checked out at another path is the same corpus.
+        digest.update(str(path.relative_to(directory)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    fingerprint = digest.hexdigest()
+    _digests[(directory, header)] = (stats, fingerprint)
+    return fingerprint
 
 
 def _extract_text(path: Path) -> str:
@@ -113,31 +164,23 @@ class Knowledge:
         self.dimensions: int = resolve_dimensions(model, dimensions)
         self._store: KnowledgeStore = store or db.knowledge_store(dimensions=self.dimensions)
 
-    def _fingerprint(self) -> str:
+    async def _fingerprint(self) -> str:
         """A hash of everything the stored chunks would be built from, as `search` compares it.
 
         Internal: the public surface stays `search`/`ingest`, and a version is the store's
         vocabulary, not an application's.
 
-        Contents, not `(size, mtime)`: a container build or a fresh checkout rewrites every
-        timestamp, so a timestamp-keyed fingerprint would re-embed the whole corpus on each
-        deploy. Reading the files is milliseconds against the seconds and the bill of embedding
-        them, and `search` pays it immediately before a network call to embed its query.
+        The model, its dimensions and the chunk shape are in the hash alongside the files' bytes:
+        chunks embedded by another model aren't comparable to this one's query vectors, so
+        changing `model=` has to invalidate the corpus exactly the way editing a file does.
 
-        The model, its dimensions and the chunk shape are in the hash too: chunks embedded by
-        another model aren't comparable to this one's query vectors, so changing `model=` has to
-        invalidate the corpus exactly the way editing a file does.
+        Off the event loop, like a sync `@tool` or `@guardrail`: walking and reading the corpus
+        is blocking I/O whose cost grows with it, and `search` runs this before every turn of
+        every knowledge-backed run. `_digest` caches it per process, so the usual answer costs
+        one `stat` per file rather than a full read.
         """
-        digest = hashlib.sha256(
-            f"{self.model}\0{self.dimensions}\0{_CHUNK_SIZE}\0{_CHUNK_OVERLAP}".encode()
-        )
-        for path in _discover(self.directory):
-            # Relative, so the same corpus checked out at another path is the same corpus.
-            digest.update(str(path.relative_to(self.directory)).encode())
-            digest.update(b"\0")
-            digest.update(path.read_bytes())
-            digest.update(b"\0")
-        return digest.hexdigest()
+        header = f"{self.model}\0{self.dimensions}\0{_CHUNK_SIZE}\0{_CHUNK_OVERLAP}"
+        return await asyncio.to_thread(_digest, self.directory, header)
 
     async def ingest(self) -> int:
         """Rebuild the knowledge base from `self.directory`, returning how many chunks it stored.
@@ -153,7 +196,7 @@ class Knowledge:
         under the older fingerprint and the next `search` rebuilds. The safe direction: a corpus
         that looks staler than it is costs one rebuild, where one that looks fresher is wrong.
         """
-        fingerprint = self._fingerprint()
+        fingerprint = await self._fingerprint()
         chunks = [
             (chunk, str(path))
             for path in _discover(self.directory)
@@ -178,7 +221,7 @@ class Knowledge:
         corpus searches it instead of rebuilding it -- which is what a per-request `Agent`
         (`runa.serve`) and every replica after the first are.
         """
-        if await self._store.version() != self._fingerprint():
+        if await self._store.version() != await self._fingerprint():
             await self.ingest()
         (vector,) = await embed([query], model=self.model)
         return await self._store.search(embedding=vector, k=k)
