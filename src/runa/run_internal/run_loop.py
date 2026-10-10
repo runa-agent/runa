@@ -24,6 +24,7 @@ from runa.exceptions import (
     RunaError,
     RunErrorDetails,
     RunTimeout,
+    UserError,
 )
 from runa.guardrail import Phase
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch, logger
@@ -82,6 +83,15 @@ async def _no_matches() -> list[Any]:
     return []
 
 
+# What fail-open deliberately does *not* cover. Memory and knowledge degrade to no matches when
+# the backend doesn't answer -- an embeddings endpoint timing out, a vector store refusing a
+# connection -- because a run is still worth finishing without them. These shapes are not that:
+# they are Runa's own code being wrong, or the app's configuration being incomplete. Retrieval is
+# the one step whose failure leaves no mark on the output (an empty block reads exactly like a
+# corpus with nothing relevant in it), so a bug swallowed here is a bug nobody ever reports.
+_NOT_A_BACKEND_FAULT = (UserError, AttributeError, NameError, TypeError, RuntimeError)
+
+
 async def _retrieve(
     source: Any,
     query: str,
@@ -101,10 +111,49 @@ async def _retrieve(
         matches = await source.search(query, **search_kwargs)
         _close_span(span, output={"count": len(matches)})
         return matches
+    except _NOT_A_BACKEND_FAULT as exc:
+        _close_span(span, error=str(exc))
+        raise
     except Exception as exc:
         _close_span(span, error=str(exc))
         logger.warning("%s retrieval failed for agent %s", label, agent_name, exc_info=True)
         return []
+
+
+async def _inject_retrieved(run: _Run, query: str) -> None:
+    """Search `agent.memory`/`agent.knowledge` for `query` and fold the matches into `run.items`.
+
+    Both are searched concurrently, and each block goes right before the message it was retrieved
+    for. Called from inside `_guarded`, so a retrieval failure that isn't the backend's fault
+    (see `_NOT_A_BACKEND_FAULT`) ends the run with its span closed and its trace exported, like
+    any other failure the loop can hit.
+    """
+    memory, knowledge = run.start.memory, run.start.knowledge
+    if memory is None and knowledge is None:
+        return
+    name, spans, session = run.start.name, run.spans, run.session
+    memory_matches, knowledge_matches = await asyncio.gather(
+        _retrieve(
+            memory,
+            query,
+            label="memory",
+            agent_name=name,
+            spans=spans,
+            user_id=session.user_id if session is not None else None,
+        )
+        if memory is not None
+        else _no_matches(),
+        _retrieve(knowledge, query, label="knowledge", agent_name=name, spans=spans)
+        if knowledge is not None
+        else _no_matches(),
+    )
+    # Right before the message they were retrieved for, wherever it sits in `items`.
+    at = latest_user_index(run.items)
+    assert at is not None  # `query` came from that same message
+    if knowledge_matches:
+        run.items.insert(at, _knowledge_block(knowledge_matches))
+    if memory_matches:
+        run.items.insert(at, _memory_block(memory_matches))
 
 
 def _maybe_compact(
@@ -294,6 +343,9 @@ async def _extract_memory(run: _Run, final_output: Any) -> None:
             model=run.start.resolve_model(run.run_config.model_provider),
         )
         _close_span(span, output={"stored": len(stored)})
+    except _NOT_A_BACKEND_FAULT as exc:
+        _close_span(span, error=str(exc))
+        raise
     except Exception as exc:
         _close_span(span, error=str(exc))
         logger.warning("memory extraction failed for agent %s", run.start.name, exc_info=True)
@@ -420,33 +472,9 @@ async def _run_async(
         emit=emit,
     )
 
-    memory = shape.memory
-    knowledge = shape.knowledge
-    if query is not None and (memory is not None or knowledge is not None):
-        memory_matches, knowledge_matches = await asyncio.gather(
-            _retrieve(
-                memory,
-                query,
-                label="memory",
-                agent_name=shape.name,
-                spans=run.spans,
-                user_id=session.user_id if session is not None else None,
-            )
-            if memory is not None
-            else _no_matches(),
-            _retrieve(knowledge, query, label="knowledge", agent_name=shape.name, spans=run.spans)
-            if knowledge is not None
-            else _no_matches(),
-        )
-        # Right before the message they were retrieved for, wherever it sits in `items`.
-        at = latest_user_index(items)
-        assert at is not None  # `query` came from that same message
-        if knowledge_matches:
-            items.insert(at, _knowledge_block(knowledge_matches))
-        if memory_matches:
-            items.insert(at, _memory_block(memory_matches))
-
     async def turns() -> _TurnOutcome:
+        if query is not None:
+            await _inject_retrieved(run, query)
         await _run_guardrails(run, Phase.INPUT, input)
         return await _run_turns(run)
 

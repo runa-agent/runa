@@ -22,6 +22,7 @@ from runa.exceptions import (
     DuplicateToolCallError,
     GuardrailTripwireTriggered,
     MaxTurnsExceeded,
+    UserError,
 )
 from runa.guardrail import (
     BoundGuardrail,
@@ -1599,11 +1600,14 @@ def test_trace_session_id_is_none_without_a_session() -> None:
 
 
 def test_memory_retrieval_failure_degrades_gracefully() -> None:
-    """A broken `memory.search` doesn't fail the run; the turn proceeds without memory."""
+    """A backend that doesn't answer doesn't fail the run; the turn proceeds without memory."""
 
     class _BoomMemory:
         async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
-            raise RuntimeError("boom")
+            raise ConnectionError("boom")
+
+        async def remember_from_conversation(self, *args: Any, **kwargs: Any) -> list[str]:
+            return []
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
 
@@ -1617,14 +1621,14 @@ def test_memory_retrieval_failure_degrades_gracefully() -> None:
 
 
 def test_memory_extraction_failure_degrades_gracefully() -> None:
-    """A broken extraction step doesn't fail the run; the final output is unaffected."""
+    """A backend that doesn't answer doesn't fail the run; the final output is unaffected."""
 
     class _BoomMemory:
         async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
             return []
 
         async def remember_from_conversation(self, *args: Any, **kwargs: Any) -> list[str]:
-            raise RuntimeError("boom")
+            raise ConnectionError("boom")
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
 
@@ -1635,6 +1639,46 @@ def test_memory_extraction_failure_degrades_gracefully() -> None:
     (extraction_span,) = [s for s in trace_of(result).spans if s.type == "custom"]
     assert extraction_span.status == "error"
     assert extraction_span.error == "boom"
+
+
+def test_retrieval_does_not_swallow_a_framework_bug() -> None:
+    """Fail-open covers a backend fault, not Runa's own code: the run ends, and says why.
+
+    An empty memory block is indistinguishable from a corpus with nothing relevant in it, so a
+    bug swallowed here would never be reported -- retrieval would just quietly stop working.
+    """
+
+    class _BuggyKnowledge:
+        async def search(self, query: str, *, k: int = 5) -> list[Any]:
+            raise RuntimeError("Event loop is closed")
+
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BuggyKnowledge())
+
+    with pytest.raises(RuntimeError, match="Event loop is closed"):
+        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+
+def test_retrieval_misconfiguration_ends_the_run_with_its_trace() -> None:
+    """A `UserError` (no embeddings key, say) ends the run the way every other failure does.
+
+    `Agent.run` turns a `RunaError` into `status="error"`; what the loop owes it is the trace
+    around the failure, which is why retrieval runs inside `_guarded` rather than before it.
+    """
+
+    class _UnconfiguredMemory:
+        async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
+            raise UserError("OPENAI_API_KEY is not set.")
+
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_UnconfiguredMemory())
+
+    with pytest.raises(UserError) as caught:
+        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+    assert caught.value.run_data is not None
+    trace = caught.value.run_data.trace
+    (retrieval_span,) = [s for s in trace.spans if s.type == "retrieval"]
+    assert retrieval_span.status == "error"
+    assert "OPENAI_API_KEY" in retrieval_span.error
 
 
 class _KnowledgeMatchStub:
@@ -1704,11 +1748,11 @@ def test_knowledge_and_memory_can_both_inject_blocks_before_the_final_message() 
 
 
 def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
-    """A broken `knowledge.search` doesn't fail the run; the turn proceeds without knowledge."""
+    """A backend that doesn't answer doesn't fail the run; the turn proceeds without knowledge."""
 
     class _BoomKnowledge:
         async def search(self, query: str, *, k: int = 5) -> list[Any]:
-            raise RuntimeError("boom")
+            raise ConnectionError("boom")
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BoomKnowledge())
 

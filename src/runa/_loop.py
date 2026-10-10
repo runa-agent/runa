@@ -14,8 +14,9 @@ reuse the address. This is that rule, once. A new long-lived client belongs here
 a connection, it is loop-scoped, and the exception is the one that has to be argued for.
 
 Nothing here knows what it is holding. `db/pool.py` keys pools by URL, `cache/redis.py` its client
-by URL, `mcp.py` its sessions by the server's address, and `ModelProvider` its HTTP clients by
-provider prefix; what they share is the lifetime, not the resource.
+by URL, `mcp.py` its sessions by the server's address, `ModelProvider` its HTTP clients by provider
+prefix, and `embeddings.py` its one client by base URL; what they share is the lifetime, not the
+resource.
 """
 
 import asyncio

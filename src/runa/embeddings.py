@@ -4,12 +4,17 @@ Only OpenAI is wired up: it's the one provider among Runa's chat backends (`_mod
 that also exposes an embeddings endpoint, and `OPENAI_API_KEY` is already the convention every
 scaffolded project has (see `cli/new.py`'s `.env` template). Talks to it directly over `httpx2`,
 same as `OpenAICompatibleModel`, rather than pulling in the `openai` SDK for one endpoint.
+
+Its client is held per event loop, like every other long-lived client in Runa (see `runa._loop`):
+`Agent.run_sync` opens a loop per call, and a client carried over from a closed one fails the next
+retrieval with "Event loop is closed".
 """
 
 import os
 
 import httpx2 as httpx
 
+from runa._loop import LoopCache
 from runa.exceptions import ModelBehaviorError, UserError
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -21,7 +26,7 @@ EMBEDDING_DIMENSIONS = {"text-embedding-3-small": 1536, "text-embedding-3-large"
 _BASE_URL = "https://api.openai.com/v1/"
 _EMBEDDINGS_PATH = "embeddings"
 
-_client: httpx.AsyncClient | None = None
+_clients: LoopCache[str, httpx.AsyncClient] = LoopCache()
 
 
 def resolve_dimensions(model: str, dimensions: int | None) -> int:
@@ -35,16 +40,23 @@ def resolve_dimensions(model: str, dimensions: int | None) -> int:
     return resolved
 
 
+def _new_client() -> httpx.AsyncClient:
+    """A client pointed at `_BASE_URL`, carrying the key `OPENAI_API_KEY` holds.
+
+    Raises `UserError` when that variable is unset, which is why the client is built lazily: an
+    app that declares neither `memory` nor `knowledge` should not need an embeddings key.
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key is None:
+        raise UserError("OPENAI_API_KEY is not set. Set it to use runa.memory/embeddings.")
+    return httpx.AsyncClient(
+        base_url=_BASE_URL, headers={"Authorization": f"Bearer {api_key}"}, timeout=60.0
+    )
+
+
 def _get_client() -> httpx.AsyncClient:
-    global _client
-    if _client is None:
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if api_key is None:
-            raise UserError("OPENAI_API_KEY is not set. Set it to use runa.memory/embeddings.")
-        _client = httpx.AsyncClient(
-            base_url=_BASE_URL, headers={"Authorization": f"Bearer {api_key}"}, timeout=60.0
-        )
-    return _client
+    """This loop's client, keyed by base URL the way `ModelProvider` keys its own by prefix."""
+    return _clients.get(_BASE_URL, _new_client)
 
 
 async def embed(texts: list[str], *, model: str = DEFAULT_EMBEDDING_MODEL) -> list[list[float]]:
