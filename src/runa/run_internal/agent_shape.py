@@ -3,9 +3,14 @@
 Everything here answers a question about one agent's declared shape -- its tools, including the
 ones its MCP servers list; its handoffs, keyed by the tool name that triggers them; its sampling
 settings; its model; its guardrails -- asked by more than one module. `run_loop`,
-`tool_execution` and `run_state` all have to agree on the answers, so none of them owns these,
+`tool_execution` and `guardrails` all have to agree on the answers, so none of them owns these,
 and each answer is worked out once when the agent starts running rather than re-derived by
 whichever module needs it next.
+
+Only `run_internal` imports this module. A question a public type asks too -- what a `handoffs`
+list may hold, which `RunState` needs to walk a graph of agents -- is answered by the public
+type that owns it (`Handoff.by_tool_name`) and called from here, so the dependency between the
+two layers stays one-way.
 
 A concrete dataclass rather than a `Protocol`, because a `Protocol` describes a surface and
 builds nothing: the only implementation of the old one was a thirteen-field `SimpleNamespace`
@@ -33,22 +38,6 @@ from runa.knowledge import KnowledgeLike
 from runa.lifecycle import AgentHooks
 from runa.memory import MemoryLike
 from runa.tool import FunctionTool
-
-
-def _normalized_handoffs(handoffs: Any) -> dict[str, Handoff]:
-    """Map each handoff's tool name to its `Handoff`, wrapping a bare `Agent` if given one.
-
-    A `dict` is already normalized -- an `AgentShape`'s `handoffs` -- and passes straight through,
-    so code walking a graph of agents (`run_state._find_agent_by_name`) doesn't have to know
-    whether it is looking at an agent or at a shape standing in for one.
-    """
-    if isinstance(handoffs, dict):
-        return handoffs
-    result: dict[str, Handoff] = {}
-    for entry in handoffs:
-        handoff = entry if isinstance(entry, Handoff) else Handoff.from_agent(entry)
-        result[handoff.tool_name] = handoff
-    return result
 
 
 @dataclass
@@ -85,7 +74,7 @@ class AgentShape:
 
     def __post_init__(self) -> None:
         """Normalize `handoffs`, and default `agent` to the shape itself if none was given."""
-        self.handoffs = _normalized_handoffs(self.handoffs)
+        self.handoffs = Handoff.by_tool_name(self.handoffs)
         if self.agent is None:
             self.agent = self
 
@@ -135,4 +124,4 @@ class AgentShape:
         return provider.get_model(self.model) if isinstance(self.model, str) else self.model
 
 
-__all__ = ["AgentShape", "_normalized_handoffs"]
+__all__ = ["AgentShape"]

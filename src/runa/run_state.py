@@ -12,7 +12,7 @@ from runa._types import InputTokensDetails, OutputTokensDetails, RunContextWrapp
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
-from runa.run_internal.agent_shape import _normalized_handoffs
+from runa.handoff import Handoff
 from runa.tool import ToolCall
 from runa.tracing.traces import Trace
 
@@ -138,7 +138,7 @@ def _find_agent_by_name(root: Any, name: str) -> Any:
             return candidate
         queue.extend(
             handoff.agent
-            for handoff in _normalized_handoffs(getattr(candidate, "handoffs", [])).values()
+            for handoff in Handoff.by_tool_name(getattr(candidate, "handoffs", [])).values()
         )
         queue.extend(
             tool.delegate

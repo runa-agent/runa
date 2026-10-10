@@ -48,6 +48,26 @@ class Handoff:
             tool_description=f"Transfer the conversation to {agent.name}.",
         )
 
+    @classmethod
+    def by_tool_name(cls, handoffs: Any) -> dict[str, Handoff]:
+        """`handoffs` keyed by the tool name that triggers each, wrapping any bare `Agent` given.
+
+        What a `handoffs` list may hold is this class's own knowledge, so turning one into the
+        map the run loop reads lives here rather than in whichever caller needs it next -- both
+        `run_internal.agent_shape` (once per agent, when it starts running) and
+        `run_state._find_agent_by_name` (walking a graph of agents, where a candidate may be an
+        `Agent` or an `AgentShape` standing in for one) ask for it. An already-keyed `dict` --
+        an `AgentShape`'s `handoffs` -- is what that map is, so it passes straight through and
+        neither caller has to know which of the two it is looking at.
+        """
+        if isinstance(handoffs, dict):
+            return handoffs
+        keyed: dict[str, Handoff] = {}
+        for entry in handoffs:
+            handoff = entry if isinstance(entry, cls) else cls.from_agent(entry)
+            keyed[handoff.tool_name] = handoff
+        return keyed
+
 
 def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | None) -> FunctionTool:
     """Wrap `agent` as a `FunctionTool` that runs it on a generated `input` string.
