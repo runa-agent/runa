@@ -13,23 +13,29 @@ import copy
 import difflib
 import inspect
 import re
-from collections.abc import AsyncIterator, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import MISSING, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from runa import content
 from runa._items import ConversationItem
-from runa._models import DEFAULT_MODEL, ModelProvider
+from runa._models import DEFAULT_MODEL, Model, ModelProvider
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import RunaError, UserError
-from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
+from runa.guardrail import (
+    BoundGuardrail,
+    GuardrailsDict,
+    GuardrailsList,
+    Phase,
+    flatten_guardrails,
+)
 from runa.handoff import agent_as_tool
-from runa.knowledge import Knowledge
+from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks, logger
-from runa.memory import Memory
+from runa.memory import Memory, MemoryLike
 from runa.run import Run, RunStream
 from runa.run_internal.run_config import DEFAULT_MAX_TURNS, RunConfig
 from runa.run_internal.run_loop import _run_async
@@ -45,40 +51,15 @@ if TYPE_CHECKING:
     from runa.eval.case import Case
     from runa.eval.report import Report
 
-_AGENT_FIELDS = (
-    "name",
-    "instructions",
-    "model",
-    "model_settings",
-    "tools",
-    "subagents",
-    "guardrails",
-    "mcp",
-    "mcp_servers",
-    "output_type",
-    "hooks",
-    "memory",
-    "knowledge",
-    "compact",
-    "max_turns",
-    "max_tokens",
-    "timeout",
-)
-"""Every name that configures an Agent, whether declared on the subclass or passed to it.
+_UNSET: Any = object()
+"""`Agent.__init__`'s "this setting wasn't passed", which is not the same as being passed `None`.
 
-One tuple for both call sites, so the two ways of saying the same thing can't drift: the merge
-loop in `__init__` reads each of these off `type(self)` as the default for the matching kwarg,
-and `_reject_unknown_settings` refuses any other name in either place.
-
-A new setting also has to reach a run, and there are exactly two paths, chosen by what the
-setting is: a ceiling on the run (`max_turns`, `max_tokens`, `timeout`) belongs to `RunConfig`,
-which configures the call rather than the agent; everything the agent *is* belongs to
-`AgentShape`, which is what `run_internal` reads instead of this class. Nothing takes neither
-path, and `tests/test_agent.py` is where that is enforced: it asserts every attribute `__init__`
-resolves has one of those two homes, and that `AgentShape.of` carries the ones that are the
-shape's -- a shape field left at its default is a setting the turn loop silently ignores, which
-is this module's `_reject_unknown_settings` bug one layer down. `project._describe` is not a
-third path: it summarizes declared attributes for the Agents page and configures nothing.
+Four settings take `None` as a value rather than as silence: `instructions=None` runs an agent on
+none instead of loading `app/prompts/<name>.md`, and `memory=None`/`knowledge=None`/
+`output_type=None` turn off what the subclass declared. A default of `None` would make
+`SupportAgent(memory=None)` indistinguishable from not overriding `memory` at all, so the default
+is this sentinel instead -- typed `Any` so every parameter keeps its own annotation while sharing
+the one default.
 """
 
 _MODEL_PROVIDER = ModelProvider()
@@ -265,26 +246,23 @@ def _is_code(value: Any) -> bool:
     return callable(value) or isinstance(value, staticmethod | classmethod | property)
 
 
-def _reject_unknown_settings(cls: type[Agent], kwargs: dict[str, Any]) -> None:
-    """Refuse a name that isn't one of `_AGENT_FIELDS`, declared on `cls` or passed to it.
+def _reject_unknown_settings(cls: type[Agent]) -> None:
+    """Refuse a class attribute of `cls` that isn't one of `_AGENT_FIELDS`.
 
     Class attributes are the whole configuration surface, so the one mistake that style invites
     is a misspelled name -- and a silently ignored `modell = "claude-sonnet-5"` doesn't fail, it
     runs the default model at a different price with different behaviour and surfaces days later
-    as "the agent answers oddly". The same promise `MCPServer`'s named parameters make (a
-    misspelled option is an error at the call site, not a server that ignores it) is made here,
-    for both the declaration and the constructor override, against one set of names.
+    as "the agent answers oddly".
+
+    The constructor override makes the same promise `MCPServer`'s named parameters do, and makes
+    it the same way: every setting is a named parameter of `__init__`, so a misspelled `modell=`
+    is a `TypeError` from the signature itself (and a type-checker error before the code is ever
+    run). This function is for the declaration, where Python offers no such check.
 
     Only data is checked: a name starting with `_`, a method, a property or a nested class is the
     subclass's own business. Mixins in the MRO are skipped for the same reason -- their attributes
     aren't claiming to be Runa settings.
     """
-    for name in kwargs:
-        if name not in _AGENT_FIELDS:
-            raise UserError(
-                f"{cls.__name__}(...) got an unexpected keyword argument {name!r}."
-                f"{_did_you_mean(name)}"
-            )
     for klass in cls.__mro__:
         if klass is Agent:
             break
@@ -306,6 +284,17 @@ def _did_you_mean(name: str) -> str:
     if close:
         return f" Did you mean {close[0]!r}?"
     return f" Agent settings are: {', '.join(sorted(_AGENT_FIELDS))}."
+
+
+def _setting[T](cls: type[Agent], passed: T, name: str, absent: Any = None) -> T:
+    """What one setting resolves to: what the constructor was passed, else what `cls` declares.
+
+    The override wins, which is the whole rule -- `_UNSET` rather than `None` standing for "not
+    passed" so that an override may pass `None` and mean it. `absent` is what neither supplies,
+    `None` for every setting but the two where never being given is itself the signal: a missing
+    `name` is an error, and missing `instructions` means "load `app/prompts/<name>.md`".
+    """
+    return passed if passed is not _UNSET else getattr(cls, name, absent)
 
 
 def _resolve_retrieval_setting(
@@ -374,12 +363,35 @@ class Agent:
     max_tokens: int | None = None
     timeout: float | None = None
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        name: str = _UNSET,
+        instructions: str | Callable[..., Any] | None = _UNSET,
+        model: str | Model = _UNSET,
+        model_settings: ModelSettings | None = _UNSET,
+        tools: list[FunctionTool] | None = _UNSET,
+        subagents: SubagentsList | SubagentsDict | None = _UNSET,
+        guardrails: GuardrailsList | GuardrailsDict | None = _UNSET,
+        mcp: list[Any] | None = _UNSET,
+        mcp_servers: list[Any] | None = _UNSET,
+        output_type: type | None = _UNSET,
+        hooks: Hooks[Any] | None = _UNSET,
+        memory: MemoryLike | Literal["auto", "llm"] | None = _UNSET,
+        knowledge: KnowledgeLike | Literal["auto", "llm"] | None = _UNSET,
+        compact: bool | Compactor | None = _UNSET,
+        max_turns: int = _UNSET,
+        max_tokens: int | None = _UNSET,
+        timeout: float | None = _UNSET,
+    ) -> None:
         """Build config from class attributes and wire up any subagents and guardrails.
 
-        Every `_AGENT_FIELDS` name can be declared on the subclass or passed here, the kwarg
-        winning; any other name is a `UserError` in either place, naming the setting it was
-        probably meant to be (see `_reject_unknown_settings`).
+        These parameters *are* the closed set of settings (`_AGENT_FIELDS` is read off this
+        signature): each one can be declared on the subclass or passed here, the argument
+        winning, and an unset one falls back to the class attribute of the same name. A name
+        that is neither is a `TypeError` from this signature, and a `UserError` naming the
+        setting it probably meant when it is declared in a class body instead (see
+        `_reject_unknown_settings`).
 
         `mcp=[...]` (as a constructor kwarg, or a `mcp` class attribute) is sugar for
         `mcp_servers=[...]`; both are merged into `mcp_servers` if given together.
@@ -418,23 +430,38 @@ class Agent:
         the run's wall-clock seconds before `RunTimeout`. All three are optional ceilings, and
         all three end the run as `Run(status="error")`.
         """
-        if type(self) is Agent:
+        cls = type(self)
+        if cls is Agent:
             raise TypeError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
+        _reject_unknown_settings(cls)
 
-        _reject_unknown_settings(type(self), kwargs)
-        for field_name in _AGENT_FIELDS:
-            value = getattr(type(self), field_name, MISSING)
-            if value is not MISSING:
-                kwargs.setdefault(field_name, value)
-        if "name" not in kwargs:
-            raise TypeError(f"{type(self).__name__}(...) is missing the required 'name'")
-        if "instructions" not in kwargs:
-            kwargs["instructions"] = _load_prompt(type(self), kwargs["name"])
+        name = _setting(cls, name, "name", _UNSET)
+        instructions = _setting(cls, instructions, "instructions", _UNSET)
+        model = _setting(cls, model, "model")
+        model_settings = _setting(cls, model_settings, "model_settings")
+        tools = _setting(cls, tools, "tools")
+        subagents = _setting(cls, subagents, "subagents")
+        guardrails = _setting(cls, guardrails, "guardrails")
+        mcp = _setting(cls, mcp, "mcp")
+        mcp_servers = _setting(cls, mcp_servers, "mcp_servers")
+        output_type = _setting(cls, output_type, "output_type")
+        hooks = _setting(cls, hooks, "hooks")
+        memory = _setting(cls, memory, "memory")
+        knowledge = _setting(cls, knowledge, "knowledge")
+        compact = _setting(cls, compact, "compact")
+        max_turns = _setting(cls, max_turns, "max_turns")
+        max_tokens = _setting(cls, max_tokens, "max_tokens")
+        timeout = _setting(cls, timeout, "timeout")
+
+        if name is _UNSET:
+            raise TypeError(f"{cls.__name__}(...) is missing the required 'name'")
+        if instructions is _UNSET:
+            instructions = _load_prompt(cls, name)
 
         handoffs: list[Any] = []
-        tools = list(kwargs.get("tools") or [])
-        mcp_servers = [*(kwargs.get("mcp_servers") or []), *(kwargs.get("mcp") or [])]
-        for sub in _flatten_subagents(kwargs.get("subagents") or []):
+        tools = list(tools or [])
+        mcp_servers = [*(mcp_servers or []), *(mcp or [])]
+        for sub in _flatten_subagents(subagents or []):
             if isinstance(sub, Subagent):
                 agent = sub.agent()
                 if sub.mode == "handoff":
@@ -446,29 +473,29 @@ class Agent:
                 handoffs.append(agent)
                 tools.append(agent.as_tool(None, None))
 
-        bound_guardrails = flatten_guardrails(kwargs.get("guardrails") or [])
+        bound_guardrails = flatten_guardrails(guardrails or [])
 
-        self.memory = _resolve_retrieval_setting(kwargs.get("memory"), Memory, tools)
-        self.knowledge = _resolve_retrieval_setting(kwargs.get("knowledge"), Knowledge, tools)
+        self.memory = _resolve_retrieval_setting(memory, Memory, tools)
+        self.knowledge = _resolve_retrieval_setting(knowledge, Knowledge, tools)
 
-        self.name: str = kwargs["name"]
-        self.instructions = _adapt_instructions(kwargs.get("instructions"))
-        self.model: str | Any = _checked_model(kwargs["model"])
-        self.model_settings: ModelSettings = kwargs.get("model_settings") or ModelSettings()
+        self.name: str = name
+        self.instructions = _adapt_instructions(instructions)
+        self.model: str | Any = _checked_model(model)
+        self.model_settings: ModelSettings = model_settings or ModelSettings()
         self.tools: list[FunctionTool] = tools
         self.handoffs: list[Any] = handoffs
         self.mcp_servers: list[Any] = mcp_servers
         # Not `self.guardrails`: that name belongs to the list/dict a subclass declares, the way
         # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
         self.bound_guardrails: dict[Phase, list[BoundGuardrail]] = bound_guardrails
-        self.output_type: type | None = kwargs.get("output_type")
-        self.hooks = kwargs.get("hooks")
+        self.output_type: type | None = output_type
+        self.hooks = hooks
         # Not `self.compact`: that name belongs to the bool/callable a subclass declares, the way
         # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
-        self.compactor: Compactor | None = _resolve_compactor(kwargs.get("compact"))
-        self.max_turns: int = kwargs["max_turns"]
-        self.max_tokens: int | None = kwargs.get("max_tokens")
-        self.timeout: float | None = kwargs.get("timeout")
+        self.compactor: Compactor | None = _resolve_compactor(compact)
+        self.max_turns: int = max_turns
+        self.max_tokens: int | None = max_tokens
+        self.timeout: float | None = timeout
 
         self.history: list[ConversationItem] = []
         self.usage = Usage()
@@ -758,6 +785,28 @@ class Agent:
             thresholds=thresholds,
             concurrency=concurrency,
         )
+
+
+_AGENT_FIELDS = tuple(inspect.signature(Agent.__init__).parameters)[1:]
+"""Every name that configures an Agent, read off the one place they are written down.
+
+`Agent.__init__`'s keyword-only parameters are the closed set, so the two ways of saying the same
+thing can't drift: each parameter falls back to the class attribute of the same name, and
+`_reject_unknown_settings` refuses any other name in a class body. The constructor needs no such
+check, having a signature: an unknown keyword is Python's own `TypeError`, suggesting the name it
+meant, and a type checker has already flagged the call (and a `max_turns="ten"` the validator
+would have let through).
+
+A new setting also has to reach a run, and there are exactly two paths, chosen by what the
+setting is: a ceiling on the run (`max_turns`, `max_tokens`, `timeout`) belongs to `RunConfig`,
+which configures the call rather than the agent; everything the agent *is* belongs to
+`AgentShape`, which is what `run_internal` reads instead of this class. Nothing takes neither
+path, and `tests/test_agent.py` is where that is enforced: it asserts every attribute `__init__`
+resolves has one of those two homes, and that `AgentShape.of` carries the ones that are the
+shape's -- a shape field left at its default is a setting the turn loop silently ignores, which
+is this module's `_reject_unknown_settings` bug one layer down. `project._describe` is not a
+third path: it summarizes declared attributes for the Agents page and configures nothing.
+"""
 
 
 @dataclass(frozen=True)

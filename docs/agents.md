@@ -48,9 +48,15 @@ class SupportAgent(Agent):
 ```
 
 Without that, the agent would quietly run on the default model and surface days later as "it
-answers oddly". The same check covers a constructor override (`SupportAgent(tolls=[...])`), and
-it only looks at data: methods, properties, `_`-prefixed attributes and anything a mixin brings
-along are yours to use freely.
+answers oddly". The check only looks at data: methods, properties, `_`-prefixed attributes and
+anything a mixin brings along are yours to use freely.
+
+A constructor override (`SupportAgent(model="claude-opus-5")`) is covered the ordinary Python
+way instead: every setting in the table is a keyword-only parameter of `Agent.__init__`, so
+`SupportAgent(tolls=[...])` is a `TypeError` naming what it meant, your editor completes the
+settings as you type them, and a type checker catches `max_turns="ten"` before the code runs.
+Passing a setting always wins over declaring it, and passing `None` means `None` -- that is how
+`SupportAgent(memory=None)` turns off a declared `memory = "auto"` for one instance.
 
 ```python
 class SupportAgent(Agent):

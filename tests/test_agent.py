@@ -16,7 +16,8 @@ from pydantic import BaseModel
 from runa import Agent, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
-from runa.agent import Subagent
+from runa.agent import _AGENT_FIELDS, Subagent
+from runa.compact import default_compactor
 from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
 from runa.guardrail import Phase, guardrail
 from runa.knowledge import Knowledge
@@ -631,18 +632,22 @@ def test_a_misspelled_class_attribute_is_rejected_by_name() -> None:
         Typo()
 
 
-def test_a_misspelled_constructor_kwarg_is_rejected_by_name() -> None:
-    """An override is checked against the same set the class body is, and suggests the same way."""
-    from runa.exceptions import UserError
+def test_a_misspelled_constructor_kwarg_is_rejected_by_the_signature() -> None:
+    """An override is a named parameter, so a typo is caught without any of Runa's own checking.
+
+    A type checker flags the call before it runs (which is most of why the signature is written
+    out rather than taken as `**kwargs`), and CPython itself suggests the name it meant -- so
+    `_reject_unknown_settings` is left to the class body, where no such check exists.
+    """
 
     class Fine(Agent):
         name = "Fine"
         instructions = "fine"
 
-    with pytest.raises(UserError, match="'tolls'.*Did you mean 'tools'"):
-        Fine(tolls=[])
-    with pytest.raises(UserError, match="'nonsense'.*Agent settings are:"):
-        Fine(nonsense=1)
+    with pytest.raises(TypeError, match="'tolls'.*Did you mean 'tools'"):
+        Fine(tolls=[])  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'nonsense'"):
+        Fine(nonsense=1)  # type: ignore[call-arg]
 
 
 _PER_RUN_STATE = frozenset({"history", "usage", "last_usage", "_in_flight"})
@@ -766,6 +771,93 @@ def test_run_config_carries_every_ceiling_on_the_run() -> None:
     config = agent._run_config(None)
 
     assert (config.max_turns, config.max_tokens, config.timeout) == (3, 100, 5.0)
+
+
+def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() -> None:
+    """The merge's other half: a setting passed to `__init__` is read, not merely accepted.
+
+    Each parameter falls back to the class attribute of the same name a line at a time, so the
+    mistake to guard against is a parameter that is accepted and then never read -- which would
+    leave `SupportAgent(model=...)` silently running the declared model. Every name in
+    `_AGENT_FIELDS` is passed here, which is what makes that a line-by-line check.
+    """
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    @guardrail
+    def block_empty(x: str) -> bool:
+        """Trip on an empty message."""
+        return not x.strip()
+
+    @dataclass
+    class Answer:
+        text: str
+
+    class _Server:
+        async def list_tools(self) -> list[Any]:
+            return []
+
+    class Blank(Agent):
+        """Declares nothing, so every setting below can only have come from the constructor."""
+
+    hooks = Hooks[Any]()
+    model_settings = ModelSettings(temperature=0.5)
+    passed: dict[str, Any] = {
+        "name": "Overridden",
+        "instructions": "overridden",
+        "model": "claude-sonnet-5",
+        "model_settings": model_settings,
+        "tools": [ping],
+        "subagents": [Translator.delegate],
+        "guardrails": [block_empty.input],
+        "mcp": [_Server()],
+        "mcp_servers": [_Server()],
+        "output_type": Answer,
+        "hooks": hooks,
+        "memory": "auto",
+        "knowledge": "auto",
+        "compact": True,
+        "max_turns": 3,
+        "max_tokens": 100,
+        "timeout": 5.0,
+    }
+    assert set(passed) == set(_AGENT_FIELDS), "a setting with no override checked here"
+
+    agent = Blank(**passed)
+
+    assert (agent.name, agent.instructions) == ("Overridden", "overridden")
+    assert agent.model == "claude-sonnet-5"
+    assert agent.model_settings is model_settings
+    assert _tool_names(agent) == ["ping", Translator().as_tool(None, None).name]
+    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
+    assert len(agent.mcp_servers) == 2, "`mcp` and `mcp_servers` are merged, not one or the other"
+    assert agent.output_type is Answer
+    assert agent.hooks is hooks
+    assert isinstance(agent.memory, Memory)
+    assert isinstance(agent.knowledge, Knowledge)
+    assert agent.compactor is default_compactor
+    assert (agent.max_turns, agent.max_tokens, agent.timeout) == (3, 100, 5.0)
+
+
+def test_an_override_of_none_turns_a_declared_setting_off() -> None:
+    """`None` is a value, not silence: the one reason a parameter defaults to a sentinel.
+
+    `memory`/`knowledge`/`output_type`/`instructions` all take `None` to mean "none of that",
+    which a `None` default would make indistinguishable from not passing the setting at all.
+    """
+
+    class Remembering(Agent):
+        name = "Remembering"
+        instructions = "remember"
+        memory = "auto"
+        knowledge = "auto"
+
+    assert Remembering().memory is not None
+    assert Remembering(memory=None, knowledge=None).memory is None
+    assert Remembering(memory=None, knowledge=None).knowledge is None
 
 
 def test_a_subclass_keeps_its_own_methods_and_underscored_state() -> None:
@@ -1273,7 +1365,10 @@ def test_runs_inside_a_trace_block_are_grouped_under_it() -> None:
 
     with tracing.trace("workflow") as outer:
         runs = asyncio.run(workflow())
-    alone = StepAgent(model=_ScriptedModel([_final_message("d")])).run_sync("four")
+    # `_ScriptedModel` answers `get_response` only, which is all this run needs and less than
+    # the `Model` protocol `model=` is annotated with.
+    scripted: Any = _ScriptedModel([_final_message("d")])
+    alone = StepAgent(model=scripted).run_sync("four")
 
     assert all(run.trace is not None for run in runs)
     assert {run.trace.metadata["group_id"] for run in runs if run.trace} == {outer.id}
