@@ -96,6 +96,11 @@ class AgentShape:
         Hand it one it already made and it comes straight back. `Agent` satisfies this
         structurally and nothing here imports it, which is what keeps `run_internal` from
         depending on the class it implements.
+
+        Every field above is fed from one attribute here, and a new one has to be: because each
+        has a default, a field this copy forgets reads as unconfigured rather than failing. The
+        inverse check is a test (`tests/test_agent.py`), as is the rule for which settings are a
+        shape's at all and which are `RunConfig`'s (`agent._AGENT_FIELDS`).
         """
         if isinstance(agent, cls):
             return agent

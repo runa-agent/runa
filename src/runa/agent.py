@@ -69,6 +69,16 @@ _AGENT_FIELDS = (
 One tuple for both call sites, so the two ways of saying the same thing can't drift: the merge
 loop in `__init__` reads each of these off `type(self)` as the default for the matching kwarg,
 and `_reject_unknown_settings` refuses any other name in either place.
+
+A new setting also has to reach a run, and there are exactly two paths, chosen by what the
+setting is: a ceiling on the run (`max_turns`, `max_tokens`, `timeout`) belongs to `RunConfig`,
+which configures the call rather than the agent; everything the agent *is* belongs to
+`AgentShape`, which is what `run_internal` reads instead of this class. Nothing takes neither
+path, and `tests/test_agent.py` is where that is enforced: it asserts every attribute `__init__`
+resolves has one of those two homes, and that `AgentShape.of` carries the ones that are the
+shape's -- a shape field left at its default is a setting the turn loop silently ignores, which
+is this module's `_reject_unknown_settings` bug one layer down. `project._describe` is not a
+third path: it summarizes declared attributes for the Agents page and configures nothing.
 """
 
 _MODEL_PROVIDER = ModelProvider()

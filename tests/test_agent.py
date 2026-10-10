@@ -5,7 +5,7 @@ import importlib.util
 import json
 import sys
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from types import ModuleType
 from typing import Any, TypedDict, cast
@@ -15,12 +15,12 @@ from pydantic import BaseModel
 
 from runa import Agent, tracing
 from runa._models import StreamDelta
-from runa._types import ModelResponse, RunContextWrapper, Usage
+from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
 from runa.agent import Subagent
 from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
 from runa.guardrail import Phase, guardrail
 from runa.knowledge import Knowledge
-from runa.lifecycle import LoggingRunHooks
+from runa.lifecycle import AgentHooks, LoggingRunHooks
 from runa.memory import Memory
 from runa.run import Run
 from runa.run_state import RunState
@@ -643,6 +643,129 @@ def test_a_misspelled_constructor_kwarg_is_rejected_by_name() -> None:
         Fine(tolls=[])
     with pytest.raises(UserError, match="'nonsense'.*Agent settings are:"):
         Fine(nonsense=1)
+
+
+_PER_RUN_STATE = frozenset({"history", "usage", "last_usage", "_in_flight"})
+"""What `Agent._fresh` clears: one run's state rather than configuration, so it goes nowhere."""
+
+_SHAPE_HOMES = {
+    "name": "name",
+    "instructions": "instructions",
+    "model": "model",
+    "model_settings": "model_settings",
+    "tools": "tools",
+    "mcp_servers": "tools",
+    "handoffs": "handoffs",
+    "bound_guardrails": "guardrails",
+    "output_type": "output_type",
+    "memory": "memory",
+    "knowledge": "knowledge",
+    "compactor": "compactor",
+    "hooks": "hooks",
+}
+"""Each attribute `Agent.__init__` resolves that is the agent's own, and the field it is read as.
+
+The three ceilings (`max_turns`/`max_tokens`/`timeout`) are missing because they take the other
+path, as a `RunConfig`. Three entries here are irregular, which is most of the reason the mapping
+is worth writing down: a subclass declares `guardrails` and `compact`, so the resolved forms take
+other names (`bound_guardrails`, `compactor`) and leave the declarations theirs, and an MCP
+server is not a shape field at all -- resolving one is folding its tools into `tools`.
+"""
+
+
+def _every_setting_agent() -> Agent:
+    """An agent with every setting it can hold given a value that is nobody's default.
+
+    Which is what lets "the shape carries it" be asserted by identity: a field `AgentShape.of`
+    forgot to copy is left at the shape's own default, and no setting here is that.
+    """
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    @tool
+    def mcp_ping() -> str:
+        """Ping, as an MCP server's tool."""
+        return "pong"
+
+    @guardrail
+    def block_empty(x: str) -> bool:
+        """Trip on an empty message."""
+        return not x.strip()
+
+    @dataclass
+    class Answer:
+        text: str
+
+    class _Server:
+        async def list_tools(self) -> list[Any]:
+            return [mcp_ping]
+
+    class Everything(Agent):
+        name = "Everything"
+        instructions = "everything"
+        model = _ScriptedModel([_final_message("hi")])
+        model_settings = ModelSettings(temperature=0.5)
+        tools = [ping]
+        subagents = [Researcher.handoff, Translator.delegate]
+        guardrails = [block_empty.input]
+        mcp = [_Server()]
+        output_type = Answer
+        hooks = AgentHooks[Any]()
+        memory = "auto"
+        knowledge = "auto"
+        compact = True
+        max_turns = 3
+        max_tokens = 100
+        timeout = 5.0
+
+    return Everything()
+
+
+def test_every_resolved_setting_has_a_home_in_a_shape_or_a_run_config() -> None:
+    """`_reject_unknown_settings`, inverted: a setting stored on the agent and read by nobody.
+
+    `AgentShape` defaults every field (so a loop test can name the two or three its behaviour
+    turns on), which means a setting added to `_AGENT_FIELDS` and `__init__` but not to the shape
+    is accepted, validated, stored on the instance -- and then silently ignored by the turn loop.
+    There are two paths into a run and a resolved setting takes one of them: `AgentShape` for what
+    the agent is, `RunConfig` for a ceiling on the call.
+    """
+    from runa.run_internal.run_config import RunConfig
+
+    resolved = {name for name in vars(_every_setting_agent()) if name not in _PER_RUN_STATE}
+    homed = set(_SHAPE_HOMES) | {f.name for f in fields(RunConfig)}
+
+    assert resolved <= homed, f"resolved but read by no run: {sorted(resolved - homed)}"
+
+
+def test_agent_shape_carries_every_setting_that_is_the_agents_own() -> None:
+    """`AgentShape.of` copies each field across one by one, so each one is checked that way."""
+    from runa.run_internal.agent_shape import AgentShape
+
+    agent = _every_setting_agent()
+
+    shape = asyncio.run(AgentShape.of(agent))
+
+    assert {f.name for f in fields(AgentShape)} == {*_SHAPE_HOMES.values(), "agent"}
+    for attribute, home in _SHAPE_HOMES.items():
+        if attribute in ("tools", "mcp_servers", "handoffs"):
+            continue  # The three that are resolved rather than copied, asserted below.
+        assert getattr(shape, home) is getattr(agent, attribute), f"{attribute} not carried"
+    assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
+    assert set(shape.handoffs) == {"transfer_to_researcher"}
+    assert shape.agent is agent
+
+
+def test_run_config_carries_every_ceiling_on_the_run() -> None:
+    """The other path: the three ceilings configure the call, so they travel as a `RunConfig`."""
+    agent = _every_setting_agent()
+
+    config = agent._run_config(None)
+
+    assert (config.max_turns, config.max_tokens, config.timeout) == (3, 100, 5.0)
 
 
 def test_a_subclass_keeps_its_own_methods_and_underscored_state() -> None:

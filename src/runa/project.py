@@ -180,6 +180,13 @@ def _retrieval_label(setting: object) -> str:
 
 
 def _describe(agent_cls: type[Agent]) -> AgentInfo:
+    """Summarize `agent_cls` for display: the settings worth a row on the Agents page.
+
+    Deliberately a subset of `agent._AGENT_FIELDS`, and deliberately the declared values rather
+    than the resolved ones (nothing here instantiates the class). A setting missing from this
+    list configures the agent exactly as before; it just doesn't get a row, so this is not one of
+    the paths a new setting has to join.
+    """
     subagents_raw = getattr(agent_cls, "subagents", [])
     return AgentInfo(
         name=getattr(agent_cls, "name", agent_cls.__name__),
