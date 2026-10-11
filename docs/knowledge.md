@@ -57,6 +57,10 @@ the corpus is embedded once, however many processes, replicas or requests search
 costs one `stat` per file, in a worker thread, and only re-reads the corpus when one of them has
 actually changed, so a large `app/knowledge/` does not slow down every turn.
 
+Embedding goes to OpenAI whatever an agent's own `model` is, so an agent with `knowledge` set
+needs `OPENAI_API_KEY` as well. See [Where embeddings go](deployment.md#where-embeddings-go) to
+send it through a gateway instead.
+
 ```python
 await knowledge.ingest()  # returns how many chunks it stored
 ```

@@ -252,6 +252,19 @@ class SupportAgent(Agent):
 `forget`, nothing lower. This is long-term memory *across* conversations;
 for one conversation's own turns, see [Session](#6-session).
 
+**Embedding is the one call an agent's `model` doesn't route.** Memory and
+[Knowledge](#8-knowledge) send text to OpenAI (`OPENAI_API_KEY`) whatever
+that model is -- it's the only provider Runa routes chat to that also
+serves embeddings -- so a `claude-*` agent with `memory` set needs that
+key too, and a run says so rather than degrading. A deployment that must
+embed elsewhere (Azure, a gateway, something self-hosted) sets
+`RUNA_EMBEDDINGS_BASE_URL`, plus `RUNA_EMBEDDINGS_API_KEY` when that
+endpoint's token differs. It's an environment variable, not an argument,
+for the reason `RUNA_DATABASE_URL` is: `memory = "auto"` names no
+instance to pass one to, and where a deployment's embeddings come from is
+not a call site's decision. `model=` on `Memory`/`Knowledge` still names
+the embedding model, which is the application's decision.
+
 ## 8. Knowledge
 
 **Opt in via `Agent(knowledge=...)`, one of `"auto"`, `"llm"`, a `Knowledge(...)` instance, or

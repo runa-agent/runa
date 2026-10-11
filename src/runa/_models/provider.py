@@ -17,7 +17,7 @@ DEFAULT_MODEL = "gpt-5.4-nano"
 
 
 @dataclass(frozen=True)
-class _Endpoint:
+class Endpoint:
     """One chat-completions-shaped provider: whose names are its, where it lives, where its key is.
 
     `prefixes` is every model-name prefix the provider answers to. Usually one, but OpenAI's
@@ -36,18 +36,21 @@ class _Endpoint:
 
 
 _ANTHROPIC_PREFIX = "claude"
-_ENDPOINTS: tuple[_Endpoint, ...] = (
-    _Endpoint(
-        ("gpt", "o1", "o3", "o4", "chatgpt", "codex"),
-        "https://api.openai.com/v1/",
-        "OPENAI_API_KEY",
-    ),
-    _Endpoint(
+
+# Named, unlike its siblings, because `runa.embeddings` reads it too: OpenAI is the one provider
+# here that also serves embeddings, and its address and key variable are written only here.
+OPENAI = Endpoint(
+    ("gpt", "o1", "o3", "o4", "chatgpt", "codex"), "https://api.openai.com/v1/", "OPENAI_API_KEY"
+)
+
+_ENDPOINTS: tuple[Endpoint, ...] = (
+    OPENAI,
+    Endpoint(
         ("gemini",), "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"
     ),
-    _Endpoint(("llama",), "https://api.llama.com/compat/v1/", "LLAMA_API_KEY"),
-    _Endpoint(("deepseek",), "https://api.deepseek.com/v1/", "DEEPSEEK_API_KEY"),
-    _Endpoint(
+    Endpoint(("llama",), "https://api.llama.com/compat/v1/", "LLAMA_API_KEY"),
+    Endpoint(("deepseek",), "https://api.deepseek.com/v1/", "DEEPSEEK_API_KEY"),
+    Endpoint(
         ("qwen",), "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", "DASHSCOPE_API_KEY"
     ),
 )
@@ -88,7 +91,7 @@ def _prefix_hint(name: str) -> str:
     return f" Model names start with one of: {', '.join(f'{p}-*' for p in _PREFIXES)}."
 
 
-def _client_for(endpoint: _Endpoint) -> httpx.AsyncClient:
+def _client_for(endpoint: Endpoint) -> httpx.AsyncClient:
     """An HTTP client pointed at `endpoint`, carrying the key its env var holds.
 
     Raises `UserError` when that variable is unset, which is why the client is built lazily: an
@@ -140,11 +143,11 @@ class ModelProvider:
         endpoint = next(e for e in _ENDPOINTS if lower.startswith(e.prefixes))
         return OpenAICompatibleModel(name, self._get_http_client(endpoint))
 
-    def _get_http_client(self, endpoint: _Endpoint) -> httpx.AsyncClient:
+    def _get_http_client(self, endpoint: Endpoint) -> httpx.AsyncClient:
         return self._http_clients.get(endpoint.name, lambda: _client_for(endpoint))
 
     def _get_anthropic_client(self) -> AsyncAnthropic:
         return self._anthropic_clients.get(_ANTHROPIC_PREFIX, AsyncAnthropic)
 
 
-__all__ = ["DEFAULT_MODEL", "ModelProvider", "check_model_name"]
+__all__ = ["DEFAULT_MODEL", "OPENAI", "Endpoint", "ModelProvider", "check_model_name"]

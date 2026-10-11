@@ -94,6 +94,8 @@ _ENV_TEMPLATE = """# Loaded by main.py via load_dotenv(). Fill in the API key fo
 # model(s) your agents use (see app/agents/), then never commit this file.
 # OPENAI_API_KEY (gpt-*) / ANTHROPIC_API_KEY (claude-*) / GEMINI_API_KEY (gemini-*)
 # LLAMA_API_KEY (llama-*) / DEEPSEEK_API_KEY (deepseek-*) / DASHSCOPE_API_KEY (qwen-*)
+# An agent with memory/knowledge needs OPENAI_API_KEY as well, whatever its own model is:
+# text is embedded through OpenAI unless RUNA_EMBEDDINGS_BASE_URL says otherwise.
 OPENAI_API_KEY=
 
 # The token clients must send to `runa serve` as `Authorization: Bearer <token>`. Required in
@@ -103,6 +105,11 @@ RUNA_API_KEY=
 # Uncomment to share sessions, traces and eval history across replicas instead of keeping them
 # in this process's db/runa.db. Needed for any deployment running more than one instance.
 # RUNA_DATABASE_URL=postgresql://user:password@host:5432/runa
+
+# Uncomment to embed memory/knowledge through an Azure deployment, a gateway or a proxy instead
+# of api.openai.com. The key defaults to OPENAI_API_KEY's; set the second only if it differs.
+# RUNA_EMBEDDINGS_BASE_URL=https://gateway.example.com/v1/
+# RUNA_EMBEDDINGS_API_KEY=
 """
 
 _GITIGNORE_TEMPLATE = """__pycache__/

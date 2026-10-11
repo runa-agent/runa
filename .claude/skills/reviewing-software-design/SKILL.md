@@ -312,7 +312,6 @@ Read the repository's existing architecture documentation when available:
 
 * README
 * architecture/design docs
-* ADRs
 * package/module documentation
 * contributor documentation
 * configuration documentation

@@ -27,10 +27,11 @@ two).
 from runa._models.anthropic import AnthropicModel
 from runa._models.chat_completions import OpenAICompatibleModel
 from runa._models.interface import Model, ModelRequest, StreamDelta
-from runa._models.provider import DEFAULT_MODEL, ModelProvider, check_model_name
+from runa._models.provider import DEFAULT_MODEL, OPENAI, ModelProvider, check_model_name
 
 __all__ = [
     "DEFAULT_MODEL",
+    "OPENAI",
     "AnthropicModel",
     "Model",
     "ModelProvider",

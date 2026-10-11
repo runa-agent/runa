@@ -260,6 +260,27 @@ The `pgvector` image matters: `Memory` and `Knowledge` need that extension, and 
 on first connect. In production the variable comes from your platform's environment or secrets,
 not from a compose file.
 
+## Where embeddings go
+
+An agent's `model` picks the provider for its *turns*. [Memory](memory.md) and
+[Knowledge](knowledge.md) also need text turned into vectors, and that goes to OpenAI's
+`text-embedding-3-small` whatever the agent's own model is: a `claude-sonnet-5` agent with
+`memory = "auto"` needs `OPENAI_API_KEY` set as well, and says so on the first run if it isn't.
+It is the one place Runa asks for a vendor no setting named -- OpenAI is the only provider Runa
+routes chat to that also serves embeddings.
+
+A deployment that can't send text there -- Azure, a corporate gateway, something self-hosted --
+redirects it the way it redirects the database, with an environment variable and no code change:
+
+```bash
+export RUNA_EMBEDDINGS_BASE_URL=https://gateway.example.com/v1/
+export RUNA_EMBEDDINGS_API_KEY=...  # only if the token isn't OPENAI_API_KEY's
+```
+
+Anything speaking OpenAI's `POST /embeddings` wire format works. `Memory(model=...)`/
+`Knowledge(model=...)` still name the model (with `dimensions=` for one Runa doesn't know the
+vector size of), because that is the app's decision; the endpoint is the deployment's.
+
 ## Bounding a run
 
 Three independent ceilings, each optional, each ending the run as `Run(status="error")` rather
@@ -379,6 +400,8 @@ A deployment checklist, in the order things tend to go wrong:
 
 - [ ] `RUNA_API_KEY` set (or `--no-auth`, deliberately)
 - [ ] The model provider's key set (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...)
+- [ ] `OPENAI_API_KEY` set too if any agent uses `memory`/`knowledge` (see
+      [Where embeddings go](#where-embeddings-go))
 - [ ] `RUNA_DATABASE_URL` set if more than one replica
 - [ ] `/health` wired to the liveness probe
 - [ ] `max_tokens` and `timeout` set on agents that face the public

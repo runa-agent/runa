@@ -21,6 +21,11 @@ provider by its prefix, and reads the matching API key from the environment, typ
 | `deepseek` | DeepSeek | `DEEPSEEK_API_KEY` |
 | `qwen` | Alibaba | `DASHSCOPE_API_KEY` |
 
+Those keys cover an agent's turns, which is all `model` decides. An agent that also sets `memory`
+or `knowledge` needs `OPENAI_API_KEY` on top of its own provider's key: embedding is the one call
+Runa makes that `model` doesn't route (see
+[Where embeddings go](deployment.md#where-embeddings-go)).
+
 That list is the whole list. A name matching none of it raises `UserError` when the agent is
 constructed, naming the prefix it probably meant, because the alternative is worse than an error:
 `model = "claud-sonnet-5"` would otherwise send your prompts to a different company under a

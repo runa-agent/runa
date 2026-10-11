@@ -52,6 +52,10 @@ await memory.forget(matches[0].id, user_id="user-42")
 `text-embedding-3-small`. Nothing to configure for the common case. Every memory is scoped by
 `user_id`, so one user's facts never surface in another's search.
 
+Embedding is the one thing memory needs that the agent's own `model` doesn't cover: it goes to
+OpenAI whatever that model is, so an agent with `memory` set needs `OPENAI_API_KEY` as well. See
+[Where embeddings go](deployment.md#where-embeddings-go) to send it through a gateway instead.
+
 Remembering a near-duplicate of an existing memory skips the write and returns the existing id
 instead, so restating the same fact across conversations doesn't pile up duplicates.
 
