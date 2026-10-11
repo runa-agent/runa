@@ -17,6 +17,7 @@ from pathlib import Path
 from runa.db import sqlite_path
 from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
+from runa.db.sqlite import read as _read_db
 from runa.tracing.store import (
     SPANS,
     TRACES,
@@ -38,9 +39,7 @@ class SQLiteTraceStore:
         self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = _connect_db(self.db_path, TRACES, SPANS)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _connect_db(self.db_path, TRACES, SPANS)
 
     def save(self, trace: Trace) -> None:
         """Persist `trace` and every span in it, replacing any existing one with the same id."""
@@ -59,7 +58,9 @@ class SQLiteTraceStore:
 
     def get(self, trace_id: str) -> Trace | None:
         """Look up one trace by id, with every span it has, or `None` if this file has none."""
-        with closing(self._connect()) as conn:
+        with _read_db(self.db_path, TRACES, SPANS) as conn:
+            if conn is None:
+                return None
             row = conn.execute(f"SELECT * FROM {TRACES.name} WHERE id = ?", (trace_id,)).fetchone()
             if row is None:
                 return None
@@ -81,7 +82,9 @@ class SQLiteTraceStore:
                 clauses.append(f"{column} = ?")
                 params.append(value)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        with closing(self._connect()) as conn:
+        with _read_db(self.db_path, TRACES, SPANS) as conn:
+            if conn is None:
+                return []
             rows = conn.execute(
                 f"SELECT * FROM {TRACES.name} {where} ORDER BY start_time DESC LIMIT ?",
                 (*params, limit),

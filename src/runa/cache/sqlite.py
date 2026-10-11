@@ -15,6 +15,7 @@ from typing import Any
 from runa.cache import ENTRIES
 from runa.db import sqlite_path
 from runa.db.sqlite import connect as _connect_db
+from runa.db.sqlite import read as _read_db
 
 
 class SQLiteCache:
@@ -31,8 +32,14 @@ class SQLiteCache:
         return _connect_db(self.db_path, ENTRIES)
 
     async def get(self, key: str) -> Any:
-        """Return the value stored for `key`, or `None` if it's missing or expired."""
-        with closing(self._connect()) as conn:
+        """Return the value stored for `key`, or `None` if it's missing or expired.
+
+        A lookup reads (`db/sqlite.py`'s `read`), so a miss on a project with no `db/runa.db`
+        yet is a miss, not a new file: the first `set` is what creates one.
+        """
+        with _read_db(self.db_path, ENTRIES) as conn:
+            if conn is None:
+                return None
             row = conn.execute(
                 f"SELECT value, expires_at FROM {ENTRIES.name} WHERE key = ?", (key,)
             ).fetchone()

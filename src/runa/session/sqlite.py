@@ -23,6 +23,7 @@ from runa._items import ConversationItem
 from runa.db import sqlite_path
 from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
+from runa.db.sqlite import read as _read_db
 from runa.session import Session
 from runa.session.store import (
     MESSAGES,
@@ -145,9 +146,9 @@ class SQLiteSession(Session):
 class SQLiteSessionStore:
     """The local `SessionStore`: the read side of `db/runa.db`'s session tables.
 
-    Opens the file read-only in spirit: a listing on a project that has never run an agent finds
-    no tables rather than creating them, so `runa chat --list` doesn't leave a `db/runa.db`
-    behind as a side effect of answering "no sessions found".
+    Queries through `db/sqlite.py`'s `read`, like every other local read side, so a listing on a
+    project that has never run an agent finds no tables rather than creating them: `runa chat
+    --list` doesn't leave a `db/runa.db` behind as a side effect of answering "no sessions found".
     """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
@@ -182,16 +183,12 @@ class SQLiteSessionStore:
         """Run `sql`, treating a file or table that isn't there yet as no rows.
 
         A deployment's first read can legitimately come before its first write, and "this app has
-        no history" is the answer then, not an error about a missing table.
+        no history" is the answer then, not an error about a missing table. That absence is the
+        only thing answered with no rows, and `read` tests it; every other way a query can fail
+        raises, here as in the three read sides next door.
         """
-        if not self.db_path.exists():
-            return []
-        with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            try:
-                return conn.execute(sql, params).fetchall()
-            except sqlite3.OperationalError:
-                return []
+        with _read_db(self.db_path, SESSIONS, MESSAGES) as conn:
+            return conn.execute(sql, params).fetchall() if conn is not None else []
 
 
 __all__ = [

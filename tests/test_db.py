@@ -357,6 +357,105 @@ def test_a_local_connection_grows_a_file_that_predates_a_column(tmp_path: Path) 
     assert rows == [("s1", None)]
 
 
+def test_a_local_read_leaves_no_file_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Answering "nothing here yet" is a read, and a read creates nothing.
+
+    One rule, kept by `db/sqlite.py`'s `read` for all four local concerns rather than stated in
+    one adapter's docstring: the session listing was the only one that honored it, so a `runa ui`
+    page or a cache miss answering the same way still left a `db/runa.db` behind.
+    """
+    import asyncio
+
+    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
+    db.use_project(tmp_path)
+
+    assert db.sessions().listing() == []
+    assert db.traces().list() == []
+    assert db.traces().get("t1") is None
+    assert db.evals().list() == []
+    assert db.evals().baseline("support_agent") is None
+    assert asyncio.run(db.cache().get("k")) is None
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_local_read_answers_no_rows_only_for_a_table_that_is_absent(tmp_path: Path) -> None:
+    """Absence is the one condition a read answers with no rows; a broken table still raises.
+
+    The failure this replaces: a blanket `except sqlite3.OperationalError: return []` around the
+    query covered a renamed column as well as a missing table, so `runa chat --list` reported no
+    sessions while `runa chat --show` printed the transcript of one of them. Tested as a condition
+    now, and a read reconciles like any other connection, so a column the declaration still wants
+    is the operator error it always was.
+    """
+    import asyncio
+    import sqlite3
+    from contextlib import closing
+
+    from runa.db.schema import SchemaOutOfDate
+    from runa.session.sqlite import SQLiteSession, SQLiteSessionStore
+
+    db_path = tmp_path / "db" / "runa.db"
+    asyncio.run(SQLiteSession("conv-1", db_path).add_items([{"role": "user", "content": "hi"}]))
+    store = SQLiteSessionStore(db_path)
+    assert [summary.id for summary in store.listing()] == ["conv-1"]
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("ALTER TABLE agent_sessions RENAME COLUMN updated_at TO touched_at")
+        conn.commit()
+
+    with pytest.raises(SchemaOutOfDate, match="agent_sessions table has no updated_at column"):
+        store.listing()
+
+
+def test_a_local_read_grows_a_file_that_predates_a_column(tmp_path: Path) -> None:
+    """A read selects the columns this release declares, so it catches an old file up too.
+
+    The other half of opening the file by hand: the session read side was outside
+    `db/sqlite.py` and therefore outside `reconcile`, so the one read path that could not be
+    brought up to its declaration was also the one that swallowed the `no such column` a stale
+    file produced.
+    """
+    from contextlib import closing
+    from dataclasses import replace
+
+    from runa.db.schema import Column
+    from runa.db.sqlite import connect, read
+    from runa.session.store import MESSAGES, SESSIONS
+
+    db_path = tmp_path / "db" / "runa.db"
+    with closing(connect(db_path, SESSIONS, MESSAGES)) as conn:
+        conn.execute(f"INSERT INTO {SESSIONS.name} (session_id) VALUES ('s1')")
+        conn.commit()
+
+    grown = replace(SESSIONS, columns=(*SESSIONS.columns, Column("agent_name", "text", null=True)))
+    with read(db_path, grown, MESSAGES) as conn:
+        assert conn is not None
+        rows = conn.execute(f"SELECT session_id, agent_name FROM {grown.name}").fetchall()
+
+    assert [tuple(row) for row in rows] == [("s1", None)]
+
+
+def test_a_local_read_of_another_concerns_file_is_no_rows(tmp_path: Path) -> None:
+    """One `runa.db`, four sets of tables: a file is not the same question as a table.
+
+    A project that has traced a run but never used a session has the file and not the tables, and
+    "no sessions" is still the answer -- without creating them on the way to saying so.
+    """
+    from runa.db.sqlite import read
+    from runa.session.store import MESSAGES, SESSIONS
+    from runa.tracing import Trace
+
+    db.use_project(tmp_path)
+    db.traces().save(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[]))
+
+    assert db.sessions().listing() == []
+    with read(tmp_path / "db" / "runa.db", SESSIONS, MESSAGES) as conn:
+        assert conn is None
+
+
 def test_deleting_a_trace_takes_its_spans(tmp_path: Path) -> None:
     """The retention pass documented for `traces` reaches `spans` without naming them."""
     import sqlite3

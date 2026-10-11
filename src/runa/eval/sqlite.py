@@ -22,6 +22,7 @@ from pathlib import Path
 from runa.db import sqlite_path
 from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
+from runa.db.sqlite import read as _read_db
 from runa.eval.report import Report
 from runa.eval.store import CASES, RUNS, EvalRun, case_values, to_run
 
@@ -39,9 +40,7 @@ class SQLiteEvalStore:
         self.db_path = Path(db_path) if db_path is not None else sqlite_path()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = _connect_db(self.db_path, RUNS, CASES)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _connect_db(self.db_path, RUNS, CASES)
 
     def save(self, report: Report) -> int:
         """Persist `report` as one run plus one row per case, returning the new run's id."""
@@ -64,7 +63,9 @@ class SQLiteEvalStore:
 
     def get(self, run_id: int) -> EvalRun | None:
         """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
-        with closing(self._connect()) as conn:
+        with _read_db(self.db_path, RUNS, CASES) as conn:
+            if conn is None:
+                return None
             row = conn.execute(f"SELECT * FROM {RUNS.name} WHERE id = ?", (run_id,)).fetchone()
             if row is None:
                 return None
@@ -75,7 +76,9 @@ class SQLiteEvalStore:
 
     def list(self, *, limit: int = 50) -> list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
-        with closing(self._connect()) as conn:
+        with _read_db(self.db_path, RUNS, CASES) as conn:
+            if conn is None:
+                return []
             rows = conn.execute(
                 f"SELECT * FROM {RUNS.name} ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
@@ -83,7 +86,9 @@ class SQLiteEvalStore:
 
     def baseline(self, agent_name: str, *, before: int | None = None) -> dict[str, bool] | None:
         """Map each input of `agent_name`'s latest run to whether it passed."""
-        with closing(self._connect()) as conn:
+        with _read_db(self.db_path, RUNS, CASES) as conn:
+            if conn is None:
+                return None
             row = conn.execute(
                 f"SELECT id FROM {RUNS.name} WHERE agent_name = ? AND id < ? "
                 "ORDER BY id DESC LIMIT 1",
