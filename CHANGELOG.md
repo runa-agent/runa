@@ -2,6 +2,145 @@
 
 All notable changes to Runa are documented here.
 
+## [0.7.0] - 2026-10-11
+
+### Features
+
+- Give make release a recipe, stopping at the tag ([0f8dcc9](https://github.com/runa-agent/runa/commit/0f8dcc93aa0a11184e243b4ef89b72617ee2400d))
+
+- Reconcile an existing database against its declaration on every connect ([a59333f](https://github.com/runa-agent/runa/commit/a59333f7044f95c5d3b45fab0ac45ad591164dea))
+
+
+### Bug Fixes
+
+- Version the knowledge corpus in its store instead of per Knowledge instance ([55fe23e](https://github.com/runa-agent/runa/commit/55fe23e09b91e012dfef1c5cb256e326afbf5b17))
+
+- Resolve compact= at construction, so a bad value fails there instead of mid-run ([33a7b2d](https://github.com/runa-agent/runa/commit/33a7b2d95e8e2cc11a796552313f84c02594dc9e))
+
+- Reject a bad model= at construction, so only resolution waits for the run ([dcd0e5d](https://github.com/runa-agent/runa/commit/dcd0e5de686ee13f8d579f34cdbf13cdce90c23b))
+
+- Treat a user message at index 0 as a cut point, not a missing one ([95b27d5](https://github.com/runa-agent/runa/commit/95b27d5573034a47b973a62e23e20f1e93690b36))
+
+- Grade evals on the run's own tool calls, not policy-filtered spans ([e5a33e8](https://github.com/runa-agent/runa/commit/e5a33e83cbffda8ab905062de855ecdd90492cac))
+
+- Scope the tracing policy to the task, not the process ([db9d173](https://github.com/runa-agent/runa/commit/db9d17330d2a9df2a5642ab49c917ef4b93a1611))
+
+- Let a misspelled MCP option fail at the call site ([e8de80b](https://github.com/runa-agent/runa/commit/e8de80bf0f476261e3920fb04640f330e4c9fa32))
+
+- Refuse an Agent attribute that isn't one of its settings ([9d81135](https://github.com/runa-agent/runa/commit/9d81135f6ba3dcd638ba066391313abdb3d87477))
+
+- Read the prompt file on construction instead of writing it ([4c0bd26](https://github.com/runa-agent/runa/commit/4c0bd26edc244ec85f47e482b53afac9f4cf3f7c))
+
+- Own the Run wire shape on Run instead of re-deriving it in serve ([981add0](https://github.com/runa-agent/runa/commit/981add08997b73b613a7846ad3b5e2080929e447))
+
+- Hold the project root in runa.db so all seven concerns share one file ([724c084](https://github.com/runa-agent/runa/commit/724c08423512070b688ece114a963dbce9c65f7b))
+
+- Hold an MCP session per event loop, as every other client in Runa does ([1a5decd](https://github.com/runa-agent/runa/commit/1a5decde93bb0ec85cff9bc38a9877975804f954))
+
+- Hold the embeddings client per event loop, and stop retrieval swallowing Runa's own bugs ([4dc39d3](https://github.com/runa-agent/runa/commit/4dc39d3647ca039282475946154ff9ccc78839c1))
+
+- Let runa serve take a paused run's state back, on the route it paused on ([0a276a5](https://github.com/runa-agent/runa/commit/0a276a502859962c7e6d2bd302a737905789daed))
+
+- Hash the knowledge corpus off the event loop, and only when a file changed ([e49474c](https://github.com/runa-agent/runa/commit/e49474c4fca1844efea3d51413c3f2a263fd22f3))
+
+- Name a guardrails declaration in the module that owns its grammar ([8294bbb](https://github.com/runa-agent/runa/commit/8294bbb6beab3cf742b07f7fd5aec6ac9c10712d))
+
+- Close the model-name prefix set, so a typo can't pick another provider ([fb9e56b](https://github.com/runa-agent/runa/commit/fb9e56b408189d60c49cd67fb101b79f262783ca))
+
+- Resolve Knowledge's source directory against the project root ([66dff74](https://github.com/runa-agent/runa/commit/66dff74c3760136b718aa16e441de9fe01f7fc21))
+
+- Answer a read's missing tables by testing for them, in one place ([2b7113b](https://github.com/runa-agent/runa/commit/2b7113bf21f83c7d1440cf300b87f39025090aa0))
+
+- Remove .DS_Store ([83bfe69](https://github.com/runa-agent/runa/commit/83bfe69c0994ed810bc30e0d601e4740ebd6875d))
+
+- Read embeddings' endpoint from the provider record, and let a deployment move it ([9a235cd](https://github.com/runa-agent/runa/commit/9a235cdeef378eacac26716e1dafc4d5e37092e8))
+
+
+### Refactor
+
+- Pass the turn loop its _Run instead of nine copies of its fields ([9438613](https://github.com/runa-agent/runa/commit/9438613382b06e671c3420097e9faf39e3dd4149))
+
+- Resolve each agent's shape once instead of declaring it as a Protocol ([f39bd8b](https://github.com/runa-agent/runa/commit/f39bd8bb025086bfb27512ecedc6c255a2047c5a))
+
+- Name the guardrail phase once instead of writing the 2x2 in nine modules ([90ee8a8](https://github.com/runa-agent/runa/commit/90ee8a8b293e31c1c8675ff3db8a8c4f7b4b3926))
+
+- Declare which failures are the operator's at each raise instead of listing thirteen in the CLI ([b04cd85](https://github.com/runa-agent/runa/commit/b04cd85120dbcc0b128de7a6529f4830dde77956))
+
+- Test the Anthropic backend through its two-method interface instead of its eight translators ([3a3ffb1](https://github.com/runa-agent/runa/commit/3a3ffb16c48c7ee65a9d4c8207e6ca3c65fee711))
+
+- Return an agent filter's escape clause with its pattern, so an adapter can't take half ([3d93af1](https://github.com/runa-agent/runa/commit/3d93af13f4b9f5383de8d27865946ee1ef2ff4a4))
+
+- One ModelRequest per turn, and file names that say what each backend speaks ([c8a4f52](https://github.com/runa-agent/runa/commit/c8a4f52cea1354f31a3d1e44c2c8fc92ff100816))
+
+- Move RunConfig into run_internal, where nothing public takes one ([6c1a322](https://github.com/runa-agent/runa/commit/6c1a32285301d18fb8cd0c51ee2855c4ef07f3d6))
+
+- Name the conversation item for what it is, and give it one reader ([f695120](https://github.com/runa-agent/runa/commit/f6951201794152db852287075f6d8194d43db4f8))
+
+- Have CI run make audit instead of duplicating it ([35b2862](https://github.com/runa-agent/runa/commit/35b2862f035a729321666006320e4c6af2ca882d))
+
+- Log a tool and model call once for both hook scopes ([acf679e](https://github.com/runa-agent/runa/commit/acf679e39d83c166bac055c21898f3b20473be02))
+
+- Resolve a paused tool call by name, not by rebuilding its tool ([9ab2b6e](https://github.com/runa-agent/runa/commit/9ab2b6ecf6ca0a31e82e6c49ea3476d6e8394642))
+
+- Have each generator report its own import line ([a57131f](https://github.com/runa-agent/runa/commit/a57131fcc82d5426df7a63b615e170fe586a183c))
+
+- Name the session write seam Session, not SessionABC ([85fe635](https://github.com/runa-agent/runa/commit/85fe6355da288a331aa2545e91e6bb989229f0db))
+
+- Give the approval protocol an owner in ApprovalLedger ([29aa3e4](https://github.com/runa-agent/runa/commit/29aa3e454c9a1073493da7fd16d97fdb1151472c))
+
+- Grade evals against Run itself, dropping AgentRun and eval/tracing ([ca51b04](https://github.com/runa-agent/runa/commit/ca51b04026431c5d024f66fa9150a0831222a4d1))
+
+- Carry a guardrail's verdict in one GuardrailVerdict, not two types ([043435c](https://github.com/runa-agent/runa/commit/043435c5597f0f36ff7baa3169c60f020ce9ff7c))
+
+- Raise TraceNotFound in one require_trace, not three identical ifs ([57bc5b1](https://github.com/runa-agent/runa/commit/57bc5b1f4e2a4a347572f195771662c3bc5e8f79))
+
+- Give the delegate-pause protocol an owner in PausedDelegates ([3885812](https://github.com/runa-agent/runa/commit/38858124fbdc749e82bc10df6a8e3c2d38b06763))
+
+- Give every resolved agent setting one home, checked by a test ([e7ec9c8](https://github.com/runa-agent/runa/commit/e7ec9c8ad15396fa32385ee1ba74ebc1b1476631))
+
+- Fold _Pending into the RunState it was copied from, and require every schema field ([bc0ec72](https://github.com/runa-agent/runa/commit/bc0ec7239b041ead4404da5317f5cf33677f951d))
+
+- Let Handoff own keying a handoffs list, so run_state stops importing run_internal ([20c7900](https://github.com/runa-agent/runa/commit/20c79005b9c45d1e66350e918381b96b693decf2))
+
+- Collapse RunHooks and AgentHooks into one Hooks class with one set of names ([1c3b97f](https://github.com/runa-agent/runa/commit/1c3b97f9e183b867a38f055e209185a162f85fb2))
+
+- Declare each eval metric once, as data the runner and the report both read ([e439be7](https://github.com/runa-agent/runa/commit/e439be7bd4ce49dd69ad3325d0a09c5bc08d8304))
+
+- State Agent's settings once, as its constructor's signature ([ab1d65e](https://github.com/runa-agent/runa/commit/ab1d65e3e01187dfbd001cc2727152e07be37fa8))
+
+- Walk the agent graph once, where its edges are defined ([ac285fa](https://github.com/runa-agent/runa/commit/ac285fa978eb9429fbc9130294fb7f457eae0426))
+
+- Resolve the package facade one name at a time ([c3d579e](https://github.com/runa-agent/runa/commit/c3d579e528b704a0d6c81e8573c32457abdf4755))
+
+- Name observe's two scopes instead of inferring them from a ([b8e7312](https://github.com/runa-agent/runa/commit/b8e7312c3675ba75ff1e728e4b867cf0b7f79bc1))
+
+- Name observe's two scopes instead of inferring them from a ([73f7a26](https://github.com/runa-agent/runa/commit/73f7a26fd4e5dc3700b3692c8623f3d1bc36eeb1))
+
+- State the prompt-file convention once, in the module that owns it ([6cac605](https://github.com/runa-agent/runa/commit/6cac605b626cebd85c0cb4baadc14d48deb14967))
+
+
+### Documentation
+
+- Point tracing/config at its real callers instead of the removed SDK's processor ([0d4f70e](https://github.com/runa-agent/runa/commit/0d4f70ef701c17774a45704a89e7ea3f6b5cc26e))
+
+- Record why runa.db repeats its branch per concern ([cba794c](https://github.com/runa-agent/runa/commit/cba794c539c04d4494952dca7f7fc326cd98ba4d))
+
+- Document Agent's nested-run seam by contract, not by caller ([51d1539](https://github.com/runa-agent/runa/commit/51d153988e132389c5499157b0580753b89e71a3))
+
+
+### Other
+
+- *(deps)* Bump mcp from 2.2.0 to 2.3.0 ([a952dc4](https://github.com/runa-agent/runa/commit/a952dc46ca330c17e9b5d76c5213248fb0d63987))
+
+- *(deps)* Bump httpx2 from 2.12.0 to 2.13.1 ([b55efb9](https://github.com/runa-agent/runa/commit/b55efb93e765b7803707e5ed64e1e1f92fbc3d61))
+
+- *(deps)* Bump fastapi from 0.141.1 to 0.142.2 ([98000bf](https://github.com/runa-agent/runa/commit/98000bf37d925098cad047ea66d0ad86c6cf07d5))
+
+- *(deps)* Bump opentelemetry-sdk from 1.44.0 to 1.45.0 ([17d2c7c](https://github.com/runa-agent/runa/commit/17d2c7cb6a2451c68d9bf61989d7220d66c5651f))
+
+- *(deps-dev)* Bump the dev-dependencies group across 1 directory with 2 updates ([074e950](https://github.com/runa-agent/runa/commit/074e950ec47bae145e20cf857fc57c0b53afd063))
+
+
 ## [0.5.0] - 2026-10-06
 
 ### Bug Fixes
