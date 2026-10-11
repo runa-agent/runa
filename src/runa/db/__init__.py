@@ -33,8 +33,10 @@ and `Knowledge` are built inside `Agent.__init__`, which has no notion of a proj
 should not grow one, so their stores silently used the cwd while sessions, traces and eval
 history followed the argument. One application's state split across two files is the exact
 failure this module exists to prevent, so the root is held here rather than threaded, the way
-`RUNA_DATABASE_URL` already is. It only moves the *local* file; a shared deployment has one
-database and no such choice to make, so it goes unread.
+`RUNA_DATABASE_URL` already is. For the database that moves the *local* file only; a shared
+deployment has one database and no such choice to make, so `sqlite_path` goes unread. State an
+app keeps as files rather than rows -- `Knowledge`'s source directory -- moves either way, and
+asks `project_path` instead.
 
 Every adapter import is deferred into the function that needs it: an app without the `postgres`
 extra has to be able to ask the question and get the SQLite answer.
@@ -131,6 +133,22 @@ def use_project(root: Path | None) -> None:
     _project_root = root
 
 
+def project_path(path: str | Path) -> Path:
+    """Resolve a relative `path` against the project `use_project` named; absolute ones unchanged.
+
+    The non-database half of `sqlite_path` below, for the state an app keeps as files rather than
+    as rows: `app/knowledge/` is this application's state exactly as much as `db/runa.db` is, and
+    a corpus read from the cwd while its vectors are written under the project root is the same
+    split-in-two failure, one directory further out. Whoever would otherwise resolve it --
+    `Knowledge.__init__`, reached through `Agent.__init__` -- is precisely the call site with no
+    root to resolve against, which is why the answer lives here.
+    """
+    path = Path(path)
+    if _project_root is None or path.is_absolute():
+        return path
+    return _project_root / path
+
+
 def sqlite_path() -> Path:
     """Where the local SQLite file lives: `RUNA_DATABASE_URL`'s path, or `db/runa.db`.
 
@@ -149,9 +167,7 @@ def sqlite_path() -> Path:
     else:
         tail = url.removeprefix(_SQLITE_SCHEME)
         path = Path(tail[1:]) if tail.startswith("//") else Path(tail.lstrip("/"))
-    if _project_root is None or path.is_absolute():
-        return path
-    return _project_root / path
+    return project_path(path)
 
 
 def session(session_id: str, *, user_id: str | None = None) -> Session:
@@ -327,6 +343,7 @@ __all__ = [
     "evals",
     "knowledge_store",
     "memory_store",
+    "project_path",
     "reset_ephemeral",
     "session",
     "sessions",

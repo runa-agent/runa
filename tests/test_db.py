@@ -174,6 +174,29 @@ def test_a_project_leaves_an_absolute_sqlite_url_alone(monkeypatch: pytest.Monke
     assert db.sqlite_path() == Path("/var/lib/runa.db")
 
 
+def test_a_project_moves_a_file_path_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`project_path` answers the same question for state an app keeps as files, not rows.
+
+    `Knowledge`'s source directory was the last concern resolving against the cwd while its
+    vectors followed the root -- the same split-in-two failure, one directory further out.
+    """
+    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
+
+    db.use_project(Path("other/project"))
+
+    assert db.project_path("app/knowledge") == Path("other/project/app/knowledge")
+    assert db.project_path(Path("/srv/corpus")) == Path("/srv/corpus")
+
+
+def test_a_shared_deployment_still_places_a_file_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unlike `sqlite_path`, this is read whatever the database is: files are on disk either way."""
+    monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
+
+    db.use_project(Path("other/project"))
+
+    assert db.project_path("app/knowledge") == Path("other/project/app/knowledge")
+
+
 def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.MonkeyPatch) -> None:
     """Constructing a local adapter by name must land on the same file the factories pick.
 

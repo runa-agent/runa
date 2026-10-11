@@ -106,6 +106,29 @@ def test_explicit_directory_overrides_the_default() -> None:
     assert know.directory == Path("some/other/path")
 
 
+def test_a_project_moves_the_source_directory(tmp_path: Path) -> None:
+    """A relative `directory` follows `db.use_project`, the way the store's own file does.
+
+    `Knowledge` is built inside `Agent.__init__`, which has no root to hand it, so an app served
+    from outside its own directory (`runa serve`, `create_app(root)`) read its corpus from the
+    cwd while writing its vectors under the root: an empty corpus, and silent, since an empty
+    knowledge block reads exactly like a corpus with nothing relevant in it.
+    """
+    corpus = tmp_path / "app" / "knowledge"
+    corpus.mkdir(parents=True)
+
+    db.use_project(tmp_path)
+
+    assert Knowledge().directory == corpus
+
+
+def test_an_absolute_directory_ignores_the_project(tmp_path: Path) -> None:
+    """An absolute path is already an answer, and is how app code names a corpus elsewhere."""
+    db.use_project(tmp_path)
+
+    assert Knowledge("/srv/shared-corpus").directory == Path("/srv/shared-corpus")
+
+
 def test_unknown_model_without_dimensions_raises() -> None:
     """A model Runa doesn't know the size of needs an explicit `dimensions=`."""
     with pytest.raises(ValueError, match="dimensions"):
@@ -117,6 +140,19 @@ def test_ingest_with_missing_directory_stores_nothing(tmp_path: Path) -> None:
     know = _knowledge(tmp_path, tmp_path / "does-not-exist")
 
     assert asyncio.run(know.ingest()) == 0
+
+
+def test_an_empty_corpus_logs_the_directory_it_looked_in(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The one retrieval failure nothing downstream can show: say it out loud, once."""
+    missing = tmp_path / "does-not-exist"
+    know = _knowledge(tmp_path, missing)
+
+    with caplog.at_level("WARNING", logger="runa"):
+        asyncio.run(know.ingest())
+
+    assert str(missing) in caplog.text
 
 
 def test_ingest_discovers_and_chunks_supported_files(tmp_path: Path) -> None:

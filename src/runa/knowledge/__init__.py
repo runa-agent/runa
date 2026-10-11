@@ -33,6 +33,7 @@ from runa import db
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.knowledge.sqlite import SQLiteKnowledgeStore
 from runa.knowledge.store import KnowledgeMatch, KnowledgeStore
+from runa.lifecycle import logger
 from runa.tool import FunctionTool, tool
 
 DEFAULT_KNOWLEDGE_DIR = Path("app/knowledge")
@@ -158,8 +159,13 @@ class Knowledge:
         """Configure the source directory, embedding model, and, unless `store` is given, storage.
 
         `dimensions` only needs setting for a model not in Runa's built-in size table.
+
+        A relative `directory` is resolved against the project `runa.db.use_project` named, the
+        same way the store's own file is, so an app served from outside its own directory reads
+        its corpus and writes its vectors in one place. Absolute paths are left alone, which is
+        how app code that means a directory somewhere else says so.
         """
-        self.directory = Path(directory)
+        self.directory = db.project_path(directory)
         self.model = model
         self.dimensions: int = resolve_dimensions(model, dimensions)
         self._store: KnowledgeStore = store or db.knowledge_store(dimensions=self.dimensions)
@@ -195,6 +201,13 @@ class Knowledge:
         The fingerprint is taken before the files are read, so a file edited mid-ingest is stored
         under the older fingerprint and the next `search` rebuilds. The safe direction: a corpus
         that looks staler than it is costs one rebuild, where one that looks fresher is wrong.
+
+        An empty corpus is logged, the way `agent._load_prompt` logs a missing prompt file, and
+        for the same reason: retrieval is the one step whose failure leaves no mark on the output
+        (an empty knowledge block reads exactly like a corpus with nothing relevant in it), so an
+        agent that asked for `knowledge=` and found nothing to search has to say so somewhere.
+        Once per corpus, not per turn: an empty directory is fingerprinted like any other, so the
+        next `search` finds the store already current.
         """
         fingerprint = await self._fingerprint()
         chunks = [
@@ -203,10 +216,16 @@ class Knowledge:
             for chunk in _chunk(_extract_text(path))
         ]
         await self._store.reset(version=fingerprint)
-        if chunks:
-            vectors = await embed([text for text, _ in chunks], model=self.model)
-            for (text, source), vector in zip(chunks, vectors, strict=True):
-                await self._store.add(text=text, source=source, embedding=vector)
+        if not chunks:
+            logger.warning(
+                "knowledge base is empty: no %s files under %s",
+                "/".join(sorted(_SUPPORTED_EXTENSIONS)),
+                self.directory,
+            )
+            return 0
+        vectors = await embed([text for text, _ in chunks], model=self.model)
+        for (text, source), vector in zip(chunks, vectors, strict=True):
+            await self._store.add(text=text, source=source, embedding=vector)
         return len(chunks)
 
     async def search(self, query: str, *, k: int = 5) -> list[KnowledgeMatch]:

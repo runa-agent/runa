@@ -44,7 +44,10 @@ matches = await knowledge.search("refund policy")
 ```
 
 `Knowledge()` means `app/knowledge/`, `db/runa.db` (the same file `SQLiteSession`/`Memory` use),
-`sqlite-vec`, and OpenAI's `text-embedding-3-small`. Discovery, chunking, embeddings, and vector
+`sqlite-vec`, and OpenAI's `text-embedding-3-small`. A relative directory is relative to the
+project, not to wherever the process happens to be started, so an app served from somewhere else
+(`runa serve`, an embedded `create_app(root)`) reads its own corpus; pass an absolute path to mean
+a directory outside the project. Discovery, chunking, embeddings, and vector
 storage are entirely internal. Put Markdown, PDF, plain text, or CSV files under
 `app/knowledge/`, and `.search` ingests them for you, so no manual `.ingest()` call is needed:
 not on first use, and not after an edit either. Each search compares a fingerprint of the
