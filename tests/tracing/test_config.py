@@ -1,4 +1,4 @@
-"""Tests for `runa.tracing.observe`: the privacy/size policy and its `with`/bare-call forms."""
+"""Tests for `runa.tracing.observe`: the privacy/size policy and its two scopes."""
 
 import asyncio
 from typing import Any
@@ -77,8 +77,8 @@ async def _both(first: Any, second: Any) -> None:
     await asyncio.gather(first, second)
 
 
-def test_observe_bare_call_leaves_the_setting_applied() -> None:
-    """A plain `observe(capture_inputs=False)` call (no `with`) applies immediately and sticks."""
+def test_observe_call_leaves_the_setting_applied() -> None:
+    """A plain `observe(capture_inputs=False)` call applies immediately and sticks."""
     observe(capture_inputs=False)
     try:
         assert config.capture_inputs() is False
@@ -86,18 +86,74 @@ def test_observe_bare_call_leaves_the_setting_applied() -> None:
         observe(capture_inputs=True)
 
 
-def test_observe_context_manager_restores_the_previous_setting_on_exit() -> None:
-    """`with observe(...):` restores whatever policy was active before it, once the block ends."""
+def test_observe_is_not_a_context_manager() -> None:
+    """`with observe(...)` is a `TypeError`, not a block whose policy outlives it.
+
+    The two scopes are two call sites; the process-wide one can't also be the scoped one, so
+    reaching for `with` on it has to fail where it was written rather than configure the process
+    for good. `observe.scoped(...)` is the block form.
+    """
+    with pytest.raises(TypeError), observe(capture_outputs=False):  # type: ignore[attr-defined]
+        pass
+
+    observe(capture_outputs=True)
+
+
+def test_scoped_restores_the_previous_setting_on_exit() -> None:
+    """`with observe.scoped(...):` restores whatever policy was active before it, once it ends."""
     assert config.capture_inputs() is True
 
-    with observe(capture_inputs=False):
+    with observe.scoped(capture_inputs=False):
         assert config.capture_inputs() is False
 
     assert config.capture_inputs() is True
 
 
-def test_a_with_observe_block_does_not_change_what_another_task_captures() -> None:
-    """One request's `with observe(...)` must not decide what every request in flight captures.
+def test_scoped_applies_nothing_until_the_block_is_entered() -> None:
+    """Building one writes no policy anywhere, so holding onto it is not a configuration change.
+
+    `observe.scoped(...)` used to be `observe(...)`, one name inferring its scope from whether a
+    `with` followed: the constructor wrote the process-wide default and `__enter__` undid that
+    write. Two of them built before either was entered therefore discarded each other's unrelated
+    settings, and each instance restored the default it had captured at construction.
+    """
+    held = observe.scoped(capture_inputs=False)
+    other = observe.scoped(max_input_bytes=10)
+
+    assert config.capture_inputs() is True
+    assert config.input_limit() == 32_000
+
+    with other:
+        assert config.input_limit() == 10
+        assert config.capture_inputs() is True
+
+    with held:
+        assert config.capture_inputs() is False
+        assert config.input_limit() == 32_000
+
+    assert config.capture_inputs() is True
+    assert config.input_limit() == 32_000
+
+
+def test_the_same_scoped_policy_can_be_entered_again_and_nested_in_itself() -> None:
+    """One `observe.scoped(...)` is reusable: a module-level constant, or a nested block."""
+    policy = observe.scoped(capture_inputs=False)
+
+    with policy:
+        with policy:
+            assert config.capture_inputs() is False
+        assert config.capture_inputs() is False
+
+    assert config.capture_inputs() is True
+
+    with policy:
+        assert config.capture_inputs() is False
+
+    assert config.capture_inputs() is True
+
+
+def test_a_scoped_block_does_not_change_what_another_task_captures() -> None:
+    """One request's `observe.scoped(...)` must not decide what every request in flight captures.
 
     `runa.serve` builds an `Agent` per request so that concurrent requests share no state, and
     `Agent.run` refuses two overlapping session-less runs for the same reason. A policy held in a
@@ -109,7 +165,7 @@ def test_a_with_observe_block_does_not_change_what_another_task_captures() -> No
     opened, read = asyncio.Event(), asyncio.Event()
 
     async def scoped() -> None:
-        with observe(capture_inputs=False):
+        with observe.scoped(capture_inputs=False):
             opened.set()
             await read.wait()  # hold the block open until `bystander` has looked
             seen["scoped"] = config.capture_inputs()
@@ -125,8 +181,8 @@ def test_a_with_observe_block_does_not_change_what_another_task_captures() -> No
     assert config.capture_inputs() is True
 
 
-def test_a_bare_observe_call_reaches_tasks_started_after_it() -> None:
-    """The bare form configures a whole deployment, so it has to cross a task boundary.
+def test_an_observe_call_reaches_tasks_started_after_it() -> None:
+    """The process-wide form configures a whole deployment, so it has to cross a task boundary.
 
     This is the half a `ContextVar` alone would not give: a policy only ever set inside the
     context that called `observe` would be invisible to the tasks an app's requests run on.
@@ -142,10 +198,10 @@ def test_a_bare_observe_call_reaches_tasks_started_after_it() -> None:
         observe(capture_inputs=True)
 
 
-def test_nested_with_observe_blocks_keep_the_setting_the_outer_one_made() -> None:
+def test_nested_scoped_blocks_keep_the_setting_the_outer_one_made() -> None:
     """An inner block overrides what it names and inherits the rest from the block around it."""
-    with observe(capture_inputs=False):
-        with observe(max_input_bytes=10):
+    with observe.scoped(capture_inputs=False):
+        with observe.scoped(max_input_bytes=10):
             assert config.capture_inputs() is False
             assert config.input_limit() == 10
 
@@ -239,8 +295,8 @@ def test_the_exporter_writes_to_the_store_it_was_resolved_with(
 def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
     """`add_exporter` keeps whatever was active (the default store exporter) and adds to it.
 
-    Unlike `observe(exporter=...)`, which fully replaces the list -- the right tool for a
-    `with observe(...):` block that swaps exporters temporarily, but a footgun for the common
+    Unlike `observe(exporter=...)`, which fully replaces the list -- the right tool for an
+    `observe.scoped(...)` block that swaps exporters temporarily, but a footgun for the common
     case of wanting one more exporter without silently losing the default.
     """
     before = list(config.exporters())
@@ -252,9 +308,9 @@ def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
 
 
 def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:
-    """`observe(capture_inputs=False)` means a captured tool span's `input` stays `None`."""
+    """`capture_inputs=False` means a captured tool span's `input` stays `None`."""
     agent = _agent_with_tool()
-    with observe(capture_inputs=False):
+    with observe.scoped(capture_inputs=False):
         result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
 
     assert result.trace is not None
@@ -278,7 +334,7 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
         tools=[lookup],
     )
 
-    with observe(redact=["email"]):
+    with observe.scoped(redact=["email"]):
         result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
 
     assert result.trace is not None
@@ -303,7 +359,7 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
         tools=[now],
     )
 
-    with observe(max_input_bytes=10):
+    with observe.scoped(max_input_bytes=10):
         result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
 
     assert result.trace is not None
@@ -333,7 +389,7 @@ def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> No
         tools=[lookup],
     )
 
-    with observe(capture_inputs=False, max_tool_result_bytes=10):
+    with observe.scoped(capture_inputs=False, max_tool_result_bytes=10):
         result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
 
     assert result.trace is not None

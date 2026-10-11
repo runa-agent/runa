@@ -111,8 +111,8 @@ def test_info_level_logging_carries_no_content(caplog: pytest.LogCaptureFixture)
 
 
 def test_debug_content_obeys_the_tracing_policy(caplog: pytest.LogCaptureFixture) -> None:
-    """`observe(capture_outputs=False)` silences the DEBUG content lines too, not just spans."""
-    with observe(capture_outputs=False), caplog.at_level(logging.DEBUG, logger="runa"):
+    """`capture_outputs=False` silences the DEBUG content lines too, not just spans."""
+    with observe.scoped(capture_outputs=False), caplog.at_level(logging.DEBUG, logger="runa"):
         asyncio.run(_run_all_hooks(LoggingHooks()))
 
     messages = [r.getMessage() for r in caplog.records]
@@ -122,7 +122,7 @@ def test_debug_content_obeys_the_tracing_policy(caplog: pytest.LogCaptureFixture
 def test_debug_content_is_redacted(caplog: pytest.LogCaptureFixture) -> None:
     """A `redactor` registered with `observe` scrubs the DEBUG content lines."""
     with (
-        observe(redactor=lambda value: "[scrubbed]"),
+        observe.scoped(redactor=lambda value: "[scrubbed]"),
         caplog.at_level(logging.DEBUG, logger="runa"),
     ):
         asyncio.run(_run_all_hooks(LoggingHooks()))

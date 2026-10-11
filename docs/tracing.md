@@ -43,20 +43,21 @@ from runa import observe
 
 observe(capture_inputs=False)  # applies immediately, stays applied, applies everywhere
 
-with observe(redact=["password", "ssn"]):
+with observe.scoped(redact=["password", "ssn"]):
     agent.run_sync(...)  # redacted within this block only
 ```
 
-Options: `capture_inputs`/`capture_outputs` (whether to keep them at all), `redact` (a list of
-dict keys to scrub) or a custom `redactor` callable, and `max_input_bytes`/`max_output_bytes`/
-`max_tool_result_bytes` to truncate what's kept.
+Both take the same options: `capture_inputs`/`capture_outputs` (whether to keep them at all),
+`redact` (a list of dict keys to scrub) or a custom `redactor` callable, and
+`max_input_bytes`/`max_output_bytes`/`max_tool_result_bytes` to truncate what's kept.
 
-The two forms differ in more than how long they last. A bare call sets the process-wide policy, so
-it's what an application configures itself with, once, at startup. A `with` block applies to the
-current task only: under `runa serve`, one request's block doesn't change what tracing captures
-for the other requests in flight, the same way each request gets its own `Agent`. The flip side is
-that a block has to wrap the work it means to cover -- a task started before the block was entered
-keeps the policy it already had, so a `with` block is not a way to configure a whole deployment.
+They differ in more than how long they last, which is why the scope is named rather than inferred
+from whether a `with` follows. `observe(...)` sets the process-wide policy, so it's what an
+application configures itself with, once, at startup. `observe.scoped(...)` applies to the current
+task only: under `runa serve`, one request's block doesn't change what tracing captures for the
+other requests in flight, the same way each request gets its own `Agent`. The flip side is that a
+block has to wrap the work it means to cover -- a task started before the block was entered keeps
+the policy it already had, so `observe.scoped` is not a way to configure a whole deployment.
 
 ### Custom Exporters
 
@@ -69,7 +70,7 @@ from runa import add_exporter, ConsoleExporter
 add_exporter(ConsoleExporter())  # runa.db still gets written to, console output is now added
 ```
 
-`observe(exporter=...)` is a full override instead, since it's also how `with observe(...):`
+`observe(exporter=...)` is a full override instead, since it's also how `observe.scoped(...)`
 swaps exporters for one block's duration:
 
 ```python

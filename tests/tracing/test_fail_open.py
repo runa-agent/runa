@@ -33,7 +33,7 @@ def _agent() -> Any:
 
 def test_agent_run_sync_completes_even_when_the_exporter_fails() -> None:
     """A run still returns a completed result when the tracing exporter raises."""
-    with observe(exporter=_BrokenExporter()):
+    with observe.scoped(exporter=_BrokenExporter()):
         result = asyncio.run(
             _run_async(_agent(), "hi", run_config=RunConfig(workflow_name="Researcher"))
         )

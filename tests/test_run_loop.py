@@ -820,7 +820,7 @@ def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
             exported.update({s.name: s.error for s in trace.spans if s.type == "tool"})
 
     with (
-        observe(exporter=[_Capture()]),
+        observe.scoped(exporter=[_Capture()]),
         pytest.raises(GuardrailTripwireTriggered),
     ):
         asyncio.run(_run_async(agent, "go", run_config=_run_config()))

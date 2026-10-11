@@ -6,16 +6,16 @@ limits truncate what's left. `run_internal/spans.py` applies it as each span ope
 and `lifecycle.py` applies the same policy to its DEBUG log lines, so one setting covers both.
 
 The policy lives in two places because its two call sites mean two different things by it: a
-process-wide default an application sets once at startup, and a per-task override that one
-`with observe(...)` block installs for its own duration. The override is a `ContextVar`, the way
-`tracing/manual.py` already holds the current trace, so a block opened while serving one request
-can't change what tracing captures for every other request in flight.
+process-wide default an application sets once at startup (`observe(...)`), and a per-task
+override that one `with observe.scoped(...)` block installs for its own duration. The override is
+a `ContextVar`, the way `tracing/manual.py` already holds the current trace, so a block opened
+while serving one request can't change what tracing captures for every other request in flight.
 """
 
 import json
 import os
 from collections.abc import Callable
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -138,14 +138,14 @@ class _Config:
 
 
 _default = _Config()
-"""The process-wide policy: what a bare `observe(...)` call and `add_exporter` write."""
+"""The process-wide policy: what an `observe(...)` call and `add_exporter` write."""
 
 _scoped: ContextVar[_Config | None] = ContextVar("runa_tracing_policy", default=None)
-"""The `with observe(...)` policy for the current task, or `None` to fall back to `_default`."""
+"""The `observe.scoped(...)` policy for the current task, or `None` to fall back to `_default`."""
 
 
 def _active() -> _Config:
-    """The policy in force here: this task's `with observe(...)` block, else the default."""
+    """The policy in force here: this task's `observe.scoped(...)` block, else the default."""
     scoped = _scoped.get()
     return scoped if scoped is not None else _default
 
@@ -223,9 +223,9 @@ def tool_result_limit() -> int:
 def _resolved_default_exporters() -> list[TraceExporter]:
     """The process-wide exporter list, resolving `_default_exporters()` on first use.
 
-    Memoized on `_default` rather than on whatever `_active()` returned, so a `with observe(...)`
-    block that overrides something other than `exporter` doesn't re-resolve the list -- a second
-    store, a second `LangfuseExporter` -- once per task that opens one.
+    Memoized on `_default` rather than on whatever `_active()` returned, so an
+    `observe.scoped(...)` block that overrides something other than `exporter` doesn't re-resolve
+    the list -- a second store, a second `LangfuseExporter` -- once per task that opens one.
     """
     if _default.exporters is None:
         _default.exporters = _default_exporters()
@@ -245,35 +245,99 @@ def exporters() -> list[TraceExporter]:
 def add_exporter(exporter: TraceExporter) -> None:
     """Add `exporter` alongside whatever's already installed, instead of replacing it.
 
-    `observe(exporter=...)` is a full override, since it's also how a `with observe(...)` block
-    temporarily swaps exporters for its duration. That makes it the wrong tool for adding one
+    `observe(exporter=...)` is a full override, since it's also how an `observe.scoped(...)`
+    block temporarily swaps exporters for its duration. That makes it the wrong tool for adding one
     more exporter (e.g. a second `LangfuseExporter`, pointed at a different project, or a
     `ConsoleExporter` for local debugging) without disabling the default store exporter and
     losing trace history. `LangfuseExporter` itself doesn't need this: `_default_exporters`
     already adds one automatically once `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are set.
 
-    Writes the process-wide default, like a bare `observe(...)` call: adding an exporter is
+    Writes the process-wide default, like an `observe(...)` call: adding an exporter is
     startup configuration, not something one task does for its own duration.
     """
     _default.exporters = [*_resolved_default_exporters(), exporter]
 
 
+def _updates(
+    *,
+    capture_inputs: bool | None,
+    capture_outputs: bool | None,
+    redact: list[str] | None,
+    redactor: Callable[[Any], Any] | None,
+    max_input_bytes: int | None,
+    max_output_bytes: int | None,
+    max_tool_result_bytes: int | None,
+    exporter: TraceExporter | list[TraceExporter] | None,
+) -> dict[str, Any]:
+    """The overrides that were actually named, as the `_Config` field names `_merge` takes.
+
+    Both call sites spell their options out as keyword-only parameters, so a misspelled one is a
+    `TypeError` where it was written; this is only the shared translation of what they collected.
+    Keyword-only here too, because five of the eight share a type with a neighbour: forwarded
+    positionally, a swapped `max_input_bytes`/`max_output_bytes` would type-check perfectly.
+    """
+    updates: dict[str, Any] = {
+        k: v
+        for k, v in {
+            "capture_inputs": capture_inputs,
+            "capture_outputs": capture_outputs,
+            "redact": redact,
+            "redactor": redactor,
+            "max_input_bytes": max_input_bytes,
+            "max_output_bytes": max_output_bytes,
+            "max_tool_result_bytes": max_tool_result_bytes,
+        }.items()
+        if v is not None
+    }
+    if exporter is not None:
+        updates["exporters"] = exporter if isinstance(exporter, list) else [exporter]
+    return updates
+
+
+class _ScopedPolicy:
+    """What `observe.scoped(...)` returns: its overrides, installed on the current task only.
+
+    It holds the overrides and nothing else -- no snapshot of the policy it will replace -- so it
+    is reusable and order-independent: a module-level constant, entered from two tasks at once or
+    nested inside itself, each entry reading the policy in force where it is entered and restoring
+    exactly that on exit. The tokens are a stack for that reason, one per live entry.
+    """
+
+    def __init__(self, updates: dict[str, Any]) -> None:
+        """Hold `updates` until a `with` block installs them."""
+        self._updates = updates
+        self._tokens: list[Token[_Config | None]] = []
+
+    def __enter__(self) -> _ScopedPolicy:
+        """Install these overrides on top of whatever policy is in force here."""
+        self._tokens.append(_scoped.set(_merge(_active(), self._updates)))
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Restore whatever tracing policy this task saw before the block."""
+        _scoped.reset(self._tokens.pop())
+
+
 class observe:
-    """Configure the tracing privacy policy: usable as a plain call or as a `with` block.
+    """Configure what tracing captures: this call for the process, `.scoped(...)` for one task.
 
-    A bare `observe(capture_inputs=False)` call applies the setting to the process-wide default
-    and leaves it there. `with observe(capture_inputs=False):` applies it to the current task
-    only, and restores whatever that task saw before on exit. Both forms are supported per the
-    design's "should be supported, but should not be required" guidance for the context-manager
-    form.
+    `observe(capture_inputs=False)` applies the setting to the process-wide default and leaves it
+    there: it is what an application configures itself with, once, at startup.
+    `with observe.scoped(capture_inputs=False):` applies it to the current task only, and restores
+    whatever that task saw before on exit.
 
-    The two forms differ in scope, deliberately. A `with` block that changed the policy
-    process-wide would mean one of `runa.serve`'s concurrent requests deciding what every other
-    in-flight request captures, with interleaved blocks restoring in construction order rather
-    than by nesting, so a late-exiting block could reinstate a stale policy. A `ContextVar` costs
-    the opposite: a task does not see an override installed by a task that started after it, so
-    the bare form -- not a `with` block held open around the whole application -- is what
-    configures a whole deployment.
+    The two scopes are two call sites rather than one name that infers which was meant from
+    whether a `with` follows it, the way `Guardrail.input`/`.output` and `Agent.handoff`/
+    `.delegate` name the choice they make. The inference needed a constructor that wrote the
+    process-wide default for `__enter__` to then undo, which made the object single-use (it
+    captured the default it would restore) and the write itself invisible to anyone reading the
+    call site. Naming the scope instead means nothing is captured and nothing is undone.
+
+    The scopes differ in reach, deliberately. A block that changed the policy process-wide would
+    mean one of `runa.serve`'s concurrent requests deciding what every other in-flight request
+    captures, so `.scoped` is a `ContextVar`. That costs the opposite: a task does not see an
+    override installed by a task that started after it, so the plain call -- not a block held open
+    around the whole application -- is what configures a whole deployment.
     """
 
     def __init__(
@@ -288,41 +352,58 @@ class observe:
         max_tool_result_bytes: int | None = None,
         exporter: TraceExporter | list[TraceExporter] | None = None,
     ) -> None:
-        """Apply the given overrides to the process-wide tracing policy immediately.
+        """Apply the given overrides to the process-wide tracing policy, permanently.
 
-        Used as `with observe(...)`, `__enter__` moves this same policy to the current task and
-        puts the default back. Doing it in that order is what lets one class serve both forms:
-        `__init__` can't know yet whether a `with` is coming, and there is no `await` between the
-        two for another task to see the default in between.
+        There is nothing to hold on to afterwards: the call *is* the configuration. An instance
+        is not a context manager, so a `with observe(...)` written out of habit is a `TypeError`
+        at that line -- pointing at `observe.scoped(...)` -- rather than a block whose policy
+        silently outlives it.
         """
-        updates: dict[str, Any] = {
-            k: v
-            for k, v in {
-                "capture_inputs": capture_inputs,
-                "capture_outputs": capture_outputs,
-                "redact": redact,
-                "redactor": redactor,
-                "max_input_bytes": max_input_bytes,
-                "max_output_bytes": max_output_bytes,
-                "max_tool_result_bytes": max_tool_result_bytes,
-            }.items()
-            if v is not None
-        }
-        if exporter is not None:
-            updates["exporters"] = exporter if isinstance(exporter, list) else [exporter]
-        self._updates = updates
-        self._previous_default = _default
-        _set_default(_merge(_default, updates))
+        _set_default(
+            _merge(
+                _default,
+                _updates(
+                    capture_inputs=capture_inputs,
+                    capture_outputs=capture_outputs,
+                    redact=redact,
+                    redactor=redactor,
+                    max_input_bytes=max_input_bytes,
+                    max_output_bytes=max_output_bytes,
+                    max_tool_result_bytes=max_tool_result_bytes,
+                    exporter=exporter,
+                ),
+            )
+        )
 
-    def __enter__(self) -> observe:
-        """Narrow this policy to the current task, putting the process-wide default back."""
-        _set_default(self._previous_default)
-        self._token = _scoped.set(_merge(_active(), self._updates))
-        return self
+    @staticmethod
+    def scoped(
+        *,
+        capture_inputs: bool | None = None,
+        capture_outputs: bool | None = None,
+        redact: list[str] | None = None,
+        redactor: Callable[[Any], Any] | None = None,
+        max_input_bytes: int | None = None,
+        max_output_bytes: int | None = None,
+        max_tool_result_bytes: int | None = None,
+        exporter: TraceExporter | list[TraceExporter] | None = None,
+    ) -> _ScopedPolicy:
+        """A `with` block that applies the given overrides to the current task only.
 
-    def __exit__(self, *exc_info: object) -> None:
-        """Restore whatever tracing policy this task saw before the block."""
-        _scoped.reset(self._token)
+        Nothing is applied until the block is entered, and everything is restored when it exits.
+        An inner block overrides what it names and inherits the rest from the block around it.
+        """
+        return _ScopedPolicy(
+            _updates(
+                capture_inputs=capture_inputs,
+                capture_outputs=capture_outputs,
+                redact=redact,
+                redactor=redactor,
+                max_input_bytes=max_input_bytes,
+                max_output_bytes=max_output_bytes,
+                max_tool_result_bytes=max_tool_result_bytes,
+                exporter=exporter,
+            )
+        )
 
 
 __all__ = [
