@@ -25,6 +25,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from runa.agent import prompt_path, snake_case
 from runa.exceptions import OperatorError
 from runa.project import AgentNotFound, NotARunaProject
 
@@ -99,10 +100,6 @@ class GeneratedAgent(Generated):
     dataset: Path
 
 
-def _snake_case(name: str) -> str:
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
-
-
 _AGENT_CLASS_NAME = re.compile(r"[A-Z][A-Za-z0-9]*Agent")
 
 
@@ -114,7 +111,7 @@ def split_tool_name(raw_name: str) -> tuple[str, str]:
     `app/tools/core.py`, the catch-all file every ungrouped tool lands in.
     """
     module, sep, func = raw_name.rpartition(":")
-    return (_snake_case(module), _snake_case(func)) if sep else ("core", _snake_case(raw_name))
+    return (snake_case(module), snake_case(func)) if sep else ("core", snake_case(raw_name))
 
 
 def _require_dir(root: Path, *parts: str) -> Path:
@@ -127,19 +124,14 @@ def _require_dir(root: Path, *parts: str) -> Path:
     return target_dir
 
 
-def scaffold(
-    root: Path,
-    *parts: str,
-    stem: str,
-    suffix: str,
-    template: str,
-    exist_ok: bool = False,
-) -> Path:
-    """Write `template` to `root/*parts/<stem><suffix>`, and return that path.
+def scaffold(file: Path, *, template: str, exist_ok: bool = False) -> Path:
+    """Write `template` to `file`, and return that path.
 
-    The one recipe every `runa generate` command follows: find the conventional directory,
-    refuse to overwrite, write the template. The four things that vary are the directory, the
-    filename, the template, and whether a file already being there is an error.
+    The one recipe every `runa generate` command follows: refuse to overwrite, check the
+    conventional directory is there, write the template. What varies is the path, the template,
+    and whether a file already being there is an error -- the path whole, so a generator whose
+    convention is stated elsewhere (`generate_prompt`, through `agent.prompt_path`) passes what
+    that says rather than re-deriving a directory and a stem for this call's sake.
 
     `exist_ok=True` makes the call a companion stub rather than a command: an existing file is
     left as it is, and a missing directory is skipped rather than raised. Either way the path
@@ -151,13 +143,11 @@ def scaffold(
     shared by every tool in its group, so its write isn't "create this file" (see
     `split_tool_name`).
     """
-    target_dir = root.joinpath(*parts)
-    file = target_dir / f"{stem}{suffix}"
-    if not target_dir.is_dir():
+    if not file.parent.is_dir():
         if exist_ok:
             return file
         raise NotARunaProject(
-            f"{target_dir} does not exist, run this from inside a Runa "
+            f"{file.parent} does not exist, run this from inside a Runa "
             "project created with `runa new`"
         )
     if file.exists():
@@ -251,7 +241,7 @@ def _resolve_components(
     imports: list[str] = []
     refs: list[str] = []
     for raw_name in names:
-        snake_name = _snake_case(raw_name.rpartition(":")[-1])
+        snake_name = snake_case(raw_name.rpartition(":")[-1])
         existing = _find_component(base_dir, snake_name)
         if existing is None:
             relative_dir = base_dir.relative_to(root)
@@ -353,7 +343,7 @@ def generate_agent(
     agents_dir = _require_dir(root, "app", "agents")
 
     class_name = name
-    file_stem = _snake_case(class_name)
+    file_stem = snake_case(class_name)
     agent_name = file_stem
     agent_file = agents_dir / f"{file_stem}.py"
     if agent_file.exists():
@@ -448,13 +438,9 @@ def generate_tool(name: str, *, root: Path, description: str | None = None) -> G
 
 def generate_guardrail(name: str, *, root: Path) -> Generated:
     """Write a new `@guardrail`-decorated function into `root/app/guardrails/`."""
-    func_name = _snake_case(name)
+    func_name = snake_case(name)
     guardrail_file = scaffold(
-        root,
-        "app",
-        "guardrails",
-        stem=func_name,
-        suffix=".py",
+        root / "app" / "guardrails" / f"{func_name}.py",
         template=_GUARDRAIL_TEMPLATE.format(func_name=func_name),
     )
     return Generated(
@@ -470,19 +456,17 @@ def generate_prompt(name: str, *, root: Path, exist_ok: bool = False) -> Generat
     Plain markdown, not Python: a prompt is text an agent's `instructions` can load, kept out
     of source the same way a query lives outside application code.
 
-    The one place the prompt-file convention lives: `generate_agent` calls this with
-    `exist_ok=True` for the stub it writes alongside a new agent, rather than restating where
-    the file goes and what it starts out saying.
+    Where the file goes is `agent.prompt_path`'s answer, not this function's: the loader that
+    reads it on construction asks the same call, so the two can't drift into a generated prompt
+    the agent can't find. What's this command's own is the stub's contents and the policy around
+    writing it -- `generate_agent` calls this with `exist_ok=True` for the stub it writes
+    alongside a new agent, rather than restating either.
     """
-    file_stem = _snake_case(name)
+    file = prompt_path(root / "app", name)
     return Generated(
         file=scaffold(
-            root,
-            "app",
-            "prompts",
-            stem=file_stem,
-            suffix=".md",
-            template=_PROMPT_TEMPLATE.format(name=file_stem),
+            file,
+            template=_PROMPT_TEMPLATE.format(name=file.stem),
             exist_ok=exist_ok,
         )
     )
@@ -500,15 +484,12 @@ def generate_evaluation(name: str, *, root: Path, exist_ok: bool = False) -> Gen
     starts with a single input-only case, graded on task completion and answer relevance. The
     Agent must already exist, checked by scanning source rather than importing the app.
     """
-    file_stem = _snake_case(name)
+    file_stem = snake_case(name)
     if _find_agent_name(_require_dir(root, "app", "agents"), file_stem) is None:
         raise AgentNotFound(f"no Agent named {file_stem!r} found under app/agents/")
     return Generated(
         file=scaffold(
-            root,
-            "evals",
-            stem=file_stem,
-            suffix=".jsonl",
+            root / "evals" / f"{file_stem}.jsonl",
             template=_EVALUATION_TEMPLATE,
             exist_ok=exist_ok,
         )

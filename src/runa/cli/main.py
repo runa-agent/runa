@@ -13,6 +13,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from runa import db
+from runa._models import DEFAULT_MODEL
 from runa.cli.chat import run_agent_repl
 from runa.cli.eval import run_project_evals
 from runa.cli.generate import (
@@ -87,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     agent_parser = generate_subparsers.add_parser("agent", help="Generate a new Agent")
     agent_parser.add_argument("name", help="UpperCamelCase, ending in 'Agent', e.g. SupportAgent")
     agent_parser.add_argument(
-        "--model", required=True, help="e.g. gpt-5.4-nano, claude-... (required)"
+        "--model", required=True, help=f"e.g. {DEFAULT_MODEL}, claude-... (required)"
     )
     agent_parser.add_argument("--instructions", default=None, help="inline instructions string")
     agent_parser.add_argument(
@@ -270,7 +271,7 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         print(
             f"\nnext steps:\n{cd_step}"
             "  put your OPENAI_API_KEY in .env   # or whichever model your agents use\n"
-            "  runa generate agent MyAgent --model gpt-5.4-nano\n"
+            f"  runa generate agent MyAgent --model {DEFAULT_MODEL}\n"
             "  runa chat my_agent"
         )
         return 0
@@ -309,7 +310,7 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
             f"  {generated_tool.import_line}\n\n"
             "  class MyAgent(Agent):\n"
             '      name = "my_agent"\n'
-            '      model = "gpt-5.4-nano"\n'
+            f'      model = "{DEFAULT_MODEL}"\n'
             f"      tools = [{generated_tool.symbol}]"
         )
         return 0

@@ -1,10 +1,13 @@
 """Tests for `runa.cli.generate`."""
 
+import importlib.util
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 
+from runa import Agent
 from runa.cli.generate import (
     AmbiguousComponent,
     InvalidAgentName,
@@ -44,6 +47,28 @@ def test_generate_agent_writes_a_prompt_stub_when_instructions_omitted(tmp_path:
     prompt_file = project_dir / "app" / "prompts" / "support_agent.md"
     assert prompt_file.is_file()
     assert "TODO: write the prompt support_agent uses." in prompt_file.read_text()
+
+
+def test_a_generated_agent_loads_the_prompt_the_generator_wrote(tmp_path: Path) -> None:
+    """Both sides of the prompt-file convention, in one test.
+
+    `generate_agent` writes the file and constructing the class it generated finds it, each
+    asking `agent.prompt_path` where it goes. This is the fact that used to be a docstring
+    asking the next person to keep a second `_snake_case` in step with the first.
+    """
+    project_dir = scaffold_project("demo", root=tmp_path)
+    agent = generate_agent("SupportAgent", root=project_dir)
+    assert agent.prompt is not None
+    agent.prompt.write_text("You are endlessly patient.\n")
+
+    spec = importlib.util.spec_from_file_location("generated_support_agent", agent.file)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["generated_support_agent"] = module
+    spec.loader.exec_module(module)
+    generated: Agent = module.SupportAgent()
+
+    assert generated.instructions == "You are endlessly patient."
 
 
 def test_generate_agent_reports_its_identity_package_import_and_companions(
@@ -520,17 +545,10 @@ def test_generate_evaluation_raises_for_an_unknown_agent(tmp_path: Path) -> None
 def test_scaffold_with_exist_ok_leaves_an_existing_file_alone(tmp_path: Path) -> None:
     """The companion-stub policy: already there means nothing to do, not an error."""
     project_dir = scaffold_project("demo", root=tmp_path)
-    written = scaffold(project_dir, "app", "prompts", stem="greeter", suffix=".md", template="mine")
+    greeter = project_dir / "app" / "prompts" / "greeter.md"
+    written = scaffold(greeter, template="mine")
 
-    again = scaffold(
-        project_dir,
-        "app",
-        "prompts",
-        stem="greeter",
-        suffix=".md",
-        template="replaced",
-        exist_ok=True,
-    )
+    again = scaffold(greeter, template="replaced", exist_ok=True)
 
     assert again == written
     assert written.read_text() == "mine"
@@ -538,15 +556,14 @@ def test_scaffold_with_exist_ok_leaves_an_existing_file_alone(tmp_path: Path) ->
 
 def test_scaffold_with_exist_ok_skips_a_missing_directory(tmp_path: Path) -> None:
     """A companion stub with nowhere to go is skipped, where a command would raise."""
-    path = scaffold(
-        tmp_path, "evals", stem="support_agent", suffix=".jsonl", template="{}\n", exist_ok=True
-    )
+    dataset = tmp_path / "evals" / "support_agent.jsonl"
+    path = scaffold(dataset, template="{}\n", exist_ok=True)
 
-    assert path == tmp_path / "evals" / "support_agent.jsonl"
+    assert path == dataset
     assert not path.exists()
 
     with pytest.raises(NotARunaProject):
-        scaffold(tmp_path, "evals", stem="support_agent", suffix=".jsonl", template="{}\n")
+        scaffold(dataset, template="{}\n")
 
 
 def test_generate_agent_tolerates_a_project_without_prompts_or_evals(tmp_path: Path) -> None:

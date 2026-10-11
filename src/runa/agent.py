@@ -138,8 +138,24 @@ def _turn_input(
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 
 
-def _snake_case(name: str) -> str:
+def snake_case(name: str) -> str:
+    """`SupportAgent` -> `support_agent`: the casing every name in a generated app follows.
+
+    An agent's declared `name` is this applied to its class name, and the file names derived
+    from it -- its module, its prompt, its eval dataset -- follow from that, so `runa generate`
+    casts tool and guardrail names with the same rule rather than one of its own.
+    """
     return _CAMEL_CASE_BOUNDARY.sub("_", name).lower()
+
+
+def prompt_path(app_dir: Path, name: str) -> Path:
+    """Where the agent called `name` keeps its instructions: `<app_dir>/prompts/<name>.md`.
+
+    The prompt-file convention itself, in the module that owns an agent's identity, so the two
+    sides that must agree on it read it from here instead of each deriving it: `_load_prompt`
+    below, which reads the file, and `runa generate prompt`, which writes it.
+    """
+    return app_dir / "prompts" / f"{snake_case(name)}.md"
 
 
 _NO_SOURCE_FILE = (TypeError, OSError)
@@ -148,10 +164,11 @@ _NO_SOURCE_FILE = (TypeError, OSError)
 def _load_prompt(cls: type, name: str) -> str | None:
     """Read `<name>.md` from the `prompts/` directory next to `cls`'s `app/agents/` module.
 
-    Mirrors `runa generate prompt`'s naming: `app/prompts/<snake_case(name)>.md`, a sibling of
-    the `agents/` directory the subclass is defined in. Reading only: constructing an Agent never
-    writes to the project tree, so an immutable image or a read-only `app/` is an ordinary way to
-    ship one. Writing that stub is `runa generate agent`/`runa generate prompt`'s job.
+    The path is `prompt_path`'s, the same call `runa generate prompt` writes through, resolved
+    against the parent of the `agents/` directory the subclass is defined in. Reading only:
+    constructing an Agent never writes to the project tree, so an immutable image or a read-only
+    `app/` is an ordinary way to ship one. Writing that stub is `runa generate
+    agent`/`runa generate prompt`'s job.
 
     Returns `None` (leaving `instructions` empty) when `cls` has no source file (e.g. defined at
     a REPL), its module doesn't live in an `agents/` directory, or no prompt file is there --
@@ -164,7 +181,7 @@ def _load_prompt(cls: type, name: str) -> str | None:
         return None
     if module_file.parent.name != "agents":
         return None
-    prompt_file = module_file.parent.parent / "prompts" / f"{_snake_case(name)}.md"
+    prompt_file = prompt_path(module_file.parent.parent, name)
     if not prompt_file.is_file():
         logger.warning(
             "%s has no instructions: write %s, or run `runa generate prompt %s`",
