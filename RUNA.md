@@ -324,12 +324,22 @@ is the one that gets a single persistent connection; prefer it when a
 
 **Always a plain string on `model`, never a constructed client.** The
 string's prefix (`claude-`, `gpt-`, `gemini-`, `llama-`, `deepseek-`,
-`qwen-`) picks the provider and its API key env var; nothing is
-configured globally.
+`qwen-`, plus OpenAI's non-`gpt` families) picks the provider and its API
+key env var; nothing is configured globally.
 
 ```python
 model = "claude-sonnet-5"
 ```
+
+**The prefix set is closed**, the way `Agent`'s settings are: a name
+matching none of it is a `UserError` at construction naming the prefix it
+most likely meant, not a default. Enforced in code, because the failure it
+replaces is the worse one, `model = "claud-sonnet-5"` sending an app's
+prompts to a different vendor under a different key and surfacing as a 404
+attributed to model misbehaviour. An endpoint Runa doesn't name (a
+gateway, a proxy, something self-hosted) is reached by passing a `Model`
+instead of a name, which is the one sanctioned way to say "not one of
+these" out loud.
 
 Mixing providers across agents in one app (a cheap router, a stronger
 answerer) is expected, not an edge case: `model` is per-agent by design.

@@ -3,7 +3,9 @@
 See RUNA.md #10 and docs/models.md.
 
 `model` is a plain string, resolved to a provider by its prefix (`claude-`, `gpt-`, `gemini-`,
-`llama-`, `deepseek-`, `qwen-`); no client to construct, no provider configured globally.
+`llama-`, `deepseek-`, `qwen-`); no client to construct, no provider configured globally. The set
+is closed, so a prefix that names no provider is a `UserError` at construction, not a silent
+fallback to a different vendor.
 
 Run it (needs both `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` set):
 

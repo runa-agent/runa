@@ -15,14 +15,45 @@ provider by its prefix, and reads the matching API key from the environment, typ
 | Prefix | Provider | Env Var |
 |---|---|---|
 | `claude` | Anthropic | `ANTHROPIC_API_KEY` |
-| `gpt` | OpenAI | `OPENAI_API_KEY` |
+| `gpt`, `o1`, `o3`, `o4`, `chatgpt`, `codex` | OpenAI | `OPENAI_API_KEY` |
 | `gemini` | Google | `GEMINI_API_KEY` |
 | `llama` | Meta | `LLAMA_API_KEY` |
 | `deepseek` | DeepSeek | `DEEPSEEK_API_KEY` |
 | `qwen` | Alibaba | `DASHSCOPE_API_KEY` |
 
-An unrecognized or bare model name falls back to the OpenAI-compatible backend. The default,
-when `model` isn't set, is `"gpt-5.4-nano"`.
+That list is the whole list. A name matching none of it raises `UserError` when the agent is
+constructed, naming the prefix it probably meant, because the alternative is worse than an error:
+`model = "claud-sonnet-5"` would otherwise send your prompts to a different company under a
+different key, and report the resulting 404 as model misbehaviour mid-run. The default, when
+`model` isn't set, is `"gpt-5.4-nano"`.
+
+```pycon
+>>> SupportAgent(model="claud-sonnet-5")
+UserError: 'claud-sonnet-5' starts with no prefix Runa routes to a provider, so it names no
+model. Did you mean a claude-* model? For an endpoint Runa doesn't name, pass a Model instance
+instead of a name.
+```
+
+For a gateway, a proxy, or something self-hosted (an endpoint Runa has no name for), pass a
+`Model` instead of a name. `model` takes any object with the two methods a backend has, so
+Runa's own chat-completions backend works, pointed at your `base_url`:
+
+```python
+import httpx2 as httpx
+from runa._models import OpenAICompatibleModel
+
+
+class SupportAgent(Agent):
+    name = "support_agent"
+    model = OpenAICompatibleModel(
+        "mixtral-8x7b",
+        httpx.AsyncClient(base_url="https://gateway.internal/v1/", headers={...}),
+    )
+```
+
+This is the sharp knife, and it is deliberately spelled differently from a name: a bare name
+can't tell "a model Runa has never heard of" and "I mistyped" apart, so the first one has to say
+so out loud.
 
 Every provider except Anthropic speaks the same chat-completions wire format, so they share one
 backend. Anthropic's Messages API is shaped differently and gets its own.

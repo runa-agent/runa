@@ -2,10 +2,12 @@
 
 `ModelProvider.get_model` maps a model name's prefix to a backend. A name starting with `claude`
 goes through `AnthropicModel`, talking to Anthropic's own SDK directly, Anthropic's Messages API
-isn't chat-completions-shaped, so it's the one backend that needs real translation. Everything else
-(`gpt-*`, `gemini-*`, `llama-*`, `deepseek-*`, `qwen-*`, or an unrecognized/bare name) goes through
+isn't chat-completions-shaped, so it's the one backend that needs real translation. The other
+prefixes (`gpt-*`, `gemini-*`, `llama-*`, `deepseek-*`, `qwen-*`) go through
 `OpenAICompatibleModel`, which speaks the chat-completions wire format that OpenAI, Gemini, Llama,
-DeepSeek, and Qwen all share, over plain HTTP via `httpx2`, not the `openai` package.
+DeepSeek, and Qwen all share, over plain HTTP via `httpx2`, not the `openai` package. The set of
+prefixes is closed: a name matching none of them is a `UserError` (`check_model_name`), not an
+unnamed provider's model quietly resolved against OpenAI's endpoint.
 
 Conversation items are plain chat-completions-shaped message dicts everywhere in Runa (see
 `runa._items`, which owns that shape and every reader of it); `AnthropicModel` is the only place
@@ -25,7 +27,7 @@ two).
 from runa._models.anthropic import AnthropicModel
 from runa._models.chat_completions import OpenAICompatibleModel
 from runa._models.interface import Model, ModelRequest, StreamDelta
-from runa._models.provider import DEFAULT_MODEL, ModelProvider
+from runa._models.provider import DEFAULT_MODEL, ModelProvider, check_model_name
 
 __all__ = [
     "DEFAULT_MODEL",
@@ -35,4 +37,5 @@ __all__ = [
     "ModelRequest",
     "OpenAICompatibleModel",
     "StreamDelta",
+    "check_model_name",
 ]

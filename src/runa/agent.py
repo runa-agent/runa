@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from runa import content
 from runa._items import ConversationItem
-from runa._models import DEFAULT_MODEL, Model, ModelProvider
+from runa._models import DEFAULT_MODEL, Model, ModelProvider, check_model_name
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import RunaError, UserError
@@ -217,23 +217,30 @@ def _resolve_compactor(compact: Any) -> Compactor | None:
 
 
 def _checked_model(model: Any) -> Any:
-    """Check `model=` names a model or is one, without building it yet.
+    """Check `model=` names a model Runa can route, or is one, without building it yet.
 
     The exception to the rule the others follow: a declared attribute becomes a usable object at
     construction (see `_resolve_compactor`), but a model name cannot, because resolving it builds
     the provider's client and that is a `UserError` when the matching API key is unset -- which an
     agent that `runa generate` just wrote, or `graph` renders, or no one ever runs has no business
-    needing. Resolution therefore waits for the run (`AgentShape.resolve_model`). Rejecting a
-    value that is neither a name nor a `Model` needs no client, though, so a mistyped `model=` is
-    still a `UserError` naming the attribute here rather than an `AttributeError` from inside the
-    turn loop, with an `llm` span already open. `Model` is checked structurally, the way
-    `run_internal` reads every backend.
+    needing. Resolution therefore waits for the run (`AgentShape.resolve_model`).
+
+    Checking the name needs no client, though, so both ways of getting it wrong are a `UserError`
+    naming the attribute here rather than a failure from inside the turn loop with an `llm` span
+    already open: a value that is neither a name nor a `Model`, and a name whose prefix picks no
+    provider. The second is the same mistake `_reject_unknown_settings` rejects one field over --
+    `model = "claud-sonnet-5"` is a worse `modell = "claude-sonnet-5"`, and gets the same answer
+    rather than the opposite one. `Model` is checked structurally, the way `run_internal` reads
+    every backend, and is the shape an endpoint Runa doesn't name is reached through.
     """
-    if model is None or isinstance(model, str) or hasattr(model, "get_response"):
-        return model
-    raise UserError(
-        f"model must be a model name, a Model instance, or None for Runa's default, got {model!r}"
-    )
+    if isinstance(model, str):
+        check_model_name(model)
+    elif model is not None and not hasattr(model, "get_response"):
+        raise UserError(
+            f"model must be a model name, a Model instance, or None for Runa's default, "
+            f"got {model!r}"
+        )
+    return model
 
 
 def _is_code(value: Any) -> bool:

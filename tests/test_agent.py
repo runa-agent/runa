@@ -615,6 +615,46 @@ def test_model_rejects_a_value_that_is_neither_a_name_nor_a_model() -> None:
         BadModel()
 
 
+def test_a_misspelled_model_name_is_rejected_like_a_misspelled_setting() -> None:
+    """A typo in `model`'s value fails at construction too, not just a typo in its name.
+
+    The regression this guards is the worse half of the pair below: `modell = "claude-sonnet-5"`
+    at least ran a working model, while `model = "claud-sonnet-5"` used to fall through to the
+    OpenAI endpoint, sending the app's prompts to another vendor under another key and reporting
+    the 404 as model misbehaviour, mid-run.
+    """
+    from runa.exceptions import UserError
+
+    class TypoedModel(Agent):
+        name = "TypoedModel"
+        instructions = "typo"
+        model = "claud-sonnet-5"
+
+    with pytest.raises(UserError, match="Did you mean a claude-\\* model"):
+        TypoedModel()
+
+
+def test_a_model_instance_is_the_escape_hatch_for_an_unnamed_endpoint() -> None:
+    """Closing the prefix set doesn't close the door: a `Model` passes through untouched.
+
+    The sanctioned shape for a gateway, a proxy or something self-hosted, and the reason an
+    unroutable *name* can afford to be an error: there is another way to say "not one of these".
+    """
+    import httpx2 as httpx
+
+    from runa._models import OpenAICompatibleModel
+
+    gateway = OpenAICompatibleModel(
+        "mixtral-8x7b", httpx.AsyncClient(base_url="https://gateway.internal/v1/")
+    )
+
+    class Gatewayed(Agent):
+        name = "Gatewayed"
+        instructions = "gateway"
+
+    assert Gatewayed(model=gateway).model is gateway
+
+
 def test_a_misspelled_class_attribute_is_rejected_by_name() -> None:
     """A typo'd setting fails at construction instead of silently configuring nothing.
 

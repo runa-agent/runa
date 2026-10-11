@@ -1,5 +1,6 @@
 """provider.py: `ModelProvider`, routing a model name to one of two backends by its prefix."""
 
+import difflib
 import os
 from dataclasses import dataclass
 
@@ -17,24 +18,74 @@ DEFAULT_MODEL = "gpt-5.4-nano"
 
 @dataclass(frozen=True)
 class _Endpoint:
-    """One chat-completions-shaped provider: where it lives and which env var holds its key."""
+    """One chat-completions-shaped provider: whose names are its, where it lives, where its key is.
 
-    prefix: str
+    `prefixes` is every model-name prefix the provider answers to. Usually one, but OpenAI's
+    reasoning and codex families aren't spelled `gpt-*`, so it takes several; the first is the
+    canonical one, naming the provider in an error message and keying its client.
+    """
+
+    prefixes: tuple[str, ...]
     base_url: str
     api_key_env: str
 
+    @property
+    def name(self) -> str:
+        """What to call this provider when talking to a developer about it."""
+        return self.prefixes[0]
 
-_OPENAI = _Endpoint("gpt", "https://api.openai.com/v1/", "OPENAI_API_KEY")
+
+_ANTHROPIC_PREFIX = "claude"
 _ENDPOINTS: tuple[_Endpoint, ...] = (
     _Endpoint(
-        "gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"
+        ("gpt", "o1", "o3", "o4", "chatgpt", "codex"),
+        "https://api.openai.com/v1/",
+        "OPENAI_API_KEY",
     ),
-    _Endpoint("llama", "https://api.llama.com/compat/v1/", "LLAMA_API_KEY"),
-    _Endpoint("deepseek", "https://api.deepseek.com/v1/", "DEEPSEEK_API_KEY"),
     _Endpoint(
-        "qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", "DASHSCOPE_API_KEY"
+        ("gemini",), "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"
+    ),
+    _Endpoint(("llama",), "https://api.llama.com/compat/v1/", "LLAMA_API_KEY"),
+    _Endpoint(("deepseek",), "https://api.deepseek.com/v1/", "DEEPSEEK_API_KEY"),
+    _Endpoint(
+        ("qwen",), "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/", "DASHSCOPE_API_KEY"
     ),
 )
+_PREFIXES: tuple[str, ...] = (_ANTHROPIC_PREFIX, *(p for e in _ENDPOINTS for p in e.prefixes))
+
+
+def check_model_name(name: str) -> None:
+    """Raise `UserError` unless `name`'s prefix is one Runa routes to a provider.
+
+    The set is closed, and that is the point. A model name is the only thing that picks the
+    vendor, the price, the capability and the credential, so a prefix that matches nothing can't
+    be answered with a default: `"claud-sonnet-5"` would send an app's prompts to a different
+    company than its author believes, under a different key, and report the resulting 404 as
+    model misbehaviour mid-run. Runa already refuses to let a misspelled *setting* name
+    (`modell = ...`) configure nothing silently (`agent._reject_unknown_settings`); the typo one
+    field over, on the value that selects the provider, gets the same answer.
+
+    `Agent.__init__` calls this at construction, through `_checked_model`, so the common case
+    fails before a run and names the attribute. `get_model` calls it too, being the seam a
+    `RunConfig`'s own provider can be reached through without an `Agent`. For an endpoint Runa
+    doesn't name -- a gateway, a proxy, something self-hosted -- the sanctioned shape is a `Model`
+    instance rather than a bare name, which `_checked_model` passes through untouched.
+    """
+    if name.lower().startswith(_PREFIXES):
+        return
+    raise UserError(
+        f"{name!r} starts with no prefix Runa routes to a provider, so it names no model."
+        f"{_prefix_hint(name)} For an endpoint Runa doesn't name, pass a Model instance "
+        f"instead of a name."
+    )
+
+
+def _prefix_hint(name: str) -> str:
+    """Point a rejected name at the prefix it most likely misspelled, or list them all."""
+    close = difflib.get_close_matches(name.lower().split("-")[0], _PREFIXES, n=1)
+    if close:
+        return f" Did you mean a {close[0]}-* model?"
+    return f" Model names start with one of: {', '.join(f'{p}-*' for p in _PREFIXES)}."
 
 
 def _client_for(endpoint: _Endpoint) -> httpx.AsyncClient:
@@ -46,7 +97,7 @@ def _client_for(endpoint: _Endpoint) -> httpx.AsyncClient:
     api_key = os.environ.get(endpoint.api_key_env)
     if api_key is None:
         raise UserError(
-            f"{endpoint.api_key_env} is not set. Set it to use a {endpoint.prefix}-* model."
+            f"{endpoint.api_key_env} is not set. Set it to use a {endpoint.name}-* model."
         )
     return httpx.AsyncClient(
         base_url=endpoint.base_url,
@@ -58,9 +109,10 @@ def _client_for(endpoint: _Endpoint) -> httpx.AsyncClient:
 class ModelProvider:
     """Routes a model name to one of two backends by its prefix.
 
-    A name starting with `claude` goes through `AnthropicModel`; everything else (`gpt-*`,
-    `gemini-*`, `llama-*`, `deepseek-*`, `qwen-*`, or an unrecognized/bare name) goes through
-    `OpenAICompatibleModel` against that provider's own chat-completions endpoint.
+    A name starting with `claude` goes through `AnthropicModel`; the other prefixes (`gpt-*` and
+    OpenAI's other families, `gemini-*`, `llama-*`, `deepseek-*`, `qwen-*`) go through
+    `OpenAICompatibleModel` against that provider's own chat-completions endpoint. A name
+    matching none of them is a `UserError`, not a default (see `check_model_name`).
     """
 
     def __init__(self) -> None:
@@ -77,20 +129,22 @@ class ModelProvider:
 
     def get_model(self, model_name: str | None) -> Model:
         """Return the `Model` for `model_name` (or Runa's own default, if `None`)."""
-        name = model_name or DEFAULT_MODEL
+        name = DEFAULT_MODEL if model_name is None else model_name
+        check_model_name(name)
         lower = name.lower()
 
-        if lower.startswith("claude"):
+        if lower.startswith(_ANTHROPIC_PREFIX):
             return AnthropicModel(name, self._get_anthropic_client())
 
-        endpoint = next((e for e in _ENDPOINTS if lower.startswith(e.prefix)), _OPENAI)
+        # Total: `_PREFIXES` is these endpoints' prefixes plus Anthropic's, both handled above.
+        endpoint = next(e for e in _ENDPOINTS if lower.startswith(e.prefixes))
         return OpenAICompatibleModel(name, self._get_http_client(endpoint))
 
     def _get_http_client(self, endpoint: _Endpoint) -> httpx.AsyncClient:
-        return self._http_clients.get(endpoint.prefix, lambda: _client_for(endpoint))
+        return self._http_clients.get(endpoint.name, lambda: _client_for(endpoint))
 
     def _get_anthropic_client(self) -> AsyncAnthropic:
-        return self._anthropic_clients.get("claude", AsyncAnthropic)
+        return self._anthropic_clients.get(_ANTHROPIC_PREFIX, AsyncAnthropic)
 
 
-__all__ = ["DEFAULT_MODEL", "ModelProvider"]
+__all__ = ["DEFAULT_MODEL", "ModelProvider", "check_model_name"]

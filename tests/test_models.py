@@ -39,12 +39,49 @@ def test_routes_gpt_to_openai_compatible_directly(monkeypatch: pytest.MonkeyPatc
     assert str(model._client.base_url) == "https://api.openai.com/v1/"
 
 
-def test_unrecognized_name_defaults_to_openai(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A model name with none of the five prefixes still resolves through OpenAI, like before."""
+@pytest.mark.parametrize("model_name", ["o3-mini", "o4-mini", "chatgpt-4o-latest", "codex-mini"])
+def test_openais_non_gpt_families_route_to_openai(
+    monkeypatch: pytest.MonkeyPatch, model_name: str
+) -> None:
+    """OpenAI's reasoning and codex names aren't spelled `gpt-*`, and are OpenAI's all the same."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    model = ModelProvider().get_model("o3-mini")
+    model = ModelProvider().get_model(model_name)
 
     assert isinstance(model, OpenAICompatibleModel)
+    assert str(model._client.base_url) == "https://api.openai.com/v1/"
+
+
+def test_a_misspelled_provider_prefix_is_an_error_naming_the_prefix() -> None:
+    """A typo doesn't become another vendor's model: it names the prefix it meant."""
+    with pytest.raises(UserError, match="Did you mean a claude-\\* model\\?") as caught:
+        ModelProvider().get_model("claud-sonnet-5")
+
+    assert "claud-sonnet-5" in str(caught.value)
+
+
+def test_an_unknown_prefix_lists_the_prefixes_and_the_escape_hatch() -> None:
+    """A name close to nothing gets the whole closed set, plus the shape for an unnamed endpoint."""
+    with pytest.raises(UserError) as caught:
+        ModelProvider().get_model("sonnet-5")
+
+    message = str(caught.value)
+    assert "claude-*" in message
+    assert "qwen-*" in message
+    assert "Model instance" in message
+
+
+@pytest.mark.parametrize("model_name", ["", "totally-made-up", "gemni-pro", "sonnet-5"])
+def test_an_unroutable_name_is_never_quietly_openais(model_name: str) -> None:
+    """Every unroutable name is an error, not an OpenAI request charged to the wrong vendor."""
+    with pytest.raises(UserError, match="no prefix Runa routes"):
+        ModelProvider().get_model(model_name)
+
+
+def test_no_name_at_all_is_runas_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`None` still means Runa's default model; only a real name can be an unroutable one."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    assert isinstance(ModelProvider().get_model(None), OpenAICompatibleModel)
 
 
 @pytest.mark.parametrize(
