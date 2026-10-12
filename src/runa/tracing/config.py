@@ -18,7 +18,7 @@ import json
 import os
 from collections.abc import Callable
 from contextvars import ContextVar, Token
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -255,38 +255,31 @@ def add_exporter(exporter: TraceExporter) -> None:
     _set_default(_merge(_default, {"exporters": [*_resolved_default_exporters(), exporter]}))
 
 
-def _updates(
-    *,
-    capture_inputs: bool | None,
-    capture_outputs: bool | None,
-    redact: list[str] | None,
-    redactor: Callable[[Any], Any] | None,
-    max_input_bytes: int | None,
-    max_output_bytes: int | None,
-    max_tool_result_bytes: int | None,
-    exporter: TraceExporter | list[TraceExporter] | None,
-) -> dict[str, Any]:
+_OVERRIDABLE = tuple(f.name for f in fields(Policy) if f.name != "exporters")
+"""Every `Policy` field an `observe(...)` call overrides under the field's own name.
+
+Read off `Policy` rather than written out again, so a ninth setting is a field plus the two
+public signatures that are its API -- not a third and fourth copy of the same list. `exporters`
+is the one field left out: it is set through `exporter=`, singular, which also takes a bare
+exporter rather than a one-item list.
+"""
+
+
+def _updates(named: dict[str, Any]) -> dict[str, Any]:
     """The overrides that were actually named, as the `Policy` field names `_merge` takes.
 
-    Both call sites spell their options out as keyword-only parameters, so a misspelled one is a
-    `TypeError` where it was written; this is only the shared translation of what they collected.
-    Keyword-only here too, because five of the eight share a type with a neighbour: forwarded
-    positionally, a swapped `max_input_bytes`/`max_output_bytes` would type-check perfectly.
+    `named` is the calling signature's own `locals()`, which holds exactly one entry per
+    parameter -- the same seam `Agent.__init__` hands `_settings`. Both call sites spell their
+    options out as keyword-only parameters, so a misspelled one is a `TypeError` where it was
+    written; this is only the shared translation of what they collected, and it reads the names
+    off `_OVERRIDABLE` instead of forwarding them one by one. That the forwarding is gone is the
+    point: five of the eight options share a type with a neighbour, so a hand-copied
+    `max_input_bytes`/`max_output_bytes` swap would have type-checked perfectly. A parameter
+    renamed out of step with its field now raises here on the first call rather than overriding
+    nothing. Anything else `named` carries (`self`) is never read.
     """
-    updates: dict[str, Any] = {
-        k: v
-        for k, v in {
-            "capture_inputs": capture_inputs,
-            "capture_outputs": capture_outputs,
-            "redact": redact,
-            "redactor": redactor,
-            "max_input_bytes": max_input_bytes,
-            "max_output_bytes": max_output_bytes,
-            "max_tool_result_bytes": max_tool_result_bytes,
-        }.items()
-        if v is not None
-    }
-    if exporter is not None:
+    updates: dict[str, Any] = {n: named[n] for n in _OVERRIDABLE if named[n] is not None}
+    if (exporter := named["exporter"]) is not None:
         updates["exporters"] = exporter if isinstance(exporter, list) else [exporter]
     return updates
 
@@ -356,21 +349,7 @@ class observe:
         at that line -- pointing at `observe.scoped(...)` -- rather than a block whose policy
         silently outlives it.
         """
-        _set_default(
-            _merge(
-                _default,
-                _updates(
-                    capture_inputs=capture_inputs,
-                    capture_outputs=capture_outputs,
-                    redact=redact,
-                    redactor=redactor,
-                    max_input_bytes=max_input_bytes,
-                    max_output_bytes=max_output_bytes,
-                    max_tool_result_bytes=max_tool_result_bytes,
-                    exporter=exporter,
-                ),
-            )
-        )
+        _set_default(_merge(_default, _updates(locals())))
 
     @staticmethod
     def scoped(
@@ -389,18 +368,7 @@ class observe:
         Nothing is applied until the block is entered, and everything is restored when it exits.
         An inner block overrides what it names and inherits the rest from the block around it.
         """
-        return _ScopedPolicy(
-            _updates(
-                capture_inputs=capture_inputs,
-                capture_outputs=capture_outputs,
-                redact=redact,
-                redactor=redactor,
-                max_input_bytes=max_input_bytes,
-                max_output_bytes=max_output_bytes,
-                max_tool_result_bytes=max_tool_result_bytes,
-                exporter=exporter,
-            )
-        )
+        return _ScopedPolicy(_updates(locals()))
 
 
 __all__ = [
