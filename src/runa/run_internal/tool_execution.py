@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from runa._items import ConversationItem, parsed_arguments
+from runa._items import ConversationItem, parsed_arguments, tool_result
 from runa._types import RunContextWrapper
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase, ToolInputGuardrailData
@@ -62,7 +62,7 @@ async def _run_tool_call(
     if tool.delegate is None:  # a delegate's own run records its own calls, under its own trace
         run.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(context_wrapper, run.current_agent, tool, result)
-    return {"role": "tool", "tool_call_id": call_id, "content": str(result)}
+    return tool_result(call_id, result)
 
 
 def _arguments_or_error(args_json: str) -> dict[str, Any] | str:
@@ -136,13 +136,7 @@ async def _run_message_tool_calls(
             span = run.span(handoff.tool_name, "handoff")
             _close_span(span)
             await run.hooks.on_handoff(context_wrapper, agent, switched_agent)
-            results.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "content": f"Transferred to {switched_agent.name}.",
-                }
-            )
+            results.append(tool_result(call_id, f"Transferred to {switched_agent.name}."))
             continue
 
         if call_id in ready:
@@ -150,15 +144,13 @@ async def _run_message_tool_calls(
             continue
         tool = shape.find_tool(name)
         if tool is None:
-            results.append(
-                {"role": "tool", "tool_call_id": call_id, "content": f"error: unknown tool {name}"}
-            )
+            results.append(tool_result(call_id, f"error: unknown tool {name}"))
             continue
 
         args_json = call["function"]["arguments"] or "{}"
         args = _arguments_or_error(args_json)
         if isinstance(args, str):
-            results.append({"role": "tool", "tool_call_id": call_id, "content": args})
+            results.append(tool_result(call_id, args))
             continue
         gate = await context_wrapper.approval_ledger.decide(
             tool.name,
@@ -173,7 +165,7 @@ async def _run_message_tool_calls(
             )
             continue
         if gate.action == "reject":
-            results.append({"role": "tool", "tool_call_id": call_id, "content": gate.message})
+            results.append(tool_result(call_id, gate.message))
             continue
 
         runs[len(results)] = partial(_run_tool_call, run, tool, call)

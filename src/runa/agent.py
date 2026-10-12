@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from runa import content
-from runa._items import ConversationItem
+from runa._items import ConversationItem, user_message
 from runa._models import DEFAULT_MODEL, Model, ModelProvider, check_model_name
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
@@ -119,8 +119,7 @@ def _turn_input(
     With no `session`, the result joins `history` as a new user message. With a `session`, only
     the new turn is ever sent (prior turns come back from the session itself): a plain string
     passes straight through, a multimodal one is wrapped in a single-item message list instead,
-    since the loop's session path only wraps a bare string into `{"role": "user", ...}`
-    itself.
+    since the loop's session path only wraps a bare string into a user message itself.
     """
     if isinstance(message, RunState):
         if context is not None:
@@ -131,8 +130,8 @@ def _turn_input(
         return message
     resolved = message if isinstance(message, str) else content.parts(message)
     if session is not None:
-        return resolved if isinstance(resolved, str) else [{"role": "user", "content": resolved}]
-    return [*history, {"role": "user", "content": resolved}]
+        return resolved if isinstance(resolved, str) else [user_message(resolved)]
+    return [*history, user_message(resolved)]
 
 
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")

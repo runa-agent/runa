@@ -1,4 +1,4 @@
-"""_items.py: the conversation item, and every reader of one.
+"""_items.py: the conversation item, and every reader and writer of one.
 
 A `ConversationItem` is one turn of conversation as Runa's runtime passes it around: a plain
 dict in OpenAI's chat-completions wire format (`tool_calls` on an assistant message,
@@ -16,6 +16,13 @@ guesswork -- `content` is a string on one turn and a list of parts on the next, 
 carries no text at all -- so every reader in Runa goes through this module rather than guessing
 locally. Adding a content kind (reasoning blocks, citations, audio) is then a change to
 `content_text` here, not to a parser in each of six modules.
+
+Writing one is the same bet pointed the other way. Only two shapes are Runa's own to build --
+the user message a turn arrives as, and the result a tool call comes back as -- and they are
+built by `user_message` and `tool_result` here, so giving either a field (structured content, an
+`is_error` flag on a failed call) is a change to one function rather than to every site that
+wrote the dict out by hand. Everything else in history is a model's output, read, never
+constructed.
 """
 
 import json
@@ -26,6 +33,26 @@ ConversationItem = dict[str, Any]
 tool result. Plain JSON, never a provider SDK type, and one shape in both directions: a model's
 output item becomes the next turn's input item once appended to history.
 """
+
+
+def user_message(content: str | list[Any]) -> ConversationItem:
+    """This turn's words, as the user message that carries them into a run.
+
+    `content` is a plain string, or the parts list `runa.content` builds for a multimodal turn:
+    both ride in the same item, a parts list being how the chat-completions shape spells one.
+    """
+    return {"role": "user", "content": content}
+
+
+def tool_result(call_id: str, content: object) -> ConversationItem:
+    """One tool call's result, as the item answering the call `call_id` names.
+
+    Every result a turn produces leaves through here -- what a tool returned, a handoff
+    acknowledgement, a rejected call's message, an error the model should see and retry from --
+    so the shape, and the rule that a result reads as text whatever the tool returned, are
+    stated once instead of at each of those sites.
+    """
+    return {"role": "tool", "tool_call_id": call_id, "content": str(content)}
 
 
 def content_text(content: Any) -> str:
@@ -113,4 +140,6 @@ __all__ = [
     "latest_user_text",
     "role_and_text",
     "parsed_arguments",
+    "tool_result",
+    "user_message",
 ]

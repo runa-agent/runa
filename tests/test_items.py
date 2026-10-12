@@ -1,4 +1,4 @@
-"""Tests for `runa._items`: the one reader of a chat-completions-shaped conversation item."""
+"""Tests for `runa._items`: the one reader and writer of a chat-completions-shaped item."""
 
 import pytest
 
@@ -10,7 +10,36 @@ from runa._items import (
     latest_user_text,
     parsed_arguments,
     role_and_text,
+    tool_result,
+    user_message,
 )
+
+
+def test_user_message_carries_this_turn_into_a_run() -> None:
+    """A turn's words become the one item shape the loop starts from."""
+    assert user_message("hello") == {"role": "user", "content": "hello"}
+
+
+def test_user_message_keeps_a_multimodal_turn_as_parts() -> None:
+    """A parts list is how the wire shape spells a multimodal turn, so it rides unflattened."""
+    parts = [{"type": "text", "text": "what is this"}, {"type": "image_url", "image_url": {}}]
+
+    assert user_message(parts) == {"role": "user", "content": parts}
+
+
+def test_tool_result_answers_the_call_it_names() -> None:
+    """A result is tied to its call by `tool_call_id`, which is what the model matches on."""
+    assert tool_result("c1", "sunny") == {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "content": "sunny",
+    }
+
+
+def test_tool_result_reads_as_text_whatever_the_tool_returned() -> None:
+    """A tool returning a number or a dict still comes back as words for the model to read."""
+    assert tool_result("c1", 42)["content"] == "42"
+    assert tool_result("c2", {"ok": True})["content"] == "{'ok': True}"
 
 
 def test_content_text_passes_a_plain_string_through() -> None:

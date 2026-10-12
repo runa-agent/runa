@@ -14,7 +14,13 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
-from runa._items import ConversationItem, item_text, latest_user_index, latest_user_text
+from runa._items import (
+    ConversationItem,
+    item_text,
+    latest_user_index,
+    latest_user_text,
+    user_message,
+)
 from runa._models import ModelRequest
 from runa._types import RunContextWrapper, Usage
 from runa.exceptions import (
@@ -451,7 +457,7 @@ async def _run_async(
     if run_config.group_id is not None or run_config.trace_metadata is not None:
         trace.metadata = {**(run_config.trace_metadata or {}), "group_id": run_config.group_id}
 
-    turn_input = [{"role": "user", "content": input}] if isinstance(input, str) else list(input)
+    turn_input = [user_message(input)] if isinstance(input, str) else list(input)
     history = await session.get_items() if session is not None else []
     items = [*history, *turn_input]
     query = latest_user_text(turn_input)
