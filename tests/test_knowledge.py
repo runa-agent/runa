@@ -263,6 +263,139 @@ def test_a_second_instance_searches_what_the_first_ingested(tmp_path: Path) -> N
     assert _embedded == ["query about pets"]
 
 
+class _WatchedStore:
+    """A `KnowledgeStore` wrapper that records what an ingest did, and in what order.
+
+    Wraps a real store rather than faking one, so the `version()` each step sees is the one a
+    reader in another process would get from the same storage.
+    """
+
+    def __init__(self, inner: KnowledgeStore) -> None:
+        self._inner = inner
+        #: One entry per call, each the operation's name and the version visible as it ran.
+        self.steps: list[tuple[str, str | None]] = []
+
+    async def _note(self, operation: str) -> None:
+        self.steps.append((operation, await self._inner.version()))
+
+    async def add(self, *, text: str, source: str, embedding: list[float]) -> int:
+        await self._note("add")
+        return await self._inner.add(text=text, source=source, embedding=embedding)
+
+    async def search(self, *, embedding: list[float], k: int) -> list[KnowledgeMatch]:
+        await self._note("search")
+        return await self._inner.search(embedding=embedding, k=k)
+
+    async def reset(self) -> None:
+        await self._inner.reset()
+        await self._note("reset")
+
+    async def stamp(self, version: str) -> None:
+        await self._inner.stamp(version)
+        await self._note("stamp")
+
+    async def version(self) -> str | None:
+        return await self._inner.version()
+
+
+def _watched(tmp_path: Path, source_dir: Path) -> tuple[Knowledge, _WatchedStore]:
+    store = _WatchedStore(SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS))
+    know = Knowledge(source_dir, dimensions=_DIMENSIONS, store=store)
+    return know, store
+
+
+def test_no_version_is_published_until_every_chunk_has_landed(tmp_path: Path) -> None:
+    """The store reports no corpus for the whole of an ingest, and this one only at the end.
+
+    The window this closes is the one a `runa.serve` worker hits on every cold start: a version
+    stamped before the embedding round trip and the inserts behind it tells every other reader of
+    the same storage that the corpus is there, so each of them skips its own ingest and searches
+    whatever has arrived so far -- and an empty knowledge block reads exactly like a corpus with
+    nothing relevant in it, so nothing downstream can tell.
+    """
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    (source_dir / "dogs.md").write_text("dogs are loyal companions")
+    know, store = _watched(tmp_path, source_dir)
+
+    asyncio.run(know.ingest())
+
+    assert [operation for operation, _ in store.steps] == ["reset", "add", "add", "stamp"]
+    # Every step before the last saw an unversioned store: nothing claimed this corpus early.
+    assert [version for _, version in store.steps[:-1]] == [None, None, None]
+    assert store.steps[-1][1] == asyncio.run(know._fingerprint())
+
+
+def test_an_empty_corpus_is_stamped_too(tmp_path: Path) -> None:
+    """An empty directory still ends versioned, so it is fingerprinted once and not per turn."""
+    know, store = _watched(tmp_path, tmp_path / "knowledge")
+
+    assert asyncio.run(know.ingest()) == 0
+    assert [operation for operation, _ in store.steps] == ["reset", "stamp"]
+    assert asyncio.run(store.version()) == asyncio.run(know._fingerprint())
+
+
+def test_an_ingest_that_dies_midway_leaves_nothing_claiming_the_corpus(tmp_path: Path) -> None:
+    """A crash between `reset` and `stamp` costs the next search a rebuild, not a thin answer.
+
+    The deliberate trade of stamping last: an interrupted ingest is wasted work, where a version
+    left standing over rows that never arrived is a wrong answer with no mark on it.
+    """
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    store = SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS)
+    know = Knowledge(source_dir, dimensions=_DIMENSIONS, store=store)
+
+    async def _die_after_reset() -> None:
+        async def boom(*, text: str, source: str, embedding: list[float]) -> int:
+            raise RuntimeError("process died mid-ingest")
+
+        original = store.add
+        store.add = boom  # type: ignore[method-assign]
+        try:
+            with pytest.raises(RuntimeError):
+                await know.ingest()
+        finally:
+            store.add = original  # type: ignore[method-assign]
+
+    asyncio.run(_die_after_reset())
+
+    assert asyncio.run(store.version()) is None
+    # A fresh instance, as the next process would be: it rebuilds rather than trusting the store.
+    assert [
+        m.text
+        for m in asyncio.run(_knowledge(tmp_path, source_dir).search("query about pets", k=1))
+    ] == ["cats are great pets"]
+
+
+def test_concurrent_searches_on_a_cold_store_ingest_once(tmp_path: Path) -> None:
+    """Two turns arriving together embed the corpus once between them, not once each.
+
+    The `runa.serve` shape: `Agent(knowledge="auto")` builds a `Knowledge` per agent and an agent
+    per request, so concurrent requests against a cold store are the common case, not an edge one.
+    Counted in embedding calls, because that is the bill a duplicate rebuild runs up.
+    """
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+
+    async def _both() -> list[list[KnowledgeMatch]]:
+        first = _knowledge(tmp_path, source_dir)
+        second = _knowledge(tmp_path, source_dir)
+        return list(
+            await asyncio.gather(
+                first.search("query about pets", k=1), second.search("query about pets", k=1)
+            )
+        )
+
+    results = asyncio.run(_both())
+
+    assert [[m.text for m in found] for found in results] == [["cats are great pets"]] * 2
+    assert _embedded.count("cats are great pets") == 1
+
+
 def test_search_reingests_after_a_source_file_changes(tmp_path: Path) -> None:
     """Editing a file is picked up by the next `search`, with no manual `.ingest()` call."""
     source_dir = tmp_path / "knowledge"
@@ -425,8 +558,11 @@ def test_custom_store_can_be_injected() -> None:
                 for idx, item in enumerate(self.added, start=1)
             ]
 
-        async def reset(self, *, version: str | None = None) -> None:
+        async def reset(self) -> None:
             self.added = []
+            self.recorded = None
+
+        async def stamp(self, version: str) -> None:
             self.recorded = version
 
         async def version(self) -> str | None:
@@ -438,8 +574,8 @@ def test_custom_store_can_be_injected() -> None:
     async def _run() -> list[KnowledgeMatch]:
         # Stamping the store with this corpus's fingerprint is what tells `search` not to
         # rebuild, the same way an earlier process's `ingest()` would have.
-        await store.reset(version=await know._fingerprint())
         await store.add(text="cats are great pets", source="manual", embedding=[0.0])
+        await store.stamp(await know._fingerprint())
         return await know.search("anything")
 
     matches = asyncio.run(_run())

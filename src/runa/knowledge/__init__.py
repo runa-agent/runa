@@ -13,10 +13,10 @@ Kept deliberately separate: `Memory` is durable facts about a user, learned from
 Whether the corpus has been ingested is the store's answer, not a flag on the `Knowledge` object:
 `Agent(knowledge="auto")` builds a fresh `Knowledge` per agent and `runa.serve` builds an agent
 per request, so instance state would have every request re-embed the whole directory into the one
-shared store. `KnowledgeStore.reset`/`.version` is where that decision lives instead. The one
-piece of process-local state here, `_digests`, answers a different question -- "what would I
-write", a pure function of the files on disk -- so an empty cache costs a re-read and never a
-re-embed.
+shared store. `KnowledgeStore.reset`/`.stamp`/`.version` is where that decision lives instead.
+The two pieces of process-local state here answer different questions: `_digests` answers "what
+would I write", a pure function of the files on disk, so an empty cache costs a re-read and never
+a re-embed; `_ingest_locks` keeps one process from embedding one corpus twice at once.
 
 `run_internal.run_loop._run_async` is what makes retrieval automatic during `run`, see its
 `knowledge`/`_knowledge_block` handling. `KnowledgeLike` is the contract a wholesale custom
@@ -31,6 +31,7 @@ from typing import Any, Protocol
 
 from runa import db
 from runa._log import logger
+from runa._loop import LoopCache
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.knowledge.sqlite import SQLiteKnowledgeStore
 from runa.knowledge.store import KnowledgeMatch, KnowledgeStore
@@ -75,6 +76,14 @@ def _discover(directory: Path) -> list[Path]:
 # besides the files, so two `Knowledge` objects over one directory with different `model=`s don't
 # read each other's entry.
 _digests: dict[tuple[Path, str], tuple[_Stats, str]] = {}
+
+# One ingest of one corpus at a time. `Agent(knowledge="auto")` builds a `Knowledge` per agent and
+# `runa.serve` an agent per request, so two concurrent turns arriving at a cold store would
+# otherwise both rebuild it: paying for the whole corpus's embeddings twice, and -- since one's
+# `reset` can land between the other's last `add` and its `stamp` -- able to leave a version
+# standing over rows that were just wiped. Keyed like `_digests`, and per event loop because an
+# `asyncio.Lock` belongs to the loop that first awaits it (see `_loop.py`).
+_ingest_locks: LoopCache[tuple[Path, str], asyncio.Lock] = LoopCache()
 
 
 def _stats(paths: list[Path]) -> _Stats:
@@ -170,8 +179,22 @@ class Knowledge:
         self.dimensions: int = resolve_dimensions(model, dimensions)
         self._store: KnowledgeStore = store or db.knowledge_store(dimensions=self.dimensions)
 
+    @property
+    def _header(self) -> str:
+        """What a fingerprint hashes besides the files: the model, its size, and the chunk shape.
+
+        Also this corpus's identity for `_digests` and `_ingest_locks`, which is the same
+        question both times: two `Knowledge` objects agree about a store's contents exactly when
+        they agree about these and the directory.
+        """
+        return f"{self.model}\0{self.dimensions}\0{_CHUNK_SIZE}\0{_CHUNK_OVERLAP}"
+
+    def _lock(self) -> asyncio.Lock:
+        """This corpus's ingest lock on the running loop, built on first use there."""
+        return _ingest_locks.get((self.directory, self._header), asyncio.Lock)
+
     async def _fingerprint(self) -> str:
-        """A hash of everything the stored chunks would be built from, as `search` compares it.
+        """A hash of all the chunks would be built from, as `_ingest_if_stale` compares it.
 
         Internal: the public surface stays `search`/`ingest`, and a version is the store's
         vocabulary, not an application's.
@@ -185,8 +208,7 @@ class Knowledge:
         every knowledge-backed run. `_digest` caches it per process, so the usual answer costs
         one `stat` per file rather than a full read.
         """
-        header = f"{self.model}\0{self.dimensions}\0{_CHUNK_SIZE}\0{_CHUNK_OVERLAP}"
-        return await asyncio.to_thread(_digest, self.directory, header)
+        return await asyncio.to_thread(_digest, self.directory, self._header)
 
     async def ingest(self) -> int:
         """Rebuild the knowledge base from `self.directory`, returning how many chunks it stored.
@@ -198,9 +220,28 @@ class Knowledge:
         doesn't exist or has no supported files: stores nothing rather than raising, and an empty
         corpus is still a fingerprinted one.
 
+        One ingest of one corpus at a time per process, so a manual rebuild and the automatic one
+        behind a `search` can't interleave their writes into the one store they share.
+        """
+        async with self._lock():
+            return await self._rebuild()
+
+    async def _rebuild(self) -> int:
+        """`ingest`'s work, with its lock already held: empty the store, refill it, then stamp it.
+
         The fingerprint is taken before the files are read, so a file edited mid-ingest is stored
         under the older fingerprint and the next `search` rebuilds. The safe direction: a corpus
         that looks staler than it is costs one rebuild, where one that looks fresher is wrong.
+
+        Which is also why the store is stamped at the end, after the last `add`, rather than by
+        the `reset` that empties it at the start. A version is a claim that the store *holds* this
+        corpus, and that only becomes true once the rows are there; stamped up front it would be
+        false for as long as the embedding round trip and the inserts behind it take. Every other
+        reader of this storage -- the next request's `Knowledge`, a second replica -- would
+        believe the claim, skip its own ingest, and search a corpus that was still arriving, which
+        is the one failure that leaves no mark on an answer. Between the `reset` and the `stamp`
+        the store is unversioned instead: the state that costs a rebuild rather than a quietly
+        thin answer.
 
         An empty corpus is logged, the way `agent._load_prompt` logs a missing prompt file, and
         for the same reason: retrieval is the one step whose failure leaves no mark on the output
@@ -215,18 +256,34 @@ class Knowledge:
             for path in _discover(self.directory)
             for chunk in _chunk(_extract_text(path))
         ]
-        await self._store.reset(version=fingerprint)
-        if not chunks:
+        await self._store.reset()
+        if chunks:
+            vectors = await embed([text for text, _ in chunks], model=self.model)
+            for (text, source), vector in zip(chunks, vectors, strict=True):
+                await self._store.add(text=text, source=source, embedding=vector)
+        else:
             logger.warning(
                 "knowledge base is empty: no %s files under %s",
                 "/".join(sorted(_SUPPORTED_EXTENSIONS)),
                 self.directory,
             )
-            return 0
-        vectors = await embed([text for text, _ in chunks], model=self.model)
-        for (text, source), vector in zip(chunks, vectors, strict=True):
-            await self._store.add(text=text, source=source, embedding=vector)
+        await self._store.stamp(fingerprint)
         return len(chunks)
+
+    async def _ingest_if_stale(self) -> None:
+        """Rebuild the corpus unless the store already holds it: `search`'s first step.
+
+        The version is read twice, once before taking the lock and once under it. The first read
+        is the common case, where the corpus is current and a search pays only for that one
+        question; the second is what keeps a queue of concurrent turns against a cold store from
+        each rebuilding what the turn ahead of it just finished.
+        """
+        fingerprint = await self._fingerprint()
+        if await self._store.version() == fingerprint:
+            return
+        async with self._lock():
+            if await self._store.version() != fingerprint:
+                await self._rebuild()
 
     async def search(self, query: str, *, k: int = 5) -> list[KnowledgeMatch]:
         """Return the `k` chunks closest in meaning to `query`, nearest first.
@@ -240,8 +297,7 @@ class Knowledge:
         corpus searches it instead of rebuilding it -- which is what a per-request `Agent`
         (`runa.serve`) and every replica after the first are.
         """
-        if await self._store.version() != await self._fingerprint():
-            await self.ingest()
+        await self._ingest_if_stale()
         (vector,) = await embed([query], model=self.model)
         return await self._store.search(embedding=vector, k=k)
 

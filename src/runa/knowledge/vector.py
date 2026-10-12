@@ -40,12 +40,16 @@ class VectorKnowledgeStore:
         found = await self._vectors.nearest(embedding=embedding, k=k)
         return [_match(row) for row in found]
 
-    async def reset(self, *, version: str | None = None) -> None:
-        """Empty the store and record `version` as the corpus it is about to hold."""
-        await self._vectors.reset(version=version)
+    async def reset(self) -> None:
+        """Empty the store, and clear the version with it."""
+        await self._vectors.reset()
+
+    async def stamp(self, version: str) -> None:
+        """Record `version` as the corpus the store now holds, leaving the chunks alone."""
+        await self._vectors.stamp(version)
 
     async def version(self) -> str | None:
-        """The version the last `reset` recorded, or `None` if it has never been reset."""
+        """The corpus the last `stamp` recorded, or `None` if nothing has been stamped."""
         return await self._vectors.version()
 
 

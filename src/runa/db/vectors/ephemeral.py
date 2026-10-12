@@ -98,14 +98,18 @@ class EphemeralVectorStore:
             if not (row[0] == item_id and self._in_scope(row[1], partition))
         ]
 
-    async def reset(self, *, version: str | None = None) -> None:
-        """Delete every row and embedding, recording `version`, and leave the id counter alone."""
+    async def reset(self) -> None:
+        """Delete every row, embedding and version, and leave the id counter alone."""
         table = self._table
         table.rows.clear()
-        table.version = version
+        table.version = None
+
+    async def stamp(self, version: str) -> None:
+        """Record `version` as what the store now holds, replacing any earlier one."""
+        self._table.version = version
 
     async def version(self) -> str | None:
-        """What the last `reset` recorded, or `None` if nothing has been reset or stamped."""
+        """What the last `stamp` recorded, or `None` if nothing has been stamped since a `reset`."""
         return self._table.version
 
 

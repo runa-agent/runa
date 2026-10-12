@@ -226,11 +226,12 @@ async def check_nearest_on_a_reset_store_is_empty(build: Build, tag: str) -> Non
     assert await store.nearest(embedding=_NEAR, k=5) == []
 
 
-async def check_version_round_trips_through_reset(build: Build, tag: str) -> None:
-    """`reset(version=...)` is what a later `version()` reports, so an ingest is detectable."""
+async def check_version_round_trips_through_stamp(build: Build, tag: str) -> None:
+    """`stamp(...)` is what a later `version()` reports, so an ingest is detectable."""
     store = build(flat())
+    await store.reset()
 
-    await store.reset(version=f"{tag}-v1")
+    await store.stamp(f"{tag}-v1")
 
     assert await store.version() == f"{tag}-v1"
 
@@ -244,14 +245,40 @@ async def check_version_is_none_until_one_is_recorded(build: Build, tag: str) ->
     assert await store.version() is None
 
 
-async def check_reset_replaces_the_previous_version(build: Build, tag: str) -> None:
-    """A second `reset` leaves one version, not two: the store holds one corpus at a time."""
+async def check_reset_clears_the_version(build: Build, tag: str) -> None:
+    """`reset` drops the version with the rows, so a half-written corpus claims nothing.
+
+    `Knowledge._rebuild` resets, refills and only then stamps, so this is what makes the gap
+    between those cost another process a rebuild rather than a search of a partial corpus.
+    """
+    store = build(flat())
+    await store.stamp(f"{tag}-v1")
+
+    await store.reset()
+
+    assert await store.version() is None
+
+
+async def check_stamp_replaces_the_previous_version(build: Build, tag: str) -> None:
+    """A second `stamp` leaves one version, not two: the store holds one corpus at a time."""
     store = build(flat())
 
-    await store.reset(version=f"{tag}-v1")
-    await store.reset(version=f"{tag}-v2")
+    await store.stamp(f"{tag}-v1")
+    await store.stamp(f"{tag}-v2")
 
     assert await store.version() == f"{tag}-v2"
+
+
+async def check_stamp_keeps_every_row(build: Build, tag: str) -> None:
+    """`stamp` records a version and nothing else: it lands after the rows it describes."""
+    store = build(flat())
+    await store.reset()
+    await store.add(payload={"text": "near", "source": f"{tag}-a.md"}, embedding=_NEAR)
+
+    await store.stamp(f"{tag}-v1")
+
+    matches = await store.nearest(embedding=_NEAR, k=5)
+    assert [match.payload["text"] for match in matches] == ["near"]
 
 
 async def check_a_version_survives_a_new_store_over_the_same_rows(build: Build, tag: str) -> None:
@@ -261,7 +288,7 @@ async def check_a_version_survives_a_new_store_over_the_same_rows(build: Build, 
     fresh `Knowledge`, and it has to be able to tell that the corpus is already ingested.
     """
     spec = flat()
-    await build(spec).reset(version=f"{tag}-v1")
+    await build(spec).stamp(f"{tag}-v1")
 
     assert await build(spec).version() == f"{tag}-v1"
 
@@ -283,8 +310,10 @@ CONTRACT: list[Check] = [
     check_an_unpartitioned_store_searches_everything,
     check_reset_removes_every_row,
     check_nearest_on_a_reset_store_is_empty,
-    check_version_round_trips_through_reset,
+    check_version_round_trips_through_stamp,
     check_version_is_none_until_one_is_recorded,
-    check_reset_replaces_the_previous_version,
+    check_reset_clears_the_version,
+    check_stamp_replaces_the_previous_version,
+    check_stamp_keeps_every_row,
     check_a_version_survives_a_new_store_over_the_same_rows,
 ]

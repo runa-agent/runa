@@ -12,12 +12,12 @@ virtual table), `postgres.py` (a `pgvector` column) and `ephemeral.py` (brute fo
 
 This seam is plumbing, not a primitive. An application never holds a `VectorStore`: it holds a
 `Memory` or a `Knowledge`, and `Memory(store=...)` still takes a `MemoryStore`. A fourth backend
-implements the five methods below and is held to `tests/contracts/vector.py`, the same contract
+implements the six methods below and is held to `tests/contracts/vector.py`, the same contract
 the three in-tree adapters answer.
 
-`reset`/`version` is the one pair only `Knowledge` uses, and it lives at this layer rather than
-above it because a version has to be written in the same transaction as the rows it describes,
-which only an adapter can do. `Memory` resets with no version and never reads one.
+`reset`/`stamp`/`version` is the one trio only `Knowledge` uses, and it lives at this layer rather
+than above it because a version has to be stored wherever the rows are, durably and atomically,
+which only an adapter can do. `Memory` never resets and keeps no version.
 
 Distance is L2 in every adapter: `vec0`'s default, `pgvector`'s `<->`, and `math.sqrt` of the
 summed squares in process. `Memory._DUPLICATE_DISTANCE` compares against it, so the three have to
@@ -120,18 +120,29 @@ class VectorStore(Protocol):
         """
         ...
 
-    async def reset(self, *, version: str | None = None) -> None:
-        """Delete every row and embedding, recording `version` as what the store now holds.
+    async def reset(self) -> None:
+        """Delete every row and embedding, and clear the version along with them.
 
-        One operation rather than a `clear` and a separate write, because the two have to agree:
-        a version that outlived the rows it describes would claim a corpus the store no longer
-        has, and every adapter here can empty the tables and stamp them in one transaction.
-        `None` is for a caller that keeps no version (`Memory`), and leaves `version()` empty.
+        Emptying and unversioning are one operation because the two have to agree: a version that
+        outlived the rows it describes would claim a corpus the store no longer has, and
+        `Knowledge.search` would then return nothing, forever, instead of re-ingesting. So an
+        emptied store is always an unversioned one, and a caller that is about to refill it says
+        what it put there afterwards, with `stamp`.
+        """
+        ...
+
+    async def stamp(self, version: str) -> None:
+        """Record `version` as what the store now holds, leaving the rows alone.
+
+        Separate from `reset`, and called after the last `add` rather than by the `reset` that
+        emptied the store, because a version is a claim about rows that are already there.
+        Stamped up front it would be a lie for as long as the writes behind it take, and every
+        other reader of this storage would believe it: see `Knowledge._rebuild`, the one caller.
         """
         ...
 
     async def version(self) -> str | None:
-        """What the last `reset` recorded, or `None` if nothing has been reset or stamped.
+        """What the last `stamp` recorded, or `None` if nothing has been stamped since a `reset`.
 
         Opaque: a caller that wants to know whether the stored rows are still the ones it would
         write compares its own marker against this. `Knowledge` keeps a hash of its source

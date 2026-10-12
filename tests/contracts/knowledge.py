@@ -80,12 +80,14 @@ async def check_reset_removes_every_chunk(store: KnowledgeStore, tag: str) -> No
     assert await store.search(embedding=_NEAR, k=5) == []
 
 
-async def check_reset_records_the_version_it_was_given(store: KnowledgeStore, tag: str) -> None:
-    """The version `reset` stamped is what `version()` reports.
+async def check_stamp_records_the_version_it_was_given(store: KnowledgeStore, tag: str) -> None:
+    """The version `stamp` recorded is what `version()` reports.
 
     How `Knowledge.search` tells an already-ingested corpus from one it has to build.
     """
-    await store.reset(version=f"{tag}-v1")
+    await store.reset()
+
+    await store.stamp(f"{tag}-v1")
 
     assert await store.version() == f"{tag}-v1"
 
@@ -95,6 +97,31 @@ async def check_version_is_none_when_nothing_stamped_it(store: KnowledgeStore, t
     await store.reset()
 
     assert await store.version() is None
+
+
+async def check_reset_clears_the_version(store: KnowledgeStore, tag: str) -> None:
+    """`reset` un-versions the store, so the chunks and the claim about them never disagree.
+
+    What makes a half-finished `Knowledge._rebuild` cost a rebuild rather than a thin answer: an
+    emptied store reports no corpus until the `stamp` at the end of the refill says otherwise.
+    """
+    await store.reset()
+    await store.stamp(f"{tag}-v1")
+
+    await store.reset()
+
+    assert await store.version() is None
+
+
+async def check_stamp_leaves_the_chunks_alone(store: KnowledgeStore, tag: str) -> None:
+    """`stamp` records a version without touching rows: it is called after the last `add`."""
+    await store.reset()
+    await store.add(text="chunk a", source=f"{tag}-a.md", embedding=_NEAR)
+
+    await store.stamp(f"{tag}-v1")
+
+    assert [match.text for match in await store.search(embedding=_NEAR, k=5)] == ["chunk a"]
+    assert await store.version() == f"{tag}-v1"
 
 
 async def check_search_on_an_empty_store_is_empty(store: KnowledgeStore, tag: str) -> None:
@@ -110,7 +137,9 @@ CONTRACT: list[Check] = [
     check_add_returns_the_new_chunks_id,
     check_search_respects_k,
     check_reset_removes_every_chunk,
-    check_reset_records_the_version_it_was_given,
+    check_stamp_records_the_version_it_was_given,
     check_version_is_none_when_nothing_stamped_it,
+    check_reset_clears_the_version,
+    check_stamp_leaves_the_chunks_alone,
     check_search_on_an_empty_store_is_empty,
 ]

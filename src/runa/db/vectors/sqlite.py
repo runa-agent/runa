@@ -144,22 +144,31 @@ class SQLiteVectorStore:
             conn.execute(f"DELETE FROM {self.items} WHERE id = ? {scope}", tuple(params))
             conn.commit()
 
-    async def reset(self, *, version: str | None = None) -> None:
-        """Delete every row and embedding, recording `version` as what the store now holds.
+    async def reset(self) -> None:
+        """Delete every row, embedding and version, in one commit.
 
-        One commit for all four statements, so a reader never sees the new version over the old
-        rows, or a version with no rows behind it.
+        One commit for all three statements, so a reader never sees the old version over the new
+        emptiness: an unversioned store is one `Knowledge` re-ingests, where a versioned empty one
+        is a corpus it would wrongly believe in.
         """
         with closing(self._connect()) as conn:
             conn.execute(f"DELETE FROM {self.vectors}")
             conn.execute(f"DELETE FROM {self.items}")
             conn.execute(f"DELETE FROM {self.meta}")
-            if version is not None:
-                conn.execute(f"INSERT INTO {self.meta} (version) VALUES (?)", (version,))
+            conn.commit()
+
+    async def stamp(self, version: str) -> None:
+        """Record `version` as what the store now holds, replacing any earlier one.
+
+        Delete and insert in one commit, since `{name}_meta` holds at most one row.
+        """
+        with closing(self._connect()) as conn:
+            conn.execute(f"DELETE FROM {self.meta}")
+            conn.execute(f"INSERT INTO {self.meta} (version) VALUES (?)", (version,))
             conn.commit()
 
     async def version(self) -> str | None:
-        """What the last `reset` recorded, or `None` if nothing has been reset or stamped."""
+        """What the last `stamp` recorded, or `None` if nothing has been stamped since a `reset`."""
         with closing(self._connect()) as conn:
             row = conn.execute(f"SELECT version FROM {self.meta} LIMIT 1").fetchone()
         return row[0] if row is not None else None

@@ -28,12 +28,12 @@ class KnowledgeMatch:
 class KnowledgeStore(Protocol):
     """The storage a `Knowledge` needs: add/search already-embedded chunks, and version the set.
 
-    The escape hatch for `Knowledge(store=...)`: any object with these four async methods works,
+    The escape hatch for `Knowledge(store=...)`: any object with these five async methods works,
     no inheritance required. `SQLiteKnowledgeStore` and `PostgresKnowledgeStore` satisfy it by
     matching shape.
 
-    `reset`/`version` is what makes an ingest a decision about the store rather than about one
-    `Knowledge` object: the store records the fingerprint of the corpus it holds, so a second
+    `reset`/`stamp`/`version` is what makes an ingest a decision about the store rather than about
+    one `Knowledge` object: the store records the fingerprint of the corpus it holds, so a second
     process -- or the next request's `Agent`, which builds its own `Knowledge` -- can see that the
     chunks it would write are already there. A store that cannot persist a version can return
     `None` from `version()`, at the cost of being re-ingested by every instance that searches it.
@@ -47,18 +47,27 @@ class KnowledgeStore(Protocol):
         """Return the `k` chunks closest to `embedding`, nearest first."""
         ...
 
-    async def reset(self, *, version: str | None = None) -> None:
-        """Empty the store and record `version` as the corpus it is about to hold.
+    async def reset(self) -> None:
+        """Empty the store, and clear the version with it.
 
         The whole store, not one source: an ingest re-reads the directory, so a file deleted
-        since the last one has to stop being retrievable. Emptying and stamping are one call
-        because a version that outlived its chunks would claim a corpus the store doesn't have,
-        and `search` would then return nothing, forever, instead of re-ingesting.
+        since the last one has to stop being retrievable. Emptying and *un*versioning are one
+        call because a version that outlived its chunks would claim a corpus the store doesn't
+        have, and `search` would then return nothing, forever, instead of re-ingesting.
+        """
+        ...
+
+    async def stamp(self, version: str) -> None:
+        """Record `version` as the corpus the store now holds, leaving the chunks alone.
+
+        The other half of the pair, and the reason it isn't folded into `reset`: a version claims
+        the chunks are there, so it can only be written once they are. `Knowledge._rebuild` calls
+        this after its last `add`, never before its first.
         """
         ...
 
     async def version(self) -> str | None:
-        """The version the last `reset` recorded, or `None` if the store has never been reset."""
+        """The corpus the last `stamp` recorded, `None` if nothing has since a `reset`."""
         ...
 
 

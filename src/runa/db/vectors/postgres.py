@@ -126,21 +126,29 @@ class PostgresVectorStore(Shared):
             *params,
         )
 
-    async def reset(self, *, version: str | None = None) -> None:
-        """Delete every row and embedding, recording `version` as what the store now holds.
+    async def reset(self) -> None:
+        """Delete every row, embedding and version, in one transaction.
 
         One transaction, which is what every replica reading these rows needs: without it a
-        concurrent search can see the new version over the old rows.
+        concurrent search can see the old version over the new emptiness.
         """
         pool = await self._pool()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(f"DELETE FROM {self.items}")
             await conn.execute(f"DELETE FROM {self.meta}")
-            if version is not None:
-                await conn.execute(f"INSERT INTO {self.meta} (version) VALUES ($1)", version)
+
+    async def stamp(self, version: str) -> None:
+        """Record `version` as what the store now holds, replacing any earlier one.
+
+        Delete and insert in one transaction, since `{name}_meta` holds at most one row.
+        """
+        pool = await self._pool()
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(f"DELETE FROM {self.meta}")
+            await conn.execute(f"INSERT INTO {self.meta} (version) VALUES ($1)", version)
 
     async def version(self) -> str | None:
-        """What the last `reset` recorded, or `None` if nothing has been reset or stamped."""
+        """What the last `stamp` recorded, or `None` if nothing has been stamped since a `reset`."""
         pool = await self._pool()
         row = await pool.fetchrow(f"SELECT version FROM {self.meta} LIMIT 1")
         return row["version"] if row is not None else None
