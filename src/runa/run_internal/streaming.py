@@ -7,8 +7,9 @@ emitting each raw delta as it arrives.
 """
 
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass
 
+from runa._items import assistant_message, tool_call
 from runa._models import Model, ModelRequest
 from runa._types import ModelResponse, Usage
 from runa.stream_events import RawResponsesStreamEvent, StreamEvent
@@ -16,10 +17,19 @@ from runa.stream_events import RawResponsesStreamEvent, StreamEvent
 Emit = Callable[[StreamEvent], None]
 
 
+@dataclass
+class _PartialCall:
+    """One tool call mid-arrival: `id`/`name` land once, `arguments` in however many pieces."""
+
+    id: str = ""
+    name: str = ""
+    arguments: str = ""
+
+
 async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> ModelResponse:
     """Consume `model.stream_response(request)` into a `ModelResponse`, emitting each delta."""
     text_parts: list[str] = []
-    tool_calls: dict[int, dict[str, Any]] = {}
+    calls: dict[int, _PartialCall] = {}
     usage = Usage()
 
     async for delta in model.stream_response(request):
@@ -27,24 +37,20 @@ async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> M
         if delta.text:
             text_parts.append(delta.text)
         if delta.tool_call_index is not None:
-            entry = tool_calls.setdefault(
-                delta.tool_call_index,
-                {"id": None, "type": "function", "function": {"name": None, "arguments": ""}},
-            )
+            call = calls.setdefault(delta.tool_call_index, _PartialCall())
             if delta.tool_call_id:
-                entry["id"] = delta.tool_call_id
+                call.id = delta.tool_call_id
             if delta.tool_call_name:
-                entry["function"]["name"] = delta.tool_call_name
+                call.name = delta.tool_call_name
             if delta.tool_call_arguments:
-                entry["function"]["arguments"] += delta.tool_call_arguments
+                call.arguments += delta.tool_call_arguments
         if delta.usage is not None:
             usage = delta.usage
 
-    message = {
-        "role": "assistant",
-        "content": "".join(text_parts) or None,
-        "tool_calls": [tool_calls[i] for i in sorted(tool_calls)] or None,
-    }
+    message = assistant_message(
+        "".join(text_parts),
+        [tool_call(calls[i].id, calls[i].name, calls[i].arguments) for i in sorted(calls)],
+    )
     return ModelResponse(output=[message], usage=usage)
 
 

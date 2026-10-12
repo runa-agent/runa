@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import httpx2 as httpx
 
+from runa._items import assistant_message
 from runa._models.interface import (
     ModelRequest,
     StreamDelta,
@@ -183,11 +184,7 @@ class OpenAICompatibleModel:
         _raise_for_status(response.status_code, response.text)
         data = response.json()
         choice = data["choices"][0]["message"]
-        message: dict[str, Any] = {
-            "role": "assistant",
-            "content": choice.get("content"),
-            "tool_calls": choice.get("tool_calls") or None,
-        }
+        message = assistant_message(choice.get("content"), choice.get("tool_calls"))
         usage = _usage_from_openai(data.get("usage") or {})
         return ModelResponse(output=[message], usage=usage, response_id=data.get("id"))
 

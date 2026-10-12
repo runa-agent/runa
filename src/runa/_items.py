@@ -17,12 +17,15 @@ carries no text at all -- so every reader in Runa goes through this module rathe
 locally. Adding a content kind (reasoning blocks, citations, audio) is then a change to
 `content_text` here, not to a parser in each of six modules.
 
-Writing one is the same bet pointed the other way. Only two shapes are Runa's own to build --
-the user message a turn arrives as, and the result a tool call comes back as -- and they are
-built by `user_message` and `tool_result` here, so giving either a field (structured content, an
-`is_error` flag on a failed call) is a change to one function rather than to every site that
-wrote the dict out by hand. Everything else in history is a model's output, read, never
-constructed.
+Writing one is the same bet pointed the other way. Every item Runa puts into history is built
+here: the user message a turn arrives as, the system block that carries instructions or
+retrieved context, the result a tool call comes back as, and the assistant message a backend
+assembles a provider's response into, with the tool-call envelopes it carries. So giving any of
+them a field (structured content, an `is_error` flag on a failed call) is a change to one
+function rather than to every site that wrote the dict out by hand -- and the rule about when an
+absent field is `None` is stated once rather than copied per backend. A backend owns translating
+its provider's shape into these arguments, which is genuinely its own; it does not own the
+envelope, which is this module's.
 """
 
 import json
@@ -42,6 +45,42 @@ def user_message(content: str | list[Any]) -> ConversationItem:
     both ride in the same item, a parts list being how the chat-completions shape spells one.
     """
     return {"role": "user", "content": content}
+
+
+def assistant_message(
+    text: str | None, tool_calls: list[ConversationItem] | None
+) -> ConversationItem:
+    """The model's turn, as the assistant message a backend assembles its response into.
+
+    Both halves are optional and both spell their absence the same way, as `None` rather than
+    `""`/`[]`: a turn is words, or calls, or both. Backends differ in how they arrive at the two
+    -- one provider hands over a finished string, another a list of content blocks, a stream a
+    pile of deltas -- and that translation is theirs; this envelope is not.
+    """
+    return {"role": "assistant", "content": text or None, "tool_calls": tool_calls or None}
+
+
+def tool_call(call_id: str, name: str, arguments: str) -> ConversationItem:
+    """One call the model made, as the envelope an assistant message's `tool_calls` carries.
+
+    `arguments` stays the JSON string the model produced, unparsed: it round-trips through
+    history and a serialized `RunState` as written, and `parsed_arguments` is how a caller that
+    needs the keyword arguments gets them.
+    """
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+def system_message(content: str) -> ConversationItem:
+    """Instructions, or a block of retrieved context, as the system message carrying them.
+
+    Everything a run tells the model that the user didn't say rides in one of these: an agent's
+    `instructions`, retrieved memories, matching knowledge.
+    """
+    return {"role": "system", "content": content}
 
 
 def tool_result(call_id: str, content: object) -> ConversationItem:
@@ -133,6 +172,7 @@ def parsed_arguments(args_json: str) -> dict[str, Any]:
 
 __all__ = [
     "ConversationItem",
+    "assistant_message",
     "content_text",
     "item_text",
     "latest_text",
@@ -140,6 +180,8 @@ __all__ = [
     "latest_user_text",
     "role_and_text",
     "parsed_arguments",
+    "system_message",
+    "tool_call",
     "tool_result",
     "user_message",
 ]

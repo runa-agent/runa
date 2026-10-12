@@ -10,7 +10,7 @@ from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
 
-from runa._items import content_text, parsed_arguments
+from runa._items import assistant_message, content_text, parsed_arguments, tool_call
 from runa._models.interface import (
     ModelRequest,
     StreamDelta,
@@ -248,18 +248,8 @@ def _to_chat_message(message: Any) -> dict[str, Any]:
         if block.type == "text":
             text_parts.append(block.text)
         elif block.type == "tool_use":
-            tool_calls.append(
-                {
-                    "id": block.id,
-                    "type": "function",
-                    "function": {"name": block.name, "arguments": json.dumps(block.input)},
-                }
-            )
-    return {
-        "role": "assistant",
-        "content": "".join(text_parts) or None,
-        "tool_calls": tool_calls or None,
-    }
+            tool_calls.append(tool_call(block.id, block.name, json.dumps(block.input)))
+    return assistant_message("".join(text_parts), tool_calls)
 
 
 async def _anthropic_deltas(stream: AsyncIterator[Any]) -> AsyncIterator[StreamDelta]:

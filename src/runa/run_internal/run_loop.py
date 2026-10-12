@@ -19,6 +19,7 @@ from runa._items import (
     item_text,
     latest_user_index,
     latest_user_text,
+    system_message,
     user_message,
 )
 from runa._log import logger
@@ -77,13 +78,13 @@ def _parse_output(shape: AgentShape, text: str) -> Any:
 def _memory_block(matches: list[Any]) -> ConversationItem:
     """A small, clearly labeled system message carrying retrieved `MemoryMatch`es."""
     lines = "\n".join(f"- {match.text}" for match in matches)
-    return {"role": "system", "content": f"Relevant memories:\n{lines}"}
+    return system_message(f"Relevant memories:\n{lines}")
 
 
 def _knowledge_block(matches: list[Any]) -> ConversationItem:
     """A small, clearly labeled system message carrying retrieved `KnowledgeMatch`es."""
     lines = "\n".join(f"- {match.text}" for match in matches)
-    return {"role": "system", "content": f"Relevant knowledge:\n{lines}"}
+    return system_message(f"Relevant knowledge:\n{lines}")
 
 
 async def _no_matches() -> list[Any]:

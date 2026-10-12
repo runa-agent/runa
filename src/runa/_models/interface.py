@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from pydantic import TypeAdapter
 
-from runa._items import ConversationItem
+from runa._items import ConversationItem, system_message
 from runa._types import ModelResponse, ModelSettings, Usage
 
 
@@ -34,7 +34,7 @@ class ModelRequest:
         """`input`, with `system_instructions` prepended as a system message if there are any."""
         if not self.system_instructions:
             return list(self.input)
-        return [{"role": "system", "content": self.system_instructions}, *self.input]
+        return [system_message(self.system_instructions), *self.input]
 
 
 class Model(Protocol):
