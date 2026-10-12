@@ -190,6 +190,13 @@ await asyncio.gather(SupportAgent().run("one"), SupportAgent().run("two"))
 Runa in your own web framework, build the agent **inside** the request handler, not at module
 scope.
 
+The agent *class* is the other half: it is resolved once, when the server starts. `runa serve`
+imports `main.py` and `app/` at boot, never per request, so whatever your app keeps at module
+level -- an HTTP client, a connection pool, a cache -- is built once and stays built, and a
+module that fails to import stops the server from starting rather than failing one route at a
+time. Editing `app/agents/` therefore takes a restart; `uvicorn asgi:app --reload` does that for
+you while you work.
+
 ## More than one replica
 
 SQLite is per-process by design. Three replicas with the default settings keep three disjoint

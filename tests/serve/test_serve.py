@@ -222,6 +222,30 @@ def test_agents_are_listed_by_declared_name(client: TestClient) -> None:
     assert response.json() == {"agents": ["support_agent"]}
 
 
+def test_the_app_is_imported_once_not_once_per_request(project: Path) -> None:
+    """Serving imports the app at startup and keeps it: module-level state survives a request.
+
+    `main.py` and everything under `app/` used to be dropped from `sys.modules` and imported
+    again on every request, so whatever an app kept at module level -- an HTTP client, a
+    connection pool, a cache -- was rebuilt under runs already holding the old one, and the
+    event loop paid for the imports. The line appended to `main.py` here stands in for all of
+    that: one import, however many requests.
+    """
+    main_file = project / "main.py"
+    main_file.write_text(
+        main_file.read_text()
+        + '\nwith open(__file__ + ".imports", "a") as _f:\n    _f.write("x")\n'
+    )
+
+    client = TestClient(create_app(project, api_key="secret-token"))
+    for _ in range(3):
+        run = client.post("/agents/support_agent/runs", json={"message": "hi"}, headers=_auth())
+        assert run.status_code == 200
+    assert client.get("/agents", headers=_auth()).status_code == 200
+
+    assert Path(f"{main_file}.imports").read_text() == "x"
+
+
 def test_a_run_returns_output_status_usage_and_a_trace_id(client: TestClient) -> None:
     """The wire shape a client depends on, including the handle for `runa traces show`."""
     response = client.post("/agents/support_agent/runs", json={"message": "hello"}, headers=_auth())

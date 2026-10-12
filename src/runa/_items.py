@@ -7,7 +7,7 @@ That is a deliberate choice, not a neutral interchange format. There is no neutr
 adopting the one two of the three major APIs already speak costs one translating backend
 (`runa._models.anthropic`, the only module that ever converts away from this shape) where
 inventing a third would cost every backend one. The whole argument, and the typed-item
-alternative it rejects, is `docs/adr/0004-the-conversation-item-is-chat-completions-shaped.md`.
+alternative it rejects.
 
 The item stays a plain dict on purpose: `agent.history`, `session.add_items`, a `Compactor` and
 a serialized `RunState` all carry items, so one has to survive a JSON round trip and be readable

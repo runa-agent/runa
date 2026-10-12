@@ -43,8 +43,7 @@ extra has to be able to ask the question and get the SQLite answer.
 
 Each factory repeats the same three-way branch rather than delegating to one resolved backend
 object. That is deliberate: backends are a closed set of three, concerns are the axis that
-grows, and inline branching keeps a new concern at one function in one file. See
-`docs/adr/0005-runa-db-repeats-its-branch-per-concern.md` before collapsing it.
+grows, and inline branching keeps a new concern at one function in one file.
 """
 
 import os
@@ -239,7 +238,7 @@ def memory_store(*, dimensions: int) -> MemoryStore:
     The in-process answer is paired here rather than in a named `memory/ephemeral.py`: nothing
     reaches it by name, so there is nothing for a module to hold but this one line. The two
     named adapters below stay, because `Memory(store=...)` is a sanctioned override and their
-    import paths are documented (see `docs/adr/0001-vector-store-is-app-private.md`).
+    import paths are documented.
     """
     if ephemeral():
         from runa.db.vectors.ephemeral import EphemeralVectorStore

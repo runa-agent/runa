@@ -8,9 +8,14 @@ here.
 
 Four decisions this makes for you, each the one a production deployment wants:
 
-* **An `Agent` is built per request.** An instance carries the conversation it is running (see
-  `Agent.run`), so a module-level agent shared across requests would interleave users' histories.
-  Constructing one is cheap; the alternative is a data leak.
+* **An `Agent` is built per request, from a class resolved once at startup.** An instance carries
+  the conversation it is running (see `Agent.run`), so a module-level agent shared across requests
+  would interleave users' histories. Constructing one is cheap; the alternative is a data leak.
+  The *class* is the other half of that choice: importing the app is what is not cheap, and doing
+  it per request would re-run `main.py` and re-initialize whatever the app keeps at module level --
+  a client, a pool, a cache -- underneath runs already holding the old one. So `create_app`
+  imports the app once, and a server picks up an edit to `app/agents/` by restarting (which is
+  what `uvicorn asgi:app --reload` already does, properly, from the outside).
 * **Conversation state is a `session`, never `self.history`.** A `session_id` in the request body
   is the whole continuity mechanism, and `runa.db` decides where that history lives: the local
   `db/runa.db` by default, the shared Postgres once `RUNA_DATABASE_URL` is set, which is what
@@ -202,17 +207,14 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     db.use_project(root)
     agents_dir = require_agents_dir(root)
 
-    def _agent_classes() -> dict[str, type[Agent]]:
-        """Resolve the app's agents by declared `name`, importing `main.py` first.
-
-        Done per request rather than once at startup so an edit to `app/agents/` is picked up by
-        a reloading server, and so a broken agent module fails that one request instead of
-        preventing the process from starting at all.
-        """
-        with loaded_app(root):
-            return {
-                getattr(cls, "name", cls.__name__): cls for cls in iter_agent_classes(agents_dir)
-            }
+    # The app's agents by declared `name`, imported here and kept: a server resolves them once,
+    # at startup, not once per request (see this module's docstring). A broken agent module
+    # therefore stops the process from starting rather than failing one route, which is the
+    # failure a deployment wants -- found by the thing that rolls out, not by a user.
+    with loaded_app(root):
+        agent_classes = {
+            getattr(cls, "name", cls.__name__): cls for cls in iter_agent_classes(agents_dir)
+        }
 
     async def _authenticate(request: Request) -> None:
         """Require `Authorization: Bearer <RUNA_API_KEY>` unless the server was started open."""
@@ -240,12 +242,11 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     @api.get("/agents")
     def agents() -> dict[str, list[str]]:
         """Every agent this app serves, by the `name` each one declares."""
-        return {"agents": sorted(_agent_classes())}
+        return {"agents": sorted(agent_classes)}
 
     def _build(agent_name: str) -> Agent:
         """A fresh `Agent` for one request; the module docstring says why it is per request."""
-        classes = _agent_classes()
-        agent_cls = classes.get(agent_name)
+        agent_cls = agent_classes.get(agent_name)
         if agent_cls is None:
             raise HTTPException(status_code=404, detail=f"no agent named {agent_name!r}")
         return agent_cls()
