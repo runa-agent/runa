@@ -1650,12 +1650,36 @@ def test_retrieval_does_not_swallow_a_framework_bug() -> None:
 
     class _BuggyKnowledge:
         async def search(self, query: str, *, k: int = 5) -> list[Any]:
-            raise RuntimeError("Event loop is closed")
+            raise AttributeError("'NoneType' object has no attribute 'embed'")
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BuggyKnowledge())
 
-    with pytest.raises(RuntimeError, match="Event loop is closed"):
+    with pytest.raises(AttributeError, match="no attribute 'embed'"):
         asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+
+def test_retrieval_fails_open_on_a_loop_lifetime_fault() -> None:
+    """A closed-loop error is the backend not answering, not Runa's own code being wrong.
+
+    It's what httpx and asyncio raise for a client or pool that outlived the loop it was opened
+    on -- the failure `runa._loop` exists for, because `run_sync` opens a loop per call. A custom
+    store holding its own client has none of that protection, and reaching one shouldn't cost a
+    run that is still worth finishing without knowledge.
+    """
+
+    class _StaleKnowledge:
+        async def search(self, query: str, *, k: int = 5) -> list[Any]:
+            raise RuntimeError("Event loop is closed")
+
+    agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_StaleKnowledge())
+
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+    assert result.output == "ok"
+
+    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
+    assert retrieval_span.status == "error"
+    assert retrieval_span.error == "Event loop is closed"
 
 
 def test_retrieval_misconfiguration_ends_the_run_with_its_trace() -> None:

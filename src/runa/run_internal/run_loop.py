@@ -97,7 +97,20 @@ async def _no_matches() -> list[Any]:
 # they are Runa's own code being wrong, or the app's configuration being incomplete. Retrieval is
 # the one step whose failure leaves no mark on the output (an empty block reads exactly like a
 # corpus with nothing relevant in it), so a bug swallowed here is a bug nobody ever reports.
-_NOT_A_BACKEND_FAULT = (UserError, AttributeError, NameError, TypeError, RuntimeError)
+#
+# Two groups, and nothing else: `UserError`, which the layer below raises when the app hasn't
+# configured what retrieval needs (no embeddings key), and the three exceptions Python raises when
+# an object isn't shaped the way the calling code assumed -- which at this seam is a custom
+# `MemoryLike`/`KnowledgeLike` whose `search` doesn't match the contract, and which would
+# otherwise read as a memory that simply never has anything to say.
+#
+# `RuntimeError` is not a third group, and adding it back inverts this for the one failure the
+# rest of Runa works hardest to handle: it's what async plumbing raises for lifetime faults --
+# httpx's "client has been closed", asyncio's "Event loop is closed", a pool reached from a loop
+# that didn't open it. That is the backend not answering, in its most literal form. `runa._loop`
+# exists for those faults precisely because `run_sync` opens a loop per call; a custom store
+# holding its own client has none of that protection, and shouldn't end a run by hitting them.
+_NOT_A_BACKEND_FAULT = (UserError, AttributeError, NameError, TypeError)
 
 
 async def _retrieve(
