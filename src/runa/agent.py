@@ -310,15 +310,30 @@ def _did_you_mean(name: str) -> str:
     return f" Agent settings are: {', '.join(sorted(_AGENT_FIELDS))}."
 
 
-def _setting[T](cls: type[Agent], passed: T, name: str, absent: Any = None) -> T:
-    """What one setting resolves to: what the constructor was passed, else what `cls` declares.
+_SIGNALLED_WHEN_ABSENT = ("name", "instructions")
+"""The two settings whose caller tells "never given" apart from "given as `None`"."""
 
-    The override wins, which is the whole rule -- `_UNSET` rather than `None` standing for "not
-    passed" so that an override may pass `None` and mean it. `absent` is what neither supplies,
-    `None` for every setting but the two where never being given is itself the signal: a missing
-    `name` is an error, and missing `instructions` means "load `app/prompts/<name>.md`".
+
+def _settings(cls: type[Agent], passed: dict[str, Any]) -> dict[str, Any]:
+    """Every setting resolved: what the constructor was passed, else what `cls` declares.
+
+    `passed` is `__init__`'s own `locals()`, which holds exactly one entry per parameter and so
+    *is* the signature -- the names resolved here are read off it (`_AGENT_FIELDS`) rather than
+    listed a second time, so a setting added to the signature is resolved with no edit here. The
+    override wins, which is the whole rule, `_UNSET` rather than `None` standing for "not passed"
+    so that an override may pass `None` and mean it.
+
+    A setting neither supplies is `None`, except for the two where never being given is itself
+    the signal and `__init__` acts on `_UNSET`: a missing `name` is an error, and missing
+    `instructions` means "load `app/prompts/<name>.md`" where `instructions=None` means it has
+    none.
     """
-    return passed if passed is not _UNSET else getattr(cls, name, absent)
+    resolved: dict[str, Any] = {}
+    for name in _AGENT_FIELDS:
+        absent = _UNSET if name in _SIGNALLED_WHEN_ABSENT else None
+        value = passed[name]
+        resolved[name] = value if value is not _UNSET else getattr(cls, name, absent)
+    return resolved
 
 
 def _resolve_retrieval_setting(
@@ -412,7 +427,8 @@ class Agent:
 
         These parameters *are* the closed set of settings (`_AGENT_FIELDS` is read off this
         signature): each one can be declared on the subclass or passed here, the argument
-        winning, and an unset one falls back to the class attribute of the same name. A name
+        winning, and an unset one falls back to the class attribute of the same name -- in one
+        pass over that tuple (`_settings`), so adding one here resolves it. A name
         that is neither is a `TypeError` from this signature, and a `UserError` naming the
         setting it probably meant when it is declared in a class body instead (see
         `_reject_unknown_settings`).
@@ -459,33 +475,19 @@ class Agent:
             raise TypeError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
         _reject_unknown_settings(cls)
 
-        name = _setting(cls, name, "name", _UNSET)
-        instructions = _setting(cls, instructions, "instructions", _UNSET)
-        model = _setting(cls, model, "model")
-        model_settings = _setting(cls, model_settings, "model_settings")
-        tools = _setting(cls, tools, "tools")
-        subagents = _setting(cls, subagents, "subagents")
-        guardrails = _setting(cls, guardrails, "guardrails")
-        mcp = _setting(cls, mcp, "mcp")
-        mcp_servers = _setting(cls, mcp_servers, "mcp_servers")
-        output_type = _setting(cls, output_type, "output_type")
-        hooks = _setting(cls, hooks, "hooks")
-        memory = _setting(cls, memory, "memory")
-        knowledge = _setting(cls, knowledge, "knowledge")
-        compact = _setting(cls, compact, "compact")
-        max_turns = _setting(cls, max_turns, "max_turns")
-        max_tokens = _setting(cls, max_tokens, "max_tokens")
-        timeout = _setting(cls, timeout, "timeout")
+        setting = _settings(cls, locals())
 
+        name = setting["name"]
         if name is _UNSET:
             raise TypeError(f"{cls.__name__}(...) is missing the required 'name'")
+        instructions = setting["instructions"]
         if instructions is _UNSET:
             instructions = _load_prompt(cls, name)
 
         handoffs: list[Any] = []
-        tools = list(tools or [])
-        mcp_servers = [*(mcp_servers or []), *(mcp or [])]
-        for sub in _flatten_subagents(subagents or []):
+        tools = list(setting["tools"] or [])
+        mcp_servers = [*(setting["mcp_servers"] or []), *(setting["mcp"] or [])]
+        for sub in _flatten_subagents(setting["subagents"] or []):
             if isinstance(sub, Subagent):
                 agent = sub.agent()
                 if sub.mode == "handoff":
@@ -497,29 +499,29 @@ class Agent:
                 handoffs.append(agent)
                 tools.append(agent.as_tool(None, None))
 
-        bound_guardrails = flatten_guardrails(guardrails or [])
-
-        self.memory = _resolve_retrieval_setting(memory, Memory, tools)
-        self.knowledge = _resolve_retrieval_setting(knowledge, Knowledge, tools)
+        self.memory = _resolve_retrieval_setting(setting["memory"], Memory, tools)
+        self.knowledge = _resolve_retrieval_setting(setting["knowledge"], Knowledge, tools)
 
         self.name: str = name
         self.instructions = _adapt_instructions(instructions)
-        self.model: str | Any = _checked_model(model)
-        self.model_settings: ModelSettings = model_settings or ModelSettings()
+        self.model: str | Any = _checked_model(setting["model"])
+        self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
         self.tools: list[FunctionTool] = tools
         self.handoffs: list[Any] = handoffs
         self.mcp_servers: list[Any] = mcp_servers
         # Not `self.guardrails`: that name belongs to the list/dict a subclass declares, the way
         # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
-        self.bound_guardrails: dict[Phase, list[BoundGuardrail]] = bound_guardrails
-        self.output_type: type | None = output_type
-        self.hooks = hooks
+        self.bound_guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
+            setting["guardrails"] or []
+        )
+        self.output_type: type | None = setting["output_type"]
+        self.hooks: Hooks[Any] | None = setting["hooks"]
         # Not `self.compact`: that name belongs to the bool/callable a subclass declares, the way
         # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
-        self.compactor: Compactor | None = _resolve_compactor(compact)
-        self.max_turns: int = max_turns
-        self.max_tokens: int | None = max_tokens
-        self.timeout: float | None = timeout
+        self.compactor: Compactor | None = _resolve_compactor(setting["compact"])
+        self.max_turns: int = setting["max_turns"]
+        self.max_tokens: int | None = setting["max_tokens"]
+        self.timeout: float | None = setting["timeout"]
 
         self.history: list[ConversationItem] = []
         self.usage = Usage()
@@ -815,8 +817,9 @@ _AGENT_FIELDS = tuple(inspect.signature(Agent.__init__).parameters)[1:]
 """Every name that configures an Agent, read off the one place they are written down.
 
 `Agent.__init__`'s keyword-only parameters are the closed set, so the two ways of saying the same
-thing can't drift: each parameter falls back to the class attribute of the same name, and
-`_reject_unknown_settings` refuses any other name in a class body. The constructor needs no such
+thing can't drift: `_settings` walks this tuple to fall each parameter back to the class attribute
+of the same name, and `_reject_unknown_settings` refuses any other name in a class body -- both
+read the signature rather than repeat it. The constructor needs no such
 check, having a signature: an unknown keyword is Python's own `TypeError`, suggesting the name it
 meant, and a type checker has already flagged the call (and a `max_turns="ten"` the validator
 would have let through).

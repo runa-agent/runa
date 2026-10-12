@@ -816,8 +816,9 @@ def test_run_config_carries_every_ceiling_on_the_run() -> None:
 def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() -> None:
     """The merge's other half: a setting passed to `__init__` is read, not merely accepted.
 
-    Each parameter falls back to the class attribute of the same name a line at a time, so the
-    mistake to guard against is a parameter that is accepted and then never read -- which would
+    `_settings` falls every parameter back to the class attribute of the same name in one pass,
+    but each lands on the instance on a line of its own, so the mistake to guard against is a
+    parameter that is accepted and resolved and then never read -- which would
     leave `SupportAgent(model=...)` silently running the declared model. Every name in
     `_AGENT_FIELDS` is passed here, which is what makes that a line-by-line check.
     """
