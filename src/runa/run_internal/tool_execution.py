@@ -87,6 +87,23 @@ async def _needs_approval(
     return bool(await verdict if inspect.isawaitable(verdict) else verdict)
 
 
+type _Thunk = Callable[[], Awaitable[ConversationItem | DelegatePaused]]
+
+
+@dataclass
+class _Slot:
+    """One tool call's place in the turn's results, in the message's call order.
+
+    A call that was handed off, rejected, unknown, malformed or reused from a paused state has
+    its `item` from the start; an approved one is given one once it has run. A call waiting on a
+    human never gets a slot, and a delegate that paused leaves its own empty: neither has
+    finished, so neither has a result to send the model, and `_run_message_tool_calls` returns
+    only the slots that were filled.
+    """
+
+    item: ConversationItem | None = None
+
+
 @dataclass
 class _TurnOutcome:
     """How the turn loop came out: an answer, or interruptions waiting on a human.
@@ -116,7 +133,8 @@ async def _run_message_tool_calls(
     agent = shape.agent
     context_wrapper = run.context_wrapper
     handoff_map = shape.handoffs
-    results: list[ConversationItem] = []
+    slots: list[_Slot] = []
+    deferred: list[tuple[_Slot, _Thunk]] = []
     interruptions: list[Interruption] = []
     switched_agent: Any = None
     approvals = resume.approvals if resume is not None else {}
@@ -125,7 +143,6 @@ async def _run_message_tool_calls(
         result["tool_call_id"]: result
         for result in (resume.ready_results if resume is not None else [])
     }
-    runs: dict[int, Callable[[], Awaitable[ConversationItem | DelegatePaused]]] = {}
 
     for call in message.get("tool_calls") or []:
         name = call["function"]["name"]
@@ -136,21 +153,21 @@ async def _run_message_tool_calls(
             span = run.span(handoff.tool_name, "handoff")
             _close_span(span)
             await run.hooks.on_handoff(context_wrapper, agent, switched_agent)
-            results.append(tool_result(call_id, f"Transferred to {switched_agent.name}."))
+            slots.append(_Slot(tool_result(call_id, f"Transferred to {switched_agent.name}.")))
             continue
 
         if call_id in ready:
-            results.append(ready[call_id])
+            slots.append(_Slot(ready[call_id]))
             continue
         tool = shape.find_tool(name)
         if tool is None:
-            results.append(tool_result(call_id, f"error: unknown tool {name}"))
+            slots.append(_Slot(tool_result(call_id, f"error: unknown tool {name}")))
             continue
 
         args_json = call["function"]["arguments"] or "{}"
         args = _arguments_or_error(args_json)
         if isinstance(args, str):
-            results.append(tool_result(call_id, args))
+            slots.append(_Slot(tool_result(call_id, args)))
             continue
         gate = await context_wrapper.approval_ledger.decide(
             tool.name,
@@ -165,22 +182,21 @@ async def _run_message_tool_calls(
             )
             continue
         if gate.action == "reject":
-            results.append(tool_result(call_id, gate.message))
+            slots.append(_Slot(tool_result(call_id, gate.message)))
             continue
 
-        runs[len(results)] = partial(_run_tool_call, run, tool, call)
-        results.append({})  # filled in once the approved calls have run
+        slot = _Slot()  # filled in below, once the approved calls have run
+        slots.append(slot)
+        deferred.append((slot, partial(_run_tool_call, run, tool, call)))
 
     parallel = shape.model_settings.parallel_tool_calls is not False
-    paused: list[int] = []
-    for index, result in zip(runs, await _execute(list(runs.values()), parallel), strict=True):
-        if isinstance(result, DelegatePaused):
-            interruptions.extend(result.interruptions)
-            paused.append(index)
+    outcomes = await _execute([thunk for _, thunk in deferred], parallel)
+    for (slot, _), outcome in zip(deferred, outcomes, strict=True):
+        if isinstance(outcome, DelegatePaused):
+            interruptions.extend(outcome.interruptions)  # unfinished: its slot stays empty
         else:
-            results[index] = result
-    results = [result for index, result in enumerate(results) if index not in paused]
-    return results, interruptions, switched_agent
+            slot.item = outcome
+    return [slot.item for slot in slots if slot.item is not None], interruptions, switched_agent
 
 
 async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -> list[T]:
