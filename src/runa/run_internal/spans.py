@@ -33,8 +33,9 @@ class _Spans:
             type=span_type,
             start_time=time.time(),
         )
-        if input is not None and tracing_config.capture_inputs():
-            span.input = tracing_config.apply_policy(input, max_bytes=tracing_config.input_limit())
+        policy = tracing_config.policy()
+        if input is not None and policy.capture_inputs:
+            span.input = tracing_config.apply_policy(input, max_bytes=policy.max_input_bytes)
         self.trace.spans.append(span)
         return span
 
@@ -45,12 +46,9 @@ class _Spans:
 
 def _close_span(span: Span, *, error: str | None = None, output: Any = None) -> None:
     span.end_time = time.time()
-    if output is not None and tracing_config.capture_outputs():
-        max_bytes = (
-            tracing_config.tool_result_limit()
-            if span.type == "tool"
-            else tracing_config.output_limit()
-        )
+    policy = tracing_config.policy()
+    if output is not None and policy.capture_outputs:
+        max_bytes = policy.max_tool_result_bytes if span.type == "tool" else policy.max_output_bytes
         span.output = tracing_config.apply_policy(output, max_bytes=max_bytes)
     if error is not None:
         span.status = "error"

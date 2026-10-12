@@ -81,7 +81,7 @@ def test_observe_call_leaves_the_setting_applied() -> None:
     """A plain `observe(capture_inputs=False)` call applies immediately and sticks."""
     observe(capture_inputs=False)
     try:
-        assert config.capture_inputs() is False
+        assert config.policy().capture_inputs is False
     finally:
         observe(capture_inputs=True)
 
@@ -101,12 +101,12 @@ def test_observe_is_not_a_context_manager() -> None:
 
 def test_scoped_restores_the_previous_setting_on_exit() -> None:
     """`with observe.scoped(...):` restores whatever policy was active before it, once it ends."""
-    assert config.capture_inputs() is True
+    assert config.policy().capture_inputs is True
 
     with observe.scoped(capture_inputs=False):
-        assert config.capture_inputs() is False
+        assert config.policy().capture_inputs is False
 
-    assert config.capture_inputs() is True
+    assert config.policy().capture_inputs is True
 
 
 def test_scoped_applies_nothing_until_the_block_is_entered() -> None:
@@ -120,19 +120,19 @@ def test_scoped_applies_nothing_until_the_block_is_entered() -> None:
     held = observe.scoped(capture_inputs=False)
     other = observe.scoped(max_input_bytes=10)
 
-    assert config.capture_inputs() is True
-    assert config.input_limit() == 32_000
+    assert config.policy().capture_inputs is True
+    assert config.policy().max_input_bytes == 32_000
 
     with other:
-        assert config.input_limit() == 10
-        assert config.capture_inputs() is True
+        assert config.policy().max_input_bytes == 10
+        assert config.policy().capture_inputs is True
 
     with held:
-        assert config.capture_inputs() is False
-        assert config.input_limit() == 32_000
+        assert config.policy().capture_inputs is False
+        assert config.policy().max_input_bytes == 32_000
 
-    assert config.capture_inputs() is True
-    assert config.input_limit() == 32_000
+    assert config.policy().capture_inputs is True
+    assert config.policy().max_input_bytes == 32_000
 
 
 def test_the_same_scoped_policy_can_be_entered_again_and_nested_in_itself() -> None:
@@ -141,15 +141,15 @@ def test_the_same_scoped_policy_can_be_entered_again_and_nested_in_itself() -> N
 
     with policy:
         with policy:
-            assert config.capture_inputs() is False
-        assert config.capture_inputs() is False
+            assert config.policy().capture_inputs is False
+        assert config.policy().capture_inputs is False
 
-    assert config.capture_inputs() is True
+    assert config.policy().capture_inputs is True
 
     with policy:
-        assert config.capture_inputs() is False
+        assert config.policy().capture_inputs is False
 
-    assert config.capture_inputs() is True
+    assert config.policy().capture_inputs is True
 
 
 def test_a_scoped_block_does_not_change_what_another_task_captures() -> None:
@@ -168,17 +168,17 @@ def test_a_scoped_block_does_not_change_what_another_task_captures() -> None:
         with observe.scoped(capture_inputs=False):
             opened.set()
             await read.wait()  # hold the block open until `bystander` has looked
-            seen["scoped"] = config.capture_inputs()
+            seen["scoped"] = config.policy().capture_inputs
 
     async def bystander() -> None:
         await opened.wait()  # look only once the block really is open
-        seen["bystander"] = config.capture_inputs()
+        seen["bystander"] = config.policy().capture_inputs
         read.set()
 
     asyncio.run(_both(scoped(), bystander()))
 
     assert seen == {"scoped": False, "bystander": True}
-    assert config.capture_inputs() is True
+    assert config.policy().capture_inputs is True
 
 
 def test_an_observe_call_reaches_tasks_started_after_it() -> None:
@@ -189,7 +189,7 @@ def test_an_observe_call_reaches_tasks_started_after_it() -> None:
     """
 
     async def read() -> bool:
-        return config.capture_inputs()
+        return config.policy().capture_inputs
 
     observe(capture_inputs=False)
     try:
@@ -202,11 +202,11 @@ def test_nested_scoped_blocks_keep_the_setting_the_outer_one_made() -> None:
     """An inner block overrides what it names and inherits the rest from the block around it."""
     with observe.scoped(capture_inputs=False):
         with observe.scoped(max_input_bytes=10):
-            assert config.capture_inputs() is False
-            assert config.input_limit() == 10
+            assert config.policy().capture_inputs is False
+            assert config.policy().max_input_bytes == 10
 
-        assert config.capture_inputs() is False
-        assert config.input_limit() == 32_000
+        assert config.policy().capture_inputs is False
+        assert config.policy().max_input_bytes == 32_000
 
 
 def test_default_exporters_is_the_store_only_without_langfuse_env_vars(
@@ -263,7 +263,7 @@ def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
     pytest.importorskip("asyncpg")
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    monkeypatch.setattr(config._default, "exporters", None)  # as it is at import
+    monkeypatch.setattr(config, "_default", config.Policy())  # exporters unresolved, as at import
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
 
     exporters = config.exporters()

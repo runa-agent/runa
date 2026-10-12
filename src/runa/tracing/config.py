@@ -4,6 +4,8 @@ One small policy, not a policy engine. `capture_inputs`/`capture_outputs` gate w
 input/output are kept at all; `redact`/`redactor` scrub what's kept; the `max_*_bytes`
 limits truncate what's left. `run_internal/spans.py` applies it as each span opens and closes,
 and `lifecycle.py` applies the same policy to its DEBUG log lines, so one setting covers both.
+Both reach it through `policy()`, the module's one read accessor, which hands over the whole
+`Policy` rather than spelling one function per field.
 
 The policy lives in two places because its two call sites mean two different things by it: a
 process-wide default an application sets once at startup (`observe(...)`), and a per-task
@@ -16,7 +18,7 @@ import json
 import os
 from collections.abc import Callable
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -116,8 +118,19 @@ def _local_exporter() -> TraceExporter:
     return StoreExporter(db.traces())
 
 
-@dataclass
-class _Config:
+@dataclass(frozen=True)
+class Policy:
+    """The settings in force for one captured span: what `policy()` hands a caller.
+
+    Handed over whole rather than one field at a time. A caller that keeps a value and the limit
+    that applies to it (`run_internal/spans.py`, `lifecycle.py`) wants two fields of one policy,
+    not two functions that each read a different global, and a new setting here costs its readers
+    nothing. Frozen for that reason: the object outlives the call that asked for it, so a caller
+    holding one must not be able to write the policy every other caller is reading. `observe(...)`
+    and `observe.scoped(...)` replace it instead (`_merge`), which is also what makes a
+    `ContextVar` override safe to share.
+    """
+
     capture_inputs: bool = True
     capture_outputs: bool = True
     redact: list[str] | None = None
@@ -128,6 +141,9 @@ class _Config:
     exporters: list[TraceExporter] | None = None
     """`None` until first read, when `exporters()` resolves `_default_exporters()`.
 
+    The one field `policy()`'s caller doesn't read directly: `exporters()` is what resolves this,
+    so that the environment deciding it is the one in place when tracing is first used.
+
     Not a `default_factory`: this dataclass is instantiated at import, and resolving the default
     there would read `RUNA_DATABASE_URL`/`LANGFUSE_*` before a generated `main.py` has run its
     `load_dotenv()`. An app whose `.env` names a shared database would then write its traces to
@@ -137,28 +153,32 @@ class _Config:
     """
 
 
-_default = _Config()
+_default = Policy()
 """The process-wide policy: what an `observe(...)` call and `add_exporter` write."""
 
-_scoped: ContextVar[_Config | None] = ContextVar("runa_tracing_policy", default=None)
+_scoped: ContextVar[Policy | None] = ContextVar("runa_tracing_policy", default=None)
 """The `observe.scoped(...)` policy for the current task, or `None` to fall back to `_default`."""
 
 
-def _active() -> _Config:
-    """The policy in force here: this task's `observe.scoped(...)` block, else the default."""
+def policy() -> Policy:
+    """The policy in force here: this task's `observe.scoped(...)` block, else the default.
+
+    The whole read side of this module. Read the fields a caller needs off the result
+    (`policy().max_input_bytes`); there is no per-field accessor to import.
+    """
     scoped = _scoped.get()
     return scoped if scoped is not None else _default
 
 
-def _merge(base: _Config, updates: dict[str, Any]) -> _Config:
-    """`base` with `updates` on top, as a new `_Config`; nothing is mutated in place."""
-    return _Config(**{**base.__dict__, **updates})
+def _merge(base: Policy, updates: dict[str, Any]) -> Policy:
+    """`base` with `updates` on top, as a new `Policy`; nothing is mutated in place."""
+    return replace(base, **updates)
 
 
-def _set_default(policy: _Config) -> None:
-    """Install `policy` as the process-wide default."""
+def _set_default(default: Policy) -> None:
+    """Install `default` as the process-wide policy."""
     global _default
-    _default = policy
+    _default = default
 
 
 def _redact_dict(value: dict[str, Any], redact: list[str]) -> dict[str, Any]:
@@ -175,16 +195,16 @@ def _truncate(text: str, max_bytes: int) -> str:
 def apply_policy(value: Any, *, max_bytes: int) -> Any:
     """Apply the active redact/size policy to one span's `input`/`output`/tool result.
 
-    Callers check `capture_inputs()`/`capture_outputs()` themselves before calling this: this
-    function only redacts and truncates a value that's already been decided worth keeping.
+    Callers check `policy().capture_inputs`/`.capture_outputs` themselves before calling this:
+    this function only redacts and truncates a value that's already been decided worth keeping.
     """
     if value is None:
         return None
-    policy = _active()
-    if policy.redactor is not None:
-        value = policy.redactor(value)
-    if policy.redact and isinstance(value, dict):
-        value = _redact_dict(value, policy.redact)
+    active = policy()
+    if active.redactor is not None:
+        value = active.redactor(value)
+    if active.redact and isinstance(value, dict):
+        value = _redact_dict(value, active.redact)
     if isinstance(value, dict | list):
         try:
             value = json.loads(_truncate(json.dumps(value, default=str), max_bytes))
@@ -195,41 +215,18 @@ def apply_policy(value: Any, *, max_bytes: int) -> Any:
     return value
 
 
-def capture_inputs() -> bool:
-    """Return whether span/trace input should be captured under the active policy."""
-    return _active().capture_inputs
-
-
-def capture_outputs() -> bool:
-    """Return whether span/trace output should be captured under the active policy."""
-    return _active().capture_outputs
-
-
-def input_limit() -> int:
-    """Return the active `max_input_bytes` limit."""
-    return _active().max_input_bytes
-
-
-def output_limit() -> int:
-    """Return the active `max_output_bytes` limit."""
-    return _active().max_output_bytes
-
-
-def tool_result_limit() -> int:
-    """Return the active `max_tool_result_bytes` limit."""
-    return _active().max_tool_result_bytes
-
-
 def _resolved_default_exporters() -> list[TraceExporter]:
     """The process-wide exporter list, resolving `_default_exporters()` on first use.
 
-    Memoized on `_default` rather than on whatever `_active()` returned, so an
+    Memoized on `_default` rather than on whatever `policy()` returned, so an
     `observe.scoped(...)` block that overrides something other than `exporter` doesn't re-resolve
     the list -- a second store, a second `LangfuseExporter` -- once per task that opens one.
     """
-    if _default.exporters is None:
-        _default.exporters = _default_exporters()
-    return _default.exporters
+    if _default.exporters is not None:
+        return _default.exporters
+    resolved = _default_exporters()
+    _set_default(_merge(_default, {"exporters": resolved}))
+    return resolved
 
 
 def exporters() -> list[TraceExporter]:
@@ -238,7 +235,7 @@ def exporters() -> list[TraceExporter]:
     Resolves the default on first call, so the environment that decides it is the one in place
     when tracing is first used rather than when `runa.tracing` was imported.
     """
-    active = _active().exporters
+    active = policy().exporters
     return active if active is not None else _resolved_default_exporters()
 
 
@@ -255,7 +252,7 @@ def add_exporter(exporter: TraceExporter) -> None:
     Writes the process-wide default, like an `observe(...)` call: adding an exporter is
     startup configuration, not something one task does for its own duration.
     """
-    _default.exporters = [*_resolved_default_exporters(), exporter]
+    _set_default(_merge(_default, {"exporters": [*_resolved_default_exporters(), exporter]}))
 
 
 def _updates(
@@ -269,7 +266,7 @@ def _updates(
     max_tool_result_bytes: int | None,
     exporter: TraceExporter | list[TraceExporter] | None,
 ) -> dict[str, Any]:
-    """The overrides that were actually named, as the `_Config` field names `_merge` takes.
+    """The overrides that were actually named, as the `Policy` field names `_merge` takes.
 
     Both call sites spell their options out as keyword-only parameters, so a misspelled one is a
     `TypeError` where it was written; this is only the shared translation of what they collected.
@@ -306,11 +303,11 @@ class _ScopedPolicy:
     def __init__(self, updates: dict[str, Any]) -> None:
         """Hold `updates` until a `with` block installs them."""
         self._updates = updates
-        self._tokens: list[Token[_Config | None]] = []
+        self._tokens: list[Token[Policy | None]] = []
 
     def __enter__(self) -> _ScopedPolicy:
         """Install these overrides on top of whatever policy is in force here."""
-        self._tokens.append(_scoped.set(_merge(_active(), self._updates)))
+        self._tokens.append(_scoped.set(_merge(policy(), self._updates)))
         return self
 
     def __exit__(self, *exc_info: object) -> None:

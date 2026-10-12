@@ -32,9 +32,10 @@ def _content(value: Any, *, limit: int | None = None) -> str:
     Imported lazily: `runa.tracing.manual` reaches back into this module for `logger`, so a
     top-level import here would close the cycle.
     """
-    from runa.tracing.config import apply_policy, output_limit
+    from runa.tracing.config import apply_policy, policy
 
-    return repr(apply_policy(value, max_bytes=limit if limit is not None else output_limit()))
+    limit = limit if limit is not None else policy().max_output_bytes
+    return repr(apply_policy(value, max_bytes=limit))
 
 
 class Hooks[TContext]:
@@ -146,12 +147,15 @@ class LoggingHooks(Hooks[Any]):
 
     async def on_agent_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
         """Log that `agent` finished: its name at INFO, its output at DEBUG if policy allows."""
-        from runa.tracing.config import capture_outputs, output_limit
+        from runa.tracing.config import policy
 
         logger.info("agent end: %s", agent.name)
-        if capture_outputs() and logger.isEnabledFor(logging.DEBUG):
+        active = policy()
+        if active.capture_outputs and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "agent output: %s -> %s", agent.name, _content(output, limit=output_limit())
+                "agent output: %s -> %s",
+                agent.name,
+                _content(output, limit=active.max_output_bytes),
             )
 
     async def on_handoff(
@@ -170,12 +174,15 @@ class LoggingHooks(Hooks[Any]):
         self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool, result: object
     ) -> None:
         """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
-        from runa.tracing.config import capture_outputs, tool_result_limit
+        from runa.tracing.config import policy
 
         logger.info("tool end: %s (%s)", tool.name, agent.name)
-        if capture_outputs() and logger.isEnabledFor(logging.DEBUG):
+        active = policy()
+        if active.capture_outputs and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "tool output: %s -> %s", tool.name, _content(result, limit=tool_result_limit())
+                "tool output: %s -> %s",
+                tool.name,
+                _content(result, limit=active.max_tool_result_bytes),
             )
 
     async def on_llm_start(
