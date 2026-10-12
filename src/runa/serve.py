@@ -50,9 +50,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from runa import db
+from runa._log import logger
 from runa.agent import Agent
 from runa.exceptions import OperatorError, UserError
-from runa.lifecycle import logger
 from runa.project import iter_agent_classes, loaded_app, require_agents_dir
 from runa.run import Run
 from runa.run_state import RunState

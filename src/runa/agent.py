@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from runa import content
 from runa._items import ConversationItem, user_message
+from runa._log import logger
 from runa._models import DEFAULT_MODEL, Model, ModelProvider, check_model_name
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
@@ -34,7 +35,7 @@ from runa.guardrail import (
 )
 from runa.handoff import Mode, agent_as_tool
 from runa.knowledge import Knowledge, KnowledgeLike
-from runa.lifecycle import Hooks, logger
+from runa.lifecycle import Hooks
 from runa.memory import Memory, MemoryLike
 from runa.run import Run, RunStream
 from runa.run_internal.run_config import DEFAULT_MAX_TURNS, RunConfig

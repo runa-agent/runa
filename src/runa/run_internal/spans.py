@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from runa._log import logger
 from runa.tracing import config as tracing_config
 from runa.tracing.config import exporters
 from runa.tracing.spans import Span
@@ -56,8 +57,6 @@ def _close_span(span: Span, *, error: str | None = None, output: Any = None) -> 
 
 
 def _export(trace: Trace) -> None:
-    from runa.lifecycle import logger
-
     for exporter in exporters():
         try:
             exporter.export(trace)

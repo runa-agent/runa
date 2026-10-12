@@ -30,10 +30,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from runa import db
+from runa._log import logger
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.knowledge.sqlite import SQLiteKnowledgeStore
 from runa.knowledge.store import KnowledgeMatch, KnowledgeStore
-from runa.lifecycle import logger
 from runa.tool import FunctionTool, tool
 
 DEFAULT_KNOWLEDGE_DIR = Path("app/knowledge")

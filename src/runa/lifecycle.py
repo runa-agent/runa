@@ -8,6 +8,10 @@ they name what happened and never carry content: an agent's answer and a tool's 
 data, and a production app running at INFO should not be writing them to stdout. Content is logged
 at DEBUG only, and even there it goes through `runa.tracing`'s redact/truncate policy, so
 `observe(redact=[...])` and `observe(capture_outputs=False)` govern these lines too.
+
+The `Logger` these write to is `runa._log`'s, not this module's: `logger` is a leaf every layer
+can import without taking `Hooks` with it, and keeping it there is what lets this module read
+the tracing policy at the top of the file rather than inside each method.
 """
 
 import logging
@@ -15,10 +19,10 @@ from collections.abc import Callable, Coroutine
 from typing import Any
 
 from runa._items import ConversationItem
+from runa._log import logger
 from runa._types import RunContextWrapper
 from runa.tool import FunctionTool
-
-logger = logging.getLogger("runa")
+from runa.tracing.config import apply_policy, policy
 
 __all__ = [
     "Hooks",
@@ -27,13 +31,7 @@ __all__ = [
 
 
 def _content(value: Any, *, limit: int | None = None) -> str:
-    """Render `value` for a DEBUG log line under `runa.tracing`'s active privacy policy.
-
-    Imported lazily: `runa.tracing.manual` reaches back into this module for `logger`, so a
-    top-level import here would close the cycle.
-    """
-    from runa.tracing.config import apply_policy, policy
-
+    """Render `value` for a DEBUG log line under `runa.tracing`'s active privacy policy."""
     limit = limit if limit is not None else policy().max_output_bytes
     return repr(apply_policy(value, max_bytes=limit))
 
@@ -147,8 +145,6 @@ class LoggingHooks(Hooks[Any]):
 
     async def on_agent_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
         """Log that `agent` finished: its name at INFO, its output at DEBUG if policy allows."""
-        from runa.tracing.config import policy
-
         logger.info("agent end: %s", agent.name)
         active = policy()
         if active.capture_outputs and logger.isEnabledFor(logging.DEBUG):
@@ -174,8 +170,6 @@ class LoggingHooks(Hooks[Any]):
         self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool, result: object
     ) -> None:
         """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
-        from runa.tracing.config import policy
-
         logger.info("tool end: %s (%s)", tool.name, agent.name)
         active = policy()
         if active.capture_outputs and logger.isEnabledFor(logging.DEBUG):

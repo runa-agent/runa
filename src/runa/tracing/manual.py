@@ -11,6 +11,7 @@ import uuid
 from contextvars import ContextVar
 from typing import Any
 
+from runa._log import logger
 from runa.tracing.config import exporters
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -24,8 +25,6 @@ def current_trace() -> Trace | None:
 
 
 def _export(finished: Trace) -> None:
-    from runa.lifecycle import logger
-
     for exporter in exporters():
         try:
             exporter.export(finished)

@@ -21,6 +21,7 @@ from runa._items import (
     latest_user_text,
     user_message,
 )
+from runa._log import logger
 from runa._models import ModelRequest
 from runa._types import RunContextWrapper, Usage
 from runa.exceptions import (
@@ -33,7 +34,7 @@ from runa.exceptions import (
     UserError,
 )
 from runa.guardrail import Phase
-from runa.lifecycle import Hooks, LoggingHooks, _Dispatch, logger
+from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.active_run import _Run
 from runa.run_internal.agent_shape import AgentShape
