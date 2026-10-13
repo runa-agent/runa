@@ -1,9 +1,10 @@
-"""Tests for `runa.project`: `find_agent_class`/`list_agents`/`ensure_loaded`."""
+"""Tests for `runa.project`: `find_agent_class`/`list_agents`/`use`."""
 
 from pathlib import Path
 
 import pytest
 
+from runa import db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.exceptions import UserError
@@ -11,10 +12,10 @@ from runa.project import (
     AgentNotFound,
     AppLoadError,
     NotARunaProject,
-    ensure_loaded,
     find_agent_class,
     list_agents,
     loaded_app,
+    use,
 )
 
 _COUNTING_MAIN = '''"""A `main.py` that records every time it is executed."""
@@ -147,8 +148,8 @@ def test_list_agents_executes_main_once_however_often_it_is_called(tmp_path: Pat
     `runa ui`'s `/agents` route renders through `list_agents`, which used to enter a scoped
     `loaded_app` block: every view re-executed the developer's entry point, so an app that calls
     `tracing.add_exporter` there held one exporter per view and wrote every finished trace that
-    many times. Loading is a fact now (`ensure_loaded`), so the import happens once and the
-    listing is still read fresh each call.
+    many times. Loading is a fact now (`project.use`), so the import happens once and the listing
+    is still read fresh each call.
     """
     project_dir = scaffold_project("demo", root=tmp_path)
     (project_dir / "main.py").write_text(_COUNTING_MAIN)
@@ -162,36 +163,83 @@ def test_list_agents_executes_main_once_however_often_it_is_called(tmp_path: Pat
     assert _loads(project_dir) == 1
 
 
-def test_ensure_loaded_is_a_no_op_for_the_project_it_already_loaded(tmp_path: Path) -> None:
-    """The second caller asks the same question and gets the answer, not a second import."""
+def test_use_says_both_halves_of_one_fact(tmp_path: Path) -> None:
+    """Saying which app this process reads places its database as well as its imports.
+
+    The two used to be two calls, which meant a surface could say one: a process whose data root
+    and import root disagree serves one project's agents off another project's database.
+    """
+    project_dir = scaffold_project("demo", root=tmp_path)
+    generate_agent("SupportAgent", root=project_dir)
+
+    use(project_dir)
+
+    assert db.sqlite_path() == project_dir / "db" / "runa.db"
+    assert [info.name for info in list_agents(root=project_dir)] == ["support_agent"]
+
+
+def test_loaded_app_says_both_halves_too(tmp_path: Path) -> None:
+    """The scoped shape places the database as well, so a one-shot command says it once."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+
+    with loaded_app(project_dir):
+        assert db.sqlite_path() == project_dir / "db" / "runa.db"
+
+
+def test_use_imports_the_app_only_once_something_reads_it(tmp_path: Path) -> None:
+    """Saying which app this process reads doesn't execute it; reading its agents does.
+
+    `runa ui` says it while building the app and renders Sessions, Traces and Evaluations without
+    ever importing the developer's code -- so a broken `main.py` costs the Agents page, not the
+    whole dashboard. `runa serve` lists its agents at startup, so it still fails there.
+    """
     project_dir = scaffold_project("demo", root=tmp_path)
     (project_dir / "main.py").write_text(_COUNTING_MAIN)
+    generate_agent("SupportAgent", root=project_dir)
 
-    ensure_loaded(project_dir)
-    ensure_loaded(project_dir)
+    use(project_dir)
+    assert _loads(project_dir) == 0
 
+    list_agents(root=project_dir)
+    list_agents(root=project_dir)
     assert _loads(project_dir) == 1
 
 
-def test_ensure_loaded_refuses_a_second_project(tmp_path: Path) -> None:
+def test_use_refuses_a_second_project(tmp_path: Path) -> None:
     """Two apps in one process would both want the `main`/`app.*` names, so saying so is the fix.
 
     The alternative is the quiet one: the loser's `sys.modules` entries are deleted underneath it
     and it serves the winner's agents. The message names both roots, since which two projects
-    collided is the only thing the caller can act on.
+    collided is the only thing the caller can act on -- and there is one message, because the
+    root reaches `db.use_project` whichever half of the fact a caller came for.
     """
     first = scaffold_project("first", root=tmp_path)
     second = scaffold_project("second", root=tmp_path)
-    ensure_loaded(first)
+    use(first)
 
     with pytest.raises(UserError) as exc_info:
-        ensure_loaded(second)
+        use(second)
 
     assert "first" in str(exc_info.value)
     assert "second" in str(exc_info.value)
 
 
-def test_ensure_loaded_can_be_retried_after_a_broken_main(tmp_path: Path) -> None:
+def test_use_none_clears_both_halves(tmp_path: Path) -> None:
+    """`None` is the process boundary a second app really has, and it clears the whole fact."""
+    first = scaffold_project("first", root=tmp_path)
+    second = scaffold_project("second", root=tmp_path)
+    generate_agent("SupportAgent", root=second)
+    use(first)
+    list_agents(root=first)
+
+    use(None)
+    use(second)
+
+    assert db.sqlite_path() == second / "db" / "runa.db"
+    assert [info.name for info in list_agents(root=second)] == ["support_agent"]
+
+
+def test_a_broken_main_can_be_retried(tmp_path: Path) -> None:
     """A `main.py` that raises leaves nothing loaded, so the next attempt is a first attempt.
 
     An `AppLoadError` is the developer's own entry point failing (see the class), which the
@@ -200,11 +248,12 @@ def test_ensure_loaded_can_be_retried_after_a_broken_main(tmp_path: Path) -> Non
     """
     project_dir = scaffold_project("demo", root=tmp_path)
     (project_dir / "main.py").write_text("raise RuntimeError('boom')\n")
+    generate_agent("SupportAgent", root=project_dir)
 
     with pytest.raises(AppLoadError):
-        ensure_loaded(project_dir)
+        list_agents(root=project_dir)
 
     (project_dir / "main.py").write_text(_COUNTING_MAIN)
-    ensure_loaded(project_dir)
+    list_agents(root=project_dir)
 
     assert _loads(project_dir) == 1

@@ -4,7 +4,7 @@ Read-only except for one write: "Add to evals" on a trace page appends a case to
 
 Every route calls straight into one `web/<page>.py`'s render function; no route does its own
 data-fetching or HTML-building. `create_app(root)` takes the app's directory rather than assuming
-`cwd`, and hands it to `db.use_project` so every store this dashboard reads resolves to the same
+`cwd`, and hands it to `project.use` so every store this dashboard reads resolves to the same
 file; the two renderers that still take `root` want the filesystem, not the database.
 
 No standalone Traces tab: `web/sessions.py`'s merged timeline already shows a session's traces in
@@ -18,10 +18,9 @@ from urllib.parse import parse_qs, quote, urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from runa import db
+from runa import project
 from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
 from runa.exceptions import OperatorError
-from runa.project import AppLoadError, NotARunaProject
 from runa.tracing import TraceNotFound
 from runa.web import agents as agents_page
 from runa.web import evaluations as evaluations_page
@@ -49,16 +48,20 @@ def _trace_url(trace_id: str) -> str:
 def create_app(root: Path) -> FastAPI:
     """Build the `runa ui` app for the project at `root`.
 
-    Telling `runa.db` which project this is happens here, once, rather than in each route: the
-    dashboard reads six concerns out of `root/db/runa.db` and a route that forwarded `root` to a
-    reader could only move the four that took it.
+    Which project this dashboard reads is said here, once, rather than in each route: it reads six
+    concerns out of `root/db/runa.db` and a route that forwarded `root` to a reader could only
+    move the four that took it. `project.use` is the whole of that -- the app's data and its
+    import -- and the Agents page is the one that needs the import, which `project.use` leaves
+    until something reads the app's modules. So a dashboard still serves Sessions, Traces and
+    Evaluations for an app whose `main.py` is broken, and only `/agents` reports it; and the
+    import still happens once however many page views arrive, since a view that re-ran the
+    developer's `main.py` would re-register whatever it registers (an exporter, a client) behind
+    the page it rendered.
 
-    `root` reaching a route at all is the filesystem half of the same answer, and the Agents page
-    is the one that loads the app from it. It asks `project.ensure_loaded`, so the import happens
-    once however many page views arrive: a view that re-ran the developer's `main.py` would
-    re-register whatever it registers (an exporter, a client) behind the page it rendered.
+    `root` reaching a route at all is the filesystem half of the same answer: the two renderers
+    that take it want files (`evals/`), not the database.
     """
-    db.use_project(root)
+    project.use(root)
     app = FastAPI(title="runa ui", docs_url=None, redoc_url=None)
 
     @app.get("/", include_in_schema=False)
@@ -114,12 +117,12 @@ def create_app(root: Path) -> FastAPI:
                 _error_page("Evaluations", "Evaluation run not found."), status_code=404
             )
 
-    @app.exception_handler(NotARunaProject)
-    def _not_a_project(_request: Request, _exc: NotARunaProject) -> HTMLResponse:
+    @app.exception_handler(project.NotARunaProject)
+    def _not_a_project(_request: Request, _exc: project.NotARunaProject) -> HTMLResponse:
         return HTMLResponse(_error_page("Agents", "Not a runa project."), status_code=400)
 
-    @app.exception_handler(AppLoadError)
-    def _app_load_error(_request: Request, _exc: AppLoadError) -> HTMLResponse:
+    @app.exception_handler(project.AppLoadError)
+    def _app_load_error(_request: Request, _exc: project.AppLoadError) -> HTMLResponse:
         return HTMLResponse(_error_page("Agents", "Failed to load application."), status_code=500)
 
     @app.exception_handler(OperatorError)

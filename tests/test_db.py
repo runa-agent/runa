@@ -175,7 +175,8 @@ def test_use_project_refuses_a_second_project(monkeypatch: pytest.MonkeyPatch) -
 
     Two Runa apps mounted in one process used to leave both resolving against whichever root was
     built last -- including runs already in flight, whose sessions and memory would land in
-    another app's file. `runa.project.ensure_loaded` refuses the import half of the same fact.
+    another app's file. This is also the refusal `runa.project.use` relies on for the import half
+    of the same fact, rather than keeping a second copy of it.
     """
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
     db.use_project(Path("one/project"))

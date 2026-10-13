@@ -15,7 +15,6 @@ import importlib
 from collections.abc import Iterable
 from pathlib import Path
 
-from runa import db
 from runa.agent import Agent
 from runa.eval import Case, Dataset, Report
 from runa.eval.corpus import require_evals_dir
@@ -43,11 +42,10 @@ def run_project_evals(root: Path, agent_name: str | None = None) -> list[Report]
     `name` (the same identity `runa chat <name>` takes) instead of running the whole `evals/`
     directory.
 
-    `root` is the project being evaluated, so `runa.db` is told about it here as well as in
-    `runa eval`: a report is graded against the baseline in that project's eval history and
-    saved back to it, and neither end of that takes a directory.
+    `root` is the project being evaluated, and the `loaded_app` block is where that is said --
+    its eval history as much as its imports: a report is graded against the baseline in that
+    project's history and saved back to it, and neither end of that takes a directory.
     """
-    db.use_project(root)
     evals_dir = require_evals_dir(root)
 
     with loaded_app(root):

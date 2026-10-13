@@ -21,12 +21,14 @@ variable but sessions don't is worse than one where neither does.
 Which project is being read is this module's one other decision, and it is asked once too:
 `use_project(root)` points the process at an app's directory, and every factory above resolves
 against it. The process's cwd is the default, which is what a bare `python main.py` wants. The
-rule for the rest is that a function handed someone else's project `root` says so here --
-`main(cwd=...)`, both `create_app(root)`s, `run_agent_repl`, `run_project_evals`,
-`run_project_tests` -- so that taking a `root` and reading that project's state are never two
-different things. Everything downstream of them (`runa ui`'s readers, `agent.evaluate()`, a
-`@tool` opening a session) gets the answer without naming a directory, and a `root` that survives
-elsewhere means a filesystem path, like `evals/`, rather than a second opinion about the database.
+rule for the rest is that a function handed someone else's project `root` says so -- here if it
+only reads that project's data (`main(cwd=...)`), and through `runa.project.use`, which calls
+this, if it also imports the app (both `create_app(root)`s, `run_agent_repl`,
+`run_project_evals`, `run_project_tests`) -- so that taking a `root` and reading that project's
+state are never two different things. Everything downstream of them (`runa ui`'s readers,
+`agent.evaluate()`, a `@tool` opening a session) gets the answer without naming a directory, and
+a `root` that survives elsewhere means a filesystem path, like `evals/`, rather than a second
+opinion about the database.
 
 A `root=` parameter per factory was the same promise made seven times and kept four: `Memory`
 and `Knowledge` are built inside `Agent.__init__`, which has no notion of a project root and
@@ -121,18 +123,23 @@ def use_project(root: Path | None) -> None:
 
     Startup configuration, said once, like `tracing.add_exporter` and for the same reason: a
     process reads one app, and a root passed per call site is a root three of the seven concerns
-    below can't be passed at all. `runa` sets this from `cwd` before dispatching, and both
-    `create_app(root)`s set it while building, so an embedder serving an app from somewhere other
-    than its own working directory gets every concern moved, not four of them.
+    below can't be passed at all.
+
+    This is the data half of "this process reads the app at `root`", and a surface that also
+    imports that app says the whole thing instead -- `runa.project.use(root)`, which calls this
+    one. The half is said alone by exactly one caller, `runa`, which points at `cwd` before it
+    knows whether the command it is about to dispatch reads an app at all: `runa traces show` and
+    `runa chat --list` read this project's database without importing a line of it.
 
     "Once" is enforced rather than asked for: a second call naming a *different* project is a
     `UserError`, because the alternative is both apps resolving to whichever root was built last,
-    including for runs already in flight. `runa.project.ensure_loaded` refuses the import half of
-    the same fact, and an app that genuinely fronts two projects runs two processes.
+    including for runs already in flight. It is raised here for both halves, since the root
+    reaches this function either way, and an app that genuinely fronts two projects runs two
+    processes.
 
     `None` is the default, not a second app, so it always applies and clears the way for another
-    root. That is what a test resets to between projects (see `tests/conftest.py`), standing in
-    for the process boundary a deployment would have.
+    root. That is what `project.use(None)` resets to between projects (see `tests/conftest.py`),
+    standing in for the process boundary a deployment would have.
 
     Unread unless this deployment's state is local: a `postgresql://` or `memory://` URL has no
     file to place.

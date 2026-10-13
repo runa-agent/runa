@@ -45,13 +45,12 @@ def _empty_ephemeral_stores():
 def _default_project():
     """Reset the project this process reads, so a test's own can't leak into the next one.
 
-    Process-wide is what `db.use_project` and `project.ensure_loaded` mean (see `runa.db` and
-    `runa.project`), the same way a plain `observe(...)` is: a test that points either at a
-    `tmp_path` is standing in for the `runa` command or the `create_app` that would normally have
-    said it once at startup. Both now refuse a second, different project rather than overwriting
-    the first, so this is also what gives each test the fresh process it is pretending to be --
-    the next test's `db/runa.db` is its own temp directory, and its `main.py` is its own.
+    Process-wide is what `project.use` means (see `runa.project`), the same way a plain
+    `observe(...)` is: a test that points it, or `db.use_project` under it, at a `tmp_path` is
+    standing in for the `runa` command or the `create_app` that would normally have said it once
+    at startup. It refuses a second, different project rather than overwriting the first, so
+    `use(None)` is also what gives each test the fresh process it is pretending to be -- the next
+    test's `db/runa.db` is its own temp directory, and its `main.py` is its own.
     """
     yield
-    db.use_project(None)
-    project.reset_loaded_app()
+    project.use(None)

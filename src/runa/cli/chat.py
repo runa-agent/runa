@@ -134,11 +134,11 @@ def run_agent_repl(
     instead of looping. Approvals then get rejected, since stdin is already used up.
 
     `root` is the project being chatted with, which makes this an entry point like the two
-    `create_app`s: it tells `runa.db` so, rather than taking a directory it only half applies.
-    `runa chat` has already said the same thing from `cwd`; saying it again costs nothing and is
-    what makes this callable on its own.
+    `create_app`s: the `loaded_app` block says so for the whole project -- its database as much
+    as its imports -- rather than taking a directory it only half applies. `runa chat` has
+    already said the data half from `cwd`; saying it again costs nothing and is what makes this
+    callable on its own.
     """
-    db.use_project(root)
     agents_dir = require_agents_dir(root)
 
     with loaded_app(root):

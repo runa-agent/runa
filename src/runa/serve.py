@@ -38,7 +38,7 @@ plain install still runs every other command; only serving needs the `serve` ext
 itself is public, though: `runa new` scaffolds an `asgi.py` that builds it, for the deployment that
 brings its own server or mounts these routes inside a larger one. One Runa app per process, in
 that case: a second `create_app` for a different project is a `UserError` rather than two apps
-quietly sharing the last one's imports and database (see `project.ensure_loaded`).
+quietly sharing the last one's imports and database (see `project.use`).
 """
 
 import json
@@ -51,11 +51,10 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
-from runa import db
+from runa import db, project
 from runa._log import logger
 from runa.agent import Agent
 from runa.exceptions import OperatorError, UserError
-from runa.project import ensure_loaded, iter_agent_classes, require_agents_dir
 from runa.run import Run
 from runa.run_state import RunState
 
@@ -202,22 +201,21 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     (or an app embedding this) can be explicit: `resolve_api_key` is the conventional way to fill
     it in.
 
-    `root` is also handed to `db.use_project`, so an embedded app served from outside its own
-    directory keeps all of its state together: a session route and the memory an agent writes
-    during that same request resolve to one file, not two.
+    `root` also goes to `project.use`, which is how this server says it reads that app: its state
+    resolves against `root` and its `main.py` is the one imported, so an embedded app served from
+    outside its own directory keeps everything together -- a session route and the memory an
+    agent writes during that same request resolve to one file, not two.
     """
-    db.use_project(root)
-    agents_dir = require_agents_dir(root)
+    project.use(root)
+    agents_dir = project.require_agents_dir(root)
 
-    # The app's agents by declared `name`, imported here and kept: a server resolves them once,
-    # at startup, not once per request (see this module's docstring). `ensure_loaded` is how that
-    # "once" is said -- it is the same fact `runa ui` asks for, and the second app in one process
-    # is its error rather than this one's. A broken agent module therefore stops the process from
-    # starting rather than failing one route, which is the failure a deployment wants -- found by
-    # the thing that rolls out, not by a user.
-    ensure_loaded(root)
+    # The app's agents by declared `name`, resolved here and kept: a server resolves them once, at
+    # startup, not once per request (see this module's docstring). Reading them is also what
+    # imports the app, so a broken agent module stops the process from starting rather than
+    # failing one route, which is the failure a deployment wants -- found by the thing that rolls
+    # out, not by a user.
     agent_classes = {
-        getattr(cls, "name", cls.__name__): cls for cls in iter_agent_classes(agents_dir)
+        getattr(cls, "name", cls.__name__): cls for cls in project.iter_agent_classes(agents_dir)
     }
 
     async def _authenticate(request: Request) -> None:

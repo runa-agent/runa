@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from runa import db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
-from runa.project import iter_agent_classes, loaded_app
+from runa.project import AppLoadError, iter_agent_classes, loaded_app
 from runa.run_state import RunState
 from runa.serve import MissingAPIKey, create_app, resolve_api_key
 
@@ -175,6 +175,20 @@ def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
 
     assert db.sessions().db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
     assert db.memory_store(dimensions=4).db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
+
+
+def test_a_broken_app_stops_the_server_from_starting(project: Path) -> None:
+    """Resolving the agents at startup is what makes a broken app the rollout's problem.
+
+    `create_app` reads the app's agents while building, which is where the app's own code is
+    imported, so a `main.py` that raises fails here -- found by the thing that rolls out, not by
+    the first user to hit a route. The dashboard makes the opposite trade for the same statement
+    (see `tests/web/test_app.py`), because it has pages worth serving for a broken app.
+    """
+    (project / "main.py").write_text("raise RuntimeError('boom')\n")
+
+    with pytest.raises(AppLoadError):
+        create_app(project, api_key="secret-token")
 
 
 def _paused_body(client: TestClient) -> dict[str, Any]:

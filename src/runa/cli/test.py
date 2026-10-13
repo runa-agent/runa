@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from runa import db
 from runa.project import NotARunaProject, loaded_app
 
 
@@ -44,10 +43,10 @@ async def _await(awaitable: Awaitable[Any]) -> Any:
 def run_project_tests(root: Path) -> list[TestResult]:
     """Import every `tests/` module and run its `test_*` functions.
 
-    `root` is the project under test, and `runa.db` is told so: a test that drives a real run
-    writes that project's `db/runa.db`, not whichever directory this was called from.
+    `root` is the project under test, and the `loaded_app` block below says so for its database
+    too: a test that drives a real run writes that project's `db/runa.db`, not whichever
+    directory this was called from.
     """
-    db.use_project(root)
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         raise NotARunaProject(

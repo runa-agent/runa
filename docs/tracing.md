@@ -179,8 +179,10 @@ db.traces().list(limit=5)
 `use_project` is startup configuration, said once: it moves every concern at once -- sessions,
 traces, eval history, memory, knowledge and the cache -- so an app read from outside its own
 directory can't end up with half its state in one file and half in another. `runa` sets it from
-the current directory, and both `create_app`s from the `root` they're given, so most code never
-calls it.
+the current directory, and both `create_app`s from the `root` they're given (through
+`project.use`, which points the process's imports at that app too), so most code never calls it.
+Reading another project's history is what the bare call above is for: it moves the data without
+importing anyone's `main.py`.
 
 `db.sessions()` and `db.evals()` are the same shape for conversation history and eval runs. All
 three replaced the module-level `list_traces(db_path=...)`-style functions in 0.x; see

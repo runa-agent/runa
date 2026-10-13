@@ -148,6 +148,20 @@ def test_agents_page_reports_a_clean_error_outside_a_runa_project(tmp_path: Path
     assert response.status_code == 400
 
 
+def test_a_broken_main_costs_the_agents_page_not_the_dashboard(project: Path) -> None:
+    """A `main.py` that raises is one page's 500, not a dashboard that won't start.
+
+    `create_app` says which app this process reads, and the app's own code is imported later, by
+    the page that reads it. That is the whole point of the dashboard for a developer whose change
+    just broke the app: the sessions and traces from before it are still there to look at.
+    """
+    (project / "main.py").write_text("raise RuntimeError('boom')\n")
+    client = TestClient(create_app(project), raise_server_exceptions=False)
+
+    assert client.get("/sessions").status_code == 200
+    assert client.get("/agents").status_code == 500
+
+
 def test_sessions_list_and_detail(client: TestClient) -> None:
     """`/sessions` lists the session; `/sessions/{id}` renders its messages."""
     listing = client.get("/sessions")
