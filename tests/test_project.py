@@ -1,4 +1,4 @@
-"""Tests for `runa.project`: `find_agent_class`/`list_agents`."""
+"""Tests for `runa.project`: `find_agent_class`/`list_agents`/`ensure_loaded`."""
 
 from pathlib import Path
 
@@ -6,11 +6,34 @@ import pytest
 
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
-from runa.project import AgentNotFound, NotARunaProject, find_agent_class, list_agents, loaded_app
+from runa.exceptions import UserError
+from runa.project import (
+    AgentNotFound,
+    AppLoadError,
+    NotARunaProject,
+    ensure_loaded,
+    find_agent_class,
+    list_agents,
+    loaded_app,
+)
+
+_COUNTING_MAIN = '''"""A `main.py` that records every time it is executed."""
+
+from pathlib import Path
+
+with (Path(__file__).parent / "loads.txt").open("a") as marker:
+    marker.write("x")
+'''
 
 
 def _write_agent(project_dir: Path, filename: str, source: str) -> None:
     (project_dir / "app" / "agents" / filename).write_text(source)
+
+
+def _loads(project_dir: Path) -> int:
+    """How many times `_COUNTING_MAIN` has run in this project."""
+    marker = project_dir / "loads.txt"
+    return len(marker.read_text()) if marker.exists() else 0
 
 
 def test_find_agent_class_matches_the_declared_name(tmp_path: Path) -> None:
@@ -116,3 +139,72 @@ def test_list_agents_raises_outside_a_runa_project(tmp_path: Path) -> None:
     """`list_agents` raises `NotARunaProject` when `root` has no `app/agents/` directory."""
     with pytest.raises(NotARunaProject):
         list_agents(root=tmp_path)
+
+
+def test_list_agents_executes_main_once_however_often_it_is_called(tmp_path: Path) -> None:
+    """The dashboard calls this once per page view, and `main.py` is not a page view.
+
+    `runa ui`'s `/agents` route renders through `list_agents`, which used to enter a scoped
+    `loaded_app` block: every view re-executed the developer's entry point, so an app that calls
+    `tracing.add_exporter` there held one exporter per view and wrote every finished trace that
+    many times. Loading is a fact now (`ensure_loaded`), so the import happens once and the
+    listing is still read fresh each call.
+    """
+    project_dir = scaffold_project("demo", root=tmp_path)
+    (project_dir / "main.py").write_text(_COUNTING_MAIN)
+    generate_agent("SupportAgent", root=project_dir)
+
+    first = list_agents(root=project_dir)
+    second = list_agents(root=project_dir)
+
+    assert [info.name for info in first] == ["support_agent"]
+    assert second == first
+    assert _loads(project_dir) == 1
+
+
+def test_ensure_loaded_is_a_no_op_for_the_project_it_already_loaded(tmp_path: Path) -> None:
+    """The second caller asks the same question and gets the answer, not a second import."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+    (project_dir / "main.py").write_text(_COUNTING_MAIN)
+
+    ensure_loaded(project_dir)
+    ensure_loaded(project_dir)
+
+    assert _loads(project_dir) == 1
+
+
+def test_ensure_loaded_refuses_a_second_project(tmp_path: Path) -> None:
+    """Two apps in one process would both want the `main`/`app.*` names, so saying so is the fix.
+
+    The alternative is the quiet one: the loser's `sys.modules` entries are deleted underneath it
+    and it serves the winner's agents. The message names both roots, since which two projects
+    collided is the only thing the caller can act on.
+    """
+    first = scaffold_project("first", root=tmp_path)
+    second = scaffold_project("second", root=tmp_path)
+    ensure_loaded(first)
+
+    with pytest.raises(UserError) as exc_info:
+        ensure_loaded(second)
+
+    assert "first" in str(exc_info.value)
+    assert "second" in str(exc_info.value)
+
+
+def test_ensure_loaded_can_be_retried_after_a_broken_main(tmp_path: Path) -> None:
+    """A `main.py` that raises leaves nothing loaded, so the next attempt is a first attempt.
+
+    An `AppLoadError` is the developer's own entry point failing (see the class), which the
+    dashboard renders as a 500 page. Recording that root as loaded anyway would turn a fixable
+    import error into a process that can never load the app it was pointed at.
+    """
+    project_dir = scaffold_project("demo", root=tmp_path)
+    (project_dir / "main.py").write_text("raise RuntimeError('boom')\n")
+
+    with pytest.raises(AppLoadError):
+        ensure_loaded(project_dir)
+
+    (project_dir / "main.py").write_text(_COUNTING_MAIN)
+    ensure_loaded(project_dir)
+
+    assert _loads(project_dir) == 1

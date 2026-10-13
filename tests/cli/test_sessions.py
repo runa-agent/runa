@@ -41,7 +41,9 @@ def test_list_sessions_reads_the_project_in_use(tmp_path: Path) -> None:
     """The project `db.use_project` named is the one whose `db/runa.db` gets opened.
 
     The convention that resolves to lives in `runa.db` now, applied to every concern at once;
-    this is the test that it still holds from a caller that names no directory at all.
+    this is the test that it still holds from a caller that names no directory at all. The
+    `use_project(None)` between the two is the process boundary a second app has in reality:
+    naming another project outright is a `UserError`, which is `tests/test_db.py`'s own test.
     """
     other = scaffold_project("other", root=tmp_path)
     _add_history(other, "SupportAgent")
@@ -50,6 +52,7 @@ def test_list_sessions_reads_the_project_in_use(tmp_path: Path) -> None:
     db.use_project(other)
     assert "SupportAgent" in list_sessions()
 
+    db.use_project(None)
     db.use_project(empty)
     assert list_sessions() == "no sessions found"
 

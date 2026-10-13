@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from runa import db
+from runa.exceptions import UserError
 
 _URL = "postgresql://runa:runa@localhost:5432/runa"
 
@@ -152,6 +153,37 @@ def test_use_project_none_is_the_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
     db.use_project(None)
 
     assert db.sqlite_path() == Path("db/runa.db")
+
+
+def test_use_project_accepts_the_same_project_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two startup paths naming one project is the normal case, not a conflict.
+
+    `runa ui` says it twice by design: `cli/main` from the cwd before dispatching, then
+    `web.app.create_app(root)` while building. Saying the same thing again configures nothing new.
+    """
+    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
+    root = Path("other/project")
+
+    db.use_project(root)
+    db.use_project(root)
+
+    assert db.sqlite_path() == root / "db" / "runa.db"
+
+
+def test_use_project_refuses_a_second_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A process reads one app, so the second one is an error instead of a silent repoint.
+
+    Two Runa apps mounted in one process used to leave both resolving against whichever root was
+    built last -- including runs already in flight, whose sessions and memory would land in
+    another app's file. `runa.project.ensure_loaded` refuses the import half of the same fact.
+    """
+    monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
+    db.use_project(Path("one/project"))
+
+    with pytest.raises(UserError):
+        db.use_project(Path("other/project"))
+
+    assert db.sqlite_path() == Path("one/project/db/runa.db")
 
 
 def test_a_project_applies_an_explicit_sqlite_url_relative_to_it(

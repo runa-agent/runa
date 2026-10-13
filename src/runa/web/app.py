@@ -52,6 +52,11 @@ def create_app(root: Path) -> FastAPI:
     Telling `runa.db` which project this is happens here, once, rather than in each route: the
     dashboard reads six concerns out of `root/db/runa.db` and a route that forwarded `root` to a
     reader could only move the four that took it.
+
+    `root` reaching a route at all is the filesystem half of the same answer, and the Agents page
+    is the one that loads the app from it. It asks `project.ensure_loaded`, so the import happens
+    once however many page views arrive: a view that re-ran the developer's `main.py` would
+    re-register whatever it registers (an exporter, a client) behind the page it rendered.
     """
     db.use_project(root)
     app = FastAPI(title="runa ui", docs_url=None, redoc_url=None)

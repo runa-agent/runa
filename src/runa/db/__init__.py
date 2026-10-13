@@ -50,7 +50,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from runa.exceptions import OperatorError
+from runa.exceptions import OperatorError, UserError
 
 if TYPE_CHECKING:
     from runa.cache import Cache
@@ -119,16 +119,30 @@ _project_root: Path | None = None
 def use_project(root: Path | None) -> None:
     """Point this process's local state at the project in `root`; `None` means its cwd.
 
-    Startup configuration, called once, like `tracing.add_exporter` and for the same reason: a
+    Startup configuration, said once, like `tracing.add_exporter` and for the same reason: a
     process reads one app, and a root passed per call site is a root three of the seven concerns
     below can't be passed at all. `runa` sets this from `cwd` before dispatching, and both
     `create_app(root)`s set it while building, so an embedder serving an app from somewhere other
     than its own working directory gets every concern moved, not four of them.
 
+    "Once" is enforced rather than asked for: a second call naming a *different* project is a
+    `UserError`, because the alternative is both apps resolving to whichever root was built last,
+    including for runs already in flight. `runa.project.ensure_loaded` refuses the import half of
+    the same fact, and an app that genuinely fronts two projects runs two processes.
+
+    `None` is the default, not a second app, so it always applies and clears the way for another
+    root. That is what a test resets to between projects (see `tests/conftest.py`), standing in
+    for the process boundary a deployment would have.
+
     Unread unless this deployment's state is local: a `postgresql://` or `memory://` URL has no
     file to place.
     """
     global _project_root
+    if root is not None and _project_root is not None and _project_root.resolve() != root.resolve():
+        raise UserError(
+            f"this process already reads the Runa app at {_project_root}, so it cannot also read "
+            f"the one at {root}: a process reads one app."
+        )
     _project_root = root
 
 

@@ -92,6 +92,10 @@ runa ui                    # http://127.0.0.1:8765
 runa ui --host 0.0.0.0 --port 3000
 ```
 
+The Agents page lists the app as it was imported when the dashboard started, not as it is on
+disk: a page view never re-runs your `main.py`. Editing `app/agents/` takes a restart, the same
+as [`runa serve`](deployment.md#one-agent-instance-one-conversation).
+
 ## Exit Codes
 
 `runa eval` and `runa test` exit `1` if any case or test failed, `0` otherwise, safe to wire into

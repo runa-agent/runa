@@ -195,7 +195,15 @@ imports `main.py` and `app/` at boot, never per request, so whatever your app ke
 level -- an HTTP client, a connection pool, a cache -- is built once and stays built, and a
 module that fails to import stops the server from starting rather than failing one route at a
 time. Editing `app/agents/` therefore takes a restart; `uvicorn asgi:app --reload` does that for
-you while you work.
+you while you work. `runa ui` reads the app the same way, so its Agents page is the app as
+imported at startup too.
+
+One process serves one app. Importing an app runs its `main.py` under the names `main` and
+`app.*`, and its local state resolves against one directory, so Runa says that out loud rather
+than leaving it to chance: mounting a second Runa app in the same process -- a second
+`create_app`, or a second `db.use_project` naming a different project -- raises a `UserError`
+instead of quietly pointing both at whichever one was built last. Serve the second app from a
+second process.
 
 ## More than one replica
 

@@ -20,7 +20,7 @@ one before it used the same backend.
 
 import pytest
 
-from runa import db
+from runa import db, project
 from runa.tracing import config, observe
 
 
@@ -43,12 +43,15 @@ def _empty_ephemeral_stores():
 
 @pytest.fixture(autouse=True)
 def _default_project():
-    """Reset the project `runa.db` resolves against, so a test's `use_project` can't leak.
+    """Reset the project this process reads, so a test's own can't leak into the next one.
 
-    Process-wide is what `db.use_project` means (see `runa.db`), the same way a plain
-    `observe(...)` is: a test that points it at a `tmp_path` is standing in for the `runa`
-    command or the `create_app` that would normally have set it at startup. Restoring the default
-    here is what keeps the next test's `db/runa.db` from being the previous test's temp directory.
+    Process-wide is what `db.use_project` and `project.ensure_loaded` mean (see `runa.db` and
+    `runa.project`), the same way a plain `observe(...)` is: a test that points either at a
+    `tmp_path` is standing in for the `runa` command or the `create_app` that would normally have
+    said it once at startup. Both now refuse a second, different project rather than overwriting
+    the first, so this is also what gives each test the fresh process it is pretending to be --
+    the next test's `db/runa.db` is its own temp directory, and its `main.py` is its own.
     """
     yield
     db.use_project(None)
+    project.reset_loaded_app()

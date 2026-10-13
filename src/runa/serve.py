@@ -36,7 +36,9 @@ Four decisions this makes for you, each the one a production deployment wants:
 `runa serve` is the short way to run this app, and `cli/serve.py` imports this module lazily so a
 plain install still runs every other command; only serving needs the `serve` extra. The app object
 itself is public, though: `runa new` scaffolds an `asgi.py` that builds it, for the deployment that
-brings its own server or mounts these routes inside a larger one.
+brings its own server or mounts these routes inside a larger one. One Runa app per process, in
+that case: a second `create_app` for a different project is a `UserError` rather than two apps
+quietly sharing the last one's imports and database (see `project.ensure_loaded`).
 """
 
 import json
@@ -53,7 +55,7 @@ from runa import db
 from runa._log import logger
 from runa.agent import Agent
 from runa.exceptions import OperatorError, UserError
-from runa.project import iter_agent_classes, loaded_app, require_agents_dir
+from runa.project import ensure_loaded, iter_agent_classes, require_agents_dir
 from runa.run import Run
 from runa.run_state import RunState
 
@@ -208,13 +210,15 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     agents_dir = require_agents_dir(root)
 
     # The app's agents by declared `name`, imported here and kept: a server resolves them once,
-    # at startup, not once per request (see this module's docstring). A broken agent module
-    # therefore stops the process from starting rather than failing one route, which is the
-    # failure a deployment wants -- found by the thing that rolls out, not by a user.
-    with loaded_app(root):
-        agent_classes = {
-            getattr(cls, "name", cls.__name__): cls for cls in iter_agent_classes(agents_dir)
-        }
+    # at startup, not once per request (see this module's docstring). `ensure_loaded` is how that
+    # "once" is said -- it is the same fact `runa ui` asks for, and the second app in one process
+    # is its error rather than this one's. A broken agent module therefore stops the process from
+    # starting rather than failing one route, which is the failure a deployment wants -- found by
+    # the thing that rolls out, not by a user.
+    ensure_loaded(root)
+    agent_classes = {
+        getattr(cls, "name", cls.__name__): cls for cls in iter_agent_classes(agents_dir)
+    }
 
     async def _authenticate(request: Request) -> None:
         """Require `Authorization: Bearer <RUNA_API_KEY>` unless the server was started open."""
