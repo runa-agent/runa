@@ -12,13 +12,17 @@ list may hold, which `RunState` needs to walk a graph of agents -- is answered b
 type that owns it (`Handoff.by_tool_name`) and called from here, so the dependency between the
 two layers stays one-way.
 
-A concrete dataclass rather than a `Protocol`, because a `Protocol` describes a surface and
-builds nothing: the only implementation of the old one was a thirteen-field `SimpleNamespace`
-hand-written in six test files, where a fourteenth field broke all six silently, at read time.
-Every field here has a default instead, so a test names the two or three its behaviour turns on.
-`agent` is the object user code is handed -- a hook's callback, a guardrail function,
-`RunState.agent` -- and for a shape built directly it is the shape itself, which is what lets one
-stand in for an agent the loop would otherwise need built in full.
+A concrete dataclass rather than a `Protocol` to implement, because a `Protocol` describes a
+surface and builds nothing: the only implementation of the old one was a thirteen-field
+`SimpleNamespace` hand-written in six test files, where a fourteenth field broke all six
+silently, at read time. Every field here has a default instead, so a test names the two or three
+its behaviour turns on. `agent` is the object user code is handed -- a hook's callback, a
+guardrail function, `RunState.agent` -- and for a shape built directly it is the shape itself,
+which is what lets one stand in for an agent the loop would otherwise need built in full.
+
+`AgentLike` is a `Protocol` nonetheless, but only as the type of what a shape is *built from*:
+the one object that implements it is the real `Agent`, and a type checker is what reads it, so
+nothing is hand-written against it and a test still only has to know about the dataclass.
 
 Work that belongs to a single caller lives with that caller instead -- approval gating in
 `tool_execution`, output parsing and instruction resolution in `run_loop`, agent lookup by name in
@@ -27,7 +31,7 @@ Work that belongs to a single caller lives with that caller instead -- approval 
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from runa._models import Model, ModelProvider
 from runa._types import ModelSettings
@@ -38,6 +42,39 @@ from runa.knowledge import KnowledgeLike
 from runa.lifecycle import Hooks
 from runa.memory import MemoryLike
 from runa.tool import FunctionTool
+
+
+class AgentLike(Protocol):
+    """What `AgentShape.of` reads off an agent: the other side of this seam, written as types.
+
+    `Agent` satisfies this structurally, and because `run_loop._run_async` takes it too, a type
+    checker verifies that where the match actually has to hold -- `Agent.run` handing itself to
+    the loop -- while `run_internal` still imports nothing from the class it implements. What no
+    annotation can state is the dynamic half, that `of` below copies each of these into the field
+    named for it, and that stays a test (`tests/test_agent.py`).
+
+    The read side only, so this is no second way to configure an agent: which names are settings
+    at all is `Agent.__init__`'s to say (`agent._AGENT_FIELDS`), and these are the resolved
+    attributes a run then reads. Two of them are resolved under a name of their own, `guardrails`
+    and `compact` staying the declaration's, and `mcp_servers` answers to no field below at all:
+    resolving one is folding its tools into `tools`. Those two keep a loose element type for the
+    reason the fields below do -- what a `handoffs` list may hold is `Handoff.by_tool_name`'s
+    knowledge, and what an MCP server is, `runa.mcp`'s.
+    """
+
+    name: str
+    instructions: str | Callable[..., Any] | None
+    model: str | Model
+    model_settings: ModelSettings
+    tools: list[FunctionTool]
+    mcp_servers: list[Any]
+    handoffs: list[Any]
+    bound_guardrails: dict[Phase, list[BoundGuardrail]]
+    output_type: type | None
+    memory: MemoryLike | None
+    knowledge: KnowledgeLike | None
+    compactor: Compactor | None
+    hooks: Hooks[Any] | None
 
 
 @dataclass
@@ -73,25 +110,29 @@ class AgentShape:
     agent: Any = None
 
     def __post_init__(self) -> None:
-        """Normalize `handoffs`, and default `agent` to the shape itself if none was given."""
+        """Key `handoffs` by tool name, and default `agent` to the shape itself if none given.
+
+        The field is the keyed map the loop reads, so `of` below hands one over already; this is
+        what lets a shape built directly be given the plain list an agent declares instead.
+        """
         self.handoffs = Handoff.by_tool_name(self.handoffs)
         if self.agent is None:
             self.agent = self
 
     @classmethod
-    async def of(cls, agent: Any) -> AgentShape:
+    async def of(cls, agent: AgentLike | AgentShape) -> AgentShape:
         """`agent`'s shape: its MCP servers' tools fetched, its handoffs normalized.
 
-        Hand it one it already made and it comes straight back. `Agent` satisfies this
-        structurally and nothing here imports it, which is what keeps `run_internal` from
-        depending on the class it implements.
+        Hand it one it already made and it comes straight back, which is the other half of the
+        parameter's type: an agent to resolve, or a shape resolved already (a test's stand-in, or
+        a handoff target the loop resolved on its way in).
 
         Every field above is fed from one attribute here, and a new one has to be: because each
         has a default, a field this copy forgets reads as unconfigured rather than failing. The
         inverse check is a test (`tests/test_agent.py`), as is the rule for which settings are a
         shape's at all and which are `RunConfig`'s (`agent._AGENT_FIELDS`).
         """
-        if isinstance(agent, cls):
+        if isinstance(agent, AgentShape):
             return agent
         tools = list(agent.tools)
         for server in agent.mcp_servers:
@@ -102,7 +143,7 @@ class AgentShape:
             model=agent.model,
             model_settings=agent.model_settings,
             tools=tools,
-            handoffs=agent.handoffs,
+            handoffs=Handoff.by_tool_name(agent.handoffs),
             guardrails=agent.bound_guardrails,
             output_type=agent.output_type,
             memory=agent.memory,
@@ -124,4 +165,4 @@ class AgentShape:
         return provider.get_model(self.model) if isinstance(self.model, str) else self.model
 
 
-__all__ = ["AgentShape"]
+__all__ = ["AgentLike", "AgentShape"]

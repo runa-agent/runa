@@ -804,6 +804,20 @@ def test_agent_shape_carries_every_setting_that_is_the_agents_own() -> None:
     assert shape.agent is agent
 
 
+def test_agent_like_names_every_attribute_a_shape_is_built_from() -> None:
+    """The contract's static half: the protocol `_run_async` checks a real `Agent` against.
+
+    `AgentLike` is the same mapping as `_SHAPE_HOMES`, read from the agent's side, so a type
+    checker catches an attribute an `Agent` stopped having at `Agent.run` rather than here. The
+    declaration is worth having only while it stays the whole list, though -- a setting added to
+    the shape and not to it is a run reading something nothing promised -- and keeping the two in
+    step is what this asserts, the dynamic half being the test above.
+    """
+    from runa.run_internal.agent_shape import AgentLike
+
+    assert set(AgentLike.__annotations__) == set(_SHAPE_HOMES)
+
+
 def test_run_config_carries_every_ceiling_on_the_run() -> None:
     """The other path: the three ceilings configure the call, so they travel as a `RunConfig`."""
     agent = _every_setting_agent()

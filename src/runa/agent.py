@@ -831,8 +831,11 @@ which configures the call rather than the agent; everything the agent *is* belon
 path, and `tests/test_agent.py` is where that is enforced: it asserts every attribute `__init__`
 resolves has one of those two homes, and that `AgentShape.of` carries the ones that are the
 shape's -- a shape field left at its default is a setting the turn loop silently ignores, which
-is this module's `_reject_unknown_settings` bug one layer down. `project._describe` is not a
-third path: it summarizes declared attributes for the Agents page and configures nothing.
+is this module's `_reject_unknown_settings` bug one layer down. Dropping one of those attributes
+needs no test at all: `run_internal.agent_shape.AgentLike` is the shape's read side as a
+`Protocol`, which `run`/`run_streamed` below are checked against by handing `self` to the loop.
+`project._describe` is not a third path: it summarizes declared attributes for the Agents page
+and configures nothing.
 """
 
 

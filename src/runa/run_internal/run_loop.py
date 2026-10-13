@@ -39,7 +39,7 @@ from runa.guardrail import Phase
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.active_run import _Run
-from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.agent_shape import AgentLike, AgentShape
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.spans import _close_span, _export, _Spans
@@ -446,7 +446,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
 
 
 async def _run_async(
-    agent: Any,
+    agent: AgentLike | AgentShape,
     input: str | list[ConversationItem] | RunState,
     *,
     context: Any = None,
