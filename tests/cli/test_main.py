@@ -265,7 +265,7 @@ def test_chat_dispatches_to_run_agent_repl(tmp_path: Path, monkeypatch: pytest.M
     ) -> None:
         calls.append((name, root, session_id, continue_last, resume))
 
-    monkeypatch.setattr("runa.cli.main.run_agent_repl", fake_repl)
+    monkeypatch.setattr("runa.cli.chat.run_agent_repl", fake_repl)
 
     exit_code = main(["chat", "Support"], cwd=project_dir)
 
@@ -291,7 +291,7 @@ def test_chat_continue_flag_dispatches_continue_last(
     ) -> None:
         calls.append(continue_last)
 
-    monkeypatch.setattr("runa.cli.main.run_agent_repl", fake_repl)
+    monkeypatch.setattr("runa.cli.chat.run_agent_repl", fake_repl)
 
     assert main(["chat", "Support", "--continue"], cwd=project_dir) == 0
     assert main(["chat", "Support", "-c"], cwd=project_dir) == 0
@@ -316,7 +316,7 @@ def test_chat_resume_flag_dispatches_the_given_or_empty_id(
     ) -> None:
         calls.append(resume)
 
-    monkeypatch.setattr("runa.cli.main.run_agent_repl", fake_repl)
+    monkeypatch.setattr("runa.cli.chat.run_agent_repl", fake_repl)
 
     assert main(["chat", "Support", "--resume", "Support-old"], cwd=project_dir) == 0
     assert main(["chat", "Support", "--resume"], cwd=project_dir) == 0
@@ -334,7 +334,7 @@ def test_chat_sends_piped_stdin_as_one_message(
     def fake_repl(name: str, *, root: Path, message: str | None = None, **kwargs: object) -> None:
         calls.append(message)
 
-    monkeypatch.setattr("runa.cli.main.run_agent_repl", fake_repl)
+    monkeypatch.setattr("runa.cli.chat.run_agent_repl", fake_repl)
 
     assert main(["chat", "Support"], cwd=project_dir) == 0
     assert calls == ["line one\nline two\n"]
@@ -438,7 +438,7 @@ def test_serve_takes_one_process_and_sends_several_workers_to_asgi_py(
     the shape that does support it.
     """
     scaffold_project("demo", root=tmp_path)
-    monkeypatch.setattr("runa.cli.main.serve_agents", lambda *a, **k: None)
+    monkeypatch.setattr("runa.cli.serve.serve_agents", lambda *a, **k: None)
 
     with pytest.raises(SystemExit) as exit_info:
         main(["serve", "--workers", "4"], cwd=tmp_path / "demo")
@@ -463,7 +463,7 @@ def test_a_missing_extra_is_one_clean_line_not_a_traceback(
     """
     scaffold_project("demo", root=tmp_path)
     monkeypatch.setattr(
-        "runa.cli.main.serve_agents",
+        "runa.cli.serve.serve_agents",
         lambda *a, **k: (_ for _ in ()).throw(ModuleNotFoundError(name="fastapi")),
     )
 
@@ -479,7 +479,7 @@ def test_a_missing_extra_names_the_ui_extra_for_runa_ui(
     """`serve` and `ui` ship the same packages, so the command decides which extra to name."""
     scaffold_project("demo", root=tmp_path)
     monkeypatch.setattr(
-        "runa.cli.main.serve_ui",
+        "runa.cli.ui.serve_ui",
         lambda *a, **k: (_ for _ in ()).throw(ModuleNotFoundError(name="fastapi")),
     )
 
@@ -495,7 +495,7 @@ def test_an_unrelated_import_error_still_propagates(
     """A real bug must not be disguised as a missing-extra hint."""
     scaffold_project("demo", root=tmp_path)
     monkeypatch.setattr(
-        "runa.cli.main.serve_agents",
+        "runa.cli.serve.serve_agents",
         lambda *a, **k: (_ for _ in ()).throw(ModuleNotFoundError(name="some_real_bug")),
     )
 

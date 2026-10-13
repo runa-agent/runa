@@ -22,12 +22,33 @@ through every backend. Split by concern: `interface` (the `Model` protocol, `Mod
 `StreamDelta`, and what both backends share), `chat_completions` (the chat-completions backend),
 `anthropic` (the Claude backend), and `provider` (`ModelProvider`, routing a name to one of the
 two).
+
+The two backends are resolved one name at a time, the way `runa`'s own facade resolves the
+public surface: a package's `__init__` runs before any of its submodules, so naming them here
+eagerly would make the Anthropic SDK -- three of the four seconds `runa` used to cost to import
+-- a load-time dependency of everything that reads `DEFAULT_MODEL` or `check_model_name`, which
+is `runa.agent` and so every entry point. `ModelProvider.get_model` imports the backend it
+routes to; nothing else needs either.
 """
 
-from runa._models.anthropic import AnthropicModel
-from runa._models.chat_completions import OpenAICompatibleModel
+from typing import TYPE_CHECKING
+
 from runa._models.interface import Model, ModelRequest, StreamDelta
 from runa._models.provider import DEFAULT_MODEL, OPENAI, ModelProvider, check_model_name
+
+if TYPE_CHECKING:
+    from runa._models.anthropic import AnthropicModel
+    from runa._models.chat_completions import OpenAICompatibleModel
+
+_BACKENDS = {
+    "AnthropicModel": "runa._models.anthropic",
+    "OpenAICompatibleModel": "runa._models.chat_completions",
+}
+"""The lazily resolved backends, mapped to the module that defines each one.
+
+`OpenAICompatibleModel` is lazy alongside the SDK-backed one, not because it costs anything, but
+because "a backend is imported by whoever routes to it" is one rule and this would be two.
+"""
 
 __all__ = [
     "DEFAULT_MODEL",
@@ -40,3 +61,16 @@ __all__ = [
     "StreamDelta",
     "check_model_name",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Resolve a backend's name, importing only the module that defines it."""
+    from importlib import import_module
+
+    try:
+        module = _BACKENDS[name]
+    except KeyError:
+        raise AttributeError(f"module 'runa._models' has no attribute {name!r}") from None
+    value = getattr(import_module(module), name)
+    globals()[name] = value
+    return value

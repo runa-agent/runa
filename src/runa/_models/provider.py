@@ -3,15 +3,16 @@
 import difflib
 import os
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx2 as httpx
-from anthropic import AsyncAnthropic
 
 from runa._loop import LoopCache
-from runa._models.anthropic import AnthropicModel
-from runa._models.chat_completions import OpenAICompatibleModel
 from runa._models.interface import Model
 from runa.exceptions import UserError
+
+if TYPE_CHECKING:
+    from anthropic import AsyncAnthropic
 
 DEFAULT_MODEL = "gpt-5.4-nano"
 
@@ -116,6 +117,14 @@ class ModelProvider:
     OpenAI's other families, `gemini-*`, `llama-*`, `deepseek-*`, `qwen-*`) go through
     `OpenAICompatibleModel` against that provider's own chat-completions endpoint. A name
     matching none of them is a `UserError`, not a default (see `check_model_name`).
+
+    Each backend is imported inside the branch that routes to it, the way `runa.db` imports an
+    adapter inside the function that needs it. The Anthropic SDK is most of a three-second
+    import, and `check_model_name`, `DEFAULT_MODEL` and the `Model` protocol -- which `runa.agent`
+    reads at module scope, and through it every entry point -- need no backend at all. So
+    `runa generate tool`, `runa --version` and an app that only ever names a `gpt-*` model pay
+    for a vendor SDK they can't use. A provider-specific client has no business being a
+    load-time dependency of a framework whose providers are chosen per agent by a string.
     """
 
     def __init__(self) -> None:
@@ -137,7 +146,11 @@ class ModelProvider:
         lower = name.lower()
 
         if lower.startswith(_ANTHROPIC_PREFIX):
+            from runa._models.anthropic import AnthropicModel
+
             return AnthropicModel(name, self._get_anthropic_client())
+
+        from runa._models.chat_completions import OpenAICompatibleModel
 
         # Total: `_PREFIXES` is these endpoints' prefixes plus Anthropic's, both handled above.
         endpoint = next(e for e in _ENDPOINTS if lower.startswith(e.prefixes))
@@ -147,6 +160,8 @@ class ModelProvider:
         return self._http_clients.get(endpoint.name, lambda: _client_for(endpoint))
 
     def _get_anthropic_client(self) -> AsyncAnthropic:
+        from anthropic import AsyncAnthropic
+
         return self._anthropic_clients.get(_ANTHROPIC_PREFIX, AsyncAnthropic)
 
 

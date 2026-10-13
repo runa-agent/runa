@@ -92,7 +92,7 @@ def test_a_new_operator_error_gets_the_clean_cli_line(
     def _raise(*_args: object, **_kwargs: object) -> Path:
         raise _BrandNewOperatorError("that name is taken")
 
-    monkeypatch.setattr("runa.cli.main.scaffold_project", _raise)
+    monkeypatch.setattr("runa.cli.new.scaffold_project", _raise)
 
     exit_code = main(["new", "demo"], cwd=tmp_path)
 

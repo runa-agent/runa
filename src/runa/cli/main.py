@@ -5,6 +5,14 @@ convention and never touch the runtime. `chat`, `eval`, and `test` do
 touch it, but only by calling existing library functions
 (`agent.run_sync()`, `agent.evaluate()`, `run_project_tests()`) against
 the app in `cwd`; no logic lives here that doesn't already exist elsewhere.
+
+Each subcommand's entry point is imported inside the `_dispatch` branch
+that runs it, never at module scope. One invocation runs one command, and
+`runa --version` or `runa generate tool` has no use for the chat REPL, the
+eval runner or the trace viewer; `serve` and `ui` already defer their web
+stack, and this is the same rule applied to the other eight. Only the four
+things every invocation needs -- `db`, `DEFAULT_MODEL` for the parser's
+help text, and the two error types `main` catches -- are imported up here.
 """
 
 import argparse
@@ -14,22 +22,6 @@ from pathlib import Path
 
 from runa import db
 from runa._models import DEFAULT_MODEL
-from runa.cli.chat import run_agent_repl
-from runa.cli.eval import run_project_evals
-from runa.cli.generate import (
-    generate_agent,
-    generate_evaluation,
-    generate_guardrail,
-    generate_prompt,
-    generate_tool,
-)
-from runa.cli.new import scaffold_project
-from runa.cli.serve import serve_agents
-from runa.cli.sessions import list_sessions, show_session
-from runa.cli.test import run_project_tests
-from runa.cli.traces import list_errors_cli, list_traces_cli, show_trace
-from runa.cli.ui import serve_ui
-from runa.eval.corpus import add_trace_to_evals
 from runa.exceptions import OperatorError
 from runa.project import AppLoadError
 
@@ -264,6 +256,8 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
 
 def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
     if args.command == "new":
+        from runa.cli.new import scaffold_project
+
         project_dir = scaffold_project(args.name, root=cwd)
         print(f"created {project_dir}")
         cd_step = f"  cd {project_dir.name}\n" if args.name else ""
@@ -276,6 +270,8 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.command == "generate" and args.kind == "agent":
+        from runa.cli.generate import generate_agent
+
         agent = generate_agent(
             args.name,
             root=cwd,
@@ -302,6 +298,8 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.command == "generate" and args.kind == "tool":
+        from runa.cli.generate import generate_tool
+
         generated_tool = generate_tool(args.name, root=cwd, description=args.description)
         print(f"created {generated_tool.file}")
         print(
@@ -315,6 +313,8 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.command == "generate" and args.kind == "guardrail":
+        from runa.cli.generate import generate_guardrail
+
         generated_guardrail = generate_guardrail(args.name, root=cwd)
         print(f"created {generated_guardrail.file}")
         print(
@@ -325,11 +325,15 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.command == "generate" and args.kind == "prompt":
+        from runa.cli.generate import generate_prompt
+
         print(f"created {generate_prompt(args.name, root=cwd).file}")
         print("\nnext: write the prompt, then load it from an Agent's `instructions`")
         return 0
 
     if args.command == "generate" and args.kind == "evaluation":
+        from runa.cli.generate import generate_evaluation
+
         print(f"created {generate_evaluation(args.name, root=cwd).file}")
         print(
             "\nnext: add one case per line, e.g. "
@@ -340,14 +344,21 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
 
     if args.command == "chat":
         if args.list:
+            from runa.cli.sessions import list_sessions
+
             print(list_sessions())
             return 0
         if args.show is not None:
+            from runa.cli.sessions import show_session
+
             print(show_session(args.show))
             return 0
         if args.agent_name is None:
             print("error: runa chat needs an agent name, or --list/--show", file=sys.stderr)
             return 1
+
+        from runa.cli.chat import run_agent_repl
+
         run_agent_repl(
             args.agent_name,
             root=cwd,
@@ -359,6 +370,8 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.command == "eval" and args.add is not None:
+        from runa.eval.corpus import add_trace_to_evals
+
         eval_file = add_trace_to_evals(args.add, root=cwd, expected=args.expected)
         print(f"added trace {args.add} to {eval_file}")
         if args.expected is None:
@@ -366,6 +379,8 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 0
 
     if args.command == "eval":
+        from runa.cli.eval import run_project_evals
+
         reports = run_project_evals(cwd, args.agent_name)
         for report in reports:
             print(report)
@@ -379,6 +394,8 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 1 if failed else 0
 
     if args.command == "test":
+        from runa.cli.test import run_project_tests
+
         results = run_project_tests(cwd)
         for result in results:
             status = "PASS" if result.passed else f"FAIL: {result.error}"
@@ -388,17 +405,27 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 1 if failed else 0
 
     if args.command == "serve":
+        from runa.cli.serve import serve_agents
+
         serve_agents(cwd, host=args.host, port=args.port, no_auth=args.no_auth)
         return 0
 
     if args.command == "ui":
+        from runa.cli.ui import serve_ui
+
         serve_ui(cwd, host=args.host, port=args.port)
         return 0
 
     if args.traces_action == "list":
+        from runa.cli.traces import list_traces_cli
+
         print(list_traces_cli())
     elif args.traces_action == "show":
+        from runa.cli.traces import show_trace
+
         print(show_trace(args.trace_id))
     else:
+        from runa.cli.traces import list_errors_cli
+
         print(list_errors_cli())
     return 0

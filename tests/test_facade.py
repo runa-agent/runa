@@ -1,10 +1,17 @@
-"""What `import runa` is allowed to cost, and what it still has to offer.
+"""What an entry point is allowed to cost, and what the facade still has to offer.
 
 `runa/__init__.py` resolves its public names lazily, so the one thing no other test would notice
 breaking is the reason it does: a single eager `from runa.agent import Agent` added back here
 would quietly reattach the Anthropic SDK and the MCP client to every `runa generate`, every
 `@tool` file and every cold start. `test_facade_stays_light` is that tripwire, and it runs in a
 subprocess because this one already has half of PyPI in `sys.modules`.
+
+A lazy facade over an eager layer buys nothing, which is what `test_entry_points_stay_light`
+covers: `runa.agent` reads `DEFAULT_MODEL`, `check_model_name` and the `Model` protocol at module
+scope, and `runa.cli.main` reads `DEFAULT_MODEL`, so an eager backend import anywhere under
+`runa._models` puts a provider's SDK back under every one of those entry points -- including the
+commands and the `gpt-*`-only apps that can never call it. `ModelProvider.get_model` imports the
+backend it routes to, and nothing else does.
 
 The rest holds the namespace to what it was before it went lazy: every name in `__all__` still
 resolves, `_EXPORTS` and `__all__` can't drift apart, and a name that isn't public still fails.
@@ -16,6 +23,22 @@ import sys
 
 import runa
 
+_HEAVY = ("anthropic", "mcp", "httpx2")
+"""The imports worth a subprocess to catch: a vendor SDK, the MCP client, and the HTTP layer."""
+
+
+def _heavy_modules_after(statement: str) -> set[str]:
+    """Which of `_HEAVY` a fresh interpreter has loaded once it has run `statement`.
+
+    In a subprocess, because this one already has half of PyPI in `sys.modules`.
+    """
+    probe = f"import sys\n{statement}\nprint(' '.join(m for m in {_HEAVY!r} if m in sys.modules))"
+    result = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    return set(result.stdout.split())
+
+
 _SELF_RESOLVING = {"db", "__version__"}
 """The two names `__getattr__` handles itself rather than reading out of a module."""
 
@@ -25,15 +48,22 @@ _EAGER = {"tool", "guardrail", "approval"}
 
 def test_facade_stays_light():
     """`import runa` pulls in neither the Anthropic SDK nor the MCP client."""
-    probe = (
-        "import sys, runa\n"
-        "heavy = sorted(m for m in ('anthropic', 'mcp', 'httpx2') if m in sys.modules)\n"
-        "print(heavy)\n"
+    assert _heavy_modules_after("import runa") == set()
+
+
+def test_entry_points_stay_light():
+    """No entry point loads a provider's SDK, and the one that routes to it still does.
+
+    `from runa import Agent` is every app's first line and `runa.cli.main` is every command's,
+    and neither knows yet which provider -- if any -- this run will name. The HTTP layer is a
+    fair cost for both (`runa._models.provider` needs it to build a client at all); a specific
+    vendor's SDK is not.
+    """
+    assert "anthropic" not in _heavy_modules_after("from runa import Agent")
+    assert "anthropic" not in _heavy_modules_after("import runa.cli.main")
+    assert "anthropic" in _heavy_modules_after(
+        "from runa._models import ModelProvider\nModelProvider().get_model('claude-sonnet-5')"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
-    )
-    assert result.stdout.strip() == "[]", result.stdout
 
 
 def test_every_public_name_resolves():
