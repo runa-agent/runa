@@ -159,6 +159,12 @@ api.mount("/ai", agents)
 `asgi.py`; reach for it when you want middleware, a mount path, or a process manager that
 `runa serve` does not give you, and stay on `runa serve` when you don't.
 
+Several worker processes is one of those things `runa serve` does not give you, and the reason is
+visible in the line above: a worker is forked from an *import string* a supervisor re-imports per
+process, and `create_app(root, api_key=...)` takes arguments, so `asgi.py` -- not a flag -- is
+where an app gets a name to be addressed by. `runa serve` runs one process; `uvicorn asgi:app
+--workers 4` runs as many as you ask for.
+
 ## One agent instance, one conversation
 
 An `Agent` instance holds the conversation it is running. Two overlapping runs on the same

@@ -427,6 +427,31 @@ def test_chat_show_reports_unknown_session_as_a_clean_error(
     assert "no session found" in capsys.readouterr().err
 
 
+def test_serve_takes_one_process_and_sends_several_workers_to_asgi_py(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`runa serve` has no `--workers`: a worker needs an import string, which `asgi.py` is.
+
+    The flag used to exist and could never work -- uvicorn refuses `workers > 1` with an app
+    object, which is all `create_app(root, api_key=...)` can hand it -- so it exited from inside
+    the library instead of binding the port. It's rejected at the flag now, and the help names
+    the shape that does support it.
+    """
+    scaffold_project("demo", root=tmp_path)
+    monkeypatch.setattr("runa.cli.main.serve_agents", lambda *a, **k: None)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["serve", "--workers", "4"], cwd=tmp_path / "demo")
+
+    assert exit_info.value.code == 2
+    assert "--workers" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit):
+        main(["serve", "--help"], cwd=tmp_path / "demo")
+
+    assert "uvicorn asgi:app --workers N" in capsys.readouterr().out
+
+
 def test_a_missing_extra_is_one_clean_line_not_a_traceback(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

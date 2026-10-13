@@ -11,14 +11,17 @@ from pathlib import Path
 
 
 def serve_agents(
-    root: Path,
-    *,
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    no_auth: bool = False,
-    workers: int = 1,
+    root: Path, *, host: str = "127.0.0.1", port: int = 8000, no_auth: bool = False
 ) -> None:
-    """Serve `root`'s agents over HTTP until interrupted."""
+    """Serve `root`'s agents over HTTP, in this one process, until interrupted.
+
+    One process is the whole process model this command has, and the reason is the app object
+    above: `create_app(root, api_key=...)` takes arguments, so there is no import string for a
+    supervisor to re-import per worker -- and an import string is what uvicorn requires to fork
+    (it refuses an app object with `workers > 1`). A deployment that wants several workers has an
+    address already: the `asgi.py` that `runa new` scaffolds, run as `uvicorn asgi:app
+    --workers N`. That's the seam for a different process model, not a flag here.
+    """
     import uvicorn
 
     from runa.serve import create_app, resolve_api_key
@@ -28,7 +31,7 @@ def serve_agents(
 
     auth = "no auth" if api_key is None else "bearer auth"
     print(f"runa serve running at http://{host}:{port} ({auth})")
-    uvicorn.run(app, host=host, port=port, workers=workers, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 __all__ = ["serve_agents"]

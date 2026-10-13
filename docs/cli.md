@@ -74,8 +74,10 @@ Serve this app's agents over HTTP. See [Deployment](deployment.md). Needs the `s
 runa serve                              # http://127.0.0.1:8000, bearer auth
 runa serve --host 0.0.0.0 --port 8000   # reachable from outside a container
 runa serve --no-auth                    # local use, no token required
-runa serve --workers 4                  # uvicorn worker processes
 ```
+
+One process, no worker flag: for several workers, run `uvicorn asgi:app --workers 4` against the
+scaffolded [`asgi.py`](deployment.md#your-own-server), which is the address a supervisor needs.
 
 Requires `RUNA_API_KEY` and refuses to start without it, unless `--no-auth` is passed. Routes:
 `GET /health` (unauthenticated), `GET /agents`, `POST /agents/{name}/runs` and

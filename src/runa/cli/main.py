@@ -187,7 +187,9 @@ def _build_parser() -> argparse.ArgumentParser:
     traces_show_parser.add_argument("trace_id")
 
     serve_parser = subparsers.add_parser(
-        "serve", help="Serve this app's agents over HTTP (needs the `serve` extra)"
+        "serve",
+        help="Serve this app's agents over HTTP (needs the `serve` extra)",
+        epilog="For several worker processes, run `uvicorn asgi:app --workers N` instead.",
     )
     serve_parser.add_argument(
         "--host", default="127.0.0.1", help="use 0.0.0.0 in a container (default: 127.0.0.1)"
@@ -197,9 +199,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-auth",
         action="store_true",
         help="serve without a bearer token; otherwise RUNA_API_KEY is required",
-    )
-    serve_parser.add_argument(
-        "--workers", type=int, default=1, help="uvicorn worker processes (default: 1)"
     )
 
     ui_parser = subparsers.add_parser(
@@ -389,13 +388,7 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         return 1 if failed else 0
 
     if args.command == "serve":
-        serve_agents(
-            cwd,
-            host=args.host,
-            port=args.port,
-            no_auth=args.no_auth,
-            workers=args.workers,
-        )
+        serve_agents(cwd, host=args.host, port=args.port, no_auth=args.no_auth)
         return 0
 
     if args.command == "ui":
