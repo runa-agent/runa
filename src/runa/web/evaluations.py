@@ -6,12 +6,21 @@ that passed in the agent's previous run but failed here is marked regressed.
 """
 
 from datetime import datetime
-from urllib.parse import quote
 
 from runa import db
 from runa.eval.store import EvalCaseRow, EvalRun
 from runa.exceptions import OperatorError
-from runa.web._html import back_link, chip, empty, empty_hint, escape, page, pre
+from runa.web._html import (
+    back_link,
+    chip,
+    empty,
+    empty_hint,
+    escape,
+    evaluation_path,
+    page,
+    pre,
+    trace_path,
+)
 
 __all__ = ["EvalRunNotFound", "render_detail", "render_list"]
 
@@ -53,7 +62,7 @@ def _case_card(case: EvalCaseRow, *, regressed: bool) -> str:
     if regressed:
         verdict = chip("regressed", "error") + " " + verdict
     trace_link = (
-        f' <a class="meta" href="/traces/{escape(quote(case.trace_id))}">open trace ›</a>'
+        f' <a class="meta" href="{trace_path(case.trace_id)}">open trace ›</a>'
         if case.trace_id
         else ""
     )
@@ -81,7 +90,7 @@ def render_list() -> str:
         body = empty_hint("no evaluation runs yet, run", "runa eval")
     else:
         rows = "".join(
-            f'<a class="row" href="/evaluations/{run.id}">'
+            f'<a class="row" href="{evaluation_path(run.id)}">'
             f'<span class="primary">{escape(run.agent_name)}</span>'
             f"{_score_bar(run.pass_rate)}"
             f'<span class="meta">{escape(_fmt_timestamp(run.created_at))}</span></a>'

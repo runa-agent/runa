@@ -3,10 +3,16 @@
 Hand-rolled strings, not a templating engine -- four small pages don't earn a Jinja dependency,
 and it keeps every page a plain, testable function (the same spirit as `Trace.__str__`). No
 JavaScript: `<details>` covers every collapsible bit a trace/session/eval page needs.
+
+Hand-rolled is why the one-line `*_path` helpers are here too, and why they are the only way a
+page addresses another: interpolating an id into an `href` takes two steps in one order, and a
+page that has to remember them is a page that can get them wrong. `escape` is still every other
+site's own call -- it is one step, and a value is either untrusted text or it isn't.
 """
 
 import html
 from typing import Literal
+from urllib.parse import quote
 
 NAV_ITEMS = ("Agents", "Sessions", "Evaluations")
 
@@ -128,6 +134,36 @@ summary.span-row { color: var(--text); font-size: inherit; cursor: pointer; user
 def escape(value: object) -> str:
     """HTML-escape any value for safe interpolation (span input/output is untrusted app data)."""
     return html.escape(str(value), quote=True)
+
+
+def _link(prefix: str, id: object) -> str:
+    r"""`prefix/id` with `id` as one path segment: percent-encoded, then HTML-escaped.
+
+    Both layers, in that order, once -- so a page's decision is which `*_path` to call, not which
+    two functions to nest. `safe=""` keeps `/` and `\` inside the segment they belong to: ids here
+    are the application's, `user/42` is a natural session id, and unencoded it addresses a path
+    nobody serves (the routes in `app.py` take the whole of it, see their `:path`).
+
+    Escaping afterwards finds nothing left to change -- percent-encoding already removed every
+    character it looks for -- which is why these are equally safe in a redirect's `Location`, with
+    no scheme or host reachable through them (CWE-601). It stays because the rule is the composite.
+    """
+    return escape(f"{prefix}/{quote(str(id), safe='')}")
+
+
+def session_path(session_id: object) -> str:
+    """Link to one session's transcript."""
+    return _link("/sessions", session_id)
+
+
+def trace_path(trace_id: object) -> str:
+    """Link to one trace's span tree."""
+    return _link("/traces", trace_id)
+
+
+def evaluation_path(run_id: object) -> str:
+    """Link to one `agent.evaluate()` run's cases."""
+    return _link("/evaluations", run_id)
 
 
 def page(*, title: str, active: str, body: str) -> str:

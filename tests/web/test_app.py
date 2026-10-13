@@ -17,7 +17,8 @@ from runa.eval.report import CaseReport, Report
 from runa.exceptions import OperatorError
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
-from runa.web.app import _trace_url, create_app
+from runa.web._html import session_path, trace_path
+from runa.web.app import create_app
 
 
 @pytest.fixture
@@ -172,6 +173,24 @@ def test_sessions_list_and_detail(client: TestClient) -> None:
     assert "hi there" in detail.text
 
 
+def test_an_awkward_session_id_is_linked_and_the_link_opens_it(client: TestClient) -> None:
+    """A session id holding `/` and `&` round-trips: the listing's own href reaches its page.
+
+    Ids are the application's, so `user/42&co` is a session id like any other. The listing links
+    it through `session_path`, which percent-encodes the whole id, and `/sessions/{id:path}` takes
+    the whole of it back -- the pair is the point, since either half alone is a 404 here.
+    """
+    asyncio.run(db.session("user/42&co").add_items([{"role": "user", "content": "awkward"}]))
+
+    href = session_path("user/42&co")
+    assert href == "/sessions/user%2F42%26co"
+    assert f'href="{href}"' in client.get("/sessions").text
+
+    detail = client.get(href)
+    assert detail.status_code == 200
+    assert "awkward" in detail.text
+
+
 def test_session_detail_404s_for_an_unknown_session(client: TestClient) -> None:
     """`/sessions/{id}` returns 404 for a session id with no history."""
     assert client.get("/sessions/nope").status_code == 404
@@ -251,8 +270,8 @@ def test_trace_add_to_evals_never_redirects_off_site(client: TestClient) -> None
     assert response.status_code == 404
     assert "evil.example.com" not in response.headers.get("location", "")
 
-    assert _trace_url("/evil.example.com") == "/traces/%2Fevil.example.com"
-    assert _trace_url("\\\\evil.example.com") == "/traces/%5C%5Cevil.example.com"
+    assert trace_path("/evil.example.com") == "/traces/%2Fevil.example.com"
+    assert trace_path("\\\\evil.example.com") == "/traces/%5C%5Cevil.example.com"
 
 
 def test_trace_detail_hides_add_to_evals_without_a_recorded_input(client: TestClient) -> None:

@@ -10,10 +10,17 @@ file; the two renderers that still take `root` want the filesystem, not the data
 No standalone Traces tab: `web/sessions.py`'s merged timeline already shows a session's traces in
 context, and `/traces/{trace_id}` stays routable (unlinked from the nav) as the "open trace" target
 from a session's trace card and for a session-less trace (an eval run, a one-off `run_sync()`).
+
+The id routes take `:path`, not a single segment, because the ids are the application's: `user/42`
+is a natural session id, and an ASGI server percent-decodes the path before this router sees it, so
+the `%2F` the link carries arrives as a `/` and a one-segment route would 404 on an id its own
+listing page just linked to. Nothing is nested under either prefix for the greedier match to
+shadow. Where a redirect goes is `_html.py`'s `trace_path` and only its -- percent-encoding the id
+whole is what keeps a crafted one a path on this app rather than another site (CWE-601).
 """
 
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -26,23 +33,11 @@ from runa.web import agents as agents_page
 from runa.web import evaluations as evaluations_page
 from runa.web import sessions as sessions_page
 from runa.web import traces as traces_page
-from runa.web._html import empty, page
+from runa.web._html import empty, page, trace_path
 
 
 def _error_page(active: str, message: str) -> str:
     return page(title="Error", active=active, body=f"<h1>Error</h1>{empty(message)}")
-
-
-def _trace_url(trace_id: str) -> str:
-    r"""Where to send a browser for `trace_id`: always a path on this app, never another site.
-
-    `trace_id` comes off the request, so it is percent-encoded whole -- `safe=""`, keeping even
-    `/` and `\` inside the one path segment it belongs to -- and the result is re-parsed to be
-    sure it names no host and no scheme before a redirect can follow it (CWE-601).
-    """
-    url = f"/traces/{quote(trace_id, safe='')}"
-    parsed = urlparse(url)
-    return url if not parsed.scheme and not parsed.netloc else "/"
 
 
 def create_app(root: Path) -> FastAPI:
@@ -76,21 +71,21 @@ def create_app(root: Path) -> FastAPI:
     def sessions_list() -> str:
         return sessions_page.render_list()
 
-    @app.get("/sessions/{session_id}", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/sessions/{session_id:path}", response_class=HTMLResponse, include_in_schema=False)
     def session_detail(session_id: str) -> HTMLResponse:
         try:
             return HTMLResponse(sessions_page.render_detail(session_id))
         except sessions_page.SessionNotFound:
             return HTMLResponse(_error_page("Sessions", "Session not found."), status_code=404)
 
-    @app.get("/traces/{trace_id}", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/traces/{trace_id:path}", response_class=HTMLResponse, include_in_schema=False)
     def trace_detail(trace_id: str) -> HTMLResponse:
         try:
             return HTMLResponse(traces_page.render_detail(trace_id, root=root))
         except TraceNotFound:
             return HTMLResponse(_error_page("", "Trace not found."), status_code=404)
 
-    @app.post("/traces/{trace_id}/eval", include_in_schema=False, response_model=None)
+    @app.post("/traces/{trace_id:path}/eval", include_in_schema=False, response_model=None)
     async def trace_add_to_evals(
         trace_id: str, request: Request
     ) -> HTMLResponse | RedirectResponse:
@@ -102,7 +97,7 @@ def create_app(root: Path) -> FastAPI:
             pass  # e.g. a double submit: the trace page already shows where the case is
         except TraceNotFound, TraceHasNoInput:
             return HTMLResponse(_error_page("", "Trace has no input to add."), status_code=404)
-        return RedirectResponse(_trace_url(trace_id), status_code=303)
+        return RedirectResponse(trace_path(trace_id), status_code=303)
 
     @app.get("/evaluations", response_class=HTMLResponse, include_in_schema=False)
     def evaluations_list() -> str:

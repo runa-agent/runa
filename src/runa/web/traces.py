@@ -9,13 +9,12 @@ reach a trace; this is the "open trace"/direct-by-id destination (see `web/app.p
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from runa import db
 from runa.eval.corpus import has_case, traced_input
 from runa.tracing import SpanRow, Trace, require_trace
 from runa.tracing.spans import Span
-from runa.web._html import chip, empty, escape, page, pre
+from runa.web._html import chip, empty, escape, page, pre, session_path, trace_path
 
 __all__ = ["render_detail"]
 
@@ -113,7 +112,7 @@ def _add_to_evals(trace: Trace, *, root: Path) -> str:
     if has_case(root / eval_file, input):
         run = "<code>runa eval</code>"
         return f'<div class="card">In <code>{escape(eval_file)}</code>. Run {run}.</div>'
-    action = escape(f"/traces/{quote(trace.id)}/eval")
+    action = f"{trace_path(trace.id)}/eval"
     return (
         f'<form class="card add-eval" method="post" action="{action}">'
         f'<div class="field-label">Add this input to <code>{escape(eval_file)}</code></div>'
@@ -132,7 +131,7 @@ def render_detail(trace_id: str, *, root: Path) -> str:
     trace = require_trace(db.traces(), trace_id)
     status = "ok" if trace.status == "ok" else "error"
     session_link = (
-        f' · session <a href="/sessions/{escape(trace.session_id)}">{escape(trace.session_id)}</a>'
+        f' · session <a href="{session_path(trace.session_id)}">{escape(trace.session_id)}</a>'
         if trace.session_id
         else ""
     )

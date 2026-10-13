@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from runa import db
 from runa.session.store import SessionMessage, SessionNotFound
 from runa.tracing import Trace
-from runa.web._html import back_link, empty, empty_hint, escape, page
+from runa.web._html import back_link, empty, empty_hint, escape, page, session_path
 from runa.web.traces import _tree
 
 __all__ = ["SessionNotFound", "render_detail", "render_list"]
@@ -26,7 +26,7 @@ def render_list() -> str:
         body = empty_hint("no sessions yet, run", "runa chat <agent>")
     else:
         items = "".join(
-            f'<a class="row" href="/sessions/{escape(session.id)}">'
+            f'<a class="row" href="{session_path(session.id)}">'
             f'<span class="primary">{escape(session.id)}</span>'
             f'<span class="meta">{escape(session.updated_at)}</span></a>'
             for session in sessions
