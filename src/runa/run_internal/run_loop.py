@@ -44,12 +44,13 @@ from runa.run_internal.active_run import _Run
 from runa.run_internal.agent_shape import AgentLike, AgentShape
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.run_config import RunConfig
-from runa.run_internal.spans import _close_span, _export, _Spans
+from runa.run_internal.spans import _close_span, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutcome
 from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
+from runa.tracing.config import export_trace_off_loop
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 
@@ -319,18 +320,23 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     raise MaxTurnsExceeded(f"max turns ({run_config.max_turns}) exceeded")
 
 
-def _close_trace(trace: Trace) -> None:
+async def _close_trace(trace: Trace) -> None:
     """Stamp `trace` as finished and hand it to the exporters: once per run, however it came out.
 
     `_guarded` is the only caller, on each of its ways out, because "once" is the point: a trace
     exported by the step that produced it and again by the boundary that caught its failure is two
     traces to whoever reads them, and one exported by neither is a run nobody can explain.
+
+    Awaited, because exporting is I/O (`tracing/config.py`'s `export_trace_off_loop`): a database
+    write, or an HTTP POST to Langfuse. The run waits for its own, so a `run_sync` that has
+    returned has a trace already written; the loop does not, so the other requests a `runa serve`
+    process is serving are not held up by this one's bookkeeping.
     """
     trace.end_time = time.time()
-    _export(trace)
+    await export_trace_off_loop(trace)
 
 
-def _report(run: _Run, failure: RunaError) -> None:
+async def _report(run: _Run, failure: RunaError) -> None:
     """Close `run` out around `failure`, and hang what it had accumulated off the exception.
 
     `run_data` travels on the exception because the exception is the only thing that crosses the
@@ -338,7 +344,7 @@ def _report(run: _Run, failure: RunaError) -> None:
     run that errored (`Agent._failed`).
     """
     _close_span(run.agent_span, error=str(failure))
-    _close_trace(run.trace)
+    await _close_trace(run.trace)
     failure.run_data = RunErrorDetails(
         input=run.input,
         new_items=list(run.generated),
@@ -387,10 +393,10 @@ async def _guarded(run: _Run, turn: Awaitable[Run]) -> Run:
                 raise RunTimeout(f"run timed out after {timeout}s") from exc
     except OperatorError as exc:
         _close_span(run.agent_span, error=str(exc))
-        _close_trace(run.trace)
+        await _close_trace(run.trace)
         raise
     except RunaError as exc:
-        _report(run, exc)
+        await _report(run, exc)
         raise
     except Exception as exc:
         failure = UnexpectedError(exc)
@@ -400,9 +406,9 @@ async def _guarded(run: _Run, turn: Awaitable[Run]) -> Run:
             type(exc).__name__,
             exc_info=True,
         )
-        _report(run, failure)
+        await _report(run, failure)
         raise failure from exc
-    _close_trace(run.trace)
+    await _close_trace(run.trace)
     return result
 
 

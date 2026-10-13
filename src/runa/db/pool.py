@@ -31,10 +31,10 @@ _loop_lock = threading.Lock()
 def _background_loop() -> asyncio.AbstractEventLoop:
     """A daemon event loop for the synchronous callers that still need `asyncpg`.
 
-    `TraceExporter.export` and the whole `runa traces`/`runa ui` read path are synchronous, and
-    a trace is exported from inside a finishing run, so `asyncio.run()` (which demands there be
-    no running loop) is not available. One long-lived loop on its own thread serves them all,
-    and `LoopCache` gives it its own pool, as it would any other loop.
+    `TraceExporter.export` and the whole `runa traces`/`runa ui` read path are synchronous, so
+    they have no loop of their own to await on. One long-lived loop on its own thread serves them
+    all, and `LoopCache` gives it its own pool, as it would any other loop -- which is the point:
+    `asyncio.run()` per call would open and close a loop, and so a pool, per query.
     """
     global _loop
     if _loop is not None and not _loop.is_closed():
@@ -49,8 +49,11 @@ def _background_loop() -> asyncio.AbstractEventLoop:
 def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
     """Run `coro` on the background loop and wait for it, for a synchronous caller.
 
-    Safe to call from inside a running event loop (which `asyncio.run` is not): the work happens
-    on a different loop entirely, so it never tries to re-enter the caller's.
+    This blocks the calling thread, so call it from a thread that has nothing better to do: a CLI
+    command, or tracing's own export thread. Calling it from a thread running an event loop
+    (`runa serve`'s) does not deadlock -- the work happens on a different loop entirely -- but it
+    stalls every task on that loop for the duration, which is what `export_trace_off_loop` and
+    `evaluate_agent`'s `asyncio.to_thread` exist to prevent.
     """
     future = asyncio.run_coroutine_threadsafe(coro, _background_loop())
     return future.result(timeout)
@@ -61,10 +64,10 @@ def sync[**P, T](method: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
 
     The other half of `run_sync`, and the reason it's here rather than written out per method: a
     `TraceStore`/`EvalStore`/`SessionStore` is a synchronous interface (`runa traces`, `runa ui`
-    and `TraceExporter.export` reach it from no loop at all, or from inside a finishing run)
-    while `asyncpg` is not, so every read and write across those three adapters needs the same
-    pairing. Decorating the async body states it once; the alternative was nine one-line twins,
-    each of which had to remember that `asyncio.run` is the wrong half.
+    and `TraceExporter.export` reach it from a thread with no loop on it) while `asyncpg` is not,
+    so every read and write across those three adapters needs the same pairing. Decorating the
+    async body states it once; the alternative was nine one-line twins, each of which had to
+    remember that `asyncio.run` is the wrong half.
     """
 
     @functools.wraps(method)

@@ -81,6 +81,11 @@ observe(exporter=[SQLiteExporter(), ConsoleExporter()])  # replaces the exporter
 
 Write your own by implementing `TraceExporter`'s single method, `export(self, trace: Trace) -> None`.
 
+Write it as plain synchronous code, and block in it freely: a finished run hands its trace to
+tracing's own thread, so a slow write holds up nothing but that one run's last millisecond -- not
+the event loop `runa serve` is answering every other request on. One thread, so your `export` is
+never called from two at once and needs no lock of its own.
+
 ### Langfuse
 
 Install the `runa-ai[langfuse]` extra and set `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` (a `.env`

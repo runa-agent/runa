@@ -11,8 +11,7 @@ import uuid
 from contextvars import ContextVar
 from typing import Any
 
-from runa._log import logger
-from runa.tracing.config import exporters
+from runa.tracing.config import export_trace
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -22,14 +21,6 @@ _current: ContextVar[Trace | None] = ContextVar("runa_current_trace", default=No
 def current_trace() -> Trace | None:
     """The innermost open `trace` block's `Trace`, or `None` outside one."""
     return _current.get()
-
-
-def _export(finished: Trace) -> None:
-    for exporter in exporters():
-        try:
-            exporter.export(finished)
-        except Exception:  # noqa: BLE001 -- tracing must never break the caller
-            logger.warning("tracing: exporter %r failed", exporter, exc_info=True)
 
 
 class trace:
@@ -59,10 +50,15 @@ class trace:
         return self._trace
 
     def __exit__(self, *exc_info: object) -> None:
-        """Close and export the `Trace`, regardless of whether the block raised."""
+        """Close and export the `Trace`, regardless of whether the block raised.
+
+        Exported inline, where a finishing run gets off the loop first (`run_loop._close_trace`):
+        this is a synchronous `with` block, so the thread it blocks is the caller's own, and the
+        only work it holds up is the code that opened the block.
+        """
         _current.reset(self._token)
         self._trace.end_time = time.time()
-        _export(self._trace)
+        export_trace(self._trace)
 
 
 class span:

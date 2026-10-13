@@ -1442,11 +1442,11 @@ def test_runs_inside_a_trace_block_are_grouped_under_it() -> None:
         instructions = "Answer."
         model = _ScriptedModel([_final_message("a"), _final_message("b"), _final_message("c")])
 
-    agent = StepAgent()
-
+    # An `Agent` per run, because two of these three overlap: one instance runs one conversation
+    # at a time (see `Agent._exclusive`), and what this test is about is the grouping.
     async def workflow() -> list[Run]:
-        first = await agent.run("one")
-        return [first, *await asyncio.gather(agent.run("two"), agent.run("three"))]
+        first = await StepAgent().run("one")
+        return [first, *await asyncio.gather(StepAgent().run("two"), StepAgent().run("three"))]
 
     with tracing.trace("workflow") as outer:
         runs = asyncio.run(workflow())

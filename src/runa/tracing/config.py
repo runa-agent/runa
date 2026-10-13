@@ -1,5 +1,11 @@
 """tracing/config.py: the privacy policy every captured span/trace goes through, plus `observe()`.
 
+Also the one place that knows how a finished trace reaches the exporters: `export_trace` for a
+synchronous caller, `export_trace_off_loop` for a run that has a loop to protect. Both are here
+rather than at the two call sites because they were the same six lines written twice, in
+`run_internal/spans.py` and `tracing/manual.py`, and because which thread an exporter runs on is
+this module's decision to make -- see `TraceExporter`.
+
 One small policy, not a policy engine. `capture_inputs`/`capture_outputs` gate whether
 input/output are kept at all; `redact`/`redactor` scrub what's kept; the `max_*_bytes`
 limits truncate what's left. `run_internal/spans.py` applies it as each span opens and closes,
@@ -14,14 +20,18 @@ a `ContextVar`, the way `tracing/manual.py` already holds the current trace, so 
 while serving one request can't change what tracing captures for every other request in flight.
 """
 
+import asyncio
+import contextvars
 import json
 import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from runa._log import logger
 from runa.tracing.store import TraceStore
 from runa.tracing.traces import Trace
 
@@ -31,17 +41,64 @@ _REDACTED = "[REDACTED]"
 class TraceExporter(Protocol):
     """Exports a finished `Trace` somewhere: SQLite, the console, or a caller's own backend.
 
-    `export` is synchronous because it's called from `_export` (`run_internal/spans.py`, or
-    `tracing/manual.py` for a manual `trace` block) as a run finishes, from inside whatever loop
-    that run was already on: there is nothing to await from there, and `asyncio.run()` demands
-    there be no running loop. `TraceStore` is synchronous for the same reason, plus the
-    `runa traces`/`runa ui` read path. An exporter over an async backend reaches a loop through
-    `db/pool.run_sync`, as `PostgresTraceStore` does.
+    `export` is synchronous, and blocking in it is expected: an exporter is plain code doing
+    plain I/O -- a file write, an HTTP POST, `db/pool.run_sync` over an async driver as
+    `PostgresTraceStore` does -- and which thread it runs on is this module's decision rather
+    than the exporter's. A finishing run awaits `export_trace_off_loop`, so the write happens on
+    tracing's own thread while the loop goes on serving every other request; a caller that is
+    synchronous all the way down (a `tracing.trace` block, `runa traces`, `runa ui`) calls
+    `export_trace` inline on the thread it already has. `TraceStore` is synchronous for the same
+    reason.
     """
 
     def export(self, trace: Trace) -> None:
         """Export `trace`. Exceptions are caught by the caller; tracing must never fail open."""
         ...
+
+
+_exporting = ThreadPoolExecutor(max_workers=1, thread_name_prefix="runa-export")
+"""The thread every off-loop export runs on, created on the first one.
+
+One worker, deliberately. An exporter is usually a user's own class, so "your `export` is never
+called from two threads at once" is a promise worth more than exporting two traces in parallel --
+and it keeps the ordering a single loop thread used to give for free. It is also why this is not
+`asyncio.to_thread`: that pool is shared with the sync `@tool` and `@guardrail` offloads, where a
+burst of slow trace writes would sit in the slots a tool call needs.
+"""
+
+
+def export_trace(trace: Trace) -> None:
+    """Hand `trace` to every exporter active here, in order, on the calling thread.
+
+    Fail-open is the whole shape of this function: an exporter that raises is logged and the next
+    one still runs, because losing a trace is a worse outcome than losing one backend's copy of
+    it, and failing the run that produced it is worse than both.
+    """
+    for exporter in exporters():
+        try:
+            exporter.export(trace)
+        except Exception:  # noqa: BLE001 -- tracing must never break the caller
+            logger.warning("tracing: exporter %r failed", exporter, exc_info=True)
+
+
+async def export_trace_off_loop(trace: Trace) -> None:
+    """`export_trace`, moved onto `_exporting` so a slow exporter can't stall the event loop.
+
+    The call site is a finishing run (`run_internal/run_loop.py`'s `_close_trace`), which under
+    `runa serve` is sharing one loop with every other request in flight. Calling a blocking
+    exporter from there -- a Langfuse OTLP POST with retries behind it, a `PostgresTraceStore.save`
+    that waits up to 30s on a struggling database -- stops that loop dead, so one run's
+    observability hiccup became every concurrent run's latency. Awaiting the same work on another
+    thread costs this run the same milliseconds it always did and costs the others nothing.
+
+    The run still waits for its own export, which is what keeps `Run` and the trace store
+    consistent for the caller: once `run_sync` returns, the trace is written. The context is
+    copied across because `exporters()` reads `observe.scoped(...)`'s `ContextVar`, which
+    `run_in_executor` would otherwise leave behind.
+    """
+    context = contextvars.copy_context()
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(_exporting, lambda: context.run(export_trace, trace))
 
 
 class StoreExporter:

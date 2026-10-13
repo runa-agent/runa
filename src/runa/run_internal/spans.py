@@ -4,9 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from runa._log import logger
 from runa.tracing import config as tracing_config
-from runa.tracing.config import exporters
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_span_id
@@ -56,12 +54,4 @@ def _close_span(span: Span, *, error: str | None = None, output: Any = None) -> 
         span.error = error
 
 
-def _export(trace: Trace) -> None:
-    for exporter in exporters():
-        try:
-            exporter.export(trace)
-        except Exception:  # noqa: BLE001 -- tracing must never break an agent run
-            logger.warning("tracing: exporter %r failed", exporter, exc_info=True)
-
-
-__all__ = ["_Spans", "_close_span", "_export"]
+__all__ = ["_Spans", "_close_span"]
