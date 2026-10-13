@@ -10,7 +10,11 @@ regardless of which module writes to it first.
 A local file is the side of that decision that outlives releases: a shared Postgres is created by
 whichever replica connects first, where `db/runa.db` can be older than the release now opening it.
 Which is why what this applies is `db/schema.py`'s two halves, `ddl` and `reconcile`, and why an
-adapter hands over its `Table`s rather than a rendered script.
+adapter hands over its `Table`s rather than a rendered script. Once per file per process, like
+`db/pool.py`'s once per database per process, and for the same reason: whether a file predates a
+column is a question about the release that created it, so a connection per call (which is what
+every adapter here opens) is not a reason to ask it again. `_pending` is that bookkeeping, and
+`read` below is the one caller that stays outside it, for a reason of its own.
 
 `read` is the other half of the same decision, for the queries that only read: creating a file to
 answer "no history yet" is a side effect no listing should have, and which tables a database has
@@ -21,11 +25,16 @@ Where that file lives is `runa.db.sqlite_path`'s answer, not this module's.
 
 import sqlite3
 import struct
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from runa.db.schema import SQLITE, Declaration, Table, ddl, reconcile
+
+_applied: set[tuple[int, int, tuple[Declaration, ...]]] = set()
+"""The `(file, declarations)` pairs this process has already brought up to date; see `_pending`."""
+_applied_lock = threading.Lock()
 
 
 def pack_vector(vector: list[float]) -> bytes:
@@ -40,7 +49,8 @@ def connect(db_path: Path, *tables: Declaration, load_vec: bool = False) -> sqli
     """Open `db_path`, creating its parent directory if needed, and apply `tables`.
 
     Apply means create what's missing and then add the columns a declaration has grown since this
-    file was created -- `db/schema.py`'s `ddl` and `reconcile`, in that order, on every connect.
+    file was created -- `db/schema.py`'s `ddl` and `reconcile`, in that order, once per file per
+    process rather than on every connect; see `_pending`.
 
     `load_vec=True` loads the `sqlite-vec` extension first, for callers passing the raw SQL of a
     `vec0` virtual table (`db/vectors/sqlite.py`) -- everyone else pays nothing for it.
@@ -57,9 +67,11 @@ def connect(db_path: Path, *tables: Declaration, load_vec: bool = False) -> sqli
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
-    conn.executescript(ddl(SQLITE, *tables))
-    _reconcile(conn, *tables)
-    conn.commit()
+    if _pending(db_path, tables):
+        conn.executescript(ddl(SQLITE, *tables))
+        _reconcile(conn, *tables)
+        conn.commit()
+        _remember(db_path, tables)
     return conn
 
 
@@ -82,8 +94,11 @@ def read(db_path: Path, *tables: Table) -> Iterator[sqlite3.Connection | None]:
 
     A database that does exist is brought up to its declaration like any other connection: a read
     selects the columns the current release declares, so `reconcile`'s additive `ALTER TABLE`s
-    (and `SchemaOutOfDate` for what it can't add) belong here as much as on a write. Rows come
-    back as `sqlite3.Row`, which is what every read path above wants.
+    (and `SchemaOutOfDate` for what it can't add) belong here as much as on a write. Per query
+    here, not once per file like `connect`: a read is a CLI command or a dashboard page rather
+    than a step in a run, and reconciling it every time is what turns a column that went missing
+    underneath a live process into the operator error above instead of a bare `no such column`.
+    Rows come back as `sqlite3.Row`, which is what every read path above wants.
 
     Reading is a local-file question only. A shared Postgres has no file to leave behind, and
     `db/pool.py` creates its schema once per process rather than per query.
@@ -102,6 +117,47 @@ def read(db_path: Path, *tables: Table) -> Iterator[sqlite3.Connection | None]:
         yield conn
     finally:
         conn.close()
+
+
+def _pending(db_path: Path, tables: tuple[Declaration, ...]) -> bool:
+    """Whether `tables` still have to be applied to `db_path` by this process.
+
+    `ddl` and `reconcile` answer a question about releases, not about queries: whether this file
+    predates a table, or a column a declaration has since grown. That answer cannot change while
+    a process runs, so re-answering it per connection buys nothing and costs the four-statement
+    `CREATE TABLE IF NOT EXISTS` script plus a whole-database `sqlite_master`/`pragma_table_info`
+    scan -- on every connection, which here means every call, three of them in one
+    session-backed turn.
+
+    Keyed on the file's identity rather than its name: a database deleted underneath a live
+    process (a test, rather than a deployment) comes back with a new inode, so the next connect
+    creates its tables again instead of trusting what this process did to the old file. Keyed on
+    the declarations too, since a file holds several adapters' tables and each applies its own.
+
+    Two threads can both be told yes for the same pair and both apply it. That costs a duplicate
+    script, not a wrong database: every statement either side runs is `IF NOT EXISTS` or an
+    `ALTER TABLE` for a column neither has yet.
+    """
+    with _applied_lock:
+        return _key(db_path, tables) not in _applied
+
+
+def _remember(db_path: Path, tables: tuple[Declaration, ...]) -> None:
+    """Record that `tables` are now applied to `db_path`, so the next connect can skip it.
+
+    Called after the statements succeed, never before: `reconcile` can raise `SchemaOutOfDate`,
+    and a database a human still has to migrate is not one this process is done with.
+    """
+    with _applied_lock:
+        _applied.add(_key(db_path, tables))
+
+
+def _key(
+    db_path: Path, tables: tuple[Declaration, ...]
+) -> tuple[int, int, tuple[Declaration, ...]]:
+    """This file's identity (device and inode) paired with the declarations applied to it."""
+    info = db_path.stat()
+    return (info.st_dev, info.st_ino, tables)
 
 
 def _table_names(conn: sqlite3.Connection) -> set[str]:

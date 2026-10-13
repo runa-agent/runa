@@ -78,6 +78,11 @@ Runa ships one implementation per backend `RUNA_DATABASE_URL` understands, and `
 picks between them. A custom store subclasses `Session`'s four abstract methods (`get_items`,
 `add_items`, `pop_item`, `clear_session`), nothing less.
 
+All four are `async def`, and a run awaits them on the event loop that `runa serve` is answering
+every other request on. If your store talks to something with a blocking client, hand the body
+to `asyncio.to_thread` the way a sync `@tool` is handed to it -- the shipped `SQLiteSession` does
+exactly that with `sqlite3`.
+
 For a deployment where multiple processes share one store, set `RUNA_DATABASE_URL` and change
 nothing else. `runa serve`, `runa chat` and `runa ui` all resolve their session store through
 `runa.db`, so they follow it automatically:

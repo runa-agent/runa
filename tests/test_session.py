@@ -3,15 +3,20 @@
 The round-trip, `limit`, `pop_item`, `set_items`, `clear_session` and isolation behavior is
 `tests/contracts/session.py`, driven over this adapter (among others) by
 `tests/test_session_store.py`. What is left here is this adapter's own: that clearing a session
-removes its `agent_sessions` row rather than just its messages, and that a hand-written
-`Session` gets `set_items` without implementing it.
+removes its `agent_sessions` row rather than just its messages, that its blocking `sqlite3` calls
+happen off the event loop, and that a hand-written `Session` gets `set_items` without
+implementing it.
 """
 
 import asyncio
 import sqlite3
+import threading
+import time
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from runa.session import Session, SQLiteSession
 
@@ -30,6 +35,49 @@ def test_clear_session_drops_its_items_and_row(tmp_path: Path) -> None:
     with closing(sqlite3.connect(db_path)) as conn:
         row = conn.execute("SELECT 1 FROM agent_sessions WHERE session_id = ?", ("s1",)).fetchone()
     assert row is None
+
+
+def test_a_session_call_leaves_the_event_loop_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`sqlite3` is blocking, so the `await` has to be a real one.
+
+    On `runa serve`'s default deployment this adapter runs on the loop that is also serving every
+    other request, and a session-backed turn does three of these. A body that stalls the loop
+    makes one turn's file I/O every concurrent turn's latency, which is what the sync `@tool` and
+    `@guardrail` offloads already prevent for application code.
+
+    Asserted two ways, because each alone can pass for the wrong reason: the body runs on another
+    thread, and a task scheduled alongside it actually gets to run while it is in flight.
+    """
+    loop_thread = threading.get_ident()
+    bodies: list[int] = []
+    original = SQLiteSession._connect
+
+    def slow_connect(self: SQLiteSession) -> sqlite3.Connection:
+        bodies.append(threading.get_ident())
+        time.sleep(0.05)
+        return original(self)
+
+    monkeypatch.setattr(SQLiteSession, "_connect", slow_connect)
+    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+
+    async def _run() -> int:
+        ticks = 0
+
+        async def tick() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.005)
+                ticks += 1
+
+        ticking = asyncio.create_task(tick())
+        await session.add_items([{"role": "user", "content": "hi"}])
+        ticking.cancel()
+        return ticks
+
+    assert asyncio.run(_run()) > 0
+    assert bodies and loop_thread not in bodies
 
 
 def test_sessionabc_default_set_items_works_without_an_override(tmp_path: Path) -> None:

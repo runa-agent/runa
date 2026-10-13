@@ -389,6 +389,51 @@ def test_a_local_connection_grows_a_file_that_predates_a_column(tmp_path: Path) 
     assert rows == [("s1", None)]
 
 
+def test_a_local_connection_applies_a_schema_once_per_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whether a file predates a column is a question about releases, not about queries.
+
+    Every local adapter opens a connection per call -- a session-backed turn opens three -- and
+    each one used to re-run the whole `CREATE TABLE IF NOT EXISTS` script and a whole-database
+    column scan to re-answer a question whose answer cannot change while the process runs.
+
+    What still has to be asked again is each of the three cases below: another adapter's tables in
+    the same file, a declaration that has grown (`test_a_local_connection_grows_a_file_...`), and
+    a file that is no longer the file this process applied anything to.
+    """
+    import asyncio
+
+    from runa.cache.sqlite import SQLiteCache
+    from runa.db import sqlite as sqlite_db
+    from runa.db.schema import Declaration, Dialect
+    from runa.session.sqlite import SQLiteSession
+
+    applied: list[tuple[str, ...]] = []
+    render = sqlite_db.ddl
+
+    def recording(dialect: Dialect, *tables: Declaration) -> str:
+        applied.append(tuple("raw" if isinstance(t, str) else t.name for t in tables))
+        return render(dialect, *tables)
+
+    monkeypatch.setattr(sqlite_db, "ddl", recording)
+    db_path = tmp_path / "db" / "runa.db"
+    session = SQLiteSession("conv-1", db_path)
+
+    asyncio.run(session.add_items([{"role": "user", "content": "hi"}]))
+    for _ in range(5):
+        assert len(asyncio.run(session.get_items())) == 1
+    assert applied == [("agent_sessions", "agent_messages")]
+
+    asyncio.run(SQLiteCache(db_path).set("k", "v"))  # another concern's tables, same file
+    assert applied[1:] == [("cache_entries",)]
+
+    db_path.unlink()  # a file deleted underneath a live process is a new file, not a known one
+    asyncio.run(session.add_items([{"role": "user", "content": "again"}]))
+    assert applied[2:] == [("agent_sessions", "agent_messages")]
+    assert len(asyncio.run(session.get_items())) == 1
+
+
 def test_a_local_read_leaves_no_file_behind(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
