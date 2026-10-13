@@ -25,7 +25,7 @@ from runa._log import logger
 from runa._models import DEFAULT_MODEL, Model, ModelProvider, check_model_name
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
-from runa.exceptions import RunaError, UserError
+from runa.exceptions import OperatorError, RunaError, UserError
 from runa.guardrail import (
     BoundGuardrail,
     GuardrailsDict,
@@ -569,14 +569,24 @@ class Agent:
             self.history = run._history()
         return run
 
-    def _failed(self, exc: RunaError) -> Run:
-        """Record what a run that `exc` stopped had used, and ran, as an `"error"` `Run`."""
-        context_wrapper = exc.run_data.context_wrapper if exc.run_data else RunContextWrapper()
+    def _failed(self, exc: Exception) -> Run:
+        """Record what a run that `exc` stopped had used, and ran, as an `"error"` `Run`.
+
+        `run_data` is there whenever the failure happened inside the turn loop, which attaches it
+        on the way out (`run_internal/run_loop._guarded`) whatever the exception was. Without it
+        the run never got that far -- an MCP server that won't start, say -- so there is no trace
+        to report and nothing was spent; the message still comes back as a `Run`, because a caller
+        holding `agent.run(...)` was promised one either way.
+        """
+        run_data = exc.run_data if isinstance(exc, RunaError) else None
+        if run_data is None:
+            logger.error("%s failed before its run began", type(self).__name__, exc_info=True)
+        context_wrapper = run_data.context_wrapper if run_data else RunContextWrapper()
         self.last_usage = context_wrapper.usage
         self.usage.add(self.last_usage)
         return Run(
             output=None,
-            trace=exc.run_data.trace if exc.run_data else None,
+            trace=run_data.trace if run_data else None,
             usage=self.last_usage,
             status="error",
             error=str(exc),
@@ -661,10 +671,14 @@ class Agent:
         user_id=...)` to scope automatic memory, or your own store.
 
         Returns a `Run` exposing `.output`, `.status`, `.interruptions`, `.trace`, `.usage` and
-        `.error`. A tool call needing approval pauses the run (`status="paused"`). A guardrail
-        tripwire, `MaxTurnsExceeded`, or another `RunaError` is caught and reported as
-        `status="error"` instead of propagating. `self.history` only changes once a turn
-        completes.
+        `.error`. A tool call needing approval pauses the run (`status="paused"`). Nothing a run
+        fails on propagates: a guardrail tripwire, `MaxTurnsExceeded`, a model error, and equally
+        an exception out of application code the run called -- a `Hooks` method, a `Session`, a
+        `Compactor` -- all come back as `status="error"` with the message on `.error`
+        (`UnexpectedError` wraps the last kind, and its traceback is logged). The two that do
+        raise are `asyncio.CancelledError`, because a caller cancelling a run wants it stopped,
+        and `OperatorError`, which is not a run failure at all (see `runa.exceptions`).
+        `self.history` only changes once a turn completes.
 
         Token usage for this call is recorded to `self.last_usage` and accumulated into
         `self.usage`, regardless of `session`, `hooks`, or whether the run errored.
@@ -694,7 +708,9 @@ class Agent:
                     session=session,
                     _context_wrapper=_context_wrapper,
                 )
-            except RunaError as exc:
+            except OperatorError:
+                raise  # the operator's input, not this run's failure: see `runa.exceptions`
+            except Exception as exc:
                 return self._failed(exc)
             return self._completed(run, session)
 
@@ -711,6 +727,9 @@ class Agent:
         was opened on (see `runa.mcp`), so each is closed before that loop goes: a `runa chat`
         turn shuts its `.stdio` servers down instead of leaving a subprocess per turn behind.
         `await agent.run(...)` on an app's own loop keeps them open for the agent's lifetime.
+
+        A shutdown that fails is logged, never raised: the turn is over, its `Run` is the answer
+        this call owes, and one server refusing to go must not take the others' shutdown with it.
         """
 
         async def turn() -> Run:
@@ -718,7 +737,10 @@ class Agent:
                 return await self.run(message, context, hooks, session)
             finally:
                 for server in self.mcp_servers:
-                    await server.close()
+                    try:
+                        await server.close()
+                    except Exception:  # noqa: BLE001 -- see the docstring
+                        logger.warning("closing MCP server %r failed", server, exc_info=True)
 
         return asyncio.run(turn())
 
@@ -749,9 +771,9 @@ class Agent:
             # The latch is held here rather than in `run_streamed` because that is where the
             # turn runs: nothing is executed and `self.history` is untouched until a consumer
             # iterates, so a stream built and dropped holds nothing, and the generator's own
-            # teardown releases one abandoned mid-flight. It sits outside the `except RunaError`
-            # below so the refusal reaches the caller the way `run`'s does, as a raise rather
-            # than an error `Run`.
+            # teardown releases one abandoned mid-flight. It sits outside the `except` below so
+            # the refusal reaches the caller the way `run`'s does, as a raise rather than an
+            # error `Run`.
             with self._exclusive(session):
                 # The loop is a task writing into a queue, rather than an async generator,
                 # because it has to keep running between a consumer's `__anext__` calls: a tool
@@ -776,7 +798,9 @@ class Agent:
                     while (event := await queue.get()) is not None:
                         yield event
                     stream.run = self._completed(task.result(), session)
-                except RunaError as exc:
+                except OperatorError:
+                    raise  # see `run`: not this run's failure to report
+                except Exception as exc:
                     stream.run = self._failed(exc)
                 finally:
                     task.cancel()

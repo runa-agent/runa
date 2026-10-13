@@ -633,13 +633,14 @@ def test_streaming_actually_streams_tokens(client: TestClient) -> None:
     assert "".join(tokens) == "items=1"
 
 
-def test_a_mid_stream_failure_is_reported_as_an_event(project: Path) -> None:
+def test_a_mid_stream_run_failure_arrives_as_the_finished_run(project: Path) -> None:
     """A stream cannot become a 500: the status went out with the first byte.
 
-    Truncating silently would leave a client unable to tell a finished answer from a dropped
-    connection, so an unexpected failure has to arrive as an `error` event instead. What it says
-    is deliberately generic: the exception's type and message belong in the server log, not in a
-    caller's hands (CWE-209).
+    A model with no `stream_response` is the app's own code being wrong, and a run reports it the
+    way it reports every failure (`Agent.run`'s contract), so this route needs no special case:
+    the same final `run` event a completed turn ends with carries `status="error"` instead, and a
+    client reads one wire shape. The `error` event below is for a failure in this transport, after
+    the run already has its answer.
     """
     broken = project / "app" / "stub_model.py"
     broken.write_text(
@@ -649,6 +650,40 @@ def test_a_mid_stream_failure_is_reported_as_an_event(project: Path) -> None:
         )
     )
     client = TestClient(create_app(project, api_key="secret-token"))
+
+    with client.stream(
+        "POST",
+        "/agents/support_agent/runs/stream",
+        json={"message": "hello"},
+        headers=_auth(),
+    ) as response:
+        assert response.status_code == 200
+        payloads = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.iter_lines()
+            if line.startswith("data: ") and not line.endswith("[DONE]")
+        ]
+
+    (run_event,) = [p for p in payloads if p.get("type") == "run"]
+    assert run_event["status"] == "error"
+    assert "stream_response" in run_event["error"]
+
+
+def test_a_failure_in_the_transport_is_reported_as_an_error_event(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Whatever breaks after the first byte, a client can still tell a failure from an answer.
+
+    Truncating silently would leave it unable to, so this route's last resort is an `error`
+    event. What that event says is deliberately generic: an exception raised by the serving code
+    itself can name internals a caller has no business reading (CWE-209), so its type and
+    message stay in the server log.
+    """
+
+    def _boom(*_args: object, **_kwargs: object) -> dict[str, Any]:
+        raise RuntimeError("serialising the run blew up")
+
+    monkeypatch.setattr("runa.serve._run_payload", _boom)
 
     with client.stream(
         "POST",

@@ -175,8 +175,14 @@ same instance continues the conversation. Pass `session=` instead to persist his
   that ran. See [Guardrails](guardrails.md#audit-trail).
 
 A tripped guardrail or a runtime error (`MaxTurnsExceeded`, a model error) is caught and reported
-as `status="error"` instead of being raised. `agent.history` is left unchanged, since the turn
-never completed.
+as `status="error"` instead of being raised, and so is an exception out of code you supplied and
+the run called -- a `Hooks` method, a custom `Session`, a `compact` function -- which arrives as
+`UnexpectedError`'s message on `run.error`, with its traceback in the log. `agent.history` is left
+unchanged, since the turn never completed.
+
+Only two things raise out of a run: `asyncio.CancelledError`, since a caller that cancels a run
+wants it stopped rather than reported as failed, and an `OperatorError` (a mistyped
+`RUNA_DATABASE_URL`, say), which is the operator's input and not the run's failure.
 
 `run_streamed` instead yields `StreamEvent`s as the model responds. It is the same run as `run`:
 guardrails, hooks, tracing, memory, approvals and `session=` all apply. Once the stream ends,

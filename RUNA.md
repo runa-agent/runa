@@ -41,7 +41,12 @@ attributes. Passing a setting beats declaring it, and passing `None` means `None
 **An agent is run only through its own methods**: `run`, `run_sync` or `run_streamed`, each
 returning (or ending with) a `Run`: `.output`, `.status` (`"completed"`, `"paused"` or
 `"error"`), `.interruptions`, `.trace`, `.usage`, `.error`, and the guardrail audit trail. Errors never raise out of a run;
-they come back as `status="error"`. Two more class attributes cover what a run needs:
+they come back as `status="error"`. The boundary decides that, not the exception's type: a
+tripped guardrail, a model error and a bug in an app's own `Hooks`/`Session`/`Compactor` alike
+(the last wrapped in `UnexpectedError`, its traceback logged), each with the trace around the
+failure. The two that still raise are `asyncio.CancelledError`, because a caller cancelling a run
+asked for it to stop rather than to fail, and `OperatorError`, which isn't a run's failure at all.
+Two more class attributes cover what a run needs:
 
 * `output_type`: a dataclass, Pydantic model or `TypedDict` the final answer is parsed into.
   The model is asked for that JSON schema (on every provider) and a mismatch is an error `Run`.

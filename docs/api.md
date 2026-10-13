@@ -90,6 +90,8 @@ signature-level reference.
 
 ::: runa.exceptions.UserError
 
+::: runa.exceptions.UnexpectedError
+
 ## Serving
 
 ::: runa.serve.create_app
@@ -183,6 +185,8 @@ signature-level reference.
 ::: runa.exceptions.ModelBehaviorError
 
 ::: runa.exceptions.UserError
+
+::: runa.exceptions.UnexpectedError
 
 ::: runa.exceptions.GuardrailTripwireTriggered
 

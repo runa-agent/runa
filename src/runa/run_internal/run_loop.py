@@ -30,9 +30,11 @@ from runa.exceptions import (
     MaxTokensExceeded,
     MaxTurnsExceeded,
     ModelBehaviorError,
+    OperatorError,
     RunaError,
     RunErrorDetails,
     RunTimeout,
+    UnexpectedError,
     UserError,
 )
 from runa.guardrail import Phase
@@ -317,39 +319,91 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     raise MaxTurnsExceeded(f"max turns ({run_config.max_turns}) exceeded")
 
 
-async def _guarded(run: _Run, turns: Awaitable[_TurnOutcome]) -> _TurnOutcome:
-    """Await `turns`; on a `RunaError`, close the trace and attach what the run had so far.
+def _close_trace(trace: Trace) -> None:
+    """Stamp `trace` as finished and hand it to the exporters: once per run, however it came out.
+
+    `_guarded` is the only caller, on each of its ways out, because "once" is the point: a trace
+    exported by the step that produced it and again by the boundary that caught its failure is two
+    traces to whoever reads them, and one exported by neither is a run nobody can explain.
+    """
+    trace.end_time = time.time()
+    _export(trace)
+
+
+def _report(run: _Run, failure: RunaError) -> None:
+    """Close `run` out around `failure`, and hang what it had accumulated off the exception.
+
+    `run_data` travels on the exception because the exception is the only thing that crosses the
+    seam to `Agent.run`, which reads it there to report the usage, trace and guardrail trail of a
+    run that errored (`Agent._failed`).
+    """
+    _close_span(run.agent_span, error=str(failure))
+    _close_trace(run.trace)
+    failure.run_data = RunErrorDetails(
+        input=run.input,
+        new_items=list(run.generated),
+        raw_responses=[],
+        last_agent=run.start.agent,
+        context_wrapper=run.context_wrapper,
+        trace=run.trace,
+        guardrail_results=run.context_wrapper.guardrail_results.snapshot(),
+    )
+
+
+async def _guarded(run: _Run, turn: Awaitable[Run]) -> Run:
+    """Await the whole run, and report any failure as a `RunaError` carrying what it had so far.
+
+    This is the boundary the "errors never raise out of a run" promise is kept at, which is why
+    it encloses everything a run does -- loading a `session`, dispatching hooks, the turn loop,
+    and `_finish`'s saving and memory extraction -- and why it catches `Exception` rather than
+    Runa's own root. Half of what a run calls is application code reached through a sanctioned
+    extension point (a `Hooks` method, a custom `Session`, a `Compactor`), and a contract that
+    held for `MaxTurnsExceeded` but not for a locked SQLite file would be no contract at all:
+    `Agent.run` would hand the caller a traceback where `Run(status="error")` was documented, and
+    the failure would skip the close-out below, leaving the one run worth inspecting with no
+    exported trace. So anything unrecognized becomes `UnexpectedError`, logged with its traceback
+    on the way past, and the `Run` says what happened.
 
     `run_config.timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding
     it is translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
     span, exports its partial trace, and comes back as `Run(status="error")` rather than leaving
-    a half-finished trace behind. `asyncio.CancelledError` is deliberately not caught: a caller
-    that cancels a run (a dropped HTTP connection, a shutting-down worker) wants it to stop, not
-    to be turned into an error result.
+    a half-finished trace behind.
+
+    Two kinds of exception deliberately pass through instead. `asyncio.CancelledError` and the
+    rest of `BaseException` are not caught at all: a caller that cancels a run (a dropped HTTP
+    connection, a shutting-down worker) wants it to stop, not to be turned into an error result.
+    And an `OperatorError` is a sibling of `RunaError` precisely so a run never reports one as its
+    own failure (see `runa.exceptions`); the trace is still closed out around it.
     """
     timeout = run.run_config.timeout
     try:
         if timeout is None:
-            return await turns
-        try:
-            async with asyncio.timeout(timeout):
-                return await turns
-        except TimeoutError as exc:
-            raise RunTimeout(f"run timed out after {timeout}s") from exc
-    except RunaError as exc:
+            result = await turn
+        else:
+            try:
+                async with asyncio.timeout(timeout):
+                    result = await turn
+            except TimeoutError as exc:
+                raise RunTimeout(f"run timed out after {timeout}s") from exc
+    except OperatorError as exc:
         _close_span(run.agent_span, error=str(exc))
-        run.trace.end_time = time.time()
-        _export(run.trace)
-        exc.run_data = RunErrorDetails(
-            input=run.input,
-            new_items=list(run.generated),
-            raw_responses=[],
-            last_agent=run.start.agent,
-            context_wrapper=run.context_wrapper,
-            trace=run.trace,
-            guardrail_results=run.context_wrapper.guardrail_results.snapshot(),
-        )
+        _close_trace(run.trace)
         raise
+    except RunaError as exc:
+        _report(run, exc)
+        raise
+    except Exception as exc:
+        failure = UnexpectedError(exc)
+        logger.error(
+            "agent %s failed with an unhandled %s",
+            run.start.name,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        _report(run, failure)
+        raise failure from exc
+    _close_trace(run.trace)
+    return result
 
 
 async def _extract_memory(run: _Run, final_output: Any) -> None:
@@ -383,9 +437,12 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     `usage` is the context wrapper's, which is where every turn (and every delegate's) has been
     accumulating it all along; `Agent.run` records that same value to `last_usage` rather than
     recomputing it.
+
+    Closing the agent span is this function's, ending and exporting the trace is not: that is
+    `_guarded`'s, on the way out, so one run is one exported trace whether it completed, paused
+    or failed here -- saving to a session is as able to fail as any other step.
     """
     _close_span(run.agent_span, output=outcome.final_output)
-    run.trace.end_time = time.time()
     context_wrapper = run.context_wrapper
 
     if outcome.interruptions:
@@ -402,7 +459,6 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             guardrail_results=context_wrapper.guardrail_results.snapshot(),
             tool_calls=list(run.tool_calls),
         )
-        _export(run.trace)
         return Run(
             output=None,
             trace=run.trace,
@@ -432,7 +488,6 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     await _extract_memory(run, outcome.final_output)
 
     await run.hooks.on_agent_end(context_wrapper, run.current_agent, outcome.final_output)
-    _export(run.trace)
     return Run(
         output=outcome.final_output,
         trace=run.trace,
@@ -475,14 +530,12 @@ async def _run_async(
         trace.metadata = {**(run_config.trace_metadata or {}), "group_id": run_config.group_id}
 
     turn_input = [user_message(input)] if isinstance(input, str) else list(input)
-    history = await session.get_items() if session is not None else []
-    items = [*history, *turn_input]
     query = latest_user_text(turn_input)
     shape = await AgentShape.of(agent)
     run = _Run(
         shape=shape,
         input=input if isinstance(input, str) else list(input),
-        items=items,
+        items=list(turn_input),
         context_wrapper=context_wrapper,
         trace=trace,
         agent_span=_Spans(trace).open(shape.name, "agent", input=query),
@@ -495,15 +548,20 @@ async def _run_async(
         emit=emit,
     )
 
-    async def turns() -> _TurnOutcome:
+    async def turn() -> Run:
+        # The session's prior turns are read here, not above, for the reason the hooks below are
+        # dispatched here: both are the run's work, and a `Session` is the application's to
+        # implement, so a backend that doesn't answer (a locked SQLite file under `runa serve`)
+        # ends the run the way every other failure does instead of escaping the boundary.
+        if session is not None:
+            run.items[:0] = await session.get_items()
+        await dispatch.on_agent_start(context_wrapper, shape.agent)
         if query is not None:
             await _inject_retrieved(run, query)
         await _run_guardrails(run, Phase.INPUT, input)
-        return await _run_turns(run)
+        return await _finish(run, await _run_turns(run))
 
-    await dispatch.on_agent_start(context_wrapper, shape.agent)
-    outcome = await _guarded(run, turns())
-    return await _finish(run, outcome)
+    return await _guarded(run, turn())
 
 
 async def _resume(
@@ -536,9 +594,12 @@ async def _resume(
         tool_calls=list(state.tool_calls),
         resumed=state,
     )
-    await dispatch.on_agent_start(state.context_wrapper, state.agent)
-    outcome = await _guarded(run, _run_turns(run))
-    return await _finish(run, outcome)
+
+    async def turn() -> Run:
+        await dispatch.on_agent_start(state.context_wrapper, state.agent)
+        return await _finish(run, await _run_turns(run))
+
+    return await _guarded(run, turn())
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]

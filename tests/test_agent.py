@@ -1248,6 +1248,36 @@ def test_run_sync_closes_the_mcp_servers_even_when_the_turn_fails(
     assert server.closes == 1
 
 
+def test_run_sync_survives_a_server_that_fails_to_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shutdown that fails is logged, not raised: the turn is over and its `Run` is owed.
+
+    It also must not take the other servers' shutdown with it, which is the leak this teardown
+    exists to prevent in the first place.
+    """
+
+    class _StuckServer:
+        async def close(self) -> None:
+            raise OSError("the subprocess is already gone")
+
+    class _Server:
+        def __init__(self) -> None:
+            self.closes = 0
+
+        async def close(self) -> None:
+            self.closes += 1
+
+    def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
+        return _loop_run()
+
+    monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
+    second = _Server()
+
+    run = Researcher(mcp=[_StuckServer(), second]).run_sync("hi")
+
+    assert run.status == "completed"
+    assert second.closes == 1
+
+
 def test_run_sync_passes_multimodal_message_content_through(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

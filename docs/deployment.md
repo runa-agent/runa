@@ -52,10 +52,12 @@ reports that the answer was wrong.
 
 The streaming route emits one JSON object per `data:` line: `{"type": "token", ...}` as the
 answer is produced, then a single `{"type": "run", ...}` carrying the same payload as above, so a
-streaming client still gets the trace id and the usage. A failure part-way through arrives as
-`{"type": "error", ...}`: the HTTP status went out with the first byte, so an error cannot become
-a 500, and silently truncating would leave a client unable to tell a finished answer from a
-dropped connection.
+streaming client still gets the trace id and the usage. A run that failed part-way through is
+that same `run` event with `status="error"` -- one wire shape either way, since a run reports
+every failure on its `Run`. Should the server itself break while streaming, a bare
+`{"type": "error", ...}` arrives instead: the HTTP status went out with the first byte, so an
+error cannot become a 500, and silently truncating would leave a client unable to tell a finished
+answer from a dropped connection.
 
 ### Resuming a paused run
 

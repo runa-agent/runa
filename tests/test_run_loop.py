@@ -22,6 +22,7 @@ from runa.exceptions import (
     DuplicateToolCallError,
     GuardrailTripwireTriggered,
     MaxTurnsExceeded,
+    UnexpectedError,
     UserError,
 )
 from runa.guardrail import (
@@ -1663,6 +1664,8 @@ def test_retrieval_does_not_swallow_a_framework_bug() -> None:
 
     An empty memory block is indistinguishable from a corpus with nothing relevant in it, so a
     bug swallowed here would never be reported -- retrieval would just quietly stop working.
+    Ending the run is what "not swallowed" means; the bug reaches `Agent.run` as the
+    `UnexpectedError` every unclassified failure is wrapped in, naming the exception it came from.
     """
 
     class _BuggyKnowledge:
@@ -1671,8 +1674,10 @@ def test_retrieval_does_not_swallow_a_framework_bug() -> None:
 
     agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BuggyKnowledge())
 
-    with pytest.raises(AttributeError, match="no attribute 'embed'"):
+    with pytest.raises(UnexpectedError, match="AttributeError: .*no attribute 'embed'") as caught:
         asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+    assert isinstance(caught.value.__cause__, AttributeError)
 
 
 def test_retrieval_fails_open_on_a_loop_lifetime_fault() -> None:

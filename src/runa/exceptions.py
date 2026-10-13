@@ -1,13 +1,16 @@
 """exceptions.py: Runa's two exception roots.
 
 `RunaError` is the base every run-ending failure raises: a tripped guardrail, `MaxTurnsExceeded`, a
-model behaving unexpectedly, or a `UserError` in how the framework itself was used. `Agent.run`/
-`run_sync` catch `RunaError` (not each subclass individually) and translate it into
-`Run(status="error", ...)`, see `runa.agent`.
+model behaving unexpectedly, or a `UserError` in how the framework itself was used. A run reports
+every one of them as `Run(status="error", ...)` instead of raising -- but it is the boundary that
+decides that, not this hierarchy: anything else a run touches raises (an app's own hook, `Session`
+or `Compactor`) is wrapped in `UnexpectedError` as the run unwinds, so one type reaches
+`runa.agent` and the promise holds for failures no subclass here anticipated.
 
 `OperatorError` is the other half: the person running a Runa app typed something wrong. A sibling
 of `RunaError` rather than a subclass, because a mistyped session id is not a run failure -- these
-come from the surfaces around a run (the CLI, the dashboard), mostly before one has started.
+come from the surfaces around a run (the CLI, the dashboard), mostly before one has started. It is
+the one exception a run deliberately lets through, which is what being a sibling buys.
 """
 
 from dataclasses import dataclass, field
@@ -103,6 +106,27 @@ class UserError(RunaError):
     """Raised when the caller has misused the framework itself (bad config, missing credentials)."""
 
 
+class UnexpectedError(RunaError):
+    """Raised in place of an exception a run ended with that is none of Runa's own kinds.
+
+    A `Session` that can't read its database, a `Hooks` method with a bug in it, a `Compactor`
+    that divides by zero: the extension points a run calls are application code, and the run
+    boundary owes them the same contract it gives a tripped guardrail (`Run(status="error")`,
+    with the trace around the failure) rather than one that holds only for failures Runa itself
+    declared. The original exception is the `__cause__`, and is logged with its traceback where
+    it was caught, so nothing about it is lost by coming back as a result.
+
+    Not raised for `OperatorError` (a sibling root, deliberately let through) nor for anything
+    deriving from `BaseException` alone -- `asyncio.CancelledError` above all, which a caller
+    asking a run to stop must get back as itself.
+    """
+
+    def __init__(self, exc: BaseException) -> None:
+        """Name `exc`'s type and message, since neither alone identifies what went wrong."""
+        detail = str(exc)
+        super().__init__(f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)
+
+
 class GuardrailTripwireTriggered(RunaError):
     """Raised when a guardrail's tripwire trips, whichever `Phase` it ran in.
 
@@ -147,5 +171,6 @@ __all__ = [
     "RunErrorDetails",
     "RunTimeout",
     "RunaError",
+    "UnexpectedError",
     "UserError",
 ]
