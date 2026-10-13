@@ -52,23 +52,25 @@ class OperatorError(Exception):
 
 
 class RunaError(Exception):
-    """Base class for every exception a Runa agent run can end with."""
+    """Base class for every exception a Runa agent run can end with.
+
+    One message, carried as both the exception's args and its `.message`, and `run_data` left
+    unset for the runner to fill in as the run unwinds. Every subclass is that plus its docstring:
+    the ones built from structured fields (`GuardrailTripwireTriggered`, `DuplicateToolCallError`)
+    keep their own `__init__` to compose the message, then hand it here like any other.
+    """
 
     run_data: RunErrorDetails | None
 
-    def __init__(self, *args: object) -> None:
-        """Initialize with `run_data` unset; the runner fills it in as the run unwinds."""
-        super().__init__(*args)
+    def __init__(self, message: str) -> None:
+        """Store `message` as both the exception's args and its `.message`."""
+        super().__init__(message)
+        self.message = message
         self.run_data = None
 
 
 class MaxTurnsExceeded(RunaError):
     """Raised when a run reaches `max_turns` without producing a final output."""
-
-    def __init__(self, message: str) -> None:
-        """Store `message` as both the exception's args and its `.message`."""
-        self.message = message
-        super().__init__(message)
 
 
 class MaxTokensExceeded(RunaError):
@@ -78,11 +80,6 @@ class MaxTokensExceeded(RunaError):
     run may call the model, this bounds how much those calls may cost. Checked after each model
     call, so the run stops at the first call that crosses the line rather than before it.
     """
-
-    def __init__(self, message: str) -> None:
-        """Store `message` as both the exception's args and its `.message`."""
-        self.message = message
-        super().__init__(message)
 
 
 class RunTimeout(RunaError):
@@ -94,11 +91,6 @@ class RunTimeout(RunaError):
     exported, so a timed-out run is as inspectable as a failed one.
     """
 
-    def __init__(self, message: str) -> None:
-        """Store `message` as both the exception's args and its `.message`."""
-        self.message = message
-        super().__init__(message)
-
 
 class ModelBehaviorError(RunaError):
     """Raised when the model does something a `Model` implementation can't make sense of.
@@ -106,19 +98,9 @@ class ModelBehaviorError(RunaError):
     For example: calling a tool that isn't in the request, or returning malformed tool-call JSON.
     """
 
-    def __init__(self, message: str) -> None:
-        """Store `message` as both the exception's args and its `.message`."""
-        self.message = message
-        super().__init__(message)
-
 
 class UserError(RunaError):
     """Raised when the caller has misused the framework itself (bad config, missing credentials)."""
-
-    def __init__(self, message: str) -> None:
-        """Store `message` as both the exception's args and its `.message`."""
-        self.message = message
-        super().__init__(message)
 
 
 class GuardrailTripwireTriggered(RunaError):
