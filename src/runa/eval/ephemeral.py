@@ -59,7 +59,11 @@ class EphemeralEvalStore:
         return [to_run(row, []) for row in reversed(_runs[-limit:])]
 
     def baseline(self, agent_name: str, *, before: int | None = None) -> dict[str, bool] | None:
-        """Map each input of `agent_name`'s latest run to whether it passed."""
+        """Map each input of `agent_name`'s latest run to whether it passed.
+
+        `eval/store.py`'s `baseline_clause` states this for the two adapters that speak SQL; this
+        is the same sentence in Python, including `before` being strictly exclusive.
+        """
         candidates = [
             run
             for run in _runs

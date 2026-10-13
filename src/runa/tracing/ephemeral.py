@@ -61,7 +61,12 @@ class EphemeralTraceStore:
         status: str | None = None,
         session_id: str | None = None,
     ) -> list[Trace]:
-        """Return the most recent `limit` traces, newest first, optionally filtered."""
+        """Return the most recent `limit` traces, newest first, optionally filtered.
+
+        The one query no SQL fragment can be shared with: `listing_clause` states the same filter,
+        order and cap for the two adapters that speak SQL, and this is it said in Python, down to
+        breaking ties on the trace id so a listing here matches a listing there.
+        """
         rows = [
             row
             for row in _traces.values()
@@ -69,7 +74,7 @@ class EphemeralTraceStore:
             and (status is None or row["status"] == status)
             and (session_id is None or row["session_id"] == session_id)
         ]
-        rows.sort(key=lambda row: row["start_time"], reverse=True)
+        rows.sort(key=lambda row: (row["start_time"], row["id"]), reverse=True)
         return [to_trace(row, self._span_rows(row["id"])) for row in rows[:limit]]
 
     def _span_rows(self, trace_id: str) -> list[dict[str, Any]]:

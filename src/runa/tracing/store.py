@@ -14,12 +14,17 @@ The two tables live here too, and so does the marshalling: `TRACES`/`SPANS` stat
 `to_trace`/`trace_values`/`span_values` are the one mapping between such a row and a `Trace`, so
 a column read out of order or a `json.dumps` left off is a mistake there is only one place to
 make.
+
+So does the one query both SQL adapters have to phrase identically: `listing_clause` is the whole
+of `list`'s filter, order and cap, because which column `agent` means and how ties break are this
+module's rule, not each backend's. What stays each adapter's own is what genuinely differs -- the
+upsert, and whether spans are fetched per trace or in one batch.
 """
 
 import json
 from typing import Any, Protocol
 
-from runa.db.schema import Column, Index, Table
+from runa.db.schema import Column, Dialect, Index, Table
 from runa.exceptions import OperatorError
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -101,6 +106,9 @@ class TraceStore(Protocol):
         `agent` matches `Trace.name` (the workflow name `Agent.run` sets to the agent's class
         name); `session_id` matches the `Session` a session-backed run was passed, when it was
         passed one; `status` is `"ok"` or `"error"`.
+
+        Ties on `start_time` break by trace id descending, in every adapter, so two traces that
+        started in the same instant list in one order whatever the deployment.
         """
         ...
 
@@ -117,6 +125,38 @@ def require_trace(store: TraceStore, trace_id: str) -> Trace:
     if trace is None:
         raise TraceNotFound(f"no trace found with id {trace_id!r}")
     return trace
+
+
+def listing_clause(
+    *,
+    limit: int,
+    agent: str | None = None,
+    status: str | None = None,
+    session_id: str | None = None,
+    dialect: Dialect,
+) -> tuple[str, tuple[Any, ...]]:
+    """Everything after `SELECT ... FROM traces` for `TraceStore.list`, and the values it binds.
+
+    One sentence of policy: keep the traces matching whichever of the three filters were given,
+    newest first, at most `limit` of them. Which column each filter means is the decision worth
+    stating once -- `agent` is `traces.name`, not an `agent` column -- and so is the tie-break,
+    which both backends leave to chance when the `ORDER BY` names `start_time` alone.
+
+    The whole tail rather than the `WHERE` alone, because a numbered placeholder counts every
+    value bound before it: an adapter handed the filter and left to append `LIMIT` has to know
+    how many filters went in to number it, which is exactly the arithmetic this hoists. Its
+    placeholders are the `dialect`'s, like `Table.placeholders`.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
+        if value is not None:
+            params.append(value)
+            clauses.append(f"{column} = {dialect.placeholder(len(params))}")
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    params.append(limit)
+    order = f"ORDER BY start_time DESC, id DESC LIMIT {dialect.placeholder(len(params))}"
+    return f"{where}{order}", tuple(params)
 
 
 def as_text(value: object) -> str | None:
@@ -203,6 +243,7 @@ __all__ = [
     "TraceNotFound",
     "TraceStore",
     "as_text",
+    "listing_clause",
     "require_trace",
     "span_values",
     "to_span",

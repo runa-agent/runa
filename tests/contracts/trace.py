@@ -86,6 +86,22 @@ def check_list_orders_newest_first_and_respects_limit(store: TraceStore, tag: st
     assert [found.id for found in store.list(agent=tag, limit=2)] == [f"{tag}-2", f"{tag}-1"]
 
 
+def check_list_breaks_a_start_time_tie_on_the_trace_id(store: TraceStore, tag: str) -> None:
+    """Two traces that started in the same instant list in one order, in every backend.
+
+    `start_time` alone leaves the order to whatever each backend happens to return, which is how
+    the Sessions listing once came out differently on a laptop and on a shared deployment. The
+    tie-break lives in `tracing/store.py`'s `listing_clause`, so this is the check that it is
+    actually the same tie-break the ephemeral store sorts by.
+    """
+    for suffix in ("b", "a", "c"):
+        store.save(_trace(f"{tag}-{suffix}", name=tag, start_time=1.0))
+
+    listed = [found.id for found in store.list(agent=tag)]
+
+    assert listed == [f"{tag}-c", f"{tag}-b", f"{tag}-a"]
+
+
 def check_list_filters_by_agent_and_status(store: TraceStore, tag: str) -> None:
     """`list(agent=..., status=...)` filters on `Trace.name`/`Trace.status`."""
     store.save(_trace(f"{tag}-1", name=tag, start_time=0.0))
@@ -166,6 +182,7 @@ CONTRACT: list[Check] = [
     check_get_returns_none_for_an_unknown_id,
     check_save_replaces_a_trace_with_the_same_id,
     check_list_orders_newest_first_and_respects_limit,
+    check_list_breaks_a_start_time_tie_on_the_trace_id,
     check_list_filters_by_agent_and_status,
     check_session_id_round_trips_and_filters_list,
     check_structured_span_input_comes_back_as_text,

@@ -6,7 +6,9 @@ only whichever history it opened. Same two tables (`eval_runs`/`eval_cases`) in 
 picked up automatically whenever `RUNA_DATABASE_URL` is a `postgresql://` one.
 
 Optional: part of the `runa[postgres]` extra, like `db/pool.py` and `tracing/postgres.py`. The
-two tables and the row marshalling are `eval/store.py`'s, shared with the SQLite adapter.
+two tables, the row marshalling and the clause selecting a baseline run are `eval/store.py`'s,
+shared with the SQLite adapter; `baseline` used to branch into two queries here where SQLite
+covered both cases with a sentinel, which is one rule written twice.
 """
 
 from datetime import UTC, datetime
@@ -14,7 +16,7 @@ from datetime import UTC, datetime
 from runa.db.pool import Shared, sync
 from runa.db.schema import POSTGRES
 from runa.eval.report import Report
-from runa.eval.store import CASES, RUNS, EvalRun, case_values, to_run
+from runa.eval.store import CASES, RUNS, EvalRun, baseline_clause, case_values, to_run
 
 
 class PostgresEvalStore(Shared):
@@ -71,18 +73,8 @@ class PostgresEvalStore(Shared):
     ) -> dict[str, bool] | None:
         """Map each input of `agent_name`'s latest run to whether it passed."""
         pool = await self._pool()
-        if before is None:
-            row = await pool.fetchrow(
-                f"SELECT id FROM {RUNS.name} WHERE agent_name = $1 ORDER BY id DESC LIMIT 1",
-                agent_name,
-            )
-        else:
-            row = await pool.fetchrow(
-                f"SELECT id FROM {RUNS.name} WHERE agent_name = $1 AND id < $2 "
-                "ORDER BY id DESC LIMIT 1",
-                agent_name,
-                before,
-            )
+        clause, params = baseline_clause(agent_name, before, POSTGRES)
+        row = await pool.fetchrow(f"SELECT id FROM {RUNS.name} {clause}", *params)
         if row is None:
             return None
         cases = await pool.fetch(

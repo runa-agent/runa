@@ -17,13 +17,19 @@ renders them; a column added in the declaration appears in both backends or in n
 What this is not is a query builder. Adapters still write their own SQL, because that is where
 they genuinely differ (`INSERT OR REPLACE` against `ON CONFLICT ... EXCLUDED`, a batched
 `ANY($1::text[])`), and a builder general enough to express those would be a shallower module than
-the eight adapters it replaced. The one query fragment here is `Table.placeholders`, which is
-dialect, not query: `?` against `$1`.
+the eight adapters it replaced. The only query fragments here are `Dialect.placeholder` and
+`Table.placeholders`, which are dialect, not query: `?` against `$1`.
 
-A concern whose adapters must phrase one predicate identically can keep that fragment beside its
-own tables -- `session/store.py`'s `agent_filter` is the whole `WHERE` matching an agent's session
-ids, placeholders and `ESCAPE` clause included, because half of that rule is not usable on its own.
-That is a predicate a concern owns, not a query builder growing here.
+A concern whose adapters must phrase one predicate identically keeps that fragment beside its own
+tables, as a function of the values and the `Dialect` returning the clause and what it binds.
+There are three: `session/store.py`'s `agent_filter`, `tracing/store.py`'s `listing_clause` and
+`eval/store.py`'s `baseline_clause`. Each returns the whole fragment rather than a piece of one --
+`agent_filter` because an escaped `LIKE` pattern is meaningless without the `ESCAPE` clause naming
+the escape character, the other two because a numbered placeholder depends on how many values came
+before it, so a caller handed half a clause has to re-derive the count. Those are predicates a
+concern owns, not a query builder growing here: each states one sentence of policy ("the latest run
+for this agent, older than this one"), and the two adapters that must agree on it read it from one
+place instead of phrasing it twice.
 
 Declaring a table is only half of owning it: `db/runa.db` outlives installs by design (that is the
 whole point of `--continue`, of trace history, of eval baselines), so a column added to a
@@ -72,6 +78,16 @@ class Dialect:
     One query for the whole database rather than one per table: both backends can answer it that
     way, and it keeps the only connection-aware step in `reconcile`'s plumbing to a single fetch.
     """
+
+    def placeholder(self, index: int) -> str:
+        """The bind placeholder for a statement's `index`th value, counting from 1.
+
+        `?` ignores the index; `$1, $2, ...` is the whole reason a fragment has to be told how
+        many values were bound before it. Every predicate written for both dialects needs this
+        one substitution and nothing else of a dialect, so it lives here rather than as a
+        `numbered_placeholders` branch in each of them.
+        """
+        return f"${index}" if self.numbered_placeholders else "?"
 
 
 SQLITE = Dialect(
@@ -198,9 +214,7 @@ class Table:
 
     def placeholders(self, dialect: Dialect) -> str:
         """The bind placeholders for one whole row: `?, ?, ...` or `$1, $2, ...`."""
-        if dialect.numbered_placeholders:
-            return ", ".join(f"${index}" for index in range(1, len(self.columns) + 1))
-        return ", ".join("?" * len(self.columns))
+        return ", ".join(dialect.placeholder(index) for index in range(1, len(self.columns) + 1))
 
     def _ddl(self, dialect: Dialect) -> str:
         definitions = [column.sql(dialect) for column in self.columns]

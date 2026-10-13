@@ -24,9 +24,7 @@ from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
 from runa.db.sqlite import read as _read_db
 from runa.eval.report import Report
-from runa.eval.store import CASES, RUNS, EvalRun, case_values, to_run
-
-_NO_LIMIT = 2**63 - 1  # SQLite's largest integer, above every `eval_runs.id`
+from runa.eval.store import CASES, RUNS, EvalRun, baseline_clause, case_values, to_run
 
 
 class SQLiteEvalStore:
@@ -86,14 +84,11 @@ class SQLiteEvalStore:
 
     def baseline(self, agent_name: str, *, before: int | None = None) -> dict[str, bool] | None:
         """Map each input of `agent_name`'s latest run to whether it passed."""
+        clause, params = baseline_clause(agent_name, before, SQLITE)
         with _read_db(self.db_path, RUNS, CASES) as conn:
             if conn is None:
                 return None
-            row = conn.execute(
-                f"SELECT id FROM {RUNS.name} WHERE agent_name = ? AND id < ? "
-                "ORDER BY id DESC LIMIT 1",
-                (agent_name, before if before is not None else _NO_LIMIT),
-            ).fetchone()
+            row = conn.execute(f"SELECT id FROM {RUNS.name} {clause}", params).fetchone()
             if row is None:
                 return None
             cases = conn.execute(

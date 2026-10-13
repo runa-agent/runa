@@ -126,7 +126,7 @@ def agent_filter(agent: str | None, dialect: Dialect) -> tuple[str, tuple[str, .
     """
     if agent is None:
         return "", ()
-    exact, prefix = ("$1", "$2") if dialect.numbered_placeholders else ("?", "?")
+    exact, prefix = dialect.placeholder(1), dialect.placeholder(2)
     escaped = agent.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return (
         rf"WHERE session_id = {exact} OR session_id LIKE {prefix} ESCAPE '\' ",

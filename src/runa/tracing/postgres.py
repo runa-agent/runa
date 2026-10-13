@@ -8,9 +8,9 @@ automatically whenever `RUNA_DATABASE_URL` is a `postgresql://` one.
 
 Optional: part of the `runa[postgres]` extra, like `db/pool.py`, which this builds on for its
 pool and for the background loop that lets a synchronous exporter talk to `asyncpg`. The two
-tables and the row marshalling are `tracing/store.py`'s, shared with the SQLite adapter; what is
-genuinely this backend's own is the async driver, the `ON CONFLICT` upsert, and the batched span
-fetch.
+tables, the row marshalling and the listing's filter-order-cap clause are `tracing/store.py`'s,
+shared with the SQLite adapter; what is genuinely this backend's own is the async driver, the
+`ON CONFLICT` upsert, and the batched span fetch.
 """
 
 from typing import Any
@@ -21,6 +21,7 @@ from runa.tracing.config import StoreExporter
 from runa.tracing.store import (
     SPANS,
     TRACES,
+    listing_clause,
     span_values,
     to_trace,
     trace_values,
@@ -90,18 +91,10 @@ class PostgresTraceStore(Shared):
     ) -> list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered."""
         pool = await self._pool()
-        clauses: list[str] = []
-        params: list[Any] = []
-        for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
-            if value is not None:
-                params.append(value)
-                clauses.append(f"{column} = ${len(params)}")
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        params.append(limit)
-        rows = await pool.fetch(
-            f"SELECT * FROM {TRACES.name} {where} ORDER BY start_time DESC LIMIT ${len(params)}",
-            *params,
+        clause, params = listing_clause(
+            limit=limit, agent=agent, status=status, session_id=session_id, dialect=POSTGRES
         )
+        rows = await pool.fetch(f"SELECT * FROM {TRACES.name} {clause}", *params)
         if not rows:
             return []
         # One query for every listed trace's spans, where the SQLite adapter asks per trace: a

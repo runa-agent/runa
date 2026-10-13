@@ -21,6 +21,7 @@ from runa.db.sqlite import read as _read_db
 from runa.tracing.store import (
     SPANS,
     TRACES,
+    listing_clause,
     span_values,
     to_trace,
     trace_values,
@@ -75,20 +76,13 @@ class SQLiteTraceStore:
         session_id: str | None = None,
     ) -> list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered."""
-        clauses: list[str] = []
-        params: list[object] = []
-        for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
-            if value is not None:
-                clauses.append(f"{column} = ?")
-                params.append(value)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        clause, params = listing_clause(
+            limit=limit, agent=agent, status=status, session_id=session_id, dialect=SQLITE
+        )
         with _read_db(self.db_path, TRACES, SPANS) as conn:
             if conn is None:
                 return []
-            rows = conn.execute(
-                f"SELECT * FROM {TRACES.name} {where} ORDER BY start_time DESC LIMIT ?",
-                (*params, limit),
-            ).fetchall()
+            rows = conn.execute(f"SELECT * FROM {TRACES.name} {clause}", params).fetchall()
             return [to_trace(row, self._span_rows(conn, row["id"])) for row in rows]
 
     def _span_rows(self, conn: sqlite3.Connection, trace_id: str) -> list[sqlite3.Row]:

@@ -11,13 +11,17 @@ than in an adapter: both
 backends read the same two objects back, and `web/evaluations.py` renders them without knowing
 which one it got. `case_values`/`to_case`/`to_run` are that mapping in both directions, written
 once, so `passed` cannot come back as SQLite's `0`/`1` from one store and a `bool` from the other.
+
+`baseline_clause` is here for the same reason: which run is "the baseline" is this module's rule,
+not each backend's, so both SQL adapters select it with one clause rather than two phrasings of
+one sentence.
 """
 
 import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
-from runa.db.schema import Column, Index, Table
+from runa.db.schema import Column, Dialect, Index, Table
 from runa.eval.report import CaseReport, Report
 
 RUNS = Table(
@@ -93,10 +97,33 @@ class EvalStore(Protocol):
         """Map each input of `agent_name`'s latest run to whether it passed.
 
         `before` looks at the latest run older than that run id instead, the baseline a past run
-        was compared against. `None` when there's no such run. Keyed by input rather than index,
-        so reordering, adding, or removing cases between runs still lines the rest up.
+        was compared against -- strictly older, so `before` the newest run skips it. `None` when
+        there's no such run. Keyed by input rather than index, so reordering, adding, or removing
+        cases between runs still lines the rest up.
         """
         ...
+
+
+def baseline_clause(
+    agent_name: str, before: int | None, dialect: Dialect
+) -> tuple[str, tuple[Any, ...]]:
+    """Everything after `SELECT id FROM eval_runs` for `EvalStore.baseline`, and its values.
+
+    One sentence of policy: the newest run of `agent_name`, strictly older than `before` when
+    there is one. `before=None` drops the comparison rather than widening it to a sentinel -- the
+    SQLite adapter used to bind `2**63 - 1` to cover both cases in one statement while the
+    Postgres one branched into two queries, which is two renderings of a rule with one boundary.
+
+    The whole tail rather than the `WHERE` alone, for the reason `tracing/store.py`'s
+    `listing_clause` is: the `ORDER BY ... LIMIT 1` is what makes it "the latest", and a numbered
+    placeholder has to count the values bound before it. Its placeholders are the `dialect`'s.
+    """
+    clause = f"WHERE agent_name = {dialect.placeholder(1)}"
+    params: tuple[Any, ...] = (agent_name,)
+    if before is not None:
+        clause += f" AND id < {dialect.placeholder(2)}"
+        params += (before,)
+    return f"{clause} ORDER BY id DESC LIMIT 1", params
 
 
 def case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
@@ -146,6 +173,7 @@ __all__ = [
     "EvalCaseRow",
     "EvalRun",
     "EvalStore",
+    "baseline_clause",
     "case_values",
     "to_case",
     "to_run",

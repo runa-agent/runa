@@ -6,7 +6,9 @@ on a laptop. `tests/test_postgres_observability.py` runs them against `PostgresE
 
 `test_adds_trace_id_to_an_older_local_file` stays here, outside the contract: a shared database is
 created by whichever replica connects first and has always had the column, where a local file can
-predate it.
+predate it. `baseline_clause` is asserted per dialect for the same reason `agent_filter` is in
+`tests/test_session_store.py`: both SQL adapters bind what it returns, and only one of them can be
+run without a server.
 """
 
 import sqlite3
@@ -18,10 +20,11 @@ from contracts.eval import CONTRACT, Check
 from helpers import finished_run
 
 from runa import db
+from runa.db.schema import POSTGRES, SQLITE, Dialect
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
-from runa.eval.store import EvalStore
+from runa.eval.store import EvalStore, baseline_clause
 
 
 @pytest.fixture(params=["sqlite", "ephemeral"])
@@ -41,6 +44,25 @@ def store(
 def test_eval_store_contract(store: EvalStore, check: Check) -> None:
     """Every local backend answers the `EvalStore` contract the same way."""
     check(store, "SupportAgent")
+
+
+@pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
+def test_baseline_clause_is_the_same_rule_in_either_dialect(dialect: Dialect) -> None:
+    """One ordering, one cap, and `before` bound exclusively, whichever backend asks.
+
+    The two adapters used to phrase this separately -- a `2**63 - 1` sentinel locally against two
+    branches on Postgres -- so the only statement that they mean the same thing was prose.
+    """
+    newest, params = baseline_clause("SupportAgent", None, dialect)
+    older, older_params = baseline_clause("SupportAgent", 7, dialect)
+
+    assert newest == f"WHERE agent_name = {dialect.placeholder(1)} ORDER BY id DESC LIMIT 1"
+    assert params == ("SupportAgent",)
+    assert older == (
+        f"WHERE agent_name = {dialect.placeholder(1)} AND id < {dialect.placeholder(2)} "
+        "ORDER BY id DESC LIMIT 1"
+    )
+    assert older_params == ("SupportAgent", 7)
 
 
 def test_adds_trace_id_to_an_older_local_file(tmp_path: Path) -> None:
