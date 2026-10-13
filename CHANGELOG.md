@@ -2,6 +2,69 @@
 
 All notable changes to Runa are documented here.
 
+## [0.8.0] - 2026-10-13
+
+### Bug Fixes
+
+- Import a served app once, at startup, not on every request ([db583dc](https://github.com/runa-agent/runa/commit/db583dcc6a314977969dd9ebee3d61c91c4f3181))
+
+- Stamp a knowledge corpus after its chunks land, not before ([0269448](https://github.com/runa-agent/runa/commit/026944807d3b35be388f864ca36fadbe0402a419))
+
+- Stop re-raising a closed-loop RuntimeError out of retrieval ([05a629b](https://github.com/runa-agent/runa/commit/05a629b5288961386450185026ecf8c60e48a16d))
+
+- Make loading an app a process-global fact instead of a per-request action ([612b421](https://github.com/runa-agent/runa/commit/612b4218e281b1b30b6afaf5ba76f02b158c78df))
+
+- Honor ModelSettings.reasoning_effort in both backends instead of nothing ([41a4ba0](https://github.com/runa-agent/runa/commit/41a4ba07f38cb956755620ca8ea9dbacf6279df3))
+
+- Drop runa serve --workers, which uvicorn could never honor ([8762792](https://github.com/runa-agent/runa/commit/876279248e1b1f0ac34e6520c5f7b1b730ea4152))
+
+- Keep "errors never raise out of a run" at the boundary, not by exception type ([c7fac35](https://github.com/runa-agent/runa/commit/c7fac352788c9a104f8e769cb88cb814081fe681))
+
+- Export a finished trace off the run's event loop, not on it ([c002422](https://github.com/runa-agent/runa/commit/c00242298202c12af539744960084f2ee89202ae))
+
+- Import a provider's SDK where it's routed to, not at every entry point ([59b09c9](https://github.com/runa-agent/runa/commit/59b09c906764474c3a0d4b4b828a8c332db39e59))
+
+- Run the local session backend off the event loop, and apply its schema once per file ([8a29a55](https://github.com/runa-agent/runa/commit/8a29a55556e7bc55a95ba9d15e1766f74531fed6))
+
+- Build the dashboard's links one way, and serve the ids that way encodes ([ae73cb8](https://github.com/runa-agent/runa/commit/ae73cb8b2892212415284beb49355eb365e4d572))
+
+
+### Refactor
+
+- Hand out the tracing policy whole instead of one accessor per field ([05c89f2](https://github.com/runa-agent/runa/commit/05c89f25893cf538cf19e4785cb25c92011e4eb1))
+
+- Give _items the two item shapes Runa constructs, not just the readers ([570eaa9](https://github.com/runa-agent/runa/commit/570eaa91ce5b99436e60d40b256552cc22c5e910))
+
+- Give the framework logger its own leaf module, out of Hooks ([a5e8c04](https://github.com/runa-agent/runa/commit/a5e8c04317772179d3f49f7eed78cbd4b06327b0))
+
+- Carry one record per tool call instead of an index-keyed side map ([dfa59ec](https://github.com/runa-agent/runa/commit/dfa59ec5935c3f3c50ba0c46aa5f5872b24ad238))
+
+- Give _items every item shape Runa constructs, envelopes included ([ab2f9e9](https://github.com/runa-agent/runa/commit/ab2f9e900ea1d42487fd54cd48534bba12074088))
+
+- Resolve every Agent setting in one pass over the signature ([4ab5d11](https://github.com/runa-agent/runa/commit/4ab5d11b200757ab5fff12a85d961dc59a07e215))
+
+- Derive the tracing policy's override names from Policy itself ([d6128ad](https://github.com/runa-agent/runa/commit/d6128ad2814019291bce91c272291529d73f0cfa))
+
+- Read the tool-call envelope through _items, as it is already written there ([1a31797](https://github.com/runa-agent/runa/commit/1a31797d0f99be3d890337ff7bada39c8009c3a5))
+
+- Type the runtime-to-Agent seam with a protocol the boundary checks ([3f8cc53](https://github.com/runa-agent/runa/commit/3f8cc532f44f0f8c3ad7001e181bbb6dedb8097d))
+
+- Hoist the query decisions both SQL adapters must share beside their tables ([8250251](https://github.com/runa-agent/runa/commit/82502516d1c1352f703885101598706984eb2385))
+
+- Hoist the query decisions both SQL adapters must share beside their tables ([d8efb6b](https://github.com/runa-agent/runa/commit/d8efb6bad366da02c19e9e95dcd474c6b2f2cf5e))
+
+- Carry a run error's message on RunaError, not in five copies ([4d531e5](https://github.com/runa-agent/runa/commit/4d531e5d36ce9bda5203dc90a423ae0f1e9e4437))
+
+- Say "this process reads one app" once, through project.use ([147451c](https://github.com/runa-agent/runa/commit/147451c52d0125a7630e30c68ca21bdcecc352bd))
+
+- Read the JSON object a model meant in one place, with one failure ([da7c6e6](https://github.com/runa-agent/runa/commit/da7c6e6409f37c0f934436c1680be512ff5daa6f))
+
+
+### Testing
+
+- Export ([42c6611](https://github.com/runa-agent/runa/commit/42c6611570f831fe28eeeff737f1dc90db32d825))
+
+
 ## [0.7.0] - 2026-10-11
 
 ### Features
