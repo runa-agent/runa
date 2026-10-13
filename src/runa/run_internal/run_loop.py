@@ -20,6 +20,7 @@ from runa._items import (
     latest_user_index,
     latest_user_text,
     system_message,
+    tool_calls,
     user_message,
 )
 from runa._log import logger
@@ -300,12 +301,13 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         run.generated.append(message)
         run.notify(RunItemStreamEvent(name="message_output_created", item=message))
 
-        if not message.get("tool_calls"):
+        calls = tool_calls(message)
+        if not calls:
             text = item_text(message)
             await _run_guardrails(run, Phase.OUTPUT, text)
             return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
 
-        for call in message["tool_calls"]:
+        for call in calls:
             run.notify(RunItemStreamEvent(name="tool_called", item=call))
         results, interruptions, switched = await _run_message_tool_calls(run, message)
         if interruptions:

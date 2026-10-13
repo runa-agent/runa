@@ -10,7 +10,7 @@ full raw `items`/`usage_tokens` and decides entirely for itself whether/how to t
 
 from typing import Protocol
 
-from runa._items import ConversationItem
+from runa._items import ConversationItem, latest_user_index
 
 DEFAULT_COMPACTION_TOKENS = 200_000
 
@@ -46,13 +46,17 @@ def default_compactor(
     older, already-finished turns are dropped. Which means there is nothing for this strategy to
     drop until a conversation has a second turn: a first turn's own tool loop, however long, all
     sits after that one user message. Swap in a summarizing `Compactor` to trim that too.
+
+    Where that message is is `_items.latest_user_index`' to say, as it is for a memory query: the
+    cut lands on the latest plain-text user turn, so a multimodal one keeps the turn before it
+    too rather than being cut into.
     """
     if usage_tokens <= DEFAULT_COMPACTION_TOKENS:
         return None
-    user_turns = [i for i, item in enumerate(items) if item.get("role") == "user"]
-    if not user_turns:
+    cut = latest_user_index(items)
+    if cut is None:
         return None
-    return items[user_turns[-1] :]
+    return items[cut:]
 
 
 __all__ = ["Compactor", "DEFAULT_COMPACTION_TOKENS", "default_compactor"]

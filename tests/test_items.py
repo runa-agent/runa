@@ -3,6 +3,11 @@
 import pytest
 
 from runa._items import (
+    answered_call_id,
+    assistant_message,
+    call_arguments,
+    call_id,
+    call_name,
     content_text,
     item_text,
     latest_text,
@@ -10,6 +15,8 @@ from runa._items import (
     latest_user_text,
     parsed_arguments,
     role_and_text,
+    tool_call,
+    tool_calls,
     tool_result,
     user_message,
 )
@@ -132,6 +139,43 @@ def test_latest_user_text_of_a_conversation_with_no_user_turn_is_none() -> None:
     """`None`, not `""`: nothing was asked, which is different from asking nothing."""
     assert latest_user_text([{"role": "system", "content": "be nice"}]) is None
     assert latest_user_index([]) is None
+
+
+def test_tool_calls_reads_back_what_assistant_message_wrote() -> None:
+    """The envelope has a reader here because it has a writer here: one convention, one module."""
+    message = assistant_message(None, [tool_call("c1", "get_weather", '{"city": "Paris"}')])
+
+    (call,) = tool_calls(message)
+
+    assert call_id(call) == "c1"
+    assert call_name(call) == "get_weather"
+    assert call_arguments(call) == '{"city": "Paris"}'
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "assistant", "content": "just words", "tool_calls": None},
+        {"role": "assistant", "content": "just words"},
+    ],
+)
+def test_tool_calls_reads_both_spellings_of_no_calls_as_empty(message: dict[str, object]) -> None:
+    """An explicit `None` and an absent field are the same turn, so the turn loop checks a list."""
+    assert tool_calls(message) == []
+
+
+@pytest.mark.parametrize("arguments", ["", None])
+def test_call_arguments_of_a_no_argument_call_is_an_empty_object(arguments: str | None) -> None:
+    """Providers spell "no arguments" differently; that is settled here, not at each reader."""
+    call = {"id": "c1", "type": "function", "function": {"name": "now", "arguments": arguments}}
+
+    assert call_arguments(call) == "{}"
+    assert call_arguments({"id": "c1", "function": {"name": "now"}}) == "{}"
+
+
+def test_answered_call_id_pairs_a_result_with_its_call() -> None:
+    """Matching a turn's results to its calls goes through the module that wrote the pairing."""
+    assert answered_call_id(tool_result("c1", "sunny")) == "c1"
 
 
 def test_parsed_arguments_reads_a_json_object() -> None:

@@ -10,7 +10,17 @@ from typing import Any
 
 from anthropic import APIError, AsyncAnthropic
 
-from runa._items import assistant_message, content_text, parsed_arguments, tool_call
+from runa._items import (
+    answered_call_id,
+    assistant_message,
+    call_arguments,
+    call_id,
+    call_name,
+    content_text,
+    parsed_arguments,
+    tool_call,
+    tool_calls,
+)
 from runa._models.interface import (
     ModelRequest,
     StreamDelta,
@@ -63,7 +73,7 @@ def _to_anthropic_turn(message: Any) -> tuple[str, list[dict[str, Any]]]:
         return "user", [
             {
                 "type": "tool_result",
-                "tool_use_id": message["tool_call_id"],
+                "tool_use_id": answered_call_id(message),
                 "content": content_text(message.get("content")),
             }
         ]
@@ -72,14 +82,13 @@ def _to_anthropic_turn(message: Any) -> tuple[str, list[dict[str, Any]]]:
         text = content_text(message.get("content"))
         if text:
             blocks.append({"type": "text", "text": text})
-        for call in message.get("tool_calls") or []:
-            function = call["function"]
+        for call in tool_calls(message):
             blocks.append(
                 {
                     "type": "tool_use",
-                    "id": call["id"],
-                    "name": function["name"],
-                    "input": parsed_arguments(function["arguments"]),
+                    "id": call_id(call),
+                    "name": call_name(call),
+                    "input": parsed_arguments(call_arguments(call)),
                 }
             )
         return "assistant", blocks
@@ -253,13 +262,13 @@ class AnthropicModel:
 def _to_chat_message(message: Any) -> dict[str, Any]:
     """Convert an Anthropic `Message` into a chat-completions-shaped assistant message dict."""
     text_parts: list[str] = []
-    tool_calls: list[dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
     for block in message.content:
         if block.type == "text":
             text_parts.append(block.text)
         elif block.type == "tool_use":
-            tool_calls.append(tool_call(block.id, block.name, json.dumps(block.input)))
-    return assistant_message("".join(text_parts), tool_calls)
+            calls.append(tool_call(block.id, block.name, json.dumps(block.input)))
+    return assistant_message("".join(text_parts), calls)
 
 
 async def _anthropic_deltas(stream: AsyncIterator[Any]) -> AsyncIterator[StreamDelta]:

@@ -1336,6 +1336,23 @@ def test_compact_keeps_a_first_turn_whose_user_message_is_the_very_first_item() 
     assert default_compactor([items[1], items[2]], 300_000) is None
 
 
+def test_compact_cuts_at_the_latest_plain_text_user_turn() -> None:
+    """Where a user turn is is `_items.latest_user_index`' to say, multimodal rule included.
+
+    A parts-list turn is not a cut point, so a conversation whose newest turn carries an image
+    keeps the plain-text turn before it rather than being cut into.
+    """
+    items: list[Any] = [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer", "tool_calls": None},
+        {"role": "user", "content": "new question"},
+        {"role": "assistant", "content": "new answer", "tool_calls": None},
+        {"role": "user", "content": [{"type": "text", "text": "and this"}]},
+    ]
+
+    assert default_compactor(items, 300_000) == items[2:]
+
+
 def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
     """A long tool loop whose total usage passes 200k, but whose context never does, isn't cut."""
 

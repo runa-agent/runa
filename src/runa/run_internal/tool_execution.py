@@ -7,7 +7,16 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-from runa._items import ConversationItem, parsed_arguments, tool_result
+from runa._items import (
+    ConversationItem,
+    answered_call_id,
+    call_arguments,
+    call_name,
+    parsed_arguments,
+    tool_calls,
+    tool_result,
+)
+from runa._items import call_id as id_of  # `call_id` here is the id of the call at hand
 from runa._types import RunContextWrapper
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase, ToolInputGuardrailData
@@ -29,11 +38,11 @@ async def _run_tool_call(
     `DelegatePaused`, not a result: the call hasn't finished, so resuming may run it again.
     """
     context_wrapper = run.context_wrapper
-    call_id = call["id"]
+    call_id = id_of(call)
     if not context_wrapper.approval_ledger.claim(call_id):
         raise DuplicateToolCallError(call_id, tool.name)
 
-    args_json = call["function"]["arguments"] or "{}"
+    args_json = call_arguments(call)
     span_type = "delegate" if tool.delegate is not None else "tool"
     span = run.span(tool.name, span_type, input=args_json)
     inside = run.spans.under(span)  # this call's guardrails belong under the call
@@ -140,13 +149,13 @@ async def _run_message_tool_calls(
     approvals = resume.approvals if resume is not None else {}
     rejection_messages = resume.rejection_messages if resume is not None else None
     ready = {
-        result["tool_call_id"]: result
+        answered_call_id(result): result
         for result in (resume.ready_results if resume is not None else [])
     }
 
-    for call in message.get("tool_calls") or []:
-        name = call["function"]["name"]
-        call_id = call["id"]
+    for call in tool_calls(message):
+        name = call_name(call)
+        call_id = id_of(call)
         if name in handoff_map:
             handoff = handoff_map[name]
             switched_agent = handoff.agent
@@ -164,7 +173,7 @@ async def _run_message_tool_calls(
             slots.append(_Slot(tool_result(call_id, f"error: unknown tool {name}")))
             continue
 
-        args_json = call["function"]["arguments"] or "{}"
+        args_json = call_arguments(call)
         args = _arguments_or_error(args_json)
         if isinstance(args, str):
             slots.append(_Slot(tool_result(call_id, args)))

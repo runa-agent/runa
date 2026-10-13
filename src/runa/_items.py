@@ -15,7 +15,10 @@ by application code without importing a type. What plainness costs is that readi
 guesswork -- `content` is a string on one turn and a list of parts on the next, a tool call
 carries no text at all -- so every reader in Runa goes through this module rather than guessing
 locally. Adding a content kind (reasoning blocks, citations, audio) is then a change to
-`content_text` here, not to a parser in each of six modules.
+`content_text` here, not to a parser in each of six modules. The tool-call envelope is read here
+for the same reason: `tool_calls`/`call_id`/`call_name`/`call_arguments`/`answered_call_id` are
+the only statement of a convention no type enforces, so normalizing a provider's call ids, or
+answering a call with something other than a `tool_call_id` row, stays one edit.
 
 Writing one is the same bet pointed the other way. Every item Runa puts into history is built
 here: the user message a turn arrives as, the system block that carries instructions or
@@ -153,6 +156,42 @@ def latest_user_text(items: list[ConversationItem]) -> str | None:
     return items[index]["content"] if index is not None else None
 
 
+def tool_calls(message: ConversationItem) -> list[ConversationItem]:
+    """The call envelopes an assistant message carries, `[]` when it carries none.
+
+    Both spellings of "no calls" read as the empty list -- an absent `tool_calls`, and the
+    explicit `None` `assistant_message` writes -- so asking whether this turn called anything is
+    just asking whether the list is empty.
+    """
+    return message.get("tool_calls") or []
+
+
+def call_id(call: ConversationItem) -> str:
+    """One call's id: what its result is tied back to, and what an approval decision is keyed by."""
+    return call["id"]
+
+
+def call_name(call: ConversationItem) -> str:
+    """The tool a call names, to be found among an agent's tools and handoffs."""
+    return call["function"]["name"]
+
+
+def call_arguments(call: ConversationItem) -> str:
+    """One call's arguments, as the JSON string the model produced, `"{}"` when it produced none.
+
+    A tool taking no arguments is called with an empty object by some providers, an empty string
+    by others and no field at all by the rest; they are the same call, and that is settled here
+    rather than at each site that reads one. Parsing the string is `parsed_arguments`' job:
+    arguments travel as written through history, a `RunState` blob and a tool-input guardrail.
+    """
+    return call["function"].get("arguments") or "{}"
+
+
+def answered_call_id(result: ConversationItem) -> str:
+    """Which call a tool result answers: how a turn's results are matched back to its calls."""
+    return result["tool_call_id"]
+
+
 def parsed_arguments(args_json: str) -> dict[str, Any]:
     """A tool call's `function.arguments` JSON string as the dict of keyword arguments it names.
 
@@ -172,7 +211,11 @@ def parsed_arguments(args_json: str) -> dict[str, Any]:
 
 __all__ = [
     "ConversationItem",
+    "answered_call_id",
     "assistant_message",
+    "call_arguments",
+    "call_id",
+    "call_name",
     "content_text",
     "item_text",
     "latest_text",
@@ -182,6 +225,7 @@ __all__ = [
     "parsed_arguments",
     "system_message",
     "tool_call",
+    "tool_calls",
     "tool_result",
     "user_message",
 ]
