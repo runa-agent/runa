@@ -79,6 +79,25 @@ class SupportAgent(Agent):
 `max_tokens` here caps the length of one response. To cap what a whole run may spend, use
 `Agent.max_tokens`; see [Bounding a run](agents.md#bounding-a-run).
 
+## Reasoning Effort
+
+How hard a reasoning model thinks before answering is `reasoning_effort`, one of three levels:
+
+```python
+class ResearchAgent(Agent):
+    name = "research_agent"
+    model = "claude-opus-5"
+    model_settings = ModelSettings(reasoning_effort="high")
+```
+
+`low`/`medium`/`high` is the vocabulary both backends share, so the setting keeps meaning the
+same thing when `model` changes vendor: a chat-completions provider is sent `reasoning_effort`,
+Claude is sent adaptive thinking at that effort. Unset, each provider's own default stands.
+
+Asking a model that can't reason for effort is the provider's error, not a setting Runa drops on
+the floor -- a misspelled `model` is loud for the same reason. A provider with a deeper ladder
+than three levels is reached by passing a `Model`.
+
 ## Retries
 
 Both backends retry connection errors and `408`/`409`/`429`/`5xx` twice, with jittered backoff

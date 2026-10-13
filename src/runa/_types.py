@@ -36,6 +36,15 @@ ToolChoice = Literal["auto", "required", "none"] | str | None
 default.
 """
 
+ReasoningEffort = Literal["low", "medium", "high"] | None
+"""How hard a reasoning model should think before answering, or `None` for the provider's default.
+
+Three levels, not each provider's own ladder: `low`/`medium`/`high` is the vocabulary both
+backends share, so an agent keeps meaning the same thing after `model` changes vendor. A provider
+that can go further (Claude's `xhigh`/`max`) is reached by passing a `Model`, the same escape
+hatch an unnamed endpoint takes.
+"""
+
 
 @dataclass
 class InputTokensDetails:
@@ -81,23 +90,21 @@ class Usage:
 
 
 @dataclass
-class Reasoning:
-    """A reasoning-model's effort/summary settings, for providers that support them."""
-
-    effort: Literal["low", "medium", "high"] | None = None
-    summary: Literal["auto", "concise", "detailed"] | None = None
-
-
-@dataclass
 class ModelSettings:
-    """Per-call model parameters; a `Model` implementation uses whichever of these its API takes."""
+    """Per-call model parameters; a `Model` implementation uses whichever of these its API takes.
+
+    "Whichever" is a closed set, not a courtesy: every field here reaches both backends' request
+    body, or is named in `tests/test_models.py`'s closure test as one that deliberately doesn't.
+    A setting that configures nothing is the failure `check_model_name` exists to prevent, one
+    field over -- the bill and the caller's mental model disagree, with no signal anywhere.
+    """
 
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
     tool_choice: ToolChoice = None
     parallel_tool_calls: bool | None = None
-    reasoning: Reasoning | None = None
+    reasoning_effort: ReasoningEffort = None
     max_retries: int | None = None
     """How many times to retry a failed request (connection errors, 408/409/429/5xx), on top of
     the first attempt. `None` uses the backend default of 2; `0` disables retrying outright, for
@@ -159,7 +166,7 @@ __all__ = [
     "ModelResponse",
     "ModelSettings",
     "OutputTokensDetails",
-    "Reasoning",
+    "ReasoningEffort",
     "RunContextWrapper",
     "ToolChoice",
     "Usage",

@@ -166,6 +166,8 @@ class OpenAICompatibleModel:
             body["top_p"] = settings.top_p
         if settings.max_tokens is not None:
             body["max_tokens"] = settings.max_tokens
+        if settings.reasoning_effort is not None:
+            body["reasoning_effort"] = settings.reasoning_effort
         schema = output_json_schema(request)
         if schema is not None:
             body["response_format"] = {

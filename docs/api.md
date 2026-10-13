@@ -70,8 +70,6 @@ signature-level reference.
 
 ::: runa.ModelSettings
 
-::: runa.Reasoning
-
 ::: runa.Usage
 
 ::: runa.RunState

@@ -34,7 +34,7 @@ from runa.tool import tool
 if TYPE_CHECKING:
     from runa import db
     from runa._items import ConversationItem
-    from runa._types import ModelSettings, Reasoning, Usage
+    from runa._types import ModelSettings, Usage
     from runa.agent import Agent
     from runa.cache import Cache, MemoryCache, SQLiteCache
     from runa.eval import (
@@ -94,7 +94,6 @@ _EXPORTS = {
     "MemoryMatch": "runa.memory",
     "ModelSettings": "runa._types",
     "RawResponsesStreamEvent": "runa.stream_events",
-    "Reasoning": "runa._types",
     "Report": "runa.eval",
     "Run": "runa.run",
     "RunItemStreamEvent": "runa.stream_events",
@@ -144,7 +143,6 @@ __all__ = [
     "MemoryMatch",
     "ModelSettings",
     "RawResponsesStreamEvent",
-    "Reasoning",
     "Report",
     "Run",
     "RunStream",

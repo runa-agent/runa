@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
 
@@ -701,3 +702,122 @@ def test_anthropic_parallel_tool_calls_false_disables_parallel_tool_use(
     )
 
     assert request["tool_choice"] == expected
+
+
+def test_openai_compatible_sends_reasoning_effort() -> None:
+    """`reasoning_effort` is chat-completions' own parameter name, passed straight through."""
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _ok_response()
+
+    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    asyncio.run(
+        model.get_response(
+            ModelRequest(
+                input=[{"role": "user", "content": "hi"}],
+                model_settings=ModelSettings(reasoning_effort="high"),
+            )
+        )
+    )
+
+    assert seen[0]["reasoning_effort"] == "high"
+
+
+def test_anthropic_reasoning_effort_turns_thinking_on() -> None:
+    """Claude's depth knob is `output_config.effort`, and it only bites with thinking enabled."""
+    request = _anthropic_request(
+        [{"role": "user", "content": "hi"}], ModelSettings(reasoning_effort="low")
+    )
+
+    assert request["thinking"] == {"type": "adaptive"}
+    assert request["output_config"] == {"effort": "low"}
+
+
+def test_anthropic_reasoning_effort_and_output_type_share_one_output_config() -> None:
+    """Both live under `output_config`, so asking for one must not drop the other."""
+    request = _anthropic_request(
+        [{"role": "user", "content": "hi"}],
+        ModelSettings(reasoning_effort="high"),
+        output_schema=_Answer,
+    )
+
+    assert request["output_config"]["effort"] == "high"
+    assert request["output_config"]["format"]["type"] == "json_schema"
+
+
+def _body(backend: Any, **settings: Any) -> dict[str, Any]:
+    """The request body `settings` puts on the wire, with one tool so `tool_choice` can land."""
+    return backend._body(
+        ModelRequest(
+            input=[{"role": "user", "content": "hi"}],
+            model_settings=ModelSettings(**settings),
+            tools=[_Tool("weather")],
+        )
+    )
+
+
+def _openai_backend() -> OpenAICompatibleModel:
+    return OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: _ok_response()))
+
+
+def test_no_reasoning_effort_sends_neither_backend_anything() -> None:
+    """The default stays the provider's: no `reasoning_effort`, no `thinking`, no `effort`."""
+    anthropic_request = _anthropic_request([{"role": "user", "content": "hi"}])
+
+    openai_body = _body(_openai_backend())
+
+    assert "thinking" not in anthropic_request
+    assert "output_config" not in anthropic_request
+    assert "reasoning_effort" not in openai_body
+
+
+_UNEXPRESSED_SETTINGS = {"max_retries"}
+"""The `ModelSettings` fields that deliberately never reach a request body.
+
+`max_retries` configures the transport rather than the call: the chat-completions backend reads
+it in its own retry loop, the Anthropic backend hands it to the SDK client through
+`with_options`. Writing a second list is not this codebase's habit -- it derives them -- and the
+exception is the point: the two backends genuinely differ in what they can express, so a field
+that no body can carry is worth saying out loud, per field, rather than inferring from a line
+nobody wrote.
+"""
+
+_SETTING_VALUES = {
+    "temperature": 0.5,
+    "top_p": 0.9,
+    "max_tokens": 123,
+    "tool_choice": "auto",
+    "parallel_tool_calls": False,
+    "reasoning_effort": "high",
+    "max_retries": 5,
+}
+"""A value per `ModelSettings` field that is nobody's default, so setting it has to show."""
+
+
+def test_every_model_setting_is_read_by_both_backends() -> None:
+    """A `ModelSettings` field honored by neither backend: it type checks and configures nothing.
+
+    `ModelSettings` is a closed set like `Agent`'s settings and `check_model_name`'s prefixes,
+    but it is the one closed set whose members are honored only because two separate request
+    builders each remembered to read it -- so this is the check that remembers instead. Asserted
+    by effect rather than by grepping `_body`: a field reaches a body or it doesn't, whatever the
+    wire spells it.
+    """
+    assert set(_SETTING_VALUES) == {f.name for f in fields(ModelSettings)}, (
+        "a new ModelSettings field needs a value here, and a reader in both backends"
+    )
+    backends: dict[str, Any] = {
+        "chat-completions": _openai_backend(),
+        "anthropic": AnthropicModel("claude-sonnet-5", _FakeAnthropic()),  # type: ignore[arg-type]
+    }
+
+    inert = [
+        f"{name} ({backend_name})"
+        for backend_name, backend in backends.items()
+        for name, value in _SETTING_VALUES.items()
+        if name not in _UNEXPRESSED_SETTINGS and _body(backend, **{name: value}) == _body(backend)
+    ]
+
+    assert not inert, f"settings that configure nothing: {sorted(inert)}"

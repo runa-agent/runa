@@ -212,9 +212,19 @@ class AnthropicModel:
             body["temperature"] = settings.temperature
         if settings.top_p is not None:
             body["top_p"] = settings.top_p
+
+        # Claude spells both of these inside one `output_config`, so they're built together.
+        output_config: dict[str, Any] = {}
+        if settings.reasoning_effort is not None:
+            # `effort` is the depth knob, and it only bites with thinking on -- which current
+            # Claude models run adaptively, so there is no token budget for Runa to guess at.
+            body["thinking"] = {"type": "adaptive"}
+            output_config["effort"] = settings.reasoning_effort
         schema = output_json_schema(request)
         if schema is not None:
-            body["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
+            output_config["format"] = {"type": "json_schema", "schema": schema}
+        if output_config:
+            body["output_config"] = output_config
         return body
 
     async def get_response(self, request: ModelRequest) -> ModelResponse:
