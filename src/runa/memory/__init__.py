@@ -11,12 +11,11 @@ the turn's exchange into zero or more remembered facts; `MemoryLike` is the cont
 narrower escape hatch of swapping just the storage backend.
 """
 
-import json
-import re
 from typing import Any, Protocol
 
 from runa import db
-from runa._items import item_text, user_message
+from runa._items import item_text, parsed_json_object, user_message
+from runa._log import logger
 from runa._models import ModelRequest
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.memory.sqlite import SQLiteMemoryStore
@@ -60,18 +59,6 @@ anything already generic/obvious. If nothing is durably worth remembering, retur
 {conversation}
 
 Reply with JSON only: {{"memories": ["...", ...]}}"""
-
-_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
-
-
-def _extract_json_object(text: str) -> dict[str, Any]:
-    match = _JSON_OBJECT.search(text)
-    if not match:
-        return {}
-    try:
-        return json.loads(match.group())
-    except json.JSONDecodeError:
-        return {}
 
 
 class Memory:
@@ -153,11 +140,20 @@ class Memory:
         meant to be called directly by app code, but part of `MemoryLike`, the contract a custom
         `memory=` object must implement alongside `search`. Returns the texts it stored, empty if
         none were worth it.
+
+        A reply this can't read JSON out of stores nothing and logs a warning, the way a failed
+        retrieval degrades in `run_loop._retrieve`: "nothing worth remembering" and "the model
+        answered with prose" are the same empty list to a caller, and an agent on `memory="auto"`
+        that has quietly stopped learning is a failure nobody would otherwise report.
         """
         prompt = _EXTRACTION_PROMPT.format(conversation=conversation)
         response = await model.get_response(ModelRequest(input=[user_message(prompt)]))
         reply = item_text(response.output[0])
-        candidates = _extract_json_object(reply).get("memories") or []
+        try:
+            candidates = parsed_json_object(reply).get("memories") or []
+        except ValueError as exc:
+            logger.warning("memory extraction read nothing from the model's reply: %s", exc)
+            return []
         stored = []
         for candidate in candidates:
             if isinstance(candidate, str) and candidate.strip():

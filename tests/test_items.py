@@ -14,6 +14,7 @@ from runa._items import (
     latest_user_index,
     latest_user_text,
     parsed_arguments,
+    parsed_json_object,
     role_and_text,
     tool_call,
     tool_calls,
@@ -199,3 +200,34 @@ def test_parsed_arguments_rejects_json_that_is_not_an_object() -> None:
     """Arguments name keywords, so a bare array or number is as wrong as malformed JSON."""
     with pytest.raises(ValueError, match="must be a JSON object"):
         parsed_arguments("[1, 2]")
+
+
+def test_parsed_json_object_reads_a_clean_object() -> None:
+    """A reply that's already valid JSON parses straight through."""
+    assert parsed_json_object('{"score": 0.8}') == {"score": 0.8}
+
+
+def test_parsed_json_object_ignores_surrounding_prose() -> None:
+    """A model that wraps its JSON in commentary or markdown fences still parses."""
+    reply = 'Sure, here is my verdict:\n```json\n{"verdict": "yes", "reason": "matches"}\n```'
+
+    assert parsed_json_object(reply) == {"verdict": "yes", "reason": "matches"}
+
+
+def test_parsed_json_object_repairs_a_trailing_comma() -> None:
+    """A trailing comma before a closing bracket is stripped and retried, not just rejected."""
+    reply = '{"statements": ["a", "b",], "extra": "x",}'
+
+    assert parsed_json_object(reply) == {"statements": ["a", "b"], "extra": "x"}
+
+
+def test_parsed_json_object_rejects_a_reply_with_no_object_in_it() -> None:
+    """A reply with no `{...}` at all raises rather than silently returning nothing."""
+    with pytest.raises(ValueError, match="contained no JSON object"):
+        parsed_json_object("no json here")
+
+
+def test_parsed_json_object_rejects_unrepairable_json() -> None:
+    """Malformed JSON that isn't just a trailing comma raises too, carrying the reply with it."""
+    with pytest.raises(ValueError, match="isn't a JSON object"):
+        parsed_json_object('{"score": }')

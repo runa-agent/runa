@@ -3,19 +3,15 @@
 `ask()` runs a prompt through a bare `runa.Agent`, so semantic metrics grade with whatever model
 an app already talks to instead of requiring a separate client or API key, and through the same
 one door as everything else: the provider, the `RunConfig` and the tracing are the Agent's, not a
-second copy assembled here. `extract_json()` pulls a JSON object out of a judge's reply,
-tolerating the odd trailing comma a model sometimes emits.
+second copy assembled here. Reading the JSON object out of a reply isn't here either: that's
+`runa._items.parsed_json_object`, shared with every other caller that asks a model for JSON.
 """
 
-import json
-import re
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from runa.agent import Agent
 from runa.exceptions import ModelBehaviorError
-
-_TRAILING_COMMA = re.compile(r",\s*([\]}])")
 
 
 class _JudgeAgent(Agent):
@@ -60,21 +56,3 @@ class Judge:
 def judge_model(model: str) -> Judge:
     """Build the judge `evaluate_semantic()` should grade with."""
     return Judge(model)
-
-
-def extract_json(text: str) -> dict[str, Any]:
-    """Pull the first JSON object out of a judge's reply.
-
-    Judges wrap their JSON in prose or markdown fences more often than not, and occasionally
-    leave a trailing comma before a closing `]`/`}`; this tolerates both rather than demanding a
-    clean `json.loads`.
-    """
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start == -1 or end == 0:
-        raise ValueError(f"judge reply contained no JSON object: {text!r}")
-    candidate = text[start:end]
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        return json.loads(_TRAILING_COMMA.sub(r"\1", candidate))

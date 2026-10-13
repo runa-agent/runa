@@ -20,6 +20,12 @@ for the same reason: `tool_calls`/`call_id`/`call_name`/`call_arguments`/`answer
 the only statement of a convention no type enforces, so normalizing a provider's call ids, or
 answering a call with something other than a `tool_call_id` row, stays one edit.
 
+Reading JSON a model wrote is the same guesswork a layer down, and lives here for the same
+reason: `parsed_arguments` for a tool call's arguments, `parsed_json_object` for a reply we asked
+to be JSON and which arrives wrapped in prose. Both raise `ValueError` and neither decides what
+that means -- how tolerant Runa is of a model's JSON is settled once, and the policy about a
+reply it can't read belongs to the caller that asked for it.
+
 Writing one is the same bet pointed the other way. Every item Runa puts into history is built
 here: the user message a turn arrives as, the system block that carries instructions or
 retrieved context, the result a tool call comes back as, and the assistant message a backend
@@ -32,7 +38,11 @@ envelope, which is this module's.
 """
 
 import json
+import re
 from typing import Any
+
+# A trailing comma before a closing bracket: the one malformation `parsed_json_object` repairs.
+_TRAILING_COMMA = re.compile(r",\s*([\]}])")
 
 ConversationItem = dict[str, Any]
 """One turn of conversation history: a `{"role": ..., "content": ...}` message, a tool call, or a
@@ -209,6 +219,33 @@ def parsed_arguments(args_json: str) -> dict[str, Any]:
     return args
 
 
+def parsed_json_object(text: str) -> dict[str, Any]:
+    """The JSON object a model meant by `text`, however it wrapped it.
+
+    For a reply Runa asked to be JSON but which arrives as prose -- a judge's verdict, memory
+    extraction's list of facts -- as against a tool call's `arguments`, which arrive as JSON and
+    nothing else and are `parsed_arguments`' job. Such a reply comes wrapped in commentary or a
+    markdown fence more often than not, and now and then with a trailing comma before a closing
+    `]`/`}`: both are tolerated, here rather than at each site, so that how tolerant Runa is of
+    a model's JSON stops being a property of which module the reply happened to land in.
+
+    Raises `ValueError` when even that doesn't parse. What to do about it is the caller's policy,
+    as above: an `ERROR` result for a judge, a logged warning for memory extraction.
+    """
+    start, end = text.find("{"), text.rfind("}") + 1
+    if start == -1 or end == 0:
+        raise ValueError(f"model reply contained no JSON object: {text!r}")
+    candidate = text[start:end]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return json.loads(_TRAILING_COMMA.sub(r"\1", candidate))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"model reply isn't a JSON object ({exc}): {text!r}") from exc
+
+
 __all__ = [
     "ConversationItem",
     "answered_call_id",
@@ -223,6 +260,7 @@ __all__ = [
     "latest_user_text",
     "role_and_text",
     "parsed_arguments",
+    "parsed_json_object",
     "system_message",
     "tool_call",
     "tool_calls",

@@ -16,8 +16,9 @@ an `ERROR` result.
 
 import asyncio
 
+from runa._items import parsed_json_object
 from runa.eval.case import Case
-from runa.eval.judge import JudgeModel, extract_json
+from runa.eval.judge import JudgeModel
 from runa.run import Run
 
 _CORRECTNESS_CRITERIA = (
@@ -37,7 +38,7 @@ def _format_tool_calls(run: Run) -> str:
 
 async def grade_task_completion(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
     """Score how completely the outcome the run achieved matches the task the input asked for."""
-    extracted = extract_json(
+    extracted = parsed_json_object(
         await judge.ask(
             "Given a user's request, the tools an AI called while handling it, and the AI's "
             "final response, identify (1) the task the user wanted done and (2) the factual "
@@ -49,7 +50,7 @@ async def grade_task_completion(judge: JudgeModel, case: Case, run: Run) -> tupl
             'Reply with JSON only: {"task": "...", "outcome": "..."}'
         )
     )
-    verdict = extract_json(
+    verdict = parsed_json_object(
         await judge.ask(
             "Given a task and the outcome actually achieved, score how completely the outcome "
             "achieves the task, from 0 (not at all) to 1 (perfectly).\n\n"
@@ -63,7 +64,7 @@ async def grade_task_completion(judge: JudgeModel, case: Case, run: Run) -> tupl
 
 async def grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
     """Score the fraction of the output's statements that address the input."""
-    statements = extract_json(
+    statements = parsed_json_object(
         await judge.ask(
             "Break the following text down into a list of the individual statements it makes. "
             "An ambiguous fragment counts as its own statement.\n\n"
@@ -74,7 +75,7 @@ async def grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tup
     if not statements:
         return 1.0, "The response made no distinct statements to evaluate."
 
-    verdicts = extract_json(
+    verdicts = parsed_json_object(
         await judge.ask(
             "For each statement below, judge whether it is relevant to addressing the given "
             "input: 'yes' (relevant), 'no' (irrelevant), or 'idk' (ambiguous, but possibly "
@@ -89,7 +90,7 @@ async def grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tup
     irrelevant = [v.get("reason", "") for v in verdicts if v["verdict"].strip().lower() == "no"]
     score = sum(1 for v in verdicts if v["verdict"].strip().lower() != "no") / len(verdicts)
 
-    reason = extract_json(
+    reason = parsed_json_object(
         await judge.ask(
             "Given an answer-relevancy score and the reasons any statements were judged "
             "irrelevant to the input, write one concise sentence justifying the score. If there "
@@ -105,7 +106,7 @@ async def grade_answer_relevance(judge: JudgeModel, case: Case, run: Run) -> tup
 
 async def grade_answer_correctness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
     """Score the output against `case.expected`, on steps derived from the criteria."""
-    steps = extract_json(
+    steps = parsed_json_object(
         await judge.ask(
             "Given the evaluation criteria below, write 3-4 concise steps for judging how well "
             "an actual output matches an expected output.\n\n"
@@ -113,7 +114,7 @@ async def grade_answer_correctness(judge: JudgeModel, case: Case, run: Run) -> t
             'Reply with JSON only: {"steps": ["...", ...]}'
         )
     )["steps"]
-    graded = extract_json(
+    graded = parsed_json_object(
         await judge.ask(
             "Following the evaluation steps below, score the actual output from 0 (no "
             "alignment) to 10 (strong alignment) against the expected output. Ground your "
@@ -146,12 +147,12 @@ async def grade_faithfulness(judge: JudgeModel, case: Case, run: Run) -> tuple[f
             'Reply with JSON only: {"claims": ["...", ...]}'
         ),
     )
-    truths = extract_json(truths_reply)["truths"]
-    claims = extract_json(claims_reply)["claims"]
+    truths = parsed_json_object(truths_reply)["truths"]
+    claims = parsed_json_object(claims_reply)["claims"]
     if not claims:
         return 1.0, "The response made no factual claims to check against the context."
 
-    verdicts = extract_json(
+    verdicts = parsed_json_object(
         await judge.ask(
             "For each claim below, judge whether it contradicts the given context: 'yes' "
             "(agrees), 'no' (contradicts), or 'idk' (the context doesn't say either way). Give a "
@@ -166,7 +167,7 @@ async def grade_faithfulness(judge: JudgeModel, case: Case, run: Run) -> tuple[f
     contradictions = [v.get("reason", "") for v in verdicts if v["verdict"].strip().lower() == "no"]
     score = sum(1 for v in verdicts if v["verdict"].strip().lower() != "no") / len(verdicts)
 
-    reason = extract_json(
+    reason = parsed_json_object(
         await judge.ask(
             "Given a faithfulness score and the contradictions found between an AI's output and "
             "its context, write one concise sentence justifying the score. If there are no "

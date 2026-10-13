@@ -67,7 +67,12 @@ async def _resolve_instructions(
 
 
 def _parse_output(shape: AgentShape, text: str) -> Any:
-    """The model's final `text`, validated into `agent.output_type` when it declares one."""
+    """The model's final `text`, validated into `agent.output_type` when it declares one.
+
+    Strictly, through the schema the model was asked for, and deliberately not through
+    `parsed_json_object`'s tolerance: a declared `output_type` is a contract the provider enforces
+    on its side, not prose to mine a JSON object out of.
+    """
     output_type = shape.output_type
     if output_type is None or output_type is str:
         return text

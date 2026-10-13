@@ -292,6 +292,37 @@ def test_remember_from_conversation_stores_nothing_when_the_model_finds_nothing(
     assert asyncio.run(_run()) == []
 
 
+def test_remember_from_conversation_logs_a_reply_it_cannot_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A reply with no JSON object in it stores nothing *and* says so: no silent empty list."""
+    mem = _memory(tmp_path)
+    model = _FakeModel("I could not find anything worth remembering.")
+
+    async def _run():
+        return await mem.remember_from_conversation(
+            "User: hi\nAssistant: hello", user_id="u1", model=model
+        )
+
+    with caplog.at_level("WARNING", logger="runa"):
+        assert asyncio.run(_run()) == []
+
+    assert "memory extraction" in caplog.text
+
+
+def test_remember_from_conversation_tolerates_a_trailing_comma(tmp_path: Path) -> None:
+    """Extraction gets the same tolerance a judge's reply does, both reading one helper."""
+    mem = _memory(tmp_path)
+    model = _FakeModel('```json\n{"memories": ["User prefers Japanese.",]}\n```')
+
+    async def _run():
+        return await mem.remember_from_conversation(
+            "User: hi\nAssistant: hello", user_id="u1", model=model
+        )
+
+    assert asyncio.run(_run()) == ["User prefers Japanese."]
+
+
 def test_custom_store_can_be_injected() -> None:
     """`Memory(store=...)` uses the given `MemoryStore` instead of the default SQLite one."""
 
