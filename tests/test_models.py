@@ -9,9 +9,11 @@ from typing import Any
 
 import httpx2 as httpx
 import pytest
+from anthropic.types import RedactedThinkingBlock, SignatureDelta, ThinkingBlock, ThinkingDelta
 from pydantic import BaseModel
 
 from runa import content
+from runa._items import assistant_message, provider_blocks, tool_call, tool_result
 from runa._models import AnthropicModel, ModelProvider, ModelRequest, OpenAICompatibleModel
 from runa._types import ModelSettings
 from runa.exceptions import UserError
@@ -375,18 +377,26 @@ async def _events(events: list[Any]) -> AsyncIterator[Any]:
         yield event
 
 
+def _anthropic_usage(**counts: Any) -> Any:
+    """A canned Anthropic `Usage`, every count zero and nothing itemized unless named."""
+    return SimpleNamespace(
+        **{
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "output_tokens_details": None,
+            **counts,
+        }
+    )
+
+
 def _anthropic_message(content: list[Any] | None = None, usage: Any | None = None) -> Any:
     """A canned Anthropic `Message`, the shape the SDK hands back from `messages.create`."""
     return SimpleNamespace(
         id="msg_1",
         content=content if content is not None else [SimpleNamespace(type="text", text="ok")],
-        usage=usage
-        or SimpleNamespace(
-            input_tokens=0,
-            output_tokens=0,
-            cache_read_input_tokens=0,
-            cache_creation_input_tokens=0,
-        ),
+        usage=usage or _anthropic_usage(),
     )
 
 
@@ -433,7 +443,7 @@ def test_anthropic_get_response_parses_text_and_tool_calls() -> None:
             SimpleNamespace(type="text", text="Checking the weather."),
             SimpleNamespace(type="tool_use", id="call_1", name="weather", input={"city": "NYC"}),
         ],
-        usage=SimpleNamespace(
+        usage=_anthropic_usage(
             input_tokens=10,
             output_tokens=5,
             cache_read_input_tokens=2,
@@ -489,20 +499,11 @@ def test_anthropic_stream_response_yields_text_and_tool_call_deltas() -> None:
                 index=1,
                 delta=SimpleNamespace(type="input_json_delta", partial_json='{"city":'),
             ),
-            SimpleNamespace(type="message_delta", usage=SimpleNamespace(output_tokens=4)),
+            SimpleNamespace(type="message_delta", usage=_anthropic_usage(output_tokens=4)),
         ]
     )
-    model = AnthropicModel("claude-sonnet-5", client)  # type: ignore[arg-type]
 
-    async def collect() -> list[Any]:
-        return [
-            d
-            async for d in model.stream_response(
-                ModelRequest(input=[{"role": "user", "content": "hi"}])
-            )
-        ]
-
-    deltas = asyncio.run(collect())
+    deltas = _anthropic_stream(client)
 
     assert deltas[0].text == "Hi"
     assert deltas[1].tool_call_id == "call_1"
@@ -512,6 +513,171 @@ def test_anthropic_stream_response_yields_text_and_tool_call_deltas() -> None:
     assert deltas[3].usage is not None
     assert deltas[3].usage.input_tokens == 7
     assert deltas[3].usage.output_tokens == 4
+
+
+def _anthropic_stream(client: Any) -> list[Any]:
+    """Every `StreamDelta` one streamed turn against `client`'s canned events yields."""
+    model = AnthropicModel("claude-sonnet-5", client)
+
+    async def collect() -> list[Any]:
+        return [
+            d
+            async for d in model.stream_response(
+                ModelRequest(input=[{"role": "user", "content": "hi"}])
+            )
+        ]
+
+    return asyncio.run(collect())
+
+
+def test_anthropic_keeps_a_block_it_has_no_half_of_the_shape_for() -> None:
+    """A thinking block is neither words nor a call, so it rides in the item's provider slot."""
+    reply = _anthropic_message(
+        content=[
+            ThinkingBlock(type="thinking", thinking="let me see", signature="sig-1"),
+            RedactedThinkingBlock(type="redacted_thinking", data="ciphertext"),
+            SimpleNamespace(type="text", text="sunny"),
+        ]
+    )
+    model = AnthropicModel("claude-sonnet-5", _FakeAnthropic(reply))  # type: ignore[arg-type]
+
+    async def call() -> Any:
+        return await model.get_response(ModelRequest(input=[{"role": "user", "content": "hi"}]))
+
+    (message,) = asyncio.run(call()).output
+
+    assert message["content"] == "sunny"
+    assert provider_blocks(message) == [
+        {"type": "thinking", "thinking": "let me see", "signature": "sig-1"},
+        {"type": "redacted_thinking", "data": "ciphertext"},
+    ]
+
+
+def test_anthropic_replays_the_thinking_blocks_of_its_own_earlier_turn() -> None:
+    """Claude gets its reasoning back, signature and all, ahead of the words of the same turn."""
+    thinking = {"type": "thinking", "thinking": "the city is NYC", "signature": "sig-1"}
+    history = [
+        {"role": "user", "content": "weather?"},
+        assistant_message(
+            "Checking.", [tool_call("call_1", "weather", '{"city": "NYC"}')], [thinking]
+        ),
+        tool_result("call_1", "sunny"),
+    ]
+
+    request = _anthropic_request(history)
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": [
+            thinking,
+            {"type": "text", "text": "Checking."},
+            {"type": "tool_use", "id": "call_1", "name": "weather", "input": {"city": "NYC"}},
+        ],
+    }
+
+
+def test_anthropic_stream_assembles_a_thinking_block_from_its_deltas() -> None:
+    """A signature arrives after the thought it signs, so the block is yielded once, whole."""
+    client = _FakeAnthropic(
+        events=[
+            SimpleNamespace(
+                type="content_block_start",
+                index=0,
+                content_block=ThinkingBlock(type="thinking", thinking="", signature=""),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=ThinkingDelta(type="thinking_delta", thinking="let me "),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=ThinkingDelta(type="thinking_delta", thinking="see"),
+            ),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=0,
+                delta=SignatureDelta(type="signature_delta", signature="sig-1"),
+            ),
+            SimpleNamespace(type="content_block_stop", index=0),
+            SimpleNamespace(
+                type="content_block_delta",
+                index=1,
+                delta=SimpleNamespace(type="text_delta", text="sunny"),
+            ),
+            SimpleNamespace(type="content_block_stop", index=1),
+        ]
+    )
+
+    deltas = _anthropic_stream(client)
+
+    assert [d.provider_blocks for d in deltas if d.provider_blocks] == [
+        [{"type": "thinking", "thinking": "let me see", "signature": "sig-1"}]
+    ]
+    assert [d.text for d in deltas if d.text] == ["sunny"]
+
+
+def test_anthropic_reports_the_thinking_tokens_it_was_billed_for() -> None:
+    """Claude itemizes thinking inside `output_tokens`; chat-completions calls it reasoning."""
+    reply = _anthropic_message(
+        usage=_anthropic_usage(
+            input_tokens=10,
+            output_tokens=90,
+            output_tokens_details=SimpleNamespace(thinking_tokens=80),
+        )
+    )
+    model = AnthropicModel("claude-sonnet-5", _FakeAnthropic(reply))  # type: ignore[arg-type]
+
+    async def call() -> Any:
+        return await model.get_response(ModelRequest(input=[{"role": "user", "content": "hi"}]))
+
+    usage = asyncio.run(call()).usage
+
+    assert usage.output_tokens_details.reasoning_tokens == 80
+
+
+def test_anthropic_streams_the_thinking_tokens_too() -> None:
+    """The same figure, from the streamed turn: one setting can't report two different ways."""
+    client = _FakeAnthropic(
+        events=[
+            SimpleNamespace(
+                type="message_delta",
+                usage=_anthropic_usage(
+                    output_tokens=90, output_tokens_details=SimpleNamespace(thinking_tokens=80)
+                ),
+            )
+        ]
+    )
+
+    (delta,) = _anthropic_stream(client)
+
+    assert delta.usage is not None
+    assert delta.usage.output_tokens_details.reasoning_tokens == 80
+
+
+def test_openai_compatible_never_sends_another_backends_blocks() -> None:
+    """A conversation that started on Claude keeps its blocks; a strict endpoint never sees them."""
+    seen: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _ok_response()
+
+    history = [
+        {"role": "user", "content": "weather?"},
+        assistant_message("sunny", None, [{"type": "thinking", "thinking": "hmm"}]),
+        {"role": "user", "content": "and tomorrow?"},
+    ]
+    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    asyncio.run(model.get_response(ModelRequest(input=history)))
+
+    assert seen[0]["messages"] == [
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "sunny", "tool_calls": None},
+        {"role": "user", "content": "and tomorrow?"},
+    ]
+    assert provider_blocks(history[1]) == [{"type": "thinking", "thinking": "hmm"}]
 
 
 def test_anthropic_asks_for_the_output_types_json_schema() -> None:

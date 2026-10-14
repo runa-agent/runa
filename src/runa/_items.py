@@ -20,6 +20,13 @@ for the same reason: `tool_calls`/`call_id`/`call_name`/`call_arguments`/`answer
 the only statement of a convention no type enforces, so normalizing a provider's call ids, or
 answering a call with something other than a `tool_call_id` row, stays one edit.
 
+What the shape can't express, it keeps anyway. A provider content kind that is neither words nor
+a tool call -- Claude's signed thinking blocks -- has one slot to go in (`provider_blocks`),
+written and read only by the backend that produced it and taken back off by `wire_items` on the
+way out to anyone else, so a boundary's options are never just "translate it or drop it". The
+wire format then stays a bet about what two of three providers already speak, rather than a
+ceiling on what the third is allowed to say.
+
 Reading JSON a model wrote is the same guesswork a layer down, and lives here for the same
 reason: `parsed_arguments` for a tool call's arguments, `parsed_json_object` for a reply we asked
 to be JSON and which arrives wrapped in prose. Both raise `ValueError` and neither decides what
@@ -61,7 +68,9 @@ def user_message(content: str | list[Any]) -> ConversationItem:
 
 
 def assistant_message(
-    text: str | None, tool_calls: list[ConversationItem] | None
+    text: str | None,
+    tool_calls: list[ConversationItem] | None,
+    provider_blocks: list[Any] | None = None,
 ) -> ConversationItem:
     """The model's turn, as the assistant message a backend assembles its response into.
 
@@ -69,8 +78,28 @@ def assistant_message(
     `""`/`[]`: a turn is words, or calls, or both. Backends differ in how they arrive at the two
     -- one provider hands over a finished string, another a list of content blocks, a stream a
     pile of deltas -- and that translation is theirs; this envelope is not.
+
+    `provider_blocks` is the third thing a turn can carry and the one two providers have no
+    shared place for: Claude's `thinking` and `redacted_thinking` blocks, which hold the
+    signature a later request needs to hand the model its own reasoning back. A backend that can
+    say a block in `text` or `tool_calls` still says it there; one that can't leaves it here
+    verbatim and reads its own back with `provider_blocks` when it rebuilds its turns, so the
+    block survives `agent.history`, a session and a serialized `RunState` instead of being
+    dropped at the boundary for want of a slot -- a loss nothing would report, since the run
+    completes and only the bill says the model reasoned from scratch every turn.
+
+    Absent rather than `None` when there are none, unlike the two halves above: those are what a
+    turn means, this is one backend's own baggage, and `wire_items` takes it back off on the way
+    out to a provider that never put it there.
     """
-    return {"role": "assistant", "content": text or None, "tool_calls": tool_calls or None}
+    message: ConversationItem = {
+        "role": "assistant",
+        "content": text or None,
+        "tool_calls": tool_calls or None,
+    }
+    if provider_blocks:
+        message["provider_blocks"] = provider_blocks
+    return message
 
 
 def tool_call(call_id: str, name: str, arguments: str) -> ConversationItem:
@@ -176,6 +205,29 @@ def tool_calls(message: ConversationItem) -> list[ConversationItem]:
     return message.get("tool_calls") or []
 
 
+def provider_blocks(message: ConversationItem) -> list[Any]:
+    """The provider content blocks an assistant message carries, `[]` when it carries none.
+
+    For the backend that wrote them (see `assistant_message`) and for nobody else: the blocks
+    are one provider's shape, so anyone but the backend replaying them is reading a format it has
+    no claim on. What Runa itself wants from a turn -- its words, its calls -- reads without them.
+    """
+    return message.get("provider_blocks") or []
+
+
+def wire_items(items: list[ConversationItem]) -> list[ConversationItem]:
+    """`items` as a chat-completions provider is sent them: without the provider-blocks slot.
+
+    One key off and nothing else, an item being that wire's shape already. It's the one key no
+    provider put there (see `assistant_message`), and a strict endpoint rejects a field it
+    doesn't name, so the backend that passes items straight into a request body passes them
+    through here first.
+    """
+    return [
+        {key: value for key, value in item.items() if key != "provider_blocks"} for item in items
+    ]
+
+
 def call_id(call: ConversationItem) -> str:
     """One call's id: what its result is tied back to, and what an approval decision is keyed by."""
     return call["id"]
@@ -261,9 +313,11 @@ __all__ = [
     "role_and_text",
     "parsed_arguments",
     "parsed_json_object",
+    "provider_blocks",
     "system_message",
     "tool_call",
     "tool_calls",
     "tool_result",
     "user_message",
+    "wire_items",
 ]

@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import httpx2 as httpx
 
-from runa._items import assistant_message
+from runa._items import assistant_message, wire_items
 from runa._models.interface import (
     ModelRequest,
     StreamDelta,
@@ -152,7 +152,7 @@ class OpenAICompatibleModel:
     def _body(self, request: ModelRequest) -> dict[str, Any]:
         """The JSON body one `request` puts on the wire."""
         settings = request.model_settings
-        body: dict[str, Any] = {"model": self.model, "messages": request.messages}
+        body: dict[str, Any] = {"model": self.model, "messages": wire_items(request.messages)}
         tools = [_wire_tool(schema) for schema in tool_schemas(request)]
         if tools:
             body["tools"] = tools

@@ -1048,6 +1048,35 @@ def test_stream_response_yields_text_and_final_message() -> None:
     assert final.item["content"] == "Hi there"
 
 
+def test_stream_response_keeps_the_provider_blocks_it_was_handed() -> None:
+    """What a streamed turn puts in the conversation matches what an unstreamed one returns."""
+    from runa.stream_events import RunItemStreamEvent
+
+    block = {"type": "thinking", "thinking": "let me see", "signature": "sig-1"}
+    agent = _agent(
+        model=_ScriptedStreamingModel(
+            [StreamDelta(provider_blocks=[block]), StreamDelta(text="Hi")]
+        )
+    )
+
+    async def collect() -> list[Any]:
+        return [event async for event in _Stream(agent, "hi", run_config=_run_config())]
+
+    events = asyncio.run(collect())
+
+    (final,) = [
+        e
+        for e in events
+        if isinstance(e, RunItemStreamEvent) and e.name == "message_output_created"
+    ]
+    assert final.item == {
+        "role": "assistant",
+        "content": "Hi",
+        "tool_calls": None,
+        "provider_blocks": [block],
+    }
+
+
 def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
     """A tool with a sticky `always=True` approval already on the context runs during streaming."""
     from runa.stream_events import RunItemStreamEvent

@@ -98,6 +98,13 @@ Asking a model that can't reason for effort is the provider's error, not a setti
 the floor -- a misspelled `model` is loud for the same reason. A provider with a deeper ladder
 than three levels is reached by passing a `Model`.
 
+What the thinking cost is on `run.usage.output_tokens_details.reasoning_tokens`, whichever
+backend answered. The reasoning itself stays in the conversation: Claude returns its thinking as
+content blocks carrying a signature, and those ride along in history, a session and a serialized
+`RunState`, so every later turn of a tool-calling loop hands the model its own reasoning back
+instead of paying to derive it again. They're the one part of an item no other provider is ever
+sent.
+
 ## Retries
 
 Both backends retry connection errors and `408`/`409`/`429`/`5xx` twice, with jittered backoff

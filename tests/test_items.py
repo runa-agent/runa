@@ -15,11 +15,13 @@ from runa._items import (
     latest_user_text,
     parsed_arguments,
     parsed_json_object,
+    provider_blocks,
     role_and_text,
     tool_call,
     tool_calls,
     tool_result,
     user_message,
+    wire_items,
 )
 
 
@@ -163,6 +165,55 @@ def test_tool_calls_reads_back_what_assistant_message_wrote() -> None:
 def test_tool_calls_reads_both_spellings_of_no_calls_as_empty(message: dict[str, object]) -> None:
     """An explicit `None` and an absent field are the same turn, so the turn loop checks a list."""
     assert tool_calls(message) == []
+
+
+def test_provider_blocks_reads_back_what_assistant_message_wrote() -> None:
+    """The slot a backend keeps its own content blocks in has its reader here, like the calls."""
+    block = {"type": "thinking", "thinking": "hmm", "signature": "sig"}
+
+    message = assistant_message("answer", None, [block])
+
+    assert provider_blocks(message) == [block]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "assistant", "content": "just words", "tool_calls": None},
+        {"role": "assistant", "content": "just words", "provider_blocks": None},
+    ],
+)
+def test_provider_blocks_of_a_turn_that_carries_none_is_empty(message: dict[str, object]) -> None:
+    """A turn with nothing to keep, and one from a session written before the slot existed."""
+    assert provider_blocks(message) == []
+
+
+def test_assistant_message_leaves_the_slot_out_when_there_is_nothing_in_it() -> None:
+    """Absent, not `None`: the common turn is the item it always was, for every other reader."""
+    assert assistant_message("hi", None) == {
+        "role": "assistant",
+        "content": "hi",
+        "tool_calls": None,
+    }
+    assert assistant_message("hi", None, []) == {
+        "role": "assistant",
+        "content": "hi",
+        "tool_calls": None,
+    }
+
+
+def test_wire_items_takes_off_the_slot_no_provider_put_there() -> None:
+    """One backend's blocks are no other provider's business, and an unnamed field is a 400."""
+    items = [
+        {"role": "user", "content": "hi"},
+        assistant_message("thought about it", None, [{"type": "thinking", "thinking": "hmm"}]),
+    ]
+
+    assert wire_items(items) == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "thought about it", "tool_calls": None},
+    ]
+    assert "provider_blocks" in items[1], "the history item itself keeps its blocks"
 
 
 @pytest.mark.parametrize("arguments", ["", None])

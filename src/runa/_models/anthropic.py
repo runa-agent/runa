@@ -18,6 +18,7 @@ from runa._items import (
     call_name,
     content_text,
     parsed_arguments,
+    provider_blocks,
     tool_call,
     tool_calls,
 )
@@ -78,7 +79,9 @@ def _to_anthropic_turn(message: Any) -> tuple[str, list[dict[str, Any]]]:
             }
         ]
     if role == "assistant":
-        blocks: list[dict[str, Any]] = []
+        # Thinking first, as Claude itself ordered it: the blocks this turn kept are the ones
+        # `_to_chat_message` had no half of the chat-completions shape to put them in.
+        blocks: list[dict[str, Any]] = list(provider_blocks(message))
         text = content_text(message.get("content"))
         if text:
             blocks.append({"type": "text", "text": text})
@@ -174,8 +177,20 @@ def _to_usage(usage: Any) -> Usage:
             cached_tokens=usage.cache_read_input_tokens or 0,
             cache_write_tokens=usage.cache_creation_input_tokens or 0,
         ),
-        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=_thinking_tokens(usage)),
     )
+
+
+def _thinking_tokens(usage: Any) -> int:
+    """How much of `usage`'s output went on thinking, `0` when the response broke out nothing.
+
+    Claude bills thinking inside `output_tokens` and itemizes it as `thinking_tokens`;
+    chat-completions providers call the same figure `reasoning_tokens`. Both land on
+    `Usage.output_tokens_details`, so one `reasoning_effort` doesn't report two different ways
+    depending on which vendor `model` named.
+    """
+    details = usage.output_tokens_details
+    return details.thinking_tokens if details else 0
 
 
 class AnthropicModel:
@@ -260,31 +275,52 @@ class AnthropicModel:
 
 
 def _to_chat_message(message: Any) -> dict[str, Any]:
-    """Convert an Anthropic `Message` into a chat-completions-shaped assistant message dict."""
+    """Convert an Anthropic `Message` into a chat-completions-shaped assistant message dict.
+
+    Words and calls go in the two halves that shape has; every other block kind -- `thinking`
+    and `redacted_thinking` today, whatever Claude adds next without this function changing --
+    is kept verbatim in the item's provider slot, as JSON the next request can hand straight
+    back. Dropping one is not free: a thinking block carries the signature the model needs its
+    own reasoning back by, so a turn that loses it pays to think from scratch on the next.
+    """
     text_parts: list[str] = []
     calls: list[dict[str, Any]] = []
+    blocks: list[dict[str, Any]] = []
     for block in message.content:
         if block.type == "text":
             text_parts.append(block.text)
         elif block.type == "tool_use":
             calls.append(tool_call(block.id, block.name, json.dumps(block.input)))
-    return assistant_message("".join(text_parts), calls)
+        else:
+            blocks.append(block.to_dict(mode="json"))
+    return assistant_message("".join(text_parts), calls, blocks)
 
 
 async def _anthropic_deltas(stream: AsyncIterator[Any]) -> AsyncIterator[StreamDelta]:
-    """Turn Anthropic's raw SSE events into `StreamDelta`s."""
+    """Turn Anthropic's raw SSE events into `StreamDelta`s.
+
+    A block Runa has no half of the chat-completions shape for is assembled here rather than
+    streamed: it only means anything whole (a thinking block's signature arrives last), so it's
+    grown across its deltas and yielded once, at the `content_block_stop` that finishes it. What
+    a stream appends to history then matches what `get_response` returns for the same turn,
+    which is the property that keeps a streamed tool-calling loop replayable.
+    """
     input_tokens = 0
+    blocks: dict[int, dict[str, Any]] = {}
     async for event in stream:
         if event.type == "message_start":
             input_tokens = event.message.usage.input_tokens
-        elif event.type == "content_block_start" and event.content_block.type == "tool_use":
+        elif event.type == "content_block_start":
             block = event.content_block
-            yield StreamDelta(
-                tool_call_index=event.index,
-                tool_call_id=block.id,
-                tool_call_name=block.name,
-                tool_call_arguments="",
-            )
+            if block.type == "tool_use":
+                yield StreamDelta(
+                    tool_call_index=event.index,
+                    tool_call_id=block.id,
+                    tool_call_name=block.name,
+                    tool_call_arguments="",
+                )
+            elif block.type != "text":
+                blocks[event.index] = block.to_dict(mode="json")
         elif event.type == "content_block_delta":
             delta = event.delta
             if delta.type == "text_delta":
@@ -293,6 +329,10 @@ async def _anthropic_deltas(stream: AsyncIterator[Any]) -> AsyncIterator[StreamD
                 yield StreamDelta(
                     tool_call_index=event.index, tool_call_arguments=delta.partial_json
                 )
+            elif event.index in blocks:
+                _grow(blocks[event.index], delta)
+        elif event.type == "content_block_stop" and event.index in blocks:
+            yield StreamDelta(provider_blocks=[blocks[event.index]])
         elif event.type == "message_delta" and event.usage is not None:
             output_tokens = event.usage.output_tokens or 0
             yield StreamDelta(
@@ -301,8 +341,24 @@ async def _anthropic_deltas(stream: AsyncIterator[Any]) -> AsyncIterator[StreamD
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     total_tokens=input_tokens + output_tokens,
+                    output_tokens_details=OutputTokensDetails(
+                        reasoning_tokens=_thinking_tokens(event.usage)
+                    ),
                 )
             )
+
+
+def _grow(block: dict[str, Any], delta: Any) -> None:
+    """Fold one streamed delta into the block it belongs to, extending each field it names.
+
+    A thinking block arrives as a `thinking_delta` per fragment and a `signature_delta` at the
+    end, and the next kind Anthropic streams will arrive the same way, so the rule is the shape
+    of the event rather than a branch per name: a delta's every string field is a piece of the
+    same-named field of its block.
+    """
+    for name, value in delta.to_dict(mode="json").items():
+        if name != "type" and isinstance(value, str):
+            block[name] = block.get(name, "") + value
 
 
 __all__ = ["AnthropicModel"]

@@ -57,7 +57,9 @@ class StreamDelta:
     these into a final message: `text` fragments concatenate; a tool-call fragment is keyed by
     `tool_call_index`, with `id`/`name` set once (when the call starts) and `arguments` arriving
     in pieces to be concatenated; `usage` is set once, on whichever fragment carries it (a
-    provider's final chunk, in practice).
+    provider's final chunk, in practice); `provider_blocks` carry a backend's own content blocks
+    (see `runa._items.assistant_message`) already whole, in the order the model produced them,
+    and are appended to the final message as they arrive.
     """
 
     text: str | None = None
@@ -66,6 +68,7 @@ class StreamDelta:
     tool_call_name: str | None = None
     tool_call_arguments: str | None = None
     usage: Usage | None = None
+    provider_blocks: list[Any] | None = None
 
 
 @dataclass(frozen=True)
