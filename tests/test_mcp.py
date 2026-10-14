@@ -6,10 +6,12 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, cast
 
 import pytest
+from helpers import run as await_
 from mcp_types import CallToolResult, ListToolsResult, TextContent, Tool
 
-from runa import mcp
-from runa._types import RunContextWrapper
+from runa import Agent, guardrail, mcp
+from runa._types import ModelResponse, RunContextWrapper, Usage
+from runa.guardrail import Phase, ToolInputGuardrailData
 from runa.mcp import (
     MCPServer,
     MCPServerStdio,
@@ -42,8 +44,8 @@ class _FakeServer(_MCPServerBase):
     testing -- the per-loop caching in `connect`, the tool mapping, `close` -- as written.
     """
 
-    def __init__(self, session: _FakeSession) -> None:
-        super().__init__(name="fake", address="fake://server")
+    def __init__(self, session: _FakeSession, **policy: Any) -> None:
+        super().__init__(name="fake", address="fake://server", **policy)
         self._fake_session = session
         self.opens = 0
         self.closed = 0
@@ -229,6 +231,130 @@ def test_an_unknown_option_is_rejected_at_the_call_site() -> None:
 
     with pytest.raises(TypeError, match="timeuot"):
         MCPServer(name="search").http("https://example.com/mcp", timeuot=30)  # pyright: ignore[reportCallIssue]
+
+
+@guardrail
+def no_path_traversal(args: Any) -> bool:
+    """Trip when a call's path escapes the directory the server was given."""
+    return ".." in str(args.get("path", ""))
+
+
+def test_a_servers_needs_approval_reaches_every_tool_it_lists() -> None:
+    """A remote tool has no decorator to declare approval on, so the server declares it."""
+    tools = [
+        Tool(name="write_file", input_schema={"type": "object"}),
+        Tool(name="read_file", input_schema={"type": "object"}),
+    ]
+    server = _FakeServer(_FakeSession(tools, {}), needs_approval=True)
+
+    listed = asyncio.run(server.list_tools())
+
+    assert [function_tool.needs_approval for function_tool in listed] == [True, True]
+
+
+def test_a_servers_guardrails_are_bound_against_the_tool_call() -> None:
+    """The server's predicates land on the tool phases, checking arguments rather than a turn."""
+    tool = Tool(name="read_file", input_schema={"type": "object"})
+    server = _FakeServer(_FakeSession([tool], {}), guardrails=[no_path_traversal.input])
+
+    (function_tool,) = asyncio.run(server.list_tools())
+
+    assert function_tool.guardrails[Phase.TOOL_OUTPUT] == []
+    (entry,) = function_tool.guardrails[Phase.TOOL_INPUT]
+    data = ToolInputGuardrailData.of("read_file", '{"path": "../etc/passwd"}', "call_1")
+    assert await_(entry.guardrail_function(data)).tripped
+    safe = ToolInputGuardrailData.of("read_file", '{"path": "notes.md"}', "call_2")
+    assert not await_(entry.guardrail_function(safe)).tripped
+
+
+def test_the_builder_carries_the_policy_onto_either_transport() -> None:
+    """`needs_approval`/`guardrails` are shared config, like `name`, not a transport's own."""
+    stdio = MCPServer(
+        name="files", needs_approval=True, guardrails=[no_path_traversal.input]
+    ).stdio("npx", ["serve"])
+    http = MCPServer(name="search", needs_approval=True, guardrails=[no_path_traversal.input]).http(
+        "https://example.com/mcp"
+    )
+
+    for server in (stdio, http):
+        assert server._needs_approval is True
+        assert len(server._guardrails[Phase.TOOL_INPUT]) == 1
+
+
+def test_a_run_pauses_on_an_mcp_tool_that_needs_approval() -> None:
+    """End to end: the approval gate the docs promise fires for an MCP tool, and resumes."""
+    tool = Tool(name="write_file", input_schema={"type": "object"})
+    written = CallToolResult(content=[TextContent(type="text", text="written")])
+    session = _FakeSession([tool], {"write_file": written})
+    server = _FakeServer(session, needs_approval=True)
+    model: Any = _ScriptedModel(
+        [_tool_call_message("write_file", '{"path": "/tmp/x"}'), _final_message("done")]
+    )
+    agent = _FileAgent(model=model, mcp=[server])
+
+    paused = agent.run_sync("write a file")
+
+    assert paused.status == "paused"
+    assert [item.name for item in paused.interruptions] == ["write_file"]
+    assert session.calls == []  # the gate held before anything reached the server
+
+    state = paused.to_state()
+    state.approve(state.pending[0])
+    resumed = agent.run_sync(state)
+
+    assert resumed.status == "completed"
+    assert session.calls == [("write_file", {"path": "/tmp/x"})]
+
+
+def test_a_servers_guardrail_trips_before_the_call_reaches_the_server() -> None:
+    """End to end: a tripped tool input guardrail stops the call and ends the run as an error."""
+    tool = Tool(name="read_file", input_schema={"type": "object"})
+    session = _FakeSession([tool], {})
+    server = _FakeServer(session, guardrails=[no_path_traversal.input])
+    model: Any = _ScriptedModel([_tool_call_message("read_file", '{"path": "../etc/passwd"}')])
+    agent = _FileAgent(model=model, mcp=[server])
+
+    result = agent.run_sync("read ../etc/passwd")
+
+    assert result.status == "error"
+    assert [entry.tripped for entry in result.tool_input_guardrail_results] == [True]
+    assert session.calls == []
+
+
+class _FileAgent(Agent):
+    """A real `Agent`, so the gates under test are the ones the turn loop actually runs."""
+
+    name = "file_agent"
+    instructions = "Use the tools."
+
+
+class _ScriptedModel:
+    """A `Model` stand-in answering each turn with the next pre-scripted message."""
+
+    def __init__(self, messages: list[dict[str, Any]]) -> None:
+        self._messages = list(messages)
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        return ModelResponse(
+            output=[self._messages.pop(0)],
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
+        )
+
+
+def _tool_call_message(name: str, arguments: str) -> dict[str, Any]:
+    """One assistant message calling `name` with `arguments`."""
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": name, "arguments": arguments}}
+        ],
+    }
+
+
+def _final_message(text: str) -> dict[str, Any]:
+    """One assistant message that answers instead of calling a tool."""
+    return {"role": "assistant", "content": text, "tool_calls": None}
 
 
 def test_mcp_server_is_the_only_exported_name() -> None:

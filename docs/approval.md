@@ -27,6 +27,10 @@ automatically.
 
 Pass `needs_approval=True` instead of a predicate to always require approval, with no condition.
 
+A tool coming from an [MCP server](mcp.md) is gated the same way, on the server rather than on a
+decorator it doesn't have: `MCPServer(name="files", needs_approval=writes_outside_tmp)` applies
+to every tool that server exposes.
+
 `runa chat` prompts interactively for any call that needs approval:
 
 ```

@@ -23,8 +23,44 @@ not reopened every turn.
 
 `mcp=` is sugar for `mcp_servers=`. Pass either.
 
-MCP tools go through the same `needs_approval` gate as any other tool. See
-[Human Approval](approval.md).
+## Approval and Guardrails
+
+Exactly like an ordinary tool includes the two things a tool carries besides its schema: whether
+a call needs a human, and the guardrails its arguments and result are checked against. A remote
+tool has no `@tool` decorator to declare them on, so the server declares them for every tool it
+exposes:
+
+```python
+from runa import MCPServer, approval, guardrail
+
+
+@approval
+def writes_outside_tmp(path: str) -> bool:
+    """Writing anywhere but /tmp needs a human to sign off."""
+    return not path.startswith("/tmp/")
+
+
+@guardrail
+def no_path_traversal(args: dict) -> bool:
+    """Trip when a call tries to escape the directory the server was given."""
+    return ".." in str(args.get("path", ""))
+
+
+files = MCPServer(
+    name="files",
+    needs_approval=writes_outside_tmp,
+    guardrails=[no_path_traversal.input],
+).stdio("npx", ["-y", "@modelcontextprotocol/server-filesystem", "."])
+```
+
+`needs_approval` takes a `bool` or an `@approval` predicate, and `guardrails` takes the same list
+`@tool(guardrails=[...])` does, bound with `.input`/`.output` against a call's arguments and its
+result. Both are given to `MCPServer(...)` rather than to `.stdio`/`.http`, because trust is a
+property of the server -- someone else's process, with its own filesystem, shell or API reach --
+not of the transport it's reached over. A predicate's parameters are looked up by name from the
+remote tool's arguments, so it is written against that server's schema.
+
+See [Human Approval](approval.md) and [Guardrails](guardrails.md).
 
 ## Example
 

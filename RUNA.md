@@ -324,7 +324,13 @@ mcp = [files, search]
 
 An MCP server's tools are exposed to the model exactly like `@tool`
 functions. Never branch application code on whether a tool came from MCP
-or from `@tool`; the framework already erases that distinction. The
+or from `@tool`; the framework already erases that distinction -- including
+the two policies a tool carries. A remote tool has no decorator to declare
+them on, so the server does, for every tool it exposes:
+`MCPServer(name=..., needs_approval=..., guardrails=[...])` takes the same
+`bool`/[`@approval`](#4-human-approval) predicate and the same
+[guardrail](#3-guardrail) list `@tool` does. Per server, because trust is a
+property of the server rather than of the transport it's reached over. The
 connection opens lazily and lives for the agent's whole lifetime, so
 there's no explicit `.connect()`/`.close()` for user code to call in the
 common case.

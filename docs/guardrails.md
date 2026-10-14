@@ -64,6 +64,9 @@ On a tool, `.input` sees the call's parsed arguments as a `dict`. `.output` sees
 return value. A guardrail that only observes, for logging or metrics, without ever tripping just
 always returns `False`.
 
+A tool coming from an [MCP server](mcp.md) has no decorator to list them on, so the server takes
+the same list for every tool it exposes: `MCPServer(name="files", guardrails=[...])`.
+
 ## Sync and Async Guardrails
 
 A guardrail predicate can be a plain `def` or `async def`. Pick whichever reads better for what

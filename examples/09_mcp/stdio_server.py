@@ -7,6 +7,10 @@ stdio, scoped to the current directory. `.http(url)` connects to a remote server
 just swap the transport. The connection opens lazily and stays open for the agent's whole
 lifetime, not reopened every turn.
 
+This question only reads, but that server also writes and moves files: pass
+`MCPServer(name=..., needs_approval=..., guardrails=[...])` to gate those calls the way `@tool`
+gates its own (docs/mcp.md).
+
 Run it:
 
     uv run python examples/09_mcp/stdio_server.py

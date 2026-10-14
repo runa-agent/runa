@@ -5,6 +5,13 @@ A server's tools are listed once (cached from then on) and exposed as ordinary `
 The connection itself is opened lazily, on first use, and kept open for as long as it can be
 reused: an MCP server is meant to be a persistent connection, not something reopened every turn.
 
+Exposed as ordinary `FunctionTool`s includes the two policies a tool carries: `needs_approval`
+and tool guardrails are the whole of what an agent may say about a tool it offers, so they are
+asked of the server (`MCPServer(needs_approval=..., guardrails=[...])`) and stamped onto every
+tool it builds. The server is the grain because trust is a property of the server -- someone
+else's process, with its own filesystem, shell or API reach -- and a remote tool has no decorator
+of its own to declare them on.
+
 As long as it *can* be is one event loop. A `ClientSession`'s streams -- a subprocess's pipes
 under `.stdio`, an HTTP connection under `.http` -- belong to the loop that was running when they
 were opened, and do not survive it being closed, which is the lifetime `runa._loop.LoopCache`
@@ -28,7 +35,8 @@ from mcp_types import TextContent
 from runa._items import parsed_arguments
 from runa._loop import LoopCache
 from runa._types import RunContextWrapper
-from runa.tool import FunctionTool
+from runa.guardrail import BoundGuardrail, GuardrailsDict, GuardrailsList, Phase, flatten_guardrails
+from runa.tool import FunctionTool, _NeedsApproval
 
 
 @dataclass
@@ -48,15 +56,29 @@ class _Connection:
 class _MCPServerBase:
     """Shared connect/list/call machinery for one MCP server; `.http`/`.stdio` pick a transport."""
 
-    def __init__(self, *, name: str | None = None, address: str) -> None:
-        """Store the server's display `name` and the `address` its connections are keyed by.
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        address: str,
+        needs_approval: _NeedsApproval = False,
+        guardrails: GuardrailsList | GuardrailsDict | None = None,
+    ) -> None:
+        """Store the server's display `name`, the `address` its connections are keyed by, policy.
 
         `address` is where this server is reached -- a URL, or a command line -- and is the key
         its per-loop connection is held under, the way `cache/redis.py` keys its client by the
-        Redis URL. Nothing connects here; the first `connect`/`list_tools` does.
+        Redis URL. `needs_approval`/`guardrails` are what every tool this server lists carries,
+        flattened once here rather than per tool: a `FunctionTool`'s guardrails are only read, so
+        one mapping is shared by all of them. Nothing connects here; the first
+        `connect`/`list_tools` does.
         """
         self.name = name or "mcp"
         self._address = address
+        self._needs_approval = needs_approval
+        self._guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
+            guardrails or [], tool=True
+        )
         self._connections: LoopCache[str, _Connection] = LoopCache()
 
     def _transport(self) -> Any:
@@ -104,6 +126,12 @@ class _MCPServerBase:
         return (await self.connect()).tools
 
     def _as_function_tool(self, tool: Any) -> FunctionTool:
+        """One listed MCP tool as a `FunctionTool`: its schema, a call back through `connect`.
+
+        The server's approval and guardrail policy comes along, so the gates `run_internal`
+        already runs for every tool call have something to read here too.
+        """
+
         async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
             session = (await self.connect()).session
             args = parsed_arguments(arguments_json)
@@ -118,6 +146,8 @@ class _MCPServerBase:
             description=tool.description or "",
             params_json_schema=tool.input_schema,
             on_invoke_tool=on_invoke_tool,
+            guardrails=self._guardrails,
+            needs_approval=self._needs_approval,
         )
 
 
@@ -132,9 +162,16 @@ class MCPServerStdio(_MCPServerBase):
         name: str | None = None,
         env: dict[str, str] | None = None,
         cwd: str | None = None,
+        needs_approval: _NeedsApproval = False,
+        guardrails: GuardrailsList | GuardrailsDict | None = None,
     ) -> None:
         """Store the command to spawn; nothing runs until the first `connect`/`list_tools`."""
-        super().__init__(name=name, address=" ".join([command, *(args or [])]))
+        super().__init__(
+            name=name,
+            address=" ".join([command, *(args or [])]),
+            needs_approval=needs_approval,
+            guardrails=guardrails,
+        )
         self._params = StdioServerParameters(command=command, args=args or [], env=env, cwd=cwd)
 
     def _transport(self) -> Any:
@@ -144,9 +181,18 @@ class MCPServerStdio(_MCPServerBase):
 class MCPServerStreamableHttp(_MCPServerBase):
     """An MCP server reachable over streamable HTTP."""
 
-    def __init__(self, url: str, *, name: str | None = None) -> None:
+    def __init__(
+        self,
+        url: str,
+        *,
+        name: str | None = None,
+        needs_approval: _NeedsApproval = False,
+        guardrails: GuardrailsList | GuardrailsDict | None = None,
+    ) -> None:
         """Store the server's `url`; nothing connects until the first `connect`/`list_tools`."""
-        super().__init__(name=name, address=url)
+        super().__init__(
+            name=name, address=url, needs_approval=needs_approval, guardrails=guardrails
+        )
         self._url = url
 
     def _transport(self) -> Any:
@@ -156,8 +202,9 @@ class MCPServerStreamableHttp(_MCPServerBase):
 class MCPServer:
     """The one way to build a server: shared config here, finalized by picking a transport.
 
-    What's given here (currently just `name`) is common to every transport; `http`/`stdio` take
-    the params specific to that transport, a URL vs. a command to spawn. Every parameter is
+    What's given here -- the server's name, and the approval/guardrail policy its tools carry --
+    is common to every transport; `http`/`stdio` take the params specific to that transport, a
+    URL vs. a command to spawn. Every parameter is
     spelled out on all three, rather than collected as `**kwargs` and forwarded, so that a
     misspelled or unsupported option is a `TypeError` naming it at the call site -- the way a
     mistyped `Agent` attribute is a `UserError` naming it at construction -- instead of a server
@@ -168,13 +215,32 @@ class MCPServer:
     reaching for `MCPServerStdio` directly.
     """
 
-    def __init__(self, *, name: str | None = None) -> None:
-        """Hold config shared by every transport, applied when `http`/`stdio` is called."""
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        needs_approval: _NeedsApproval = False,
+        guardrails: GuardrailsList | GuardrailsDict | None = None,
+    ) -> None:
+        """Hold config shared by every transport, applied when `http`/`stdio` is called.
+
+        `needs_approval` (a `bool`, or an `@approval` predicate over the remote tool's arguments)
+        and `guardrails` (`@guardrail` predicates, bound with `.input`/`.output` against a call's
+        arguments and its result) apply to every tool this server exposes -- `@tool`'s two
+        parameters, asked of the server because that's where a remote tool's trust is decided.
+        """
         self._name = name
+        self._needs_approval = needs_approval
+        self._guardrails = guardrails
 
     def http(self, url: str) -> MCPServerStreamableHttp:
         """Connect over streamable HTTP."""
-        return MCPServerStreamableHttp(url, name=self._name)
+        return MCPServerStreamableHttp(
+            url,
+            name=self._name,
+            needs_approval=self._needs_approval,
+            guardrails=self._guardrails,
+        )
 
     def stdio(
         self,
@@ -185,7 +251,15 @@ class MCPServer:
         cwd: str | None = None,
     ) -> MCPServerStdio:
         """Spawn a local process over stdio."""
-        return MCPServerStdio(command, args, name=self._name, env=env, cwd=cwd)
+        return MCPServerStdio(
+            command,
+            args,
+            name=self._name,
+            env=env,
+            cwd=cwd,
+            needs_approval=self._needs_approval,
+            guardrails=self._guardrails,
+        )
 
 
 __all__ = ["MCPServer"]
