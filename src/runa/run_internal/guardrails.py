@@ -24,9 +24,11 @@ async def _run_guardrails(
     complete up to the stop.
 
     `phase` is the whole of what four near-identical binders used to be: whose list to read (the
-    agent's, or `tool`'s), what each entry is handed -- an agent's `(context, agent, value)`, a
-    tool's one `data` -- and which phase the audit trail and a tripwire report. A tool phase also
-    passes `spans`, so its guardrails hang under the call they guard rather than under the run.
+    agent's, or `tool`'s), and which phase the audit trail and a tripwire report. Every entry is
+    called the same way, with the one `value` the caller already has -- what each phase makes of
+    that value is stated once, in `guardrail._checked`, beside the `Phase` that decides it. A
+    tool phase also passes `spans`, so its guardrails hang under the call they guard rather than
+    under the run.
     """
     entries = (run.shape.guardrails if tool is None else tool.guardrails).get(phase, ())
     if not entries:
@@ -35,11 +37,7 @@ async def _run_guardrails(
     results = run.context_wrapper.guardrail_results
     for entry in entries:
         span = scope.open(entry.get_name(), "guardrail")
-        verdict = await (
-            entry.guardrail_function(value)
-            if phase.on_tool
-            else entry.guardrail_function(run.context_wrapper, run.current_agent, value)
-        )
+        verdict = await entry.guardrail_function(value)
         _close_span(span, error="tripwire triggered" if verdict.tripped else None)
         result = GuardrailResult(entry, verdict, verdict.tripped, phase)
         results.record(result)

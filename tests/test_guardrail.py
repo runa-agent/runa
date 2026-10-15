@@ -9,13 +9,10 @@ from helpers import run as run_awaitable
 from runa import Agent, guardrail
 from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase, declared_names
 
-_CTX = cast(Any, None)
-_AGENT = cast(Any, None)
-
 
 def _run(g: BoundGuardrail, value: Any) -> GuardrailVerdict:
     """Call a wrapped guardrail's function directly, awaiting its always-async wrapper."""
-    coro = cast(Awaitable[GuardrailVerdict], g.guardrail_function(_CTX, _AGENT, value))
+    coro = cast(Awaitable[GuardrailVerdict], g.guardrail_function(value))
     return run_awaitable(coro)
 
 

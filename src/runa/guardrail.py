@@ -17,15 +17,16 @@ from typing import TYPE_CHECKING, Any, Literal
 from runa._items import ConversationItem, latest_text, parsed_arguments
 
 _Predicate = Callable[[Any], bool | Awaitable[bool]]
-_GuardrailFunction = Callable[..., Awaitable["GuardrailVerdict"]]
+_GuardrailFunction = Callable[[Any], Awaitable["GuardrailVerdict"]]
 
 
 class Phase(StrEnum):
     """Where a guardrail runs: agent-or-tool by input-or-output, the 2x2 named once.
 
     The phase decides everything the four used to spell out separately: which list an entry
-    belongs to, which call shape its function takes (an agent's `(context, agent, value)`, a
-    tool's `(data)`), which key its results are recorded under, and how a tripwire names it.
+    belongs to, what the one value its function is handed means (the agent's own input or final
+    output, a tool call's `data`), which key its results are recorded under, and how a tripwire
+    names it.
     """
 
     INPUT = "input"
@@ -55,8 +56,8 @@ class GuardrailVerdict:
 
     One shape for all four phases, because `tripped` is the only question anyone asks a verdict.
     Whether the guardrail watched an agent's turn or one tool call is `Phase`'s to say -- the
-    runner branches on `phase.on_tool` for the call shape, `GuardrailResult.phase` records it for
-    the audit trail -- so the verdict doesn't re-encode it as a second type.
+    wrapper reads `phase` to know what the one value it was handed is, `GuardrailResult.phase`
+    records it for the audit trail -- so the verdict doesn't re-encode it as a second type.
     """
 
     output_info: Any
@@ -202,25 +203,25 @@ def _tool_args(data: ToolInputGuardrailData) -> Any:
         return data.context.tool_arguments
 
 
-def _checked(phase: Phase, args: tuple[Any, ...]) -> Any:
-    """The value `phase`'s predicate actually sees, dug out of its call shape's arguments.
+def _checked(phase: Phase, value: Any) -> Any:
+    """The value `phase`'s predicate actually sees, reduced from the one the runner passed.
 
-    An agent guardrail is called `(context, agent, value)` and a tool's `(data)`; an input phase
-    checks what is going in (the latest user text, the call's parsed arguments), an output phase
-    what came back (the agent's final output, the tool's return value).
+    Every guardrail is called with exactly one argument, whatever its phase; what that argument
+    is, is this 2x2's only statement. An agent phase is handed the run's own input or final
+    output, a tool phase one `ToolInputGuardrailData`; an input phase checks what is going in
+    (the latest user text, the call's parsed arguments), an output phase what came back (the
+    agent's final output, the tool's return value).
     """
     if not phase.on_tool:
-        value = args[-1]
         return value if phase.on_output else _checked_input(value)
-    data = args[0]
-    return data.output if phase.on_output else _tool_args(data)
+    return value.output if phase.on_output else _tool_args(value)
 
 
 def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:
-    """Wrap a `(value) -> bool` predicate into the call shape `phase` is invoked with."""
+    """Wrap a `(value) -> bool` predicate into the guardrail function the runner calls."""
 
-    async def wrapper(*args: Any) -> GuardrailVerdict:
-        checked = _checked(phase, args)
+    async def wrapper(value: Any) -> GuardrailVerdict:
+        checked = _checked(phase, value)
         if inspect.iscoroutinefunction(func):
             tripped = await func(checked)
         else:
@@ -316,7 +317,8 @@ def _rebound(entry: BoundGuardrail, phase: Phase) -> BoundGuardrail:
 
     Rebinding is what lets one `@guardrail` object mean "check the agent" on an agent and "check
     the tool call" on a tool. It needs the raw predicate the entry wrapped, so a hand-built entry
-    -- which carries a function in one call shape and nothing to re-wrap -- can't cross over.
+    -- which reads its value the way its own phase does, and carries nothing to re-wrap -- can't
+    cross over.
     """
     if entry.phase is phase:
         return entry
