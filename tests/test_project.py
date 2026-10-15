@@ -224,6 +224,28 @@ def test_use_refuses_a_second_project(tmp_path: Path) -> None:
     assert "second" in str(exc_info.value)
 
 
+def test_loaded_app_refuses_a_second_project_too(tmp_path: Path) -> None:
+    """The scoped shape is refused on the way in, so neither half is left pointing at it.
+
+    This is what keeps the asymmetry in `loaded_app` honest: it restores the import half and
+    leaves the data half, so a block that could open on a *different* root than the process
+    already reads would leave `project` reporting the first app while `runa.db` resolved against
+    the second -- the split-in-two state this module exists to prevent. It cannot, because the
+    root reaches `db.use_project` here as well, and both halves are still the first app's
+    afterwards.
+    """
+    first = scaffold_project("first", root=tmp_path)
+    second = scaffold_project("second", root=tmp_path)
+    generate_agent("SupportAgent", root=first)
+    use(first)
+
+    with pytest.raises(UserError), loaded_app(second):
+        pass  # pragma: no cover -- the block is never entered
+
+    assert db.sqlite_path() == first / "db" / "runa.db"
+    assert [info.name for info in list_agents(root=first)] == ["support_agent"]
+
+
 def test_use_none_clears_both_halves(tmp_path: Path) -> None:
     """`None` is the process boundary a second app really has, and it clears the whole fact."""
     first = scaffold_project("first", root=tmp_path)

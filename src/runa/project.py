@@ -221,6 +221,11 @@ def loaded_app(root: Path) -> Iterator[None]:
     that had already said `use` is still reading that app afterwards, so its one import is still
     its own to undo. That is how a test opens a block inside a `create_app`'s process (see
     `tests/serve/test_serve.py`) without stranding the import `create_app` made.
+
+    Restoring one half and keeping the other is only safe because the halves cannot name two
+    different apps: `db.use_project` is called here too, so a block opening on a *different* root
+    than the process already reads is refused before either half moves. The two halves this exits
+    with are therefore the same app's, never one each.
     """
     global _root, _imported
     db.use_project(root)
