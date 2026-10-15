@@ -22,6 +22,7 @@ from runa.session.store import (
     SessionNotFound,
     SessionSummary,
     as_timestamp,
+    listing_rows,
     to_message,
 )
 
@@ -102,14 +103,19 @@ class EphemeralSessionStore:
     """The in-process `SessionStore`: the read side of this process's session history."""
 
     def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
-        """Return this process's sessions, most recently updated first."""
-        matches = [
-            SessionSummary(id=session_id, updated_at=row.updated_at)
-            for session_id, row in _sessions.items()
-            if agent is None or session_id == agent or session_id.startswith(f"{agent}-")
-        ]
-        matches.sort(key=lambda summary: (summary.updated_at, summary.id), reverse=True)
-        return matches
+        """Return this process's sessions, most recently updated first.
+
+        Which sessions those are and what order they come back in is `session/store.py`'s rule,
+        applied here by `listing_rows` -- the Python half of the `listing_clause` the two SQL
+        adapters bind, so this listing can't drift from theirs.
+        """
+        return listing_rows(
+            (
+                SessionSummary(id=session_id, updated_at=row.updated_at)
+                for session_id, row in _sessions.items()
+            ),
+            agent,
+        )
 
     def messages(self, session_id: str) -> list[SessionMessage]:
         """Return `session_id`'s messages, oldest first."""

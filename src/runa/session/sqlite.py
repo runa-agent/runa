@@ -38,8 +38,8 @@ from runa.session.store import (
     SessionMessage,
     SessionNotFound,
     SessionSummary,
-    agent_filter,
     as_timestamp,
+    listing_clause,
     to_message,
 )
 
@@ -197,12 +197,8 @@ class SQLiteSessionStore:
 
     def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this file's sessions, most recently updated first."""
-        where, params = agent_filter(agent, SQLITE)
-        rows = self._query(
-            f"SELECT session_id, updated_at FROM {SESSIONS.name} {where}"
-            "ORDER BY updated_at DESC, session_id DESC",
-            params,
-        )
+        clause, params = listing_clause(agent, SQLITE)
+        rows = self._query(f"SELECT session_id, updated_at FROM {SESSIONS.name} {clause}", params)
         return [
             SessionSummary(id=row["session_id"], updated_at=as_timestamp(row["updated_at"]))
             for row in rows

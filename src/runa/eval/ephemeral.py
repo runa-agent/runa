@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from runa.eval.report import Report
-from runa.eval.store import CASES, EvalRun, case_values, to_run
+from runa.eval.store import CASES, EvalRun, baseline_row, case_values, to_run
 
 _runs: list[dict[str, Any]] = []
 _cases: dict[int, list[dict[str, Any]]] = {}
@@ -61,17 +61,13 @@ class EphemeralEvalStore:
     def baseline(self, agent_name: str, *, before: int | None = None) -> dict[str, bool] | None:
         """Map each input of `agent_name`'s latest run to whether it passed.
 
-        `eval/store.py`'s `baseline_clause` states this for the two adapters that speak SQL; this
-        is the same sentence in Python, including `before` being strictly exclusive.
+        Which run that is is `eval/store.py`'s rule, applied here by `baseline_row` -- the Python
+        half of the `baseline_clause` the two SQL adapters bind, so a baseline on a laptop and one
+        in CI are the same run.
         """
-        candidates = [
-            run
-            for run in _runs
-            if run["agent_name"] == agent_name and (before is None or run["id"] < before)
-        ]
-        if not candidates:
+        latest = baseline_row(_runs, agent_name, before)
+        if latest is None:
             return None
-        latest = max(candidates, key=lambda run: run["id"])
         return {case["input"]: bool(case["passed"]) for case in _cases.get(latest["id"], [])}
 
 

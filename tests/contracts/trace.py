@@ -91,8 +91,8 @@ def check_list_breaks_a_start_time_tie_on_the_trace_id(store: TraceStore, tag: s
 
     `start_time` alone leaves the order to whatever each backend happens to return, which is how
     the Sessions listing once came out differently on a laptop and on a shared deployment. The
-    tie-break lives in `tracing/store.py`'s `listing_clause`, so this is the check that it is
-    actually the same tie-break the ephemeral store sorts by.
+    tie-break lives in `tracing/store.py`, as `listing_clause` for the backends that speak SQL and
+    `listing_rows` for the one that doesn't, so this is the check that the two agree.
     """
     for suffix in ("b", "a", "c"):
         store.save(_trace(f"{tag}-{suffix}", name=tag, start_time=1.0))

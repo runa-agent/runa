@@ -20,7 +20,7 @@ from contracts.session import CONTRACT, Check, SessionPair
 
 from runa import db
 from runa.db.schema import POSTGRES, SQLITE, Dialect
-from runa.session.store import agent_filter
+from runa.session.store import listing_clause
 
 
 @pytest.fixture(params=["sqlite", "ephemeral"])
@@ -77,7 +77,7 @@ def test_listing_breaks_updated_at_ties_by_session_id_descending(project: None) 
 
 
 @pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
-def test_agent_filter_carries_its_escape_clause_in_every_dialect(dialect: Dialect) -> None:
+def test_listing_clause_carries_its_escape_clause_in_every_dialect(dialect: Dialect) -> None:
     """The escaped pattern and the `ESCAPE` clause that gives it meaning come back together.
 
     Both are one value because an adapter handed the pattern alone can bind it without the clause,
@@ -85,13 +85,20 @@ def test_agent_filter_carries_its_escape_clause_in_every_dialect(dialect: Dialec
     its default escape character. Asserted per dialect rather than per adapter, since the live
     Postgres half of the contract is `tests/test_postgres.py`.
     """
-    where, params = agent_filter("a_b", dialect)
+    clause, params = listing_clause("a_b", dialect)
 
-    assert "ESCAPE '\\'" in where
+    assert "ESCAPE '\\'" in clause
     assert params == ("a_b", "a\\_b-%")
 
 
 @pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
-def test_agent_filter_is_no_clause_at_all_for_no_agent(dialect: Dialect) -> None:
-    """`agent=None` filters nothing, so a listing composes one string either way."""
-    assert agent_filter(None, dialect) == ("", ())
+def test_listing_clause_orders_the_same_way_with_or_without_an_agent(dialect: Dialect) -> None:
+    """The tie-break rides along with the filter, so no adapter appends an `ORDER BY` of its own.
+
+    It used to: both of them did, and one broke ties on `rowid` where the other broke them on
+    `session_id`.
+    """
+    order = "ORDER BY updated_at DESC, session_id DESC"
+
+    assert listing_clause(None, dialect) == (order, ())
+    assert listing_clause("SupportAgent", dialect)[0].endswith(f" {order}")

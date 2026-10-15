@@ -6,9 +6,10 @@ on a laptop. `tests/test_postgres_observability.py` runs them against `PostgresE
 
 `test_adds_trace_id_to_an_older_local_file` stays here, outside the contract: a shared database is
 created by whichever replica connects first and has always had the column, where a local file can
-predate it. `baseline_clause` is asserted per dialect for the same reason `agent_filter` is in
+predate it. `baseline_clause` is asserted per dialect for the same reason `listing_clause` is in
 `tests/test_session_store.py`: both SQL adapters bind what it returns, and only one of them can be
-run without a server.
+run without a server. Its Python twin, `baseline_row`, needs no test of its own here -- the
+contract runs over the ephemeral store, which is the adapter that calls it.
 """
 
 import sqlite3

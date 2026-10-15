@@ -82,9 +82,9 @@ def test_placeholders_follow_the_dialect_and_the_column_count() -> None:
 def test_one_placeholder_is_the_whole_of_what_a_predicate_needs_of_a_dialect() -> None:
     """The substitution the three shared `WHERE` fragments are written against, and the only one.
 
-    `session/store.py`'s `agent_filter`, `tracing/store.py`'s `listing_clause` and
-    `eval/store.py`'s `baseline_clause` each ask for a numbered placeholder and nothing else, so
-    none of them branches on `numbered_placeholders` itself.
+    `session/store.py`'s and `tracing/store.py`'s `listing_clause` and `eval/store.py`'s
+    `baseline_clause` each ask for a numbered placeholder and nothing else, so none of them
+    branches on `numbered_placeholders` itself.
     """
     assert (SQLITE.placeholder(1), SQLITE.placeholder(3)) == ("?", "?")
     assert (POSTGRES.placeholder(1), POSTGRES.placeholder(3)) == ("$1", "$3")

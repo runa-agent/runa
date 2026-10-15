@@ -16,6 +16,7 @@ from typing import Any
 from runa.tracing.store import (
     SPANS,
     TRACES,
+    listing_rows,
     span_values,
     to_trace,
     trace_values,
@@ -63,19 +64,14 @@ class EphemeralTraceStore:
     ) -> list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered.
 
-        The one query no SQL fragment can be shared with: `listing_clause` states the same filter,
-        order and cap for the two adapters that speak SQL, and this is it said in Python, down to
-        breaking ties on the trace id so a listing here matches a listing there.
+        The one query no SQL fragment can be shared with, so `tracing/store.py` owns a Python one
+        too: `listing_rows` is `listing_clause`'s twin, written beside it, and applying it here is
+        what keeps this listing the same listing the two SQL adapters return.
         """
-        rows = [
-            row
-            for row in _traces.values()
-            if (agent is None or row["name"] == agent)
-            and (status is None or row["status"] == status)
-            and (session_id is None or row["session_id"] == session_id)
-        ]
-        rows.sort(key=lambda row: (row["start_time"], row["id"]), reverse=True)
-        return [to_trace(row, self._span_rows(row["id"])) for row in rows[:limit]]
+        rows = listing_rows(
+            _traces.values(), limit=limit, agent=agent, status=status, session_id=session_id
+        )
+        return [to_trace(row, self._span_rows(row["id"])) for row in rows]
 
     def _span_rows(self, trace_id: str) -> list[dict[str, Any]]:
         return sorted(_spans.get(trace_id, []), key=lambda span: span["start_time"])

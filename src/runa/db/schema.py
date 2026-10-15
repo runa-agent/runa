@@ -22,14 +22,22 @@ the eight adapters it replaced. The only query fragments here are `Dialect.place
 
 A concern whose adapters must phrase one predicate identically keeps that fragment beside its own
 tables, as a function of the values and the `Dialect` returning the clause and what it binds.
-There are three: `session/store.py`'s `agent_filter`, `tracing/store.py`'s `listing_clause` and
+There are three: `session/store.py`'s `listing_clause`, `tracing/store.py`'s `listing_clause` and
 `eval/store.py`'s `baseline_clause`. Each returns the whole fragment rather than a piece of one --
-`agent_filter` because an escaped `LIKE` pattern is meaningless without the `ESCAPE` clause naming
+the session one because an escaped `LIKE` pattern is meaningless without the `ESCAPE` clause naming
 the escape character, the other two because a numbered placeholder depends on how many values came
 before it, so a caller handed half a clause has to re-derive the count. Those are predicates a
 concern owns, not a query builder growing here: each states one sentence of policy ("the latest run
 for this agent, older than this one"), and the two adapters that must agree on it read it from one
 place instead of phrasing it twice.
+
+Three adapters, though, not two: the third is the ephemeral store, which answers the same question
+in Python over rows it keeps in the shape these tables declare. So each of those three clauses has
+a twin in the same file -- `listing_rows`, `listing_rows`, `baseline_row` -- taking the rows rather
+than a `Dialect` and returning the ones the clause would have selected. The policy is still stated
+twice, because SQL and Python genuinely are two languages, but both statements are on one screen,
+where changing one and not the other is visible. What would close that last gap is a query builder,
+and a builder able to express these would be the shallower module described above.
 
 Declaring a table is only half of owning it: `db/runa.db` outlives installs by design (that is the
 whole point of `--continue`, of trace history, of eval baselines), so a column added to a

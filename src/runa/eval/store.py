@@ -14,10 +14,13 @@ once, so `passed` cannot come back as SQLite's `0`/`1` from one store and a `boo
 
 `baseline_clause` is here for the same reason: which run is "the baseline" is this module's rule,
 not each backend's, so both SQL adapters select it with one clause rather than two phrasings of
-one sentence.
+one sentence. `baseline_row` is that same sentence in Python, for `eval/ephemeral.py`, which has
+no SQL to bind it to -- written beside the clause, because a rule stated in two languages in two
+files is a rule nobody reads twice.
 """
 
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
@@ -126,6 +129,25 @@ def baseline_clause(
     return f"{clause} ORDER BY id DESC LIMIT 1", params
 
 
+def baseline_row(
+    runs: Iterable[dict[str, Any]], agent_name: str, before: int | None
+) -> dict[str, Any] | None:
+    """`baseline_clause` said in Python, for the adapter whose runs never reach a database.
+
+    The same sentence over the rows `eval/ephemeral.py` keeps -- the newest run of `agent_name`,
+    strictly older than `before` when there is one, `None` when there is no such run. Two
+    renderings because two languages need them; one file, because this is the rule that decides
+    what `runa eval` calls a regression, and a backend that drew the boundary differently would
+    be flagging different cases on a laptop than in CI.
+    """
+    candidates = [
+        run
+        for run in runs
+        if run["agent_name"] == agent_name and (before is None or run["id"] < before)
+    ]
+    return max(candidates, key=lambda run: run["id"], default=None)
+
+
 def case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
     """One graded `case`'s column values, in `CASES.column_names` order."""
     return (
@@ -174,6 +196,7 @@ __all__ = [
     "EvalRun",
     "EvalStore",
     "baseline_clause",
+    "baseline_row",
     "case_values",
     "to_case",
     "to_run",
