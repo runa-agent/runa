@@ -1,4 +1,4 @@
-.PHONY: install format lint typecheck test coverage audit check docs hello tour ui-demo examples clean changelog release
+.PHONY: install format lint typecheck test coverage audit check dist-check docs hello tour ui-demo examples clean changelog release
 
 install:
 	uv sync
@@ -34,6 +34,17 @@ check:
 	$(MAKE) lint
 	$(MAKE) typecheck
 	$(MAKE) test
+
+# Everything above runs against the working tree, where a file that was never committed imports
+# as happily as one that was. This unpacks HEAD the way a clone, a release tag and the published
+# sdist all get it -- `git archive`, nothing read from disk -- and imports every module in it, so
+# a file left out of a commit fails here instead of in someone else's checkout.
+dist-check:
+	rm -rf build/head && mkdir -p build/head
+	git archive HEAD | tar -x -C build/head
+	uv run --project build/head python -c \
+		"import importlib, pkgutil, runa; \
+		[importlib.import_module(m.name) for m in pkgutil.walk_packages(runa.__path__, 'runa.')]"
 
 docs:
 	uv run zensical build --strict

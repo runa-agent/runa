@@ -55,6 +55,25 @@ jobs:
       - name: Run checks
         run: make check
 
+  # Separate from `check`, because it asks a question the working tree cannot answer: whether
+  # what git has is what runs. A file every module imports but nobody committed passes `make
+  # check` on the machine that wrote it and breaks every clone.
+  dist:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Import what HEAD ships
+        run: make dist-check
+
   audit:
     runs-on: ubuntu-latest
 
