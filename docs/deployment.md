@@ -46,6 +46,14 @@ curl -X POST http://127.0.0.1:8000/agents/support_agent/runs \
 }
 ```
 
+Startup does the work a first request would otherwise do: the server resolves every agent class
+as it boots (so a broken `app/agents/` fails the rollout, not a user's turn) and ingests the
+[knowledge](knowledge.md) corpus of each agent that declares one, which is a read of every file
+and an embedding call for every chunk. Both are costs a deploy should pay, not a user waiting on
+an answer. The server accepts no connections until that finishes, so `/health` answering is
+already the signal that a replica is warm -- and an agent with `knowledge` set now needs its
+embeddings credential at boot rather than at its first retrieval.
+
 `status` is the `Run`'s own, so a client tells "answered" from "paused for approval" from
 "failed" without parsing prose, and `trace_id` is the handle for `runa traces show` when someone
 reports that the answer was wrong.

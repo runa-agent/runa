@@ -15,7 +15,9 @@ Four decisions this makes for you, each the one a production deployment wants:
   it per request would re-run `main.py` and re-initialize whatever the app keeps at module level --
   a client, a pool, a cache -- underneath runs already holding the old one. So `create_app`
   imports the app once, and a server picks up an edit to `app/agents/` by restarting (which is
-  what `uvicorn asgi:app --reload` already does, properly, from the outside).
+  what `uvicorn asgi:app --reload` already does, properly, from the outside). Whatever else those
+  agents need before they can answer is startup's too: `_ingest_knowledge` embeds their
+  `knowledge=` corpus here, so a deploy's cost is paid by the deploy and not by its first user.
 * **Conversation state is a `session`, never `self.history`.** A `session_id` in the request body
   is the whole continuity mechanism, and `runa.db` decides where that history lives: the local
   `db/runa.db` by default, the shared Postgres once `RUNA_DATABASE_URL` is set, which is what
@@ -43,7 +45,8 @@ quietly sharing the last one's imports and database (see `project.use`).
 
 import json
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Self
 
@@ -227,7 +230,17 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         if not _constant_time_equal(token, api_key):
             raise HTTPException(status_code=403, detail="invalid API key")
 
-    app = FastAPI(title="runa serve", description="This Runa app's agents, over HTTP.")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """Ingest the agents' knowledge before the first request, on the loop that serves it."""
+        await _ingest_knowledge(agent_classes.values())
+        yield
+
+    app = FastAPI(
+        title="runa serve",
+        description="This Runa app's agents, over HTTP.",
+        lifespan=lifespan,
+    )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -309,6 +322,39 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
 
     app.include_router(api)
     return app
+
+
+async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
+    """Ingest every declared agent's knowledge corpus, before any request can need it.
+
+    The same choice `create_app` already makes by resolving the agent classes at startup, applied
+    to the other startup-shaped cost an app can carry: reading a directory of documents and
+    embedding every chunk of it. Left to `Knowledge.search`'s own lazy ingest, that lands inside
+    whichever user's turn arrives first after a rollout -- metered, corpus-sized, and attributed
+    to a `retrieval` span rather than to the deploy that caused it. A startup that fails on a
+    missing embeddings credential is the same trade: found by the thing that rolls out.
+
+    One throwaway `Agent` per class, for the `knowledge=` its constructor resolves (`"auto"`
+    builds a `Knowledge` there, see `Agent.__init__`). Agents sharing one corpus cost nothing
+    extra: `ingest` asks the store whether it already holds what it would write, so the second
+    one pays a `stat` per file and a version read. An agent in `knowledge="llm"` mode keeps its
+    `Knowledge` inside the search tool it hands the model and so isn't warmed here -- that cost
+    lands on a tool call the model chose, not on every turn.
+
+    `KnowledgeLike` only promises `search`, so a wholesale custom `knowledge=` object is ingested
+    only if it offers an `ingest` of its own; one backed by a service that indexes elsewhere has
+    nothing to do at startup.
+    """
+    for agent_cls in agent_classes:
+        knowledge = agent_cls().knowledge
+        ingest = getattr(knowledge, "ingest", None)
+        if ingest is None:
+            continue
+        chunks = await ingest()
+        if chunks:
+            # Only when it actually wrote: zero is the usual answer (a corpus the store already
+            # held), and a line per agent per boot saying nothing happened is noise.
+            logger.info("ingested %d knowledge chunks for %s", chunks, declared_name(agent_cls))
 
 
 def _token_text(event: Any) -> str | None:

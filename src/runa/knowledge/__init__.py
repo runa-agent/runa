@@ -14,6 +14,9 @@ Whether the corpus has been ingested is the store's answer, not a flag on the `K
 `Agent(knowledge="auto")` builds a fresh `Knowledge` per agent and `runa.serve` builds an agent
 per request, so instance state would have every request re-embed the whole directory into the one
 shared store. `KnowledgeStore.reset`/`.stamp`/`.version` is where that decision lives instead.
+Which also makes `ingest` idempotent, and therefore the only ingest verb: `search` calls it, and
+so does `serve.create_app` at startup, so the first request after a deploy doesn't pay for the
+whole corpus.
 The two pieces of process-local state here answer different questions: `_digests` answers "what
 would I write", a pure function of the files on disk, so an empty cache costs a re-read and never
 a re-embed; `_ingest_locks` keeps one process from embedding one corpus twice at once.
@@ -211,19 +214,39 @@ class Knowledge:
         return await asyncio.to_thread(_digest, self.directory, self._header)
 
     async def ingest(self) -> int:
-        """Rebuild the knowledge base from `self.directory`, returning how many chunks it stored.
+        """Bring the store up to date with `self.directory`, returning how many chunks it wrote.
 
-        A full rebuild every time: discovers supported files, extracts their text, chunks it,
-        embeds every chunk, empties whatever was stored before, and stores the fresh set under
-        this corpus's fingerprint, so editing or removing a source file never leaves stale chunks
-        behind, with no file-tracking table to keep in sync. Safe to call when `self.directory`
-        doesn't exist or has no supported files: stores nothing rather than raising, and an empty
-        corpus is still a fingerprinted one.
+        Zero means there was nothing to write: the store already held this corpus, or the corpus
+        is empty. Idempotent on purpose, because every caller wants the same thing -- the store
+        holding what the directory says -- and no caller knows whether the last request, the last
+        process or another replica got there first. So this is the one ingest verb: what `search`
+        calls before a query, and what `runa.serve` calls at startup to keep the cold-start cost
+        off a user's first turn. A cheap "if it's stale" path beside an expensive "rebuild now"
+        one would be two ways to ask one question, and the expensive one is the answer a
+        deployment would reach for by name and then pay for on every replica's every restart.
 
-        One ingest of one corpus at a time per process, so a manual rebuild and the automatic one
-        behind a `search` can't interleave their writes into the one store they share.
+        When a rebuild *is* called for it is a full one: discovers supported files, extracts their
+        text, chunks it, embeds every chunk, empties whatever was stored before, and stores the
+        fresh set under this corpus's fingerprint, so editing or removing a source file never
+        leaves stale chunks behind, with no file-tracking table to keep in sync. Safe to call when
+        `self.directory` doesn't exist or has no supported files: stores nothing rather than
+        raising, and an empty corpus is still a fingerprinted one.
+
+        The question asked is "does the store hold what I would write", not "have I ingested
+        yet": the answer is the store's, so the second `Knowledge` over an already-ingested
+        corpus searches it instead of rebuilding it -- which is what a per-request `Agent`
+        (`runa.serve`) and every replica after the first are. The version is read twice, once
+        before taking the lock and once under it. The first read is the common case, where the
+        corpus is current and a caller pays only for that one question; the second is what keeps
+        a queue of concurrent turns against a cold store from each rebuilding what the turn ahead
+        of it just finished.
         """
+        fingerprint = await self._fingerprint()
+        if await self._store.version() == fingerprint:
+            return 0
         async with self._lock():
+            if await self._store.version() == fingerprint:
+                return 0
             return await self._rebuild()
 
     async def _rebuild(self) -> int:
@@ -270,34 +293,17 @@ class Knowledge:
         await self._store.stamp(fingerprint)
         return len(chunks)
 
-    async def _ingest_if_stale(self) -> None:
-        """Rebuild the corpus unless the store already holds it: `search`'s first step.
-
-        The version is read twice, once before taking the lock and once under it. The first read
-        is the common case, where the corpus is current and a search pays only for that one
-        question; the second is what keeps a queue of concurrent turns against a cold store from
-        each rebuilding what the turn ahead of it just finished.
-        """
-        fingerprint = await self._fingerprint()
-        if await self._store.version() == fingerprint:
-            return
-        async with self._lock():
-            if await self._store.version() != fingerprint:
-                await self._rebuild()
-
     async def search(self, query: str, *, k: int = 5) -> list[KnowledgeMatch]:
         """Return the `k` chunks closest in meaning to `query`, nearest first.
 
         Ingests first when the store doesn't already hold this corpus, so the common case
         (`Knowledge()` attached to an `Agent`) needs no manual `.ingest()` call, and an edited
-        source file is picked up on the next search rather than on the next manual rebuild.
-
-        The question asked is "does the store hold what I would write", not "have I ingested
-        yet": the answer is the store's, so the second `Knowledge` over an already-ingested
-        corpus searches it instead of rebuilding it -- which is what a per-request `Agent`
-        (`runa.serve`) and every replica after the first are.
+        source file is picked up on the next search rather than on the next manual rebuild. That
+        call is the safety net rather than the plan: a served deployment has already ingested at
+        startup (`serve.create_app`), so what a turn usually pays here is one `stat` per file and
+        one version read.
         """
-        await self._ingest_if_stale()
+        await self.ingest()
         (vector,) = await embed([query], model=self.model)
         return await self._store.search(embedding=vector, k=k)
 

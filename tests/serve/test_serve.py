@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from runa import db
+from runa import knowledge as knowledge_module
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.project import AppLoadError, iter_agent_classes, loaded_app
@@ -189,6 +190,43 @@ def test_a_broken_app_stops_the_server_from_starting(project: Path) -> None:
 
     with pytest.raises(AppLoadError):
         create_app(project, api_key="secret-token")
+
+
+def test_knowledge_is_ingested_at_startup_not_inside_a_users_turn(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A corpus-sized read and embed belongs to the rollout, not to the first request after it.
+
+    `Knowledge.search` ingests lazily, so without this the whole directory is read and embedded
+    inside whichever turn happens to arrive first on a cold store -- a metered cost on a user's
+    latency path, reported as a `retrieval` span. Startup is where this server already pays for
+    what its agents need (it resolves their classes there for the same reason), so it pays this
+    too, on the loop that will serve the requests.
+    """
+    corpus = project / "app" / "knowledge"
+    corpus.mkdir(parents=True, exist_ok=True)
+    (corpus / "pets.md").write_text("cats are great pets")
+    agent_file = project / "app" / "agents" / "support_agent.py"
+    agent_file.write_text(
+        agent_file.read_text().replace(
+            '    name = "support_agent"', '    name = "support_agent"\n    knowledge = "auto"'
+        )
+    )
+    embedded: list[str] = []
+
+    async def fake_embed(texts: list[str], *, model: str = "") -> list[list[float]]:
+        embedded.extend(texts)
+        return [[0.0] * 1536 for _ in texts]
+
+    monkeypatch.setattr(knowledge_module, "embed", fake_embed)
+
+    app = create_app(project, api_key="secret-token")
+
+    assert embedded == []  # building the app reads the agents; starting it embeds the corpus
+    with TestClient(app):
+        pass
+
+    assert embedded == ["cats are great pets"]
 
 
 def _paused_body(client: TestClient) -> dict[str, Any]:

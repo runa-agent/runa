@@ -494,8 +494,27 @@ def test_fingerprint_runs_off_the_event_loop(
     assert hashed_on and loop_thread not in hashed_on
 
 
+def test_ingest_twice_embeds_an_unchanged_corpus_once(tmp_path: Path) -> None:
+    """`ingest()` asks the store what it holds, so calling it again is free, not a second bill.
+
+    The property that lets `serve.create_app` ingest at startup and `search` ingest lazily be the
+    same call: every replica's boot, and every agent sharing one corpus, would otherwise re-embed
+    the whole directory under the name of warming it up.
+    """
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    know = _knowledge(tmp_path, source_dir)
+
+    assert asyncio.run(know.ingest()) == 1
+    before = list(_embedded)
+
+    assert asyncio.run(_knowledge(tmp_path, source_dir).ingest()) == 0
+    assert _embedded == before
+
+
 def test_ingest_again_reflects_edited_and_removed_files(tmp_path: Path) -> None:
-    """Calling `ingest()` again fully rebuilds -- edits and removals aren't left as stale chunks."""
+    """An edited corpus is rebuilt in full -- edits and removals aren't left as stale chunks."""
     source_dir = tmp_path / "knowledge"
     source_dir.mkdir()
     pets_file = source_dir / "pets.md"

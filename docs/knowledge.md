@@ -62,13 +62,17 @@ needs `OPENAI_API_KEY` as well. See [Where embeddings go](deployment.md#where-em
 send it through a gateway instead.
 
 ```python
-await knowledge.ingest()  # returns how many chunks it stored
+await knowledge.ingest()  # returns how many chunks it wrote; 0 if the store was already current
 ```
 
-Calling `.ingest()` yourself forces a rebuild, which you need only to re-embed a corpus whose
-files did not change. It is always a full rebuild: it empties whatever was stored before and
-re-chunks and re-embeds every supported file currently in the directory, so an edited or deleted
-file never leaves stale chunks behind.
+`.ingest()` brings the store up to date with the directory, and asks the same fingerprint
+question `.search` does, so calling it is idempotent: zero means there was nothing to write.
+That is what makes it safe to call where it costs nothing to be early -- at startup, in a
+migration, after writing a file -- and `runa serve` does exactly that, ingesting every agent's
+corpus before it accepts a request, so the first user after a deploy is not the one who pays for
+embedding it. When a rebuild is called for it is a full one: it empties whatever was stored
+before and re-chunks and re-embeds every supported file currently in the directory, so an edited
+or deleted file never leaves stale chunks behind.
 
 ## A Different Store
 

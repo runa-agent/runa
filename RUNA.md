@@ -292,7 +292,10 @@ a non-default `directory`/`db_path`/`model`/`store`. `Knowledge()` means `app/kn
 and vector storage are entirely internal; put Markdown/PDF/text/CSV files under `app/knowledge/`
 and no manual `.ingest()` call is needed either: `.search` ingests whenever the store doesn't
 already hold the corpus it would write, so a first run ingests, an edited file re-ingests, and
-nothing else does -- not a second process, and not the next request's `Agent`. Pass
+nothing else does -- not a second process, and not the next request's `Agent`. `ingest()` asks
+that same question, which is why it's one verb rather than a cheap check beside a forced rebuild:
+idempotent, so `runa serve` calls it for every declared agent at startup and a deploy's first
+request doesn't pay to embed the corpus. Pass
 `Knowledge("some/other/path")` for a non-default source directory.
 
 `Knowledge` is application-scoped, not `user_id`-scoped, and its source of truth is a directory
