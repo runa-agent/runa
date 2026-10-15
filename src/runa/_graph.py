@@ -10,8 +10,9 @@ a paused run through; only the recursion stays here, because drawing needs each 
 MCP servers too, which a walk over agents alone doesn't carry.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from runa.agent_like import AgentLike
 from runa.handoff import Mode, subagent_edges
 
 if TYPE_CHECKING:
@@ -22,35 +23,29 @@ _EDGE_STYLE: dict[Mode, str] = {"handoff": "dashed", "delegate": "dotted"}
 here, not a plausible-looking edge in the wrong style."""
 
 
-def _agent_node_id(agent: Any) -> str:
+def _agent_node_id(agent: AgentLike) -> str:
     return f"agent_{id(agent)}"
 
 
-def _add_agent(dot: Digraph, agent: Any, seen: set[int]) -> None:
+def _add_agent(dot: Digraph, agent: AgentLike, seen: set[int]) -> None:
     if id(agent) in seen:
         return
     seen.add(id(agent))
     node_id = _agent_node_id(agent)
     dot.node(node_id, agent.name, shape="ellipse", style="filled", fillcolor="lightblue")
 
-    for tool in getattr(agent, "tools", []) or []:
-        if getattr(tool, "delegate", None) is not None:
+    for tool in agent.tools:
+        if tool.delegate is not None:
             continue  # an agent, drawn as one by the subagent loop below, not a tool box
         tool_id = f"tool_{id(tool)}"
-        dot.node(
-            tool_id,
-            getattr(tool, "name", str(tool)),
-            shape="box",
-            style="filled",
-            fillcolor="lightyellow",
-        )
+        dot.node(tool_id, tool.name, shape="box", style="filled", fillcolor="lightyellow")
         dot.edge(node_id, tool_id)
 
-    for server in getattr(agent, "mcp_servers", []) or []:
+    for server in agent.mcp_servers:
         server_id = f"mcp_{id(server)}"
         dot.node(
             server_id,
-            getattr(server, "name", "mcp"),
+            server.name,
             shape="box",
             style="filled,dashed",
             fillcolor="lightgrey",
@@ -62,7 +57,7 @@ def _add_agent(dot: Digraph, agent: Any, seen: set[int]) -> None:
         _add_agent(dot, target, seen)
 
 
-def draw_graph(agent: Any) -> Digraph:
+def draw_graph(agent: AgentLike) -> Digraph:
     """Render `agent`, and its tools/subagents/MCP servers (recursively), as a Graphviz `Digraph`.
 
     Building it runs no Graphviz executable: only `.render()` (or Jupyter's inline image) needs

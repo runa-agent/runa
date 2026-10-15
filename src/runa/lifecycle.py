@@ -12,17 +12,25 @@ at DEBUG only, and even there it goes through `runa.tracing`'s redact/truncate p
 The `Logger` these write to is `runa._log`'s, not this module's: `logger` is a leaf every layer
 can import without taking `Hooks` with it, and keeping it there is what lets this module read
 the tracing policy at the top of the file rather than inside each method.
+
+The `agent` every callback is handed is an `AgentLike` (`runa.agent_like`), so a `Hooks` subclass
+reads it against a type rather than hoping for an attribute. That import is type-only, and has to
+be: `AgentLike` names the `hooks` an agent carries, which is the class below -- the two sides of
+one seam, written down in the direction an agent is read.
 """
 
 import logging
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from runa._items import ConversationItem
 from runa._log import logger
 from runa._types import RunContextWrapper
 from runa.tool import FunctionTool
 from runa.tracing.config import apply_policy, policy
+
+if TYPE_CHECKING:
+    from runa.agent_like import AgentLike
 
 __all__ = [
     "Hooks",
@@ -54,40 +62,44 @@ class Hooks[TContext]:
     `LoggingHooks` (below) is what a run with no `hooks=` gets.
     """
 
-    async def on_agent_start(self, context: RunContextWrapper[TContext], agent: Any) -> None:
+    async def on_agent_start(self, context: RunContextWrapper[TContext], agent: AgentLike) -> None:
         """Called right before `agent` starts (or resumes, after a handoff) running."""
 
     async def on_agent_end(
-        self, context: RunContextWrapper[TContext], agent: Any, output: Any
+        self, context: RunContextWrapper[TContext], agent: AgentLike, output: Any
     ) -> None:
         """Called once `agent` has produced its final output for the run."""
 
     async def on_handoff(
-        self, context: RunContextWrapper[TContext], from_agent: Any, to_agent: Any
+        self, context: RunContextWrapper[TContext], from_agent: AgentLike, to_agent: AgentLike
     ) -> None:
         """Called when `from_agent` hands the run off to `to_agent`."""
 
     async def on_tool_start(
-        self, context: RunContextWrapper[TContext], agent: Any, tool: FunctionTool
+        self, context: RunContextWrapper[TContext], agent: AgentLike, tool: FunctionTool
     ) -> None:
         """Called right before `tool` runs."""
 
     async def on_tool_end(
-        self, context: RunContextWrapper[TContext], agent: Any, tool: FunctionTool, result: object
+        self,
+        context: RunContextWrapper[TContext],
+        agent: AgentLike,
+        tool: FunctionTool,
+        result: object,
     ) -> None:
         """Called once `tool` has returned (or raised) `result`."""
 
     async def on_llm_start(
         self,
         context: RunContextWrapper[TContext],
-        agent: Any,
+        agent: AgentLike,
         system_prompt: str | None,
         input_items: list[ConversationItem],
     ) -> None:
         """Called right before `agent` calls the model."""
 
     async def on_llm_end(
-        self, context: RunContextWrapper[TContext], agent: Any, response: Any
+        self, context: RunContextWrapper[TContext], agent: AgentLike, response: Any
     ) -> None:
         """Called once the model call has returned `response`."""
 
@@ -124,8 +136,10 @@ class _Dispatch[TContext]:
 
         async def fire(context: RunContextWrapper[TContext], *args: Any) -> None:
             await getattr(self.run_hooks, event)(context, *args)
-            agent = args[self._NOTIFIED.get(event, 0)]
-            if (own := getattr(agent, "hooks", None)) is not None:
+            # Which argument is the agent is per-event (`_NOTIFIED`), so it arrives untyped; the
+            # annotation is what says the thing it was read out of was an agent all along.
+            agent: AgentLike = args[self._NOTIFIED.get(event, 0)]
+            if (own := agent.hooks) is not None:
                 await getattr(own, event)(context, *args)
 
         return fire
@@ -139,11 +153,13 @@ class LoggingHooks(Hooks[Any]):
     to an `Agent` subclass's `hooks` instead, it logs that one agent's events.
     """
 
-    async def on_agent_start(self, context: RunContextWrapper[Any], agent: Any) -> None:
+    async def on_agent_start(self, context: RunContextWrapper[Any], agent: AgentLike) -> None:
         """Log that `agent` is about to run."""
         logger.info("agent start: %s", agent.name)
 
-    async def on_agent_end(self, context: RunContextWrapper[Any], agent: Any, output: Any) -> None:
+    async def on_agent_end(
+        self, context: RunContextWrapper[Any], agent: AgentLike, output: Any
+    ) -> None:
         """Log that `agent` finished: its name at INFO, its output at DEBUG if policy allows."""
         logger.info("agent end: %s", agent.name)
         active = policy()
@@ -155,19 +171,19 @@ class LoggingHooks(Hooks[Any]):
             )
 
     async def on_handoff(
-        self, context: RunContextWrapper[Any], from_agent: Any, to_agent: Any
+        self, context: RunContextWrapper[Any], from_agent: AgentLike, to_agent: AgentLike
     ) -> None:
         """Log a handoff as `from_agent -> to_agent`."""
         logger.info("handoff: %s -> %s", from_agent.name, to_agent.name)
 
     async def on_tool_start(
-        self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool
+        self, context: RunContextWrapper[Any], agent: AgentLike, tool: FunctionTool
     ) -> None:
         """Log that `tool` is about to run."""
         logger.info("tool start: %s (%s)", tool.name, agent.name)
 
     async def on_tool_end(
-        self, context: RunContextWrapper[Any], agent: Any, tool: FunctionTool, result: object
+        self, context: RunContextWrapper[Any], agent: AgentLike, tool: FunctionTool, result: object
     ) -> None:
         """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
         logger.info("tool end: %s (%s)", tool.name, agent.name)
@@ -182,13 +198,15 @@ class LoggingHooks(Hooks[Any]):
     async def on_llm_start(
         self,
         context: RunContextWrapper[Any],
-        agent: Any,
+        agent: AgentLike,
         system_prompt: str | None,
         input_items: list[ConversationItem],
     ) -> None:
         """Log that `agent` is about to call the model."""
         logger.debug("llm start: %s", agent.name)
 
-    async def on_llm_end(self, context: RunContextWrapper[Any], agent: Any, response: Any) -> None:
+    async def on_llm_end(
+        self, context: RunContextWrapper[Any], agent: AgentLike, response: Any
+    ) -> None:
         """Log that `agent`'s model call returned."""
         logger.debug("llm end: %s", agent.name)

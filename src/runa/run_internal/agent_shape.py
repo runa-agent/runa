@@ -10,7 +10,8 @@ whichever module needs it next.
 Only `run_internal` imports this module. A question a public type asks too -- what a `handoffs`
 list may hold, which `RunState` needs to walk a graph of agents -- is answered by the public
 type that owns it (`Handoff.by_tool_name`) and called from here, so the dependency between the
-two layers stays one-way.
+two layers stays one-way. What an agent *is* is answered the same way, by `runa.agent_like`'s
+`AgentLike`: this module reads an agent, it doesn't get to define one.
 
 A concrete dataclass rather than a `Protocol` to implement, because a `Protocol` describes a
 surface and builds nothing: the only implementation of the old one was a thirteen-field
@@ -20,10 +21,6 @@ its behaviour turns on. `agent` is the object user code is handed -- a hook's ca
 guardrail function, `RunState.agent` -- and for a shape built directly it is the shape itself,
 which is what lets one stand in for an agent the loop would otherwise need built in full.
 
-`AgentLike` is a `Protocol` nonetheless, but only as the type of what a shape is *built from*:
-the one object that implements it is the real `Agent`, and a type checker is what reads it, so
-nothing is hand-written against it and a test still only has to know about the dataclass.
-
 Work that belongs to a single caller lives with that caller instead -- approval gating in
 `tool_execution`, output parsing and instruction resolution in `run_loop`, agent lookup by name in
 `run_state`.
@@ -31,10 +28,11 @@ Work that belongs to a single caller lives with that caller instead -- approval 
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from runa._models import Model, ModelProvider
 from runa._types import ModelSettings
+from runa.agent_like import AgentLike
 from runa.compact import Compactor
 from runa.guardrail import BoundGuardrail, Phase
 from runa.handoff import Handoff
@@ -44,48 +42,16 @@ from runa.memory import MemoryLike
 from runa.tool import FunctionTool
 
 
-class AgentLike(Protocol):
-    """What `AgentShape.of` reads off an agent: the other side of this seam, written as types.
-
-    `Agent` satisfies this structurally, and because `run_loop._run_async` takes it too, a type
-    checker verifies that where the match actually has to hold -- `Agent.run` handing itself to
-    the loop -- while `run_internal` still imports nothing from the class it implements. What no
-    annotation can state is the dynamic half, that `of` below copies each of these into the field
-    named for it, and that stays a test (`tests/test_agent.py`).
-
-    The read side only, so this is no second way to configure an agent: which names are settings
-    at all is `Agent.__init__`'s to say (`agent._AGENT_FIELDS`), and these are the resolved
-    attributes a run then reads. Two of them are resolved under a name of their own, `guardrails`
-    and `compact` staying the declaration's, and `mcp_servers` answers to no field below at all:
-    resolving one is folding its tools into `tools`. Those two keep a loose element type for the
-    reason the fields below do -- what a `handoffs` list may hold is `Handoff.by_tool_name`'s
-    knowledge, and what an MCP server is, `runa.mcp`'s.
-    """
-
-    name: str
-    instructions: str | Callable[..., Any] | None
-    model: str | Model
-    model_settings: ModelSettings
-    tools: list[FunctionTool]
-    mcp_servers: list[Any]
-    handoffs: list[Any]
-    bound_guardrails: dict[Phase, list[BoundGuardrail]]
-    output_type: type | None
-    memory: MemoryLike | None
-    knowledge: KnowledgeLike | None
-    compactor: Compactor | None
-    hooks: Hooks[Any] | None
-
-
 @dataclass
 class AgentShape:
     """One agent's surface as the turn loop needs it, resolved and named in one place.
 
     The two loose annotations are the ones `Agent` leaves open past construction: `model` is the
     declared name or a `Model` built directly; and `agent` is whatever object user code is handed,
-    which `run_internal` cannot name without importing the class it implements. Everything else
-    arrives already resolved -- a mode string or a bool is `Agent.__init__`'s to turn into an
-    object, not this module's.
+    an `AgentLike` or -- for a shape built directly -- this shape standing in for one, which is
+    the one place `Any` still says something `AgentLike` can't. Everything else arrives already
+    resolved -- a mode string or a bool is `Agent.__init__`'s to turn into an object, not this
+    module's.
 
     `model` is the one declared attribute that is not, and the reason is where the credentials
     are: resolving a name builds the provider's client, which is a `UserError` when its API key
@@ -127,10 +93,10 @@ class AgentShape:
         parameter's type: an agent to resolve, or a shape resolved already (a test's stand-in, or
         a handoff target the loop resolved on its way in).
 
-        Every field above is fed from one attribute here, and a new one has to be: because each
-        has a default, a field this copy forgets reads as unconfigured rather than failing. The
-        inverse check is a test (`tests/test_agent.py`), as is the rule for which settings are a
-        shape's at all and which are `RunConfig`'s (`agent._AGENT_FIELDS`).
+        Every field above is fed from one attribute of `AgentLike`, and a new one has to be:
+        because each has a default, a field this copy forgets reads as unconfigured rather than
+        failing. The inverse check is a test (`tests/test_agent.py`), as is the rule for which
+        settings are a shape's at all and which are `RunConfig`'s (`agent._AGENT_FIELDS`).
         """
         if isinstance(agent, AgentShape):
             return agent
@@ -165,4 +131,4 @@ class AgentShape:
         return provider.get_model(self.model) if isinstance(self.model, str) else self.model
 
 
-__all__ = ["AgentLike", "AgentShape"]
+__all__ = ["AgentShape"]

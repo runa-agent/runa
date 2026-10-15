@@ -26,6 +26,7 @@ from runa._items import (
 from runa._log import logger
 from runa._models import ModelRequest
 from runa._types import RunContextWrapper, Usage
+from runa.agent_like import AgentLike
 from runa.exceptions import (
     MaxTokensExceeded,
     MaxTurnsExceeded,
@@ -41,7 +42,7 @@ from runa.guardrail import Phase
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.active_run import _Run
-from runa.run_internal.agent_shape import AgentLike, AgentShape
+from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.spans import _close_span, _Spans
@@ -242,7 +243,9 @@ def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
         raise MaxTokensExceeded(f"max tokens ({max_tokens}) exceeded: {spent} used")
 
 
-async def _record_tool_results(run: _Run, results: list[ConversationItem], switched: Any) -> None:
+async def _record_tool_results(
+    run: _Run, results: list[ConversationItem], switched: AgentLike | None
+) -> None:
     """Fold one message's tool results into the run, following a handoff if there was one.
 
     The loop reaches this twice -- after a resumed message's calls, and after each turn's own --

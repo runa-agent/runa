@@ -18,6 +18,7 @@ from runa._items import (
 )
 from runa._items import call_id as id_of  # `call_id` here is the id of the call at hand
 from runa._types import RunContextWrapper
+from runa.agent_like import AgentLike
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase, ToolInputGuardrailData
 from runa.handoff import DelegatePaused
@@ -129,7 +130,7 @@ class _TurnOutcome:
 
 async def _run_message_tool_calls(
     run: _Run, message: dict[str, Any], resume: RunState | None = None
-) -> tuple[list[ConversationItem], list[Interruption], Any]:
+) -> tuple[list[ConversationItem], list[Interruption], AgentLike | None]:
     """Execute (or defer for approval) every tool call in `message`; returns results so far.
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
@@ -145,7 +146,7 @@ async def _run_message_tool_calls(
     slots: list[_Slot] = []
     deferred: list[tuple[_Slot, _Thunk]] = []
     interruptions: list[Interruption] = []
-    switched_agent: Any = None
+    switched_agent: AgentLike | None = None
     approvals = resume.approvals if resume is not None else {}
     rejection_messages = resume.rejection_messages if resume is not None else None
     ready = {

@@ -148,6 +148,22 @@ def snake_case(name: str) -> str:
     return _CAMEL_CASE_BOUNDARY.sub("_", name).lower()
 
 
+def declared_name(agent_cls: type[Agent]) -> str:
+    """The `name` `agent_cls` declares, falling back to the class's own name if it declares none.
+
+    For the surfaces that read an `Agent` subclass without building one -- `runa ui`'s Agents
+    page, `runa serve`'s route table, `runa chat`'s lookup by name -- where `__init__`'s guarantee
+    that every agent has a `name` hasn't been made yet. One function rather than one `getattr`
+    default per caller, because an agent answering to two different names depending on which
+    surface is asking is the confusion this convention exists to prevent.
+
+    An agent that never declares one is only ever *displayed* this way: constructing it still
+    raises `TypeError`. That it doesn't vanish from a listing (or stop the page rendering) is the
+    point -- a half-written agent is exactly what a developer is looking at the page to find.
+    """
+    return getattr(agent_cls, "name", agent_cls.__name__)
+
+
 def prompt_path(app_dir: Path, name: str) -> Path:
     """Where the agent called `name` keeps its instructions: `<app_dir>/prompts/<name>.md`.
 
@@ -856,8 +872,9 @@ path, and `tests/test_agent.py` is where that is enforced: it asserts every attr
 resolves has one of those two homes, and that `AgentShape.of` carries the ones that are the
 shape's -- a shape field left at its default is a setting the turn loop silently ignores, which
 is this module's `_reject_unknown_settings` bug one layer down. Dropping one of those attributes
-needs no test at all: `run_internal.agent_shape.AgentLike` is the shape's read side as a
-`Protocol`, which `run`/`run_streamed` below are checked against by handing `self` to the loop.
+needs no test at all: `runa.agent_like.AgentLike` is this class's read side as a `Protocol`, and
+`run`/`run_streamed` below are checked against it by handing `self` to the loop -- the same type
+every layer that reads an agent (`handoff`, `run_state`, `lifecycle`, `_graph`) is annotated with.
 `project._describe` is not a third path: it summarizes declared attributes for the Agents page
 and configures nothing.
 """

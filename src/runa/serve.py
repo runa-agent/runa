@@ -53,7 +53,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from runa import db, project
 from runa._log import logger
-from runa.agent import Agent
+from runa.agent import Agent, declared_name
 from runa.exceptions import OperatorError, UserError
 from runa.run import Run
 from runa.run_state import RunState
@@ -214,9 +214,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     # imports the app, so a broken agent module stops the process from starting rather than
     # failing one route, which is the failure a deployment wants -- found by the thing that rolls
     # out, not by a user.
-    agent_classes = {
-        getattr(cls, "name", cls.__name__): cls for cls in project.iter_agent_classes(agents_dir)
-    }
+    agent_classes = {declared_name(cls): cls for cls in project.iter_agent_classes(agents_dir)}
 
     async def _authenticate(request: Request) -> None:
         """Require `Authorization: Bearer <RUNA_API_KEY>` unless the server was started open."""

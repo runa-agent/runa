@@ -278,7 +278,7 @@ def test_from_json_never_lists_an_agents_mcp_server_tools() -> None:
 
     result, agent = _paused_result_and_agent()
     blob = result.to_state().to_json()
-    fresh_agent = SimpleNamespace(
+    fresh_agent: Any = SimpleNamespace(
         name=agent.name, tools=[], handoffs={}, mcp_servers=[_ExplodingServer()]
     )
 

@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from runa import db
-from runa.agent import Agent, Subagent, _flatten_subagents
+from runa.agent import Agent, Subagent, _flatten_subagents, declared_name
 from runa.exceptions import OperatorError
 from runa.guardrail import declared_names
 
@@ -274,12 +274,14 @@ def iter_agent_classes(agents_dir: Path) -> Iterator[type[Agent]]:
 def find_agent_class(agent_name: str, *, agents_dir: Path) -> type[Agent]:
     """Find the Agent subclass under `agents_dir` whose declared `name` is `agent_name`.
 
-    Matches the `name` class attribute (e.g. `class SupportAgent(Agent): name = "Support"`),
-    not the Python class name: `name` is the identity Runa itself uses for traces, instructions,
-    and handoffs, so it's what an operator should type too.
+    Matches the `name` class attribute (e.g. `class SupportAgent(Agent): name = "Support"`)
+    rather than the Python class name: `name` is the identity Runa itself uses for traces,
+    instructions, and handoffs, so it's what an operator should type too. One that declares none
+    answers to its class name (`declared_name`), which is also how it was listed and served, so
+    an operator types what they were shown either way.
     """
     for agent_cls in iter_agent_classes(agents_dir):
-        if getattr(agent_cls, "name", None) == agent_name:
+        if declared_name(agent_cls) == agent_name:
             return agent_cls
     raise AgentNotFound(f"no Agent named {agent_name!r} found under {agents_dir}")
 
@@ -309,10 +311,8 @@ def _subagent_label(subagent: Subagent | type[Agent]) -> str:
     `subagents` gave it an explicit `.handoff`/`.delegate` mode; unwrapped means "auto".
     """
     if isinstance(subagent, Subagent):
-        agent_name = getattr(subagent.agent, "name", subagent.agent.__name__)
-        return f"{agent_name} ({subagent.mode})"
-    agent_name = getattr(subagent, "name", getattr(subagent, "__name__", str(subagent)))
-    return f"{agent_name} (auto)"
+        return f"{declared_name(subagent.agent)} ({subagent.mode})"
+    return f"{declared_name(subagent)} (auto)"
 
 
 def _retrieval_label(setting: object) -> str:
@@ -331,9 +331,9 @@ def _describe(agent_cls: type[Agent]) -> AgentInfo:
     """
     subagents_raw = getattr(agent_cls, "subagents", [])
     return AgentInfo(
-        name=getattr(agent_cls, "name", agent_cls.__name__),
+        name=declared_name(agent_cls),
         class_name=agent_cls.__name__,
-        model=getattr(agent_cls, "model", Agent.model),
+        model=agent_cls.model,
         tools=[_tool_name(tool) for tool in getattr(agent_cls, "tools", [])],
         guardrails=declared_names(getattr(agent_cls, "guardrails", [])),
         subagents=[_subagent_label(sub) for sub in _flatten_subagents(subagents_raw)],

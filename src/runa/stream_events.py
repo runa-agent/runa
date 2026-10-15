@@ -1,10 +1,11 @@
 """stream_events.py: the events `Agent.run_streamed` yields."""
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from runa._items import ConversationItem
 from runa._models import StreamDelta
+from runa.agent_like import AgentLike
 
 
 @dataclass
@@ -28,7 +29,7 @@ class RunItemStreamEvent:
 class AgentUpdatedStreamEvent:
     """A handoff switched the agent running this turn."""
 
-    new_agent: Any
+    new_agent: AgentLike
     type: Literal["agent_updated_stream_event"] = "agent_updated_stream_event"
 
 

@@ -10,16 +10,26 @@ The two modes are the only edges between agents, so this module also names them 
 them: `subagent_edges` is one agent's outgoing edges and `reachable` the whole graph below it. A
 module that needs "everything reachable from this agent" asks here rather than re-reading
 `handoffs` and `tools` itself, which is what keeps a third mode from being a change in five places.
+
+An agent is read here, never built, so the attributes that walk is made of are `runa.agent_like`'s
+`AgentLike` (which is also why no read below needs a `getattr` default: an agent that has no
+`handoffs` is a type error at `Agent.run`, not an agent with no subagents). The one exception is
+`agent_as_tool`, whose delegate is *run* rather than read, and so is annotated as the `Agent` it
+is only ever called with -- a type-only import, so the runtime dependency still points one way.
 """
 
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from runa._items import parsed_arguments
 from runa._types import RunContextWrapper, Usage
+from runa.agent_like import AgentLike
 from runa.tool import FunctionTool
+
+if TYPE_CHECKING:
+    from runa.agent import Agent
 
 Mode = Literal["handoff", "delegate"]
 """Which of the two mechanisms above wires a subagent up: `Agent.subagents`' `.handoff`/`.delegate`.
@@ -48,12 +58,12 @@ class Handoff:
     `tool_name` as a request to switch `current_agent` to `agent`, rather than a normal tool call.
     """
 
-    agent: Any
+    agent: AgentLike
     tool_name: str
     tool_description: str
 
     @classmethod
-    def from_agent(cls, agent: Any) -> Handoff:
+    def from_agent(cls, agent: AgentLike) -> Handoff:
         """Build a `Handoff` for `agent` with a name/description derived from it."""
         return cls(
             agent=agent,
@@ -82,7 +92,9 @@ class Handoff:
         return keyed
 
 
-def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | None) -> FunctionTool:
+def agent_as_tool(
+    agent: Agent, tool_name: str | None, tool_description: str | None
+) -> FunctionTool:
     """Wrap `agent` as a `FunctionTool` that runs it on a generated `input` string.
 
     The nested run shares the caller's `context` (so tools/guardrails/`instructions` see the same
@@ -134,7 +146,7 @@ def agent_as_tool(agent: Any, tool_name: str | None, tool_description: str | Non
     )
 
 
-def subagent_edges(agent: Any) -> Iterator[tuple[Mode, Any]]:
+def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
     """`agent`'s outgoing edges in the agent graph: one `(mode, target)` per subagent of it.
 
     Handoffs first, then delegates, each in declaration order. An `auto`-mode subagent is wired
@@ -144,25 +156,25 @@ def subagent_edges(agent: Any) -> Iterator[tuple[Mode, Any]]:
     What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), and
     so is a delegate being a tool carrying the agent behind it (`agent_as_tool` sets it), so
     reading both lives here and not in each module that needs the graph: `run_state` resolves a
-    paused run's agent by name, `_graph` draws the edges. Takes an `Agent` or an `AgentShape`
-    standing in for one, the two being the same shape from here (`Handoff.by_tool_name` absorbs
-    the one field where they differ).
+    paused run's agent by name, `_graph` draws the edges. An `AgentShape` standing in for an agent
+    walks the same way, the two being one shape from here (`Handoff.by_tool_name` absorbs the one
+    field where they differ).
     """
-    for handoff in Handoff.by_tool_name(getattr(agent, "handoffs", None) or []).values():
+    for handoff in Handoff.by_tool_name(agent.handoffs).values():
         yield "handoff", handoff.agent
-    for tool in getattr(agent, "tools", None) or []:
-        if getattr(tool, "delegate", None) is not None:
+    for tool in agent.tools:
+        if tool.delegate is not None:
             yield "delegate", tool.delegate
 
 
-def reachable(agent: Any) -> Iterator[Any]:
+def reachable(agent: AgentLike) -> Iterator[AgentLike]:
     """`agent`, then every agent reachable from it through handoffs and delegates, breadth-first.
 
     Each agent once, by identity, so a cycle (two agents listing each other, an agent listing
     itself) terminates rather than recursing forever.
     """
     seen: set[int] = set()
-    queue: list[Any] = [agent]
+    queue: list[AgentLike] = [agent]
     while queue:
         candidate = queue.pop(0)
         if id(candidate) in seen:

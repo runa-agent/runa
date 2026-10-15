@@ -805,7 +805,7 @@ def test_agent_shape_carries_every_setting_that_is_the_agents_own() -> None:
 
 
 def test_agent_like_names_every_attribute_a_shape_is_built_from() -> None:
-    """The contract's static half: the protocol `_run_async` checks a real `Agent` against.
+    """The contract's static half: the protocol every layer that reads an agent is annotated with.
 
     `AgentLike` is the same mapping as `_SHAPE_HOMES`, read from the agent's side, so a type
     checker catches an attribute an `Agent` stopped having at `Agent.run` rather than here. The
@@ -813,9 +813,11 @@ def test_agent_like_names_every_attribute_a_shape_is_built_from() -> None:
     the shape and not to it is a run reading something nothing promised -- and keeping the two in
     step is what this asserts, the dynamic half being the test above.
     """
-    from runa.run_internal.agent_shape import AgentLike
+    from runa.agent_like import AgentLike
 
-    assert set(AgentLike.__annotations__) == set(_SHAPE_HOMES)
+    members = {name for name, value in vars(AgentLike).items() if isinstance(value, property)}
+
+    assert members == set(_SHAPE_HOMES)
 
 
 def test_run_config_carries_every_ceiling_on_the_run() -> None:
