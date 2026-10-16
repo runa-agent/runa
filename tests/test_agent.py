@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from runa import Agent, tracing
 from runa._models import StreamDelta
-from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
+from runa._types import ModelResponse, ModelSettings, RunContext, Usage
 from runa.agent import _AGENT_FIELDS, Subagent
 from runa.compact import default_compactor
 from runa.exceptions import MaxTurnsExceeded, RunErrorDetails, UserError
@@ -849,9 +849,11 @@ def test_agent_like_names_every_attribute_a_shape_is_built_from() -> None:
 
 def test_run_config_carries_every_ceiling_on_the_run() -> None:
     """The other path: the three ceilings configure the call, so they travel as a `RunConfig`."""
+    from runa.run_internal.run_config import RunConfig
+
     agent = _every_setting_agent()
 
-    config = agent._run_config(None)
+    config = RunConfig.of(agent)
 
     assert (config.max_turns, config.max_tokens, config.timeout) == (3, 100, 5.0)
 
@@ -1059,7 +1061,7 @@ def _single_arg_instructions(context: _Ctx) -> str:
     return f"context={context.label}"
 
 
-def _two_arg_instructions(context: RunContextWrapper[_Ctx], agent: Any) -> str:
+def _two_arg_instructions(context: RunContext[_Ctx], agent: Any) -> str:
     return f"{agent.name}:{context.context.label}"
 
 
@@ -1069,7 +1071,7 @@ async def _prompt_of(agent: Any, label: str) -> str | None:
     from runa.run_internal.run_loop import _resolve_instructions
 
     shape = await AgentShape.of(agent)
-    return await _resolve_instructions(shape, RunContextWrapper(context=_Ctx(label=label)))
+    return await _resolve_instructions(shape, RunContext(context=_Ctx(label=label)))
 
 
 def test_single_arg_instructions_resolves_from_run_context() -> None:
@@ -1387,9 +1389,7 @@ def test_run_sync_catches_runa_error_as_error_run(monkeypatch: pytest.MonkeyPatc
         new_items=[],
         raw_responses=[],
         last_agent=cast(Any, None),
-        context_wrapper=RunContextWrapper(
-            context=None, usage=Usage(input_tokens=5, output_tokens=6)
-        ),
+        context_wrapper=RunContext(context=None, usage=Usage(input_tokens=5, output_tokens=6)),
     )
 
     def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
@@ -1987,7 +1987,7 @@ def test_a_delegates_approval_is_recorded_on_the_delegates_own_state() -> None:
     state = run.to_state()
     state.approve(run.interruptions[0])
 
-    delegate = state.context_wrapper.paused_delegates.waiting["outer_1"]
+    delegate = state._governance.paused_delegates.waiting["outer_1"]
     assert delegate.approvals == {"inner_1": True}
     assert state.approvals == {}  # the child's call is never the parent's to run
 
@@ -2054,7 +2054,7 @@ def test_a_delegate_of_a_delegate_pauses_the_whole_chain_and_resumes_it() -> Non
 
     state = run.to_state()
     state.approve(run.interruptions[0])
-    stash = state.context_wrapper.paused_delegates
+    stash = state._governance.paused_delegates
 
     assert state.approvals == {}  # neither the parent's call to run...
     assert stash.waiting["outer_1"].approvals == {}  # ...nor the child's

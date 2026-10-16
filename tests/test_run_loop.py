@@ -13,10 +13,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from helpers import context_of
 
+from runa._governance import _Governance
 from runa._models import StreamDelta
-from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
+from runa._types import ModelResponse, ModelSettings, Usage
 from runa.compact import default_compactor
 from runa.exceptions import (
     DuplicateToolCallError,
@@ -49,9 +49,7 @@ class _Stream:
 
     def __init__(self, agent: Any, input: Any, **kwargs: Any) -> None:
         """Prepare the run; nothing starts until the first `__anext__`."""
-        self.context_wrapper = (
-            input.context_wrapper if isinstance(input, RunState) else RunContextWrapper()
-        )
+        self.governance = input._governance if isinstance(input, RunState) else _Governance()
         self.run: Run | None = None
         self._events = self._stream(agent, input, kwargs)
 
@@ -61,7 +59,7 @@ class _Stream:
             _run_async(
                 agent,
                 input,
-                _context_wrapper=self.context_wrapper,
+                governance=self.governance,
                 emit=queue.put_nowait,
                 **kwargs,
             )
@@ -200,7 +198,7 @@ def test_plain_text_turn_returns_final_output() -> None:
 
     assert result.output == "hello there"
     assert result.interruptions == []
-    assert context_of(result).usage.input_tokens == 1
+    assert result.usage.input_tokens == 1
 
 
 def test_run_sync_matches_run() -> None:
@@ -1170,7 +1168,7 @@ def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
     )
 
     result = _Stream(agent, "do it", run_config=_run_config())
-    result.context_wrapper.approval_ledger.record("dangerous", approved=True)
+    result.governance.approval_ledger.record("dangerous", approved=True)
 
     async def collect() -> list[Any]:
         return [event async for event in result]
@@ -1475,7 +1473,7 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
 
     result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
-    assert context_of(result).usage.total_tokens > 200_000
+    assert result.usage.total_tokens > 200_000
     assert result._transcript.history()[:3] == history
     assert not [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
 
@@ -1928,7 +1926,7 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
     """A tool listed by an `mcp_servers` entry is callable exactly like a `@tool` function."""
     from runa.tool import FunctionTool
 
-    async def on_invoke_tool(ctx: Any, arguments_json: str, call_id: str) -> Any:
+    async def on_invoke_tool(ctx: Any, governance: Any, arguments_json: str, call_id: str) -> Any:
         return "42"
 
     mcp_tool = FunctionTool(

@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from runa import content
 from runa._items import ConversationItem, user_message
 from runa._log import logger
-from runa._models import DEFAULT_MODEL, Model, ModelProvider, check_model_name
-from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
+from runa._models import DEFAULT_MODEL, Model, check_model_name
+from runa._types import MessageContent, ModelSettings, RunContext, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
@@ -39,7 +39,6 @@ from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import StreamEvent
 from runa.tool import FunctionTool
-from runa.tracing.manual import current_trace
 
 if TYPE_CHECKING:
     from graphviz import Digraph
@@ -58,8 +57,6 @@ is this sentinel instead -- typed `Any` so every parameter keeps its own annotat
 the one default.
 """
 
-_MODEL_PROVIDER = ModelProvider()
-
 
 def _adapt_instructions(instructions: Any) -> Any:
     """Let `instructions` be a `(context) -> str` callable instead of the runner's 2-arg shape.
@@ -75,7 +72,7 @@ def _adapt_instructions(instructions: Any) -> Any:
     if len(params) != 1:
         return instructions
 
-    def _resolved(run_context: RunContextWrapper[Any], _agent: Agent) -> Any:
+    def _resolved(run_context: RunContext[Any], _agent: Agent) -> Any:
         return instructions(run_context.context)
 
     return _resolved
@@ -418,7 +415,7 @@ class Agent:
 
     `usage` accumulates token usage across every `run`/`run_sync`/`run_streamed` call made on
     this instance; `last_usage` holds just the most recent call's usage. Both are read from
-    `RunContextWrapper.usage`, which the turn loop populates regardless of `hooks`.
+    `RunContext.usage`, which the turn loop populates regardless of `hooks`.
 
     One run is bounded three ways, each `None`/unset meaning "no ceiling of that kind":
     `max_turns` (model calls, default 10), `max_tokens` (total tokens the run may spend), and
@@ -580,18 +577,6 @@ class Agent:
 
         return draw_graph(self)
 
-    def _run_config(self, session: Session | None) -> RunConfig:
-        """Group this run under an enclosing `tracing.trace` block, else under its session."""
-        outer = current_trace()
-        return RunConfig(
-            model_provider=_MODEL_PROVIDER,
-            workflow_name=type(self).__name__,
-            group_id=outer.id if outer else (session.session_id if session is not None else None),
-            max_turns=self.max_turns,
-            max_tokens=self.max_tokens,
-            timeout=self.timeout,
-        )
-
     def _record(self, run: Run, session: Session | None) -> Run:
         """Record `run`'s usage (and, if it completed a session-less turn, its history).
 
@@ -615,11 +600,10 @@ class Agent:
         """A copy of this agent with empty per-run state, sharing its config.
 
         For a run that must not inherit this instance's conversation, and may be one of several
-        in flight on it. An agent declared once is reused for many such runs -- a `Subagent` is
-        built once per agent graph, an eval's agent once per dataset -- so running the shared
-        instance directly would both accumulate history across unrelated runs and corrupt it when
-        two overlap, whether the model delegated twice in one message or two eval cases are
-        running concurrently.
+        in flight on it: an eval's agent is declared once per dataset, and its cases run
+        concurrently, so running the shared instance directly would both accumulate history
+        across unrelated cases and corrupt it when two overlap. (A delegate needs no copy: its
+        nested run never goes through `run`, so it never touches an instance's history.)
         """
         clone = copy.copy(self)
         clone.history = []
@@ -658,8 +642,6 @@ class Agent:
         context: Any = None,
         hooks: Hooks[Any] | None = None,
         session: Session | str | None = None,
-        *,
-        _context_wrapper: RunContextWrapper[Any] | None = None,
     ) -> Run:
         """Run a turn asynchronously, appending it to the conversation history.
 
@@ -706,12 +688,6 @@ class Agent:
         raise `UserError` rather than quietly interleaving their histories; give each run its own
         `session`, or its own `Agent`. Under a web server, build the agent inside the request
         handler (`runa serve` does exactly this).
-
-        `_context_wrapper` is internal: a nested run takes the fork of an enclosing run's
-        `RunContextWrapper` instead of building a fresh one, which is what shares the approval
-        ledger, the usage accounting and the guardrail audit trail between the two. `context` is
-        ignored when it's given, since a fork already carries the enclosing run's. Don't pass it
-        directly; delegation, the one thing that needs it, is `runa.handoff`'s to wire up.
         """
         session = _resolve_session(session)
         turn_input = _turn_input(message, self.history, session, context)
@@ -725,9 +701,8 @@ class Agent:
                 turn_input,
                 context=context,
                 hooks=hooks,
-                run_config=self._run_config(session),
+                run_config=RunConfig.of(self, session),
                 session=session,
-                _context_wrapper=_context_wrapper,
             )
             return self._record(run, session)
 
@@ -782,7 +757,7 @@ class Agent:
         """
         session = _resolve_session(session)
         turn_input = _turn_input(message, self.history, session, context)
-        run_config = self._run_config(session)
+        run_config = RunConfig.of(self, session)
 
         async def events() -> AsyncIterator[StreamEvent]:
             # The latch is held here rather than in `run_streamed` because that is where the

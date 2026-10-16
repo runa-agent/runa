@@ -3,8 +3,8 @@
 One result shape, built once by the turn loop (`run_internal/run_loop._finish`) and handed back
 unchanged. The loop used to return a `RunResult` of its own that the Agent translated field by
 field into this one, which meant two dataclasses carrying the same ten values and a translator
-that had to be kept honest between them. What the loop needs and a caller doesn't -- the context
-wrapper and the run's `Transcript` -- is here too, underscore-prefixed: private fields on the one
+that had to be kept honest between them. What the loop needs and a caller doesn't -- the run's
+`_Governance` and its `Transcript` -- is here too, underscore-prefixed: private fields on the one
 result, rather than a second result shape to convert from.
 """
 
@@ -14,7 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from runa._types import RunContextWrapper, Usage
+from runa._governance import _Governance
+from runa._types import Usage
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_state import Interruption, RunState
@@ -72,7 +73,7 @@ class Run(GuardrailAudit):
     interruptions: list[Interruption] = field(default_factory=list)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     _state: RunState | None = field(default=None, repr=False)
-    _context_wrapper: RunContextWrapper | None = field(default=None, repr=False)
+    _governance: _Governance | None = field(default=None, repr=False)
     _transcript: Transcript = field(default_factory=Transcript, repr=False)
     """The run's conversation (see `Transcript`): `history()` is what `Agent.run` writes back to
     `Agent.history`, and `tool_calls` the unfiltered record `runa.eval` grades. Private because

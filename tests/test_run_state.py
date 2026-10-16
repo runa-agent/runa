@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from helpers import context_of
+from helpers import governance_of
 
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
@@ -106,9 +106,8 @@ _SERIALIZED_AS = {
     "pending": ("pending",),
     "approvals": ("approvals",),
     "rejection_messages": ("rejection_messages",),
-    "context_wrapper": (
-        "context",
-        "usage",
+    "run_context": ("context", "usage"),
+    "_governance": (
         "approval_ledger",
         "approval_ledger_messages",
         "executed_call_ids",
@@ -119,10 +118,10 @@ _SERIALIZED_AS = {
 }
 """Each `RunState` field and the `_RunStateSchema` field(s) `_to_schema` writes it to.
 
-Mostly one to one, under the same name. The two that aren't are the two holding an object rather
-than data: the context wrapper flattens into its `context`, its `usage` and the contents of the
-two protocol objects on it (`ApprovalLedger`, `PausedDelegates`), and a `Trace` into the three
-fields that identify it, its spans being exported separately.
+Mostly one to one, under the same name. The three that aren't are the three holding an object
+rather than data: the `RunContext` flattens into its `context` and `usage`, the `_Governance` into
+the contents of two of the protocol objects it holds (`ApprovalLedger`, `PausedDelegates`), and
+a `Trace` into the three fields that identify it, its spans being exported separately.
 """
 
 _NOT_SERIALIZED = {
@@ -293,8 +292,8 @@ def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> N
     assert blob["approval_ledger"] == {"dangerous": True}
 
     restored = RunState.from_json(_fresh_agent_like(agent), blob)
-    assert restored.context_wrapper.approval_ledger.sticky == {"dangerous": True}
+    assert restored._governance.approval_ledger.sticky == {"dangerous": True}
 
     resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
     assert resumed.output == "all done"
-    assert "call_1" in context_of(resumed).approval_ledger.executed
+    assert "call_1" in governance_of(resumed).approval_ledger.executed

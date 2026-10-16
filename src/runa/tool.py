@@ -14,8 +14,9 @@ from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
+from runa._governance import _Governance
 from runa._items import parsed_arguments
-from runa._types import RunContextWrapper
+from runa._types import RunContext
 from runa.approval import _NeedsApproval as _ApprovalPredicate
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 
@@ -30,8 +31,12 @@ class FunctionTool:
     name: str
     description: str
     params_json_schema: dict[str, Any]
-    on_invoke_tool: Callable[[RunContextWrapper, str, str], Awaitable[Any]]
-    """Called with `(ctx, arguments_json, call_id)`; returns whatever the wrapped function does."""
+    on_invoke_tool: Callable[[RunContext, _Governance, str, str], Awaitable[Any]]
+    """Called with `(ctx, governance, arguments_json, call_id)`; returns what the tool does.
+
+    `governance` is the framework's, for the one tool that starts a run of its own -- a delegate,
+    which shares it with its caller (see `runa._governance`). A function wrapped by `@tool` never
+    sees it: its `ctx` is the `RunContext` alone."""
     guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     """This tool's guardrails by `Phase`, checked against the call's arguments
     (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
@@ -112,7 +117,7 @@ def _schema_from_signature(func: Callable[..., Any]) -> tuple[dict[str, Any], li
 
 
 def _bind_arguments(
-    func: Callable[..., Any], args: dict[str, Any], ctx: RunContextWrapper, call_id: str
+    func: Callable[..., Any], args: dict[str, Any], ctx: RunContext, call_id: str
 ) -> dict[str, Any]:
     """Build `func`'s call kwargs from the model's parsed `args`, plus any reserved parameters."""
     reserved = {"ctx": ctx, "call_id": call_id}
@@ -159,7 +164,9 @@ def tool(
     def decorator(fn: Callable[..., Any]) -> FunctionTool:
         schema, _ = _schema_from_signature(fn)
 
-        async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
+        async def on_invoke_tool(
+            ctx: RunContext, governance: _Governance, arguments_json: str, call_id: str
+        ) -> Any:
             args = parsed_arguments(arguments_json)
             kwargs = _bind_arguments(fn, args, ctx, call_id)
             if inspect.iscoroutinefunction(fn):

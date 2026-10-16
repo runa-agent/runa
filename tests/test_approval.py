@@ -1,18 +1,19 @@
 """Tests for the `@approval` decorator and the `ApprovalLedger` that decides each call."""
 
 import asyncio
+from dataclasses import fields
 from typing import Any, cast
 
 import pytest
 
 from runa import approval, tool
-from runa._types import RunContextWrapper
+from runa._types import RunContext
 from runa.approval import ApprovalDecision, ApprovalLedger
 
 
 def _run(predicate: Any, params: dict[str, Any], call_id: str = "call_1") -> bool:
     """Call a wrapped `needs_approval` callable directly, awaiting its always-async wrapper."""
-    ctx = cast(RunContextWrapper[Any], RunContextWrapper(context=None))
+    ctx = cast(RunContext[Any], RunContext(context=None))
     return asyncio.run(predicate(ctx, params, call_id))
 
 
@@ -66,14 +67,14 @@ def test_approval_exposes_ctx_and_call_id_by_name() -> None:
     seen: dict[str, Any] = {}
 
     @approval
-    def requires_review(ctx: RunContextWrapper[Any], call_id: str, subject: str) -> bool:
+    def requires_review(ctx: RunContext[Any], call_id: str, subject: str) -> bool:
         seen["ctx"] = ctx
         seen["call_id"] = call_id
         return bool(subject)
 
     assert _run(requires_review, {"subject": "x"}, call_id="call_42")
     assert seen["call_id"] == "call_42"
-    assert isinstance(seen["ctx"], RunContextWrapper)
+    assert isinstance(seen["ctx"], RunContext)
 
 
 def test_approval_supports_async_predicates() -> None:
@@ -198,13 +199,11 @@ def test_a_claimed_call_id_cannot_be_claimed_twice() -> None:
     assert ledger.claim("call_1") is True
 
 
-def test_a_forked_context_shares_one_ledger() -> None:
-    """A delegate's decisions and claims are the caller's: one ledger, shared by reference."""
-    ctx: RunContextWrapper[Any] = RunContextWrapper(context=None)
-    forked = ctx.fork()
+def test_the_ctx_app_code_receives_carries_no_governance() -> None:
+    """A predicate's (or tool's, or hook's) `ctx` is the caller's `context` and usage, nothing more.
 
-    forked.approval_ledger.record("issue_refund", approved=True)
-    forked.approval_ledger.claim("call_1")
-
-    assert ctx.approval_ledger.sticky == {"issue_refund": True}
-    assert ctx.approval_ledger.claim("call_1") is False
+    The ledger, the paused-delegate stash and the guardrail audit trail are the framework's own
+    bookkeeping (`runa._governance`): handing them over would make every rename inside them a
+    breaking change for an app that was legitimately given them.
+    """
+    assert {field.name for field in fields(RunContext)} == {"context", "usage"}

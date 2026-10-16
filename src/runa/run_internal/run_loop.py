@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from runa._governance import _Governance
 from runa._items import (
     ConversationItem,
     item_text,
@@ -26,7 +27,7 @@ from runa._items import (
 )
 from runa._log import logger
 from runa._models import ModelRequest
-from runa._types import RunContextWrapper, Usage
+from runa._types import RunContext, Usage
 from runa.agent_like import AgentLike
 from runa.exceptions import (
     MaxTokensExceeded,
@@ -58,14 +59,12 @@ from runa.tracing.util import gen_trace_id
 from runa.transcript import Transcript
 
 
-async def _resolve_instructions(
-    shape: AgentShape, context_wrapper: RunContextWrapper
-) -> str | None:
+async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
     """Resolve `agent.instructions`: a string passes through, a callable is called and awaited."""
     instructions = shape.instructions
     if not callable(instructions):
         return instructions
-    resolved: Any = instructions(context_wrapper, shape.agent)
+    resolved: Any = instructions(run_context, shape.agent)
     return await resolved if inspect.isawaitable(resolved) else resolved
 
 
@@ -259,7 +258,7 @@ async def _record_tool_results(
     if switched is not None:
         run.shape = await AgentShape.of(switched)
         run.notify(AgentUpdatedStreamEvent(new_agent=switched))
-        await run.hooks.on_agent_start(run.context_wrapper, switched)
+        await run.hooks.on_agent_start(run.run_context, switched)
 
 
 async def _run_turns(run: _Run) -> _TurnOutcome:
@@ -269,7 +268,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
     items, hooks, run_config = run.transcript.items, run.hooks, run.run_config
-    context_wrapper = run.context_wrapper
+    run_context = run.run_context
 
     if run.resumed is not None:
         results, interruptions, switched = await _run_message_tool_calls(
@@ -284,8 +283,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         agent = shape.agent
         model = shape.resolve_model(run_config.model_provider)
         with run.span(str(shape.model), "llm", input=list(items)) as llm_span:
-            system_instructions = await _resolve_instructions(shape, context_wrapper)
-            await hooks.on_llm_start(context_wrapper, agent, system_instructions, items)
+            system_instructions = await _resolve_instructions(shape, run_context)
+            await hooks.on_llm_start(run_context, agent, system_instructions, items)
             request = ModelRequest(
                 input=items,
                 system_instructions=system_instructions,
@@ -298,10 +297,10 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
                 response = await model.get_response(request)
             else:
                 response = await _stream_response(model, request, run.emit)
-            context_wrapper.usage.add(response.usage)
+            run_context.usage.add(response.usage)
             llm_span.output = {"usage": response.usage.__dict__}
-            _check_token_budget(context_wrapper.usage, run_config.max_tokens)
-        await hooks.on_llm_end(context_wrapper, agent, response)
+            _check_token_budget(run_context.usage, run_config.max_tokens)
+        await hooks.on_llm_end(run_context, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
         _maybe_compact(shape, items, context_tokens, run.spans)
 
@@ -349,7 +348,8 @@ async def _errored(
     *,
     trace: Trace,
     agent_span: Span,
-    context_wrapper: RunContextWrapper,
+    run_context: RunContext,
+    governance: _Governance,
 ) -> Run:
     """Close the run out around `failure` and return it as the `Run` the caller was promised.
 
@@ -357,20 +357,21 @@ async def _errored(
     for the same reason those are built there: one result shape, produced by the loop on every
     path, rather than a payload bolted onto the exception for the layer above to rebuild one from.
 
-    What a failed run can say is exactly what the trace and the context wrapper already hold --
-    the spans around the failure, what it spent, which guardrails ran -- so this needs nothing the
-    run hadn't put somewhere a caller can read. The items it generated before failing are not
-    among them: an unfinished turn is not history, so the `Run` carries an empty `Transcript`.
+    What a failed run can say is exactly what the trace, the `RunContext` and the `_Governance`
+    already hold -- the spans around the failure, what it spent, which guardrails ran -- so this
+    needs nothing the run hadn't put somewhere a caller can read. The items it generated before
+    failing are not among them: an unfinished turn is not history, so the `Run` carries an empty
+    `Transcript`.
     """
     _close_span(agent_span, error=str(failure))
     await _close_trace(trace)
     return Run(
         output=None,
         trace=trace,
-        usage=context_wrapper.usage,
+        usage=run_context.usage,
         status="error",
         error=str(failure),
-        guardrail_results=context_wrapper.guardrail_results.snapshot(),
+        guardrail_results=governance.guardrail_results.snapshot(),
     )
 
 
@@ -379,7 +380,8 @@ async def _guarded(
     *,
     trace: Trace,
     agent_span: Span,
-    context_wrapper: RunContextWrapper,
+    run_context: RunContext,
+    governance: _Governance,
     timeout: float | None,
 ) -> Run:
     """Await the whole run and return its `Run`, the `"error"` one included.
@@ -395,7 +397,7 @@ async def _guarded(
     the one run worth inspecting with no exported trace. So anything unrecognized becomes
     `UnexpectedError`, logged with its traceback on the way past, and the `Run` says what happened.
 
-    It takes the four things a run is known by before its first turn rather than the `_Run` the
+    It takes the things a run is known by before its first turn rather than the `_Run` the
     loop works on, because resolving the agent's shape is itself inside here: listing an MCP
     server's tools starts a subprocess, and a server that won't start used to be the one failure
     that happened before a run had a trace -- which is the whole reason `Run.trace` was once
@@ -440,7 +442,11 @@ async def _guarded(
         await _close_trace(trace)
         return result
     return await _errored(
-        failure, trace=trace, agent_span=agent_span, context_wrapper=context_wrapper
+        failure,
+        trace=trace,
+        agent_span=agent_span,
+        run_context=run_context,
+        governance=governance,
     )
 
 
@@ -472,7 +478,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     A session-backed run persists nothing while paused: the whole turn is saved once it
     completes, whether that's straight away or after one or more resumes.
 
-    `usage` is the context wrapper's, which is where every turn (and every delegate's) has been
+    `usage` is the `RunContext`'s, which is where every turn (and every delegate's) has been
     accumulating it all along; `Agent.run` records that same value to `last_usage` rather than
     recomputing it.
 
@@ -481,7 +487,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     or failed here -- saving to a session is as able to fail as any other step.
     """
     _close_span(run.agent_span, output=outcome.final_output)
-    context_wrapper, transcript = run.context_wrapper, run.transcript
+    run_context, governance, transcript = run.run_context, run.governance, run.transcript
 
     if outcome.interruptions:
         state = RunState(
@@ -489,20 +495,21 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             transcript=transcript,
             ready_results=outcome.ready_results,
             pending=outcome.interruptions,
-            context_wrapper=context_wrapper,
+            run_context=run_context,
+            _governance=governance,
             trace=run.trace,
-            guardrail_results=context_wrapper.guardrail_results.snapshot(),
+            guardrail_results=governance.guardrail_results.snapshot(),
         )
         return Run(
             output=None,
             trace=run.trace,
-            usage=context_wrapper.usage,
+            usage=run_context.usage,
             status="paused",
             interruptions=outcome.interruptions,
             _state=state,
-            _context_wrapper=context_wrapper,
+            _governance=governance,
             _transcript=transcript,
-            guardrail_results=context_wrapper.guardrail_results.snapshot(),
+            guardrail_results=governance.guardrail_results.snapshot(),
         )
 
     # The next call's history starts from the same cut compaction made mid-run: the session's
@@ -519,14 +526,14 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
         _maybe_compact(run.start, transcript.original_input, outcome.context_tokens, run.spans)
     await _extract_memory(run, outcome.final_output)
 
-    await run.hooks.on_agent_end(context_wrapper, run.current_agent, outcome.final_output)
+    await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
     return Run(
         output=outcome.final_output,
         trace=run.trace,
-        usage=context_wrapper.usage,
-        _context_wrapper=context_wrapper,
+        usage=run_context.usage,
+        _governance=governance,
         _transcript=transcript,
-        guardrail_results=context_wrapper.guardrail_results.snapshot(),
+        guardrail_results=governance.guardrail_results.snapshot(),
     )
 
 
@@ -538,18 +545,26 @@ async def _run_async(
     hooks: Hooks[Any] | None = None,
     run_config: RunConfig | None = None,
     session: Session | None = None,
-    _context_wrapper: RunContextWrapper[Any] | None = None,
+    governance: _Governance | None = None,
     emit: Emit | None = None,
 ) -> Run:
+    """Run `agent` on `input`, or resume the paused `RunState` it is, and return its `Run`.
+
+    `Agent.run` is the public door; this is the room behind it, and the one other caller is a
+    `.delegate` subagent's nested run (`runa.handoff.agent_as_tool`), which comes here directly
+    rather than through `Agent.run` so that no internal channel shows up in a public signature.
+    It passes its caller's `governance`, shared rather than started afresh, and its caller's
+    `context`, which the nested run gets a `RunContext` of its own over -- usage starting at zero
+    (see `runa._governance`). Every other run starts with a `_Governance` of its own.
+    """
     run_config = run_config or RunConfig()
     dispatch = _Dispatch(hooks or LoggingHooks())
 
     if isinstance(input, RunState):
         return await _resume(input, dispatch, run_config, session, emit)
 
-    context_wrapper = (
-        _context_wrapper if _context_wrapper is not None else RunContextWrapper(context=context)
-    )
+    run_context = RunContext(context=context)
+    governance = governance if governance is not None else _Governance()
     trace = Trace(
         id=gen_trace_id(),
         name=run_config.workflow_name,
@@ -580,7 +595,8 @@ async def _run_async(
         run = _Run(
             shape=shape,
             transcript=transcript,
-            context_wrapper=context_wrapper,
+            run_context=run_context,
+            governance=governance,
             trace=trace,
             agent_span=agent_span,
             session=session,
@@ -588,7 +604,7 @@ async def _run_async(
             run_config=run_config,
             emit=emit,
         )
-        await dispatch.on_agent_start(context_wrapper, shape.agent)
+        await dispatch.on_agent_start(run_context, shape.agent)
         if query is not None:
             await _inject_retrieved(run, query)
         await _run_guardrails(run, Phase.INPUT, input)
@@ -598,7 +614,8 @@ async def _run_async(
         turn(),
         trace=trace,
         agent_span=agent_span,
-        context_wrapper=context_wrapper,
+        run_context=run_context,
+        governance=governance,
         timeout=run_config.timeout,
     )
 
@@ -622,7 +639,8 @@ async def _resume(
         run = _Run(
             shape=shape,
             transcript=state.transcript.copy(),
-            context_wrapper=state.context_wrapper,
+            run_context=state.run_context,
+            governance=state._governance,
             trace=state.trace,
             agent_span=agent_span,
             session=session,
@@ -631,14 +649,15 @@ async def _resume(
             emit=emit,
             resumed=state,
         )
-        await dispatch.on_agent_start(state.context_wrapper, state.agent)
+        await dispatch.on_agent_start(state.run_context, state.agent)
         return await _finish(run, await _run_turns(run))
 
     return await _guarded(
         turn(),
         trace=state.trace,
         agent_span=agent_span,
-        context_wrapper=state.context_wrapper,
+        run_context=state.run_context,
+        governance=state._governance,
         timeout=run_config.timeout,
     )
 

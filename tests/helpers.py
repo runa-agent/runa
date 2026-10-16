@@ -4,7 +4,8 @@ import asyncio
 from collections.abc import Awaitable
 from typing import Any
 
-from runa._types import RunContextWrapper, Usage
+from runa._governance import _Governance
+from runa._types import Usage
 from runa.run import Run
 from runa.tracing import Trace
 
@@ -23,14 +24,14 @@ def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides:
     )
 
 
-def context_of(result: Run) -> RunContextWrapper:
-    """`result._context_wrapper`, narrowed, for a test reading what the loop accumulated on it.
+def governance_of(result: Run) -> _Governance:
+    """`result._governance`, narrowed, for a test reading what the loop recorded on it.
 
-    Private on `Run` because a caller has `usage` and the guardrail audit lists already; the loop's
-    own tests read the wrapper itself to check usage accounting and the call-id replay guard.
+    Private on `Run` because a caller has the guardrail audit lists already; the loop's own tests
+    read the governance itself to check the call-id replay guard.
     """
-    assert result._context_wrapper is not None
-    return result._context_wrapper
+    assert result._governance is not None
+    return result._governance
 
 
 def run[T](awaitable: Awaitable[T]) -> T:

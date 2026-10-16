@@ -16,6 +16,8 @@ An agent is read here, never built, so the attributes that walk is made of are `
 `handoffs` is a type error at `Agent.run`, not an agent with no subagents). The one exception is
 `agent_as_tool`, whose delegate is *run* rather than read, and so is annotated as the `Agent` it
 is only ever called with -- a type-only import, so the runtime dependency still points one way.
+It runs it through the turn loop directly, imported where it's called: the loop reaches back here
+(through `run_state`) for `reachable`, so a module-level import would be a cycle.
 """
 
 import re
@@ -23,8 +25,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from runa._governance import _Governance
 from runa._items import parsed_arguments
-from runa._types import RunContextWrapper, Usage
+from runa._types import RunContext, Usage
 from runa.agent_like import AgentLike
 from runa.tool import FunctionTool
 
@@ -99,41 +102,49 @@ def agent_as_tool(
 
     The nested run shares the caller's `context` (so tools/guardrails/`instructions` see the same
     object) but not its conversation history: the calling agent generates fresh input for it, the
-    same way any other tool call's arguments are generated. Each invocation runs on a `_fresh()`
-    copy of `agent`, which makes that true in fact and not just in intent: a `Subagent` is built
-    once and reused, so on the shared instance one delegation's history would leak into the next,
-    and two delegations in a single message (tool calls run concurrently) would overwrite each
-    other's. A nested run that errors surfaces its error message as the tool's return value
-    instead of raising, so the calling agent's turn can still continue and decide how to respond.
+    same way any other tool call's arguments are generated. It is the turn loop's own entry, not
+    `Agent.run`, so it never reads or writes the shared instance's `history` -- a `Subagent` is
+    built once and reused, and two delegations in a single message (tool calls run concurrently)
+    are two independent runs of it. A nested run that errors surfaces its error message as the
+    tool's return value instead of raising, so the calling agent's turn can still continue and
+    decide how to respond.
 
-    The delegate's context is `ctx.fork()`ed, not just `ctx.context` unwrapped: this shares the
+    The nested run gets the caller's `governance`, not a fresh one: that shares the
     `ApprovalLedger` (so the sticky decisions and the call-id replay guard are one ledger, not
-    two) and the guardrail-result audit trail with the delegate and back, and merges the
-    delegate's usage into the caller's afterward.
+    two) and the guardrail-result audit trail with the delegate and back. Its `RunContext` is its
+    own, over the same `context`, so its usage starts at zero and is merged into the caller's here.
 
     A delegate run that pauses for approval raises `DelegatePaused`: the caller's run pauses on
-    the same interruptions, and the nested `RunState` waits in `ctx.paused_delegates` under this
-    call's id, so resuming the caller resumes the delegate instead of starting it over. Stashing
-    it there is also what makes those interruptions the delegate's to resolve rather than the
-    caller's -- `runa.paused_delegates` owns that whole protocol.
+    the same interruptions, and the nested `RunState` waits in `governance.paused_delegates` under
+    this call's id, so resuming the caller resumes the delegate instead of starting it over.
+    Stashing it there is also what makes those interruptions the delegate's to resolve rather than
+    the caller's -- `runa.paused_delegates` owns that whole protocol.
     """
     resolved_name = tool_name or _slugify(agent.name)
     resolved_description = tool_description or f"Delegate a task to {agent.name}."
 
-    async def on_invoke_tool(ctx: RunContextWrapper, arguments_json: str, call_id: str) -> Any:
-        paused = ctx.paused_delegates.take(call_id)
+    async def on_invoke_tool(
+        ctx: RunContext, governance: _Governance, arguments_json: str, call_id: str
+    ) -> Any:
+        from runa.run_internal.run_config import RunConfig
+        from runa.run_internal.run_loop import _run_async
+
+        paused = governance.paused_delegates.take(call_id)
         if paused is not None:
-            forked = paused.context_wrapper
-            run = await agent.run(paused)
+            run = await _run_async(agent, paused, run_config=RunConfig.of(agent))
         else:
-            args = parsed_arguments(arguments_json)
-            forked = ctx.fork()
-            run = await agent._fresh().run(args.get("input", ""), _context_wrapper=forked)
-        ctx.usage.add(forked.usage)
+            run = await _run_async(
+                agent,
+                parsed_arguments(arguments_json).get("input", ""),
+                context=ctx.context,
+                run_config=RunConfig.of(agent),
+                governance=governance,
+            )
+        ctx.usage.add(run.usage)
         if run.status == "paused":
-            forked.usage = Usage()  # already merged into the caller's
             state = run.to_state()
-            ctx.paused_delegates.stash(call_id, state)
+            state.run_context.usage = Usage()  # already merged into the caller's
+            governance.paused_delegates.stash(call_id, state)
             raise DelegatePaused(state.pending)
         return run.output if run.status == "completed" else f"error: {run.error}"
 

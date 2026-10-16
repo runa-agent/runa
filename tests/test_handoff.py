@@ -1,6 +1,6 @@
 """Tests for `agent_as_tool` and the shared agent-graph walk.
 
-`agent_as_tool`'s context-forking (sticky approvals, usage, `context` sharing), and the walk
+`agent_as_tool`'s sharing with its caller (sticky approvals, usage, `context`), and the walk
 every module needing "reachable from here" shares (`reachable`/`subagent_edges`).
 """
 
@@ -8,7 +8,8 @@ from typing import Any
 
 from helpers import run as run_awaitable
 
-from runa._types import ModelResponse, RunContextWrapper, Usage
+from runa._governance import _Governance
+from runa._types import ModelResponse, RunContext, Usage
 from runa.agent import Agent
 from runa.handoff import agent_as_tool, reachable, subagent_edges
 from runa.tool import tool
@@ -41,13 +42,12 @@ class _ScriptedModel:
         )
 
 
-def test_agent_as_tool_forks_context_so_sticky_approvals_apply_to_the_delegate() -> None:
-    """A sticky `always=True` approval already on the context lets a delegate's gated tool run.
+def test_agent_as_tool_shares_governance_so_sticky_approvals_apply_to_the_delegate() -> None:
+    """A sticky `always=True` approval already on the caller's ledger lets a delegate's tool run.
 
-    Without forking, `on_invoke_tool` builds the delegate a brand-new `RunContextWrapper` with an
-    empty approval ledger, so its `dangerous` call would pause instead -- and since `Run.status`
-    has no "paused" state, a paused delegate run's `output` comes back as `None` rather than the
-    tool's real result. Forking is what makes `result == "delegate done"` possible here.
+    Without sharing, the nested run would start a brand-new `_Governance` with an empty approval
+    ledger, so its `dangerous` call would pause instead and the tool would raise `DelegatePaused`
+    rather than return. Sharing is what makes `result == "delegate done"` possible here.
     """
 
     @tool(needs_approval=True)
@@ -63,26 +63,28 @@ def test_agent_as_tool_forks_context_so_sticky_approvals_apply_to_the_delegate()
         )
 
     tool_fn = agent_as_tool(Delegate(), None, None)
-    ctx = RunContextWrapper(context=None)
-    ctx.approval_ledger.record("dangerous", approved=True)
+    governance = _Governance()
+    governance.approval_ledger.record("dangerous", approved=True)
 
-    result = run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
+    result = run_awaitable(
+        tool_fn.on_invoke_tool(RunContext(), governance, '{"input": "go"}', "call_1")
+    )
 
     assert result == "delegate done"
 
 
 def test_agent_as_tool_merges_the_delegates_usage_into_the_callers_context() -> None:
-    """The delegate's token usage is added onto the caller's `context_wrapper.usage`."""
+    """The delegate's token usage is added onto the caller's `RunContext.usage`."""
 
     class Delegate(Agent):
         name = "Delegate"
         model = _ScriptedModel([_final_message("delegate done")])
 
     tool_fn = agent_as_tool(Delegate(), None, None)
-    ctx = RunContextWrapper(context=None)
+    ctx = RunContext()
     assert ctx.usage.total_tokens == 0
 
-    run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
+    run_awaitable(tool_fn.on_invoke_tool(ctx, _Governance(), '{"input": "go"}', "call_1"))
 
     assert ctx.usage.total_tokens == 2
 
@@ -92,7 +94,7 @@ def test_agent_as_tool_shares_the_same_context_object_with_the_delegate() -> Non
     seen: list[Any] = []
 
     @tool
-    def record(ctx: RunContextWrapper) -> str:
+    def record(ctx: RunContext) -> str:
         """Record the context object it was called with."""
         seen.append(ctx.context)
         return "recorded"
@@ -106,9 +108,9 @@ def test_agent_as_tool_shares_the_same_context_object_with_the_delegate() -> Non
 
     marker = object()
     tool_fn = agent_as_tool(Delegate(), None, None)
-    ctx = RunContextWrapper(context=marker)
+    ctx = RunContext(context=marker)
 
-    run_awaitable(tool_fn.on_invoke_tool(ctx, '{"input": "go"}', "call_1"))
+    run_awaitable(tool_fn.on_invoke_tool(ctx, _Governance(), '{"input": "go"}', "call_1"))
 
     assert seen == [marker]
 

@@ -17,7 +17,7 @@ from runa._items import (
     tool_result,
 )
 from runa._items import call_id as id_of  # `call_id` here is the id of the call at hand
-from runa._types import RunContextWrapper
+from runa._types import RunContext
 from runa.agent_like import AgentLike
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase
@@ -37,21 +37,21 @@ async def _run_tool_call(
     before anything else runs. A delegate that paused for approval comes back as its
     `DelegatePaused`, not a result: the call hasn't finished, so resuming may run it again.
     """
-    context_wrapper = run.context_wrapper
+    run_context, ledger = run.run_context, run.governance.approval_ledger
     call_id = id_of(call)
-    if not context_wrapper.approval_ledger.claim(call_id):
+    if not ledger.claim(call_id):
         raise DuplicateToolCallError(call_id, tool.name)
 
     args_json = call_arguments(call)
     span_type = "delegate" if tool.delegate is not None else "tool"
     with run.span(tool.name, span_type, input=args_json) as span:
         inside = run.spans.under(span)  # this call's guardrails belong under the call
-        await run.hooks.on_tool_start(context_wrapper, run.current_agent, tool)
+        await run.hooks.on_tool_start(run_context, run.current_agent, tool)
         await _run_guardrails(run, Phase.TOOL_INPUT, args_json, tool=tool, spans=inside)
         try:
-            result = await tool.on_invoke_tool(context_wrapper, args_json, call_id)
+            result = await tool.on_invoke_tool(run_context, run.governance, args_json, call_id)
         except DelegatePaused as paused:
-            context_wrapper.approval_ledger.release(call_id)
+            ledger.release(call_id)
             span.output = "paused for approval"
             return paused
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
@@ -61,7 +61,7 @@ async def _run_tool_call(
         span.output = result
     if tool.delegate is None:  # a delegate's own run records its own calls, under its own trace
         run.transcript.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
-    await run.hooks.on_tool_end(context_wrapper, run.current_agent, tool, result)
+    await run.hooks.on_tool_end(run_context, run.current_agent, tool, result)
     return tool_result(call_id, result)
 
 
@@ -78,12 +78,12 @@ def _arguments_or_error(args_json: str) -> dict[str, Any] | str:
 
 
 async def _needs_approval(
-    tool: FunctionTool, context_wrapper: RunContextWrapper, args: dict[str, Any], call_id: str
+    tool: FunctionTool, run_context: RunContext, args: dict[str, Any], call_id: str
 ) -> bool:
     """Ask the tool itself whether this call needs a human, `bool` or predicate alike."""
     if isinstance(tool.needs_approval, bool):
         return tool.needs_approval
-    verdict = tool.needs_approval(context_wrapper, args, call_id)
+    verdict = tool.needs_approval(run_context, args, call_id)
     return bool(await verdict if inspect.isawaitable(verdict) else verdict)
 
 
@@ -131,7 +131,7 @@ async def _run_message_tool_calls(
     """
     shape = run.shape
     agent = shape.agent
-    context_wrapper = run.context_wrapper
+    run_context = run.run_context
     handoff_map = shape.handoffs
     slots: list[_Slot] = []
     deferred: list[tuple[_Slot, _Thunk]] = []
@@ -151,7 +151,7 @@ async def _run_message_tool_calls(
             handoff = handoff_map[name]
             switched_agent = handoff.agent
             with run.span(handoff.tool_name, "handoff"):
-                await run.hooks.on_handoff(context_wrapper, agent, switched_agent)
+                await run.hooks.on_handoff(run_context, agent, switched_agent)
             slots.append(_Slot(tool_result(call_id, f"Transferred to {switched_agent.name}.")))
             continue
 
@@ -168,10 +168,10 @@ async def _run_message_tool_calls(
         if isinstance(args, str):
             slots.append(_Slot(tool_result(call_id, args)))
             continue
-        gate = await context_wrapper.approval_ledger.decide(
+        gate = await run.governance.approval_ledger.decide(
             tool.name,
             call_id,
-            needs_approval=partial(_needs_approval, tool, context_wrapper, args, call_id),
+            needs_approval=partial(_needs_approval, tool, run_context, args, call_id),
             approvals=approvals,
             rejection_messages=rejection_messages,
         )

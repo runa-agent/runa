@@ -1,11 +1,18 @@
 """run_config.py: `RunConfig`, per-call configuration for one `Agent` run."""
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from runa._models import ModelProvider
+from runa.session import Session
+from runa.tracing.manual import current_trace
+
+if TYPE_CHECKING:
+    from runa.agent import Agent
 
 DEFAULT_MAX_TURNS = 10
+
+_MODEL_PROVIDER = ModelProvider()
 
 
 @dataclass
@@ -28,6 +35,24 @@ class RunConfig:
     max_turns: int = DEFAULT_MAX_TURNS
     max_tokens: int | None = None
     timeout: float | None = None
+
+    @classmethod
+    def of(cls, agent: Agent, session: Session | None = None) -> RunConfig:
+        """`agent`'s run, grouped under an enclosing `tracing.trace` block, else its `session`.
+
+        The one place an `Agent` becomes a `RunConfig`: `Agent.run` asks for its own, and a
+        `.delegate` subagent's nested run (`runa.handoff`) for the delegate's, without either
+        reaching into the other.
+        """
+        outer = current_trace()
+        return cls(
+            model_provider=_MODEL_PROVIDER,
+            workflow_name=type(agent).__name__,
+            group_id=outer.id if outer else (session.session_id if session is not None else None),
+            max_turns=agent.max_turns,
+            max_tokens=agent.max_tokens,
+            timeout=agent.timeout,
+        )
 
 
 __all__ = ["DEFAULT_MAX_TURNS", "RunConfig"]
