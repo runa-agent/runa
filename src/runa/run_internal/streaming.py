@@ -1,6 +1,6 @@
 """streaming.py: assembling a streamed model response, for `Agent.run_streamed`.
 
-`run_streamed` runs the same turn loop as `run` (`run_loop._run_async`, with an `emit` callback),
+`run_streamed` runs the same turn loop as `run` (with an `emit` callback),
 so guardrails, approvals, tracing, hooks and sessions behave identically. The only
 streaming-specific step is here: consuming `Model.stream_response` instead of `get_response`,
 emitting each raw delta as it arrives.

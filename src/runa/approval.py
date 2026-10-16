@@ -9,7 +9,7 @@ spread across the turn loop and `RunState`:
 * a rejection with no message of its own gets `ApprovalLedger.DEFAULT_REJECTION`;
 * a call id is claimed before it runs, and a claimed id never runs again.
 
-A run's `runa._governance._Governance` holds one `ApprovalLedger`, shared by reference with
+A run's governance (`runa._governance`) holds one `ApprovalLedger`, shared by reference with
 every delegate the run starts, which is what makes a caller's "always" answer cover the
 delegate's matching tool. It is never on the `RunContext` an `@approval` predicate is handed:
 the ledger is the framework's bookkeeping, not the app's. `run_internal.tool_execution` asks it

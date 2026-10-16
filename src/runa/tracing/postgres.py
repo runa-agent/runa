@@ -113,7 +113,7 @@ class PostgresTraceStore(Shared):
 class PostgresExporter(StoreExporter):
     """A `TraceExporter` that persists every finished trace to Postgres.
 
-    `_default_exporters` builds a plain `StoreExporter` over whatever `runa.db.traces()` resolved,
+    The default exporter is a plain `StoreExporter` over whatever `runa.db.traces()` resolved,
     so this name is for an app that wants to export to a database other than this deployment's.
     """
 

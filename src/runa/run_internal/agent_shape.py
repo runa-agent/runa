@@ -13,13 +13,11 @@ type that owns it (`Handoff.by_tool_name`) and called from here, so the dependen
 two layers stays one-way. What an agent *is* is answered the same way, by `runa.agent_like`'s
 `AgentLike`: this module reads an agent, it doesn't get to define one.
 
-A concrete dataclass rather than a `Protocol` to implement, because a `Protocol` describes a
-surface and builds nothing: the only implementation of the old one was a thirteen-field
-`SimpleNamespace` hand-written in six test files, where a fourteenth field broke all six
-silently, at read time. Every field here has a default instead, so a test names the two or three
-its behaviour turns on. `agent` is the object user code is handed -- a hook's callback, a
-guardrail function, `RunState.agent` -- and for a shape built directly it is the shape itself,
-which is what lets one stand in for an agent the loop would otherwise need built in full.
+A concrete dataclass rather than a `Protocol` to implement, so it can be built directly: every field
+has a default, and a test names only the two or three its behaviour turns on. `agent` is the object
+user code is handed -- a hook's callback, a guardrail function, `RunState.agent` -- and for a shape
+built directly it is the shape itself, which is what lets one stand in for an agent the loop would
+otherwise need built in full.
 
 Work that belongs to a single caller lives with that caller instead -- approval gating in
 `tool_execution`, output parsing and instruction resolution in `run_loop`, agent lookup by name in
@@ -95,8 +93,7 @@ class AgentShape:
 
         Every field above is fed from one attribute of `AgentLike`, and a new one has to be:
         because each has a default, a field this copy forgets reads as unconfigured rather than
-        failing. The inverse check is a test (`tests/test_agent.py`), as is the rule for which
-        settings are a shape's at all and which are `RunConfig`'s (`agent._AGENT_FIELDS`).
+        failing.
         """
         if isinstance(agent, AgentShape):
             return agent

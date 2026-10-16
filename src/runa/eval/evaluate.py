@@ -3,11 +3,9 @@
 A case runs through `Agent.run`, the same door an application's own call uses, so an agent is
 evaluated with the wiring it actually ships with: its guardrails, its memory and knowledge, its
 `max_turns`/`max_tokens`/`timeout`. What comes back is graded as the `Run` it already is: every
-metric past here takes a `Run`, so an application can grade a run it produced itself. There used
-to be an `AgentRun` in between, re-flattening five of `Run`'s fields, which meant every new
-graded fact cost two edits whose only job was keeping the two shapes in step.
+metric past here takes a `Run`, so an application can grade a run it produced itself.
 
-Each case gets a `_fresh()` copy of the agent: a dataset's cases are independent, and up to
+Each case gets a fresh copy of the agent: a dataset's cases are independent, and up to
 `concurrency` of them run at once, so sharing one instance would let one case's conversation
 leak into the next.
 

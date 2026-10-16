@@ -21,8 +21,8 @@ The two pieces of process-local state here answer different questions: `_digests
 would I write", a pure function of the files on disk, so an empty cache costs a re-read and never
 a re-embed; `_ingest_locks` keeps one process from embedding one corpus twice at once.
 
-`run_internal.run_loop._run_async` is what makes retrieval automatic during `run`, see its
-`knowledge`/`_knowledge_block` handling. `KnowledgeLike` is the contract a wholesale custom
+A run searches an agent's `knowledge` before every turn, so retrieval is automatic.
+`KnowledgeLike` is the contract a wholesale custom
 `knowledge=` object needs, as opposed to `Knowledge(store=...)`'s narrower escape hatch of
 swapping just the storage backend.
 """
@@ -266,7 +266,7 @@ class Knowledge:
         the store is unversioned instead: the state that costs a rebuild rather than a quietly
         thin answer.
 
-        An empty corpus is logged, the way `agent._load_prompt` logs a missing prompt file, and
+        An empty corpus is logged, the way `Agent` logs a missing prompt file, and
         for the same reason: retrieval is the one step whose failure leaves no mark on the output
         (an empty knowledge block reads exactly like a corpus with nothing relevant in it), so an
         agent that asked for `knowledge=` and found nothing to search has to say so somewhere.

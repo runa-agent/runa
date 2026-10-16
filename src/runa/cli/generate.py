@@ -325,7 +325,7 @@ def generate_agent(
 
     Without an explicit `instructions`, the class gets no `instructions` attribute at all.
     Instead a stub `app/prompts/<snake_case(name)>.md` is written alongside it, the file
-    `Agent.__init__` reads on construction (`agent.py`'s `_load_prompt`, which only ever reads).
+    `Agent.__init__` reads on construction, and only ever reads.
     Scaffolding it here is what keeps an agent from starting life on empty instructions.
     Likewise `evals/<snake_case(name)>.jsonl` starts with one case, so `runa eval` grades the new
     agent from day one (see `generate_evaluation`).

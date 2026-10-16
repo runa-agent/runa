@@ -20,7 +20,7 @@ than above it because a version has to be stored wherever the rows are, durably 
 which only an adapter can do. `Memory` never resets and keeps no version.
 
 Distance is L2 in every adapter: `vec0`'s default, `pgvector`'s `<->`, and `math.sqrt` of the
-summed squares in process. `Memory._DUPLICATE_DISTANCE` compares against it, so the three have to
+summed squares in process. `Memory`'s duplicate threshold compares against it, so the three have to
 agree on more than the ordering.
 """
 
@@ -137,7 +137,7 @@ class VectorStore(Protocol):
         Separate from `reset`, and called after the last `add` rather than by the `reset` that
         emptied the store, because a version is a claim about rows that are already there.
         Stamped up front it would be a lie for as long as the writes behind it take, and every
-        other reader of this storage would believe it: see `Knowledge._rebuild`, the one caller.
+        other reader of this storage would believe it.
         """
         ...
 

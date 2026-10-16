@@ -7,6 +7,7 @@ conventions: @RUNA.md
 ## Rules
 - `make check` (format, lint, typecheck, test) must pass before work is done.
 - Commits: one line, `<type>: <summary>`. Type is feat, fix, docs, refactor, or test.
+- Docstrings and comments state what the code promises now, and any constraint a reader couldn't see from the code. History ("used to", "the old ..."), rejected alternatives and which test enforces what belong in the commit message, not the source. Never name a private symbol of another module.
 
 ## Principles
 - Optimize for programmer happiness: Prefer APIs and designs that make the common path obvious, pleasant, and productive.

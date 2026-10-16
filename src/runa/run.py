@@ -1,11 +1,8 @@
 """`Run`: the result of `Agent.run()`/`run_sync()`, and `RunStream`, of `Agent.run_streamed()`.
 
-One result shape, built once by the turn loop (`run_internal/run_loop._finish`) and handed back
-unchanged. The loop used to return a `RunResult` of its own that the Agent translated field by
-field into this one, which meant two dataclasses carrying the same ten values and a translator
-that had to be kept honest between them. What the loop needs and a caller doesn't -- the run's
-`_Governance` and its `Transcript` -- is here too, underscore-prefixed: private fields on the one
-result, rather than a second result shape to convert from.
+One result shape, built once by the turn loop and handed back unchanged. What the loop needs and a
+caller doesn't -- the run's governance and its `Transcript` -- is here too, underscore-prefixed:
+private fields on the one result, rather than a second result shape to convert from.
 """
 
 from collections.abc import AsyncIterator

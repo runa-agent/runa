@@ -1,19 +1,11 @@
 """eval/evaluation/metrics.py: every metric Runa grades, declared once, as data.
 
-A metric used to be a bare string, and the closed set of them was spelled out four times: the
-semantic runner produced the names and encoded each one's activation rule inline, a
-`DEFAULT_THRESHOLDS` dict keyed thresholds by the same names, `eval/report.py` kept a display
-order and a label map listing them again, and `Report.score` hard-coded one of the names as the
-headline. Nothing tied the four together, so adding a metric was five edits in three files -- and
-the easiest one to forget produced the worst symptom, because the report iterated its own order
-list and dropped any metric missing from it, while that metric still decided whether cases passed.
-
-So a metric is declared here, once: its name, how a report labels it, the score it must reach,
+A metric is declared here, once: its name, how a report labels it, the score it must reach,
 when it applies, and the pipeline that grades it. `evaluate_semantic()` below iterates this table
 instead of listing metrics by hand, `eval/evaluation/deterministic.py` builds its results from the
 two entries it owns, and `eval/report.py` reads labels and order from it, with no name of its own.
 A result whose metric isn't declared here is a `KeyError` at the display path (see
-`in_display_order`), the way a missing threshold has always been one.
+`in_display_order`), the way a missing threshold is one.
 
 What stays out of the table is the prompts: they're each metric's content, not its identity, and
 they live with the pipelines in `eval/evaluation/semantic.py`.

@@ -1,11 +1,9 @@
 """Class-based Agent, built on Runa's own runtime (`runa.run_internal`).
 
 `run`/`run_sync`/`run_streamed` are the only way to run an Agent, and `Run` the only thing they
-return. The turn loop under them (`run_internal/run_loop._run_async`) is this class's
-implementation, not a second entry point: a `Runner` that forwarded to it used to sit here, which
-is how `eval/judge.py` and `eval/evaluate.py` came to run agents without an Agent's own
-wiring -- its guardrail flattening, its memory and knowledge resolution, its `RunConfig`, its
-refusal of two concurrent session-less runs. One door, so there is nothing to go around.
+return. The turn loop under them is this class's implementation, not a second entry point, so
+every run gets an Agent's own wiring: its guardrail flattening, its memory and knowledge
+resolution, its `RunConfig`, its refusal of two concurrent session-less runs.
 """
 
 import asyncio
@@ -252,8 +250,8 @@ def _resolve_compactor(compact: Any) -> Compactor | None:
 
     Resolved here, alongside `memory=`/`knowledge=`, for the reason they are: a declared attribute
     becomes a usable object once, at construction, so a value that is neither a bool nor a
-    callable is a `UserError` naming the attribute rather than a `TypeError` raised from inside
-    `run_internal.run_loop._maybe_compact` after a model call has already been paid for.
+    callable is a `UserError` naming the attribute rather than a `TypeError` raised mid-run, after a
+    model call has already been paid for.
     """
     if compact is None or compact is False:
         return None
@@ -836,19 +834,11 @@ check, having a signature: an unknown keyword is Python's own `TypeError`, sugge
 meant, and a type checker has already flagged the call (and a `max_turns="ten"` the validator
 would have let through).
 
-A new setting also has to reach a run, and there are exactly two paths, chosen by what the
-setting is: a ceiling on the run (`max_turns`, `max_tokens`, `timeout`) belongs to `RunConfig`,
-which configures the call rather than the agent; everything the agent *is* belongs to
-`AgentShape`, which is what `run_internal` reads instead of this class. Nothing takes neither
-path, and `tests/test_agent.py` is where that is enforced: it asserts every attribute `__init__`
-resolves has one of those two homes, and that `AgentShape.of` carries the ones that are the
-shape's -- a shape field left at its default is a setting the turn loop silently ignores, which
-is this module's `_reject_unknown_settings` bug one layer down. Dropping one of those attributes
-needs no test at all: `runa.agent_like.AgentLike` is this class's read side as a `Protocol`, and
-`run`/`run_streamed` below are checked against it by handing `self` to the loop -- the same type
-every layer that reads an agent (`handoff`, `run_state`, `lifecycle`, `_graph`) is annotated with.
-`project._describe` is not a third path: it summarizes declared attributes for the Agents page
-and configures nothing.
+A new setting also has to reach a run, by exactly one of two paths chosen by what the setting
+is: a ceiling on the run (`max_turns`, `max_tokens`, `timeout`) belongs to `RunConfig`, which
+configures the call rather than the agent; everything the agent *is* belongs to `AgentShape`,
+which is what `run_internal` reads instead of this class. A shape field left at its default is a
+setting the turn loop silently ignores.
 """
 
 

@@ -84,10 +84,8 @@ class SessionStore(Protocol):
         `agent` (the old, pre-session-per-chat default) or starts with `f"{agent}-"`
         (`cli/chat.py`'s current scheme), so `--continue`/`--resume` find history under either.
 
-        Ties on `updated_at` break by session id descending, in every adapter. Two sessions
-        written in the same second used to list in a different order depending on the backend,
-        which made `runa chat --list` and the Sessions page disagree between a local deployment
-        and a shared one.
+        Ties on `updated_at` break by session id descending, in every adapter, so `runa chat
+        --list` and the Sessions page agree between a local deployment and a shared one.
         """
         ...
 
@@ -105,9 +103,8 @@ def as_timestamp(value: str | datetime) -> str:
     """One rendering of a stored timestamp, whichever backend produced it.
 
     SQLite hands back `CURRENT_TIMESTAMP`'s `"YYYY-MM-DD HH:MM:SS"` text and Postgres a
-    `TIMESTAMPTZ`, so the same session listed from a local deployment used to read differently
-    from one listed from a shared one -- naive on the first, offset-bearing on the second. Both
-    go through here instead: one format, on one clock (UTC).
+    `TIMESTAMPTZ` -- naive on the first, offset-bearing on the second. Both go through here: one
+    format, on one clock (UTC).
     """
     if isinstance(value, str):
         return value
@@ -129,10 +126,8 @@ def listing_clause(agent: str | None, dialect: Dialect) -> tuple[str, tuple[str,
 
     The whole tail rather than the `LIKE` pattern alone, because escaping a wildcard only works
     paired with the `ESCAPE` clause naming the escape character, and an adapter handed the pattern
-    plus a docstring asking for the clause can take half the rule -- the Postgres one did, and
-    matched anyway only because a backslash is already its default. The `ORDER BY` is here for the
-    same reason: both adapters used to append their own, which is how one of them came to break
-    ties on `rowid`.
+    plus a docstring asking for the clause can take half the rule. The `ORDER BY` is here for the
+    same reason: one tie-break, not one per adapter.
     """
     if agent is None:
         return _ORDER, ()

@@ -13,15 +13,14 @@ would already depend on everything through here.
 
 So: `_EXPORTS` maps each public name to the module that defines it, and PEP 562's `__getattr__`
 imports that module on first read, caching the result as a plain global. The names are declared
-for real under `TYPE_CHECKING`, so type checkers and editors see the same namespace they always
-did. `tests/test_facade.py` pins the win.
+for real under `TYPE_CHECKING`, so type checkers and editors see the full namespace.
 
-The three exceptions are `tool`, `guardrail` and `approval`, imported eagerly below. Each names
-both a submodule and the decorator that submodule defines, and `__getattr__` only runs for an
-attribute this module doesn't have: the moment anything imports `runa.tool`, the import system
-binds the *module* here, and `from runa import tool` would hand back a module instead of a
-decorator. The eager facade won that race by importing the decorator last, and these three keep
-doing exactly that. They cost no subsystem -- a `@tool` file was importing `runa.tool` anyway.
+The three exceptions are `tool`, `guardrail` and `approval`, imported eagerly below. Each names both
+a submodule and the decorator that submodule defines, and `__getattr__` only runs for an attribute
+this module doesn't have: the moment anything imports `runa.tool`, the import system binds the
+*module* here, and `from runa import tool` would hand back a module instead of a decorator.
+Importing the decorator eagerly, after its module, wins that race. They cost no subsystem -- a
+`@tool` file was importing `runa.tool` anyway.
 """
 
 from importlib import import_module
@@ -119,7 +118,7 @@ Four names are missing. `db` is a submodule rather than a name inside one, and `
 read off the installed distribution rather than imported at all; `__getattr__` handles both
 itself. `tool`, `guardrail` and `approval` are the eager three, for the reason this module's
 docstring gives -- any new public name that collides with a submodule's belongs up there with
-them, which `tests/test_facade.py` checks rather than trusts.
+them.
 """
 
 __all__ = [

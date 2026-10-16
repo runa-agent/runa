@@ -91,7 +91,7 @@ class ModelSettings:
     """Per-call model parameters; a `Model` implementation uses whichever of these its API takes.
 
     "Whichever" is a closed set, not a courtesy: every field here reaches both backends' request
-    body, or is named in `tests/test_models.py`'s closure test as one that deliberately doesn't.
+    body, unless it is one a backend deliberately doesn't take.
     A setting that configures nothing is the failure `check_model_name` exists to prevent, one
     field over -- the bill and the caller's mental model disagree, with no signal anywhere.
     """

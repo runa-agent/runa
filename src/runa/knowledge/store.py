@@ -61,8 +61,8 @@ class KnowledgeStore(Protocol):
         """Record `version` as the corpus the store now holds, leaving the chunks alone.
 
         The other half of the pair, and the reason it isn't folded into `reset`: a version claims
-        the chunks are there, so it can only be written once they are. `Knowledge._rebuild` calls
-        this after its last `add`, never before its first.
+        the chunks are there, so it can only be written once they are: after the last `add`,
+        never before the first.
         """
         ...
 

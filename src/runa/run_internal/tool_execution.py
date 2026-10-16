@@ -109,7 +109,7 @@ class _TurnOutcome:
     """How the turn loop came out: an answer, or interruptions waiting on a human.
 
     Only what the loop couldn't put on its `_Run` as it went. Everything it did record there --
-    the generated items, which agent ended up answering -- `_finish` reads off the run.
+    the generated items, which agent ended up answering -- is read off the run.
     """
 
     final_output: Any

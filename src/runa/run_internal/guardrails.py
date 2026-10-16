@@ -23,10 +23,10 @@ async def _run_guardrails(
     it, but every entry that already ran is in the run's audit trail, so a tripped run's trail is
     complete up to the stop.
 
-    `phase` is the whole of what four near-identical binders used to be: whose list to read (the
-    agent's, or `tool`'s), and which phase the audit trail and a tripwire report. Every entry is
-    called the same way, with the one `value` the caller already has -- what each phase makes of
-    that value is stated once, in `guardrail._checked`, beside the `Phase` that decides it. A
+    `phase` decides whose list to read (the agent's, or `tool`'s), and which phase the audit trail
+    and a tripwire report. Every entry is called the same way, with the one `value` the caller
+    already has -- what each phase makes of that value is stated once, beside `Phase` in
+    `runa.guardrail`. A
     tool phase also passes `spans`, so its guardrails hang under the call they guard rather than
     under the run.
     """

@@ -23,7 +23,7 @@ def _format_value(value: Any) -> str:
     """Pretty-print a span's `input`/`output` for display.
 
     `tracing/sqlite.py` round-trips a dict/list `input`/`output` through SQLite as compact JSON
-    text (only `attributes` comes back as a real dict, see `_row_to_trace`), so a string value
+    text (only `attributes` comes back as a real dict), so a string value
     here may itself be JSON worth re-indenting -- attempted first, falling back to the raw text
     for a value that was always a plain string.
     """

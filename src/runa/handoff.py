@@ -164,12 +164,12 @@ def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
     up as both, so it is yielded twice, once per mode -- which is what it is: two tools the model
     picks between.
 
-    What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), and
-    so is a delegate being a tool carrying the agent behind it (`agent_as_tool` sets it), so
-    reading both lives here and not in each module that needs the graph: `run_state` resolves a
-    paused run's agent by name, `_graph` draws the edges. An `AgentShape` standing in for an agent
-    walks the same way, the two being one shape from here (`Handoff.by_tool_name` absorbs the one
-    field where they differ).
+    What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), and so
+    is a delegate being a tool carrying the agent behind it (`agent_as_tool` sets it), so reading
+    both lives here and not in each module that needs the graph: `run_state` resolves a paused run's
+    agent by name, `Agent.graph` draws the edges. An `AgentShape` standing in for an agent walks the
+    same way, the two being one shape from here (`Handoff.by_tool_name` absorbs the one field where
+    they differ).
     """
     for handoff in Handoff.by_tool_name(agent.handoffs).values():
         yield "handoff", handoff.agent

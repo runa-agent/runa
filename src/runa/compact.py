@@ -4,8 +4,9 @@
 most recent exchange -- a rolling window, not a summary, the simplest thing that stops `history`
 from growing without bound. `compact=my_fn` swaps in any other strategy instead -- a different
 threshold, an LLM summary, dropping by item count rather than tokens -- since a `Compactor` gets
-full raw `items`/`usage_tokens` and decides entirely for itself whether/how to trim. See
-`run_internal.run_loop._maybe_compact`, the only caller.
+full raw `items`/`usage_tokens` and decides entirely for itself whether/how to trim. The turn
+loop calls it mid-run and once more when the run finishes, so the next call's history reflects
+the same cut.
 """
 
 from typing import Protocol

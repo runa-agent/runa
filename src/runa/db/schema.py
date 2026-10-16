@@ -45,8 +45,7 @@ declaration below has to reach databases that already exist. `CREATE TABLE IF NO
 do that -- on an existing table it is a no-op, and the next query fails with `no such column`.
 `reconcile` is the other half: it diffs what the declaration says against what the database has
 and emits the `ALTER TABLE ... ADD COLUMN` the difference needs, so the two halves answer from the
-same declaration. `eval/sqlite.py` used to hand-roll that diff for its one column inside its own
-`_connect`, which worked exactly until a second column landed.
+same declaration.
 """
 
 from collections.abc import Iterable

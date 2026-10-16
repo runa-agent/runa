@@ -16,9 +16,9 @@ from runa.tracing.util import gen_span_id
 class _Spans:
     """Where a span opened right here belongs: which trace, and under which parent.
 
-    One value instead of the `(trace, parent_id)` pair every step used to take alongside its own
-    arguments. A step that opens spans inside its own (a tool call, around its guardrails) hands
-    on `under(span)` rather than remembering to swap one of two parameters.
+    One value instead of a `(trace, parent_id)` pair beside every step's own arguments. A step that
+    opens spans inside its own (a tool call, around its guardrails) hands on `under(span)` rather
+    than remembering to swap one of two parameters.
     """
 
     trace: Trace

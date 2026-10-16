@@ -48,8 +48,7 @@ class Interruption:
 # that can't round-trip through JSON. These Pydantic models are the actual JSON
 # envelope `to_json`/`to_string`/`from_json`/`from_string` serialize through -- kept separate
 # from the runtime dataclasses above, which stay plain dataclasses (hot-path, mutated in place,
-# and partly non-serializable by nature). This is Runa's only use of Pydantic; everywhere else
-# in the codebase is dataclass-only.
+# and partly non-serializable by nature).
 
 
 class _UsageSchema(BaseModel):
@@ -80,8 +79,7 @@ class _RunStateSchema(BaseModel):
     the way out -- which is the whole guard against this mapping drifting from the dataclass it
     mirrors. A blob missing a key is then a `UserError` from `from_json`, not a half-read state;
     every blob this version writes carries all of them, and an older one is refused by
-    `schema_version` anyway. `tests/test_run_state.py` checks the other direction, that no field
-    here is written from nothing and no `RunState` field is left out unnamed.
+    `schema_version` anyway.
 
     The guardrail audit trail (see `GuardrailResults`) is the one field with no counterpart here
     at all: every guardrail that ran is already a span in the trace `trace_id` names. The

@@ -4,10 +4,8 @@
 other local adapter writes to (`db/sqlite.py`), so a local app accumulates one `runa.db` with no
 setup regardless of which concern wrote to it first.
 
-The tables are `tracing/store.py`'s `TRACES`/`SPANS`, rendered here in SQLite's dialect. They
-used to be a second `CREATE TABLE` string, kept in step with `tracing/postgres.py`'s by a
-docstring asking for it: the Postgres side carried indexes this one lacked, which made `runa ui`
-fast on a shared deployment and slow on a laptop for no reason anyone had stated.
+The tables are `tracing/store.py`'s `TRACES`/`SPANS`, rendered here in SQLite's dialect, so both
+backends carry the same columns and indexes.
 """
 
 import sqlite3

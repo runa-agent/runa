@@ -66,10 +66,10 @@ def check_model_name(name: str) -> None:
     be answered with a default: `"claud-sonnet-5"` would send an app's prompts to a different
     company than its author believes, under a different key, and report the resulting 404 as
     model misbehaviour mid-run. Runa already refuses to let a misspelled *setting* name
-    (`modell = ...`) configure nothing silently (`agent._reject_unknown_settings`); the typo one
-    field over, on the value that selects the provider, gets the same answer.
+    (`modell = ...`) configure nothing silently; the typo one field over, on the value that
+    selects the provider, gets the same answer.
 
-    `Agent.__init__` calls this at construction, through `_checked_model`, so the common case
+    `Agent.__init__` calls this at construction, so the common case
     fails before a run and names the attribute. `get_model` calls it too, being the seam a
     `RunConfig`'s own provider can be reached through without an `Agent`. For an endpoint Runa
     doesn't name -- a gateway, a proxy, something self-hosted -- the sanctioned shape is a `Model`

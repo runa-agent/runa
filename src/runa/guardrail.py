@@ -23,10 +23,9 @@ _GuardrailFunction = Callable[[Any], Awaitable["GuardrailVerdict"]]
 class Phase(StrEnum):
     """Where a guardrail runs: agent-or-tool by input-or-output, the 2x2 named once.
 
-    The phase decides everything the four used to spell out separately: which list an entry
-    belongs to, what the one value its function is handed means (the agent's own input or final
-    output, a tool call's arguments or return value), which key its results are recorded under,
-    and how a tripwire names it.
+    The phase decides everything about an entry: which list it belongs to, what the one value its
+    function is handed means (the agent's own input or final output, a tool call's arguments or
+    return value), which key its results are recorded under, and how a tripwire names it.
     """
 
     INPUT = "input"
@@ -142,11 +141,10 @@ class GuardrailAudit:
 class BoundGuardrail:
     """A predicate bound to one `Phase`: what an `Agent`'s or a `@tool`'s guardrail list holds.
 
-    One entry type for all four cells of the 2x2, which used to be four dataclasses (six, with
-    the two that added nothing but `predicate`) carrying the same two fields and the same
-    `get_name()`. `phase` is the entire difference between them. `predicate` is the raw
-    `(value) -> bool` that was wrapped, kept so the same bound object can be rebound against a
-    tool call when it's listed in `@tool(guardrails=[...])` instead of on an agent.
+    One entry type for all four cells of the 2x2: `phase` is the entire difference between them.
+    `predicate` is the raw `(value) -> bool` that was wrapped, kept so the same bound object can be
+    rebound against a tool call when it's listed in `@tool(guardrails=[...])` instead of on an
+    agent.
     """
 
     guardrail_function: _GuardrailFunction

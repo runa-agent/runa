@@ -1,10 +1,10 @@
 """active_run.py: `_Run`, the one value the turn loop and every step under it is passed.
 
-A run is one object from the moment `_run_async` builds it to the moment `_finish` turns it into
-the caller's `Run`: the agent, its `Transcript`, the `RunContext` user code is handed and the
-`_Governance` it isn't, the span everything hangs under, and the hooks, config and `emit` this
-particular call was made with. `_run_turns` and the steps it calls take this, not a re-listing of
-its fields, so something a run starts carrying doesn't ripple through a dozen signatures.
+A run is one object from the moment the loop starts it to the moment it becomes the caller's `Run`:
+the agent, its `Transcript`, the `RunContext` user code is handed and the governance it isn't, the
+span everything hangs under, and the hooks, config and `emit` this particular call was made with.
+The turn loop and the steps it calls take this, not a re-listing of its fields, so something a run
+starts carrying doesn't ripple through a dozen signatures.
 
 It lives here rather than in `run_loop` for one reason: `tool_execution` takes a `_Run` too, and
 it has no business importing the loop that calls it.

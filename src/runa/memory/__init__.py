@@ -5,7 +5,7 @@ The store contract and its `MemoryMatch` live in `memory/store.py`, re-exported 
 a bare `Memory()` gets is `runa.db`'s decision, not this module's: `memory/sqlite.py` locally,
 `memory/postgres.py` when `RUNA_DATABASE_URL` points at a shared database.
 
-`remember_from_conversation` is what `run_internal.run_loop._run_async` calls after a run to turn
+`remember_from_conversation` is what a run calls once it finishes, to turn
 the turn's exchange into zero or more remembered facts; `MemoryLike` is the contract (it and
 `search`) a wholesale custom `memory=` object needs, as opposed to `Memory(store=...)`'s
 narrower escape hatch of swapping just the storage backend.
@@ -136,13 +136,13 @@ class Memory:
     ) -> list[str]:
         """Ask `model` what's durably worth remembering from `conversation`, and store it.
 
-        Called by `run_internal.run_loop._run_async` after a run when `agent.memory` is set, not
+        Called by the run itself once it finishes when `agent.memory` is set, not
         meant to be called directly by app code, but part of `MemoryLike`, the contract a custom
         `memory=` object must implement alongside `search`. Returns the texts it stored, empty if
         none were worth it.
 
         A reply this can't read JSON out of stores nothing and logs a warning, the way a failed
-        retrieval degrades in `run_loop._retrieve`: "nothing worth remembering" and "the model
+        retrieval degrades: "nothing worth remembering" and "the model
         answered with prose" are the same empty list to a caller, and an agent on `memory="auto"`
         that has quietly stopped learning is a failure nobody would otherwise report.
         """

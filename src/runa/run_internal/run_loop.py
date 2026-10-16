@@ -115,8 +115,8 @@ async def _no_matches() -> list[Any]:
 # `MemoryLike`/`KnowledgeLike` whose `search` doesn't match the contract, and which would
 # otherwise read as a memory that simply never has anything to say.
 #
-# `RuntimeError` is not a third group, and adding it back inverts this for the one failure the
-# rest of Runa works hardest to handle: it's what async plumbing raises for lifetime faults --
+# `RuntimeError` is deliberately not a third group, because it's the one failure the rest of
+# Runa works hardest to handle: it's what async plumbing raises for lifetime faults --
 # httpx's "client has been closed", asyncio's "Event loop is closed", a pool reached from a loop
 # that didn't open it. That is the backend not answering, in its most literal form. `runa._loop`
 # exists for those faults precisely because `run_sync` opens a loop per call; a custom store
@@ -191,7 +191,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
 def _maybe_compact(
     shape: AgentShape, items: list[ConversationItem], usage_tokens: int, spans: _Spans
 ) -> None:
-    """Run `agent.compact`'s `Compactor`, if any, and replace `items` in place if it trims them.
+    """Run the agent's `compactor`, if any, and replace `items` in place if it trims them.
 
     Called twice: mid-`_run_turns`, on `items`, so a single run's own repeated calls (a long
     tool-calling loop) don't keep resending an ever-growing prompt; and once more when the run
@@ -399,10 +399,8 @@ async def _guarded(
 
     It takes the things a run is known by before its first turn rather than the `_Run` the
     loop works on, because resolving the agent's shape is itself inside here: listing an MCP
-    server's tools starts a subprocess, and a server that won't start used to be the one failure
-    that happened before a run had a trace -- which is the whole reason `Run.trace` was once
-    optional. The trace and the span exist first, the shape is resolved under them, and every way
-    out of a run now ends with a trace to read.
+    server's tools starts a subprocess, which can fail. The trace and the span exist first and the
+    shape is resolved under them, so every way out of a run ends with a trace to read.
 
     `timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding it is
     translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its

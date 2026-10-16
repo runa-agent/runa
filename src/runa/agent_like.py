@@ -1,39 +1,21 @@
 """agent_like.py: `AgentLike`, what Runa reads off an agent, written as types.
 
-"An agent" is the framework's most central seam, and almost nothing that reads one can import the
-class that implements it: `Agent` is assembled *out of* `runa.handoff`, `runa.run_state`,
-`runa.lifecycle` and `runa.run_internal`, so each of those importing `runa.agent` back would be a
-cycle. The dependency has to point this way. What it must not cost is the definition: an agent is
-one shape, and this module is where it is written down, so every layer that reads one -- and a
-`Hooks` subclass in an application, handed an agent by every callback -- names the same type
-instead of taking `Any` and asking an object for an attribute it may not have.
+Most layers that read an agent (`runa.handoff`, `runa.run_state`, `runa.lifecycle`,
+`runa.run_internal`) can't import `runa.agent`, which is built out of them. They, and an
+application's `Hooks` subclass, name this `Protocol` instead of taking `Any`, so a renamed or
+misspelled attribute is a type error rather than a `getattr` default that reads as "not set".
 
-That default is the failure this exists to remove. `getattr(agent, "handoffs", None) or []` reads
-a renamed or misspelled attribute as "this agent has no subagents" and lets the run proceed --
-`Agent._reject_unknown_settings`'s bug one layer down, where there is no class body left to
-check. Written as a type, the same mistake is a type error at `Agent.run`, where the class hands
-itself to the loop.
+**The read side only.** Every member is a property, so a subclass's plain class attribute
+satisfies it. Which names are settings at all is `Agent.__init__`'s signature to say; these are
+the resolved attributes a run reads, not a second way to configure an agent.
 
-**The read side only**, and read-only in fact: every member below is a property, because a
-subclass is where the values come from and a mutable attribute would have to match this
-declaration exactly rather than merely satisfy it -- `instructions = "Be helpful."` is a `str`,
-and only a type nobody can assign through accepts it as one of the three things `instructions`
-may be. Which names are settings at all is `Agent.__init__`'s to say (`agent._AGENT_FIELDS`);
-these are the resolved attributes a run then reads, so this is no second way to configure an
-agent.
+Three names differ from their declaration: `guardrails` and `compact` resolve to
+`bound_guardrails` and `compactor`, and `memory`/`knowledge` keep their names while changing kind
+(`"auto"` becomes the object it built). Those two are typed `Any`; `Agent.__init__` guarantees
+that a run only ever sees an object or `None`.
 
-Three names carry the irregularity of the class they describe. `guardrails` and `compact` stay
-the declaration's, so their resolved forms answer to `bound_guardrails` and `compactor`; and
-`memory`/`knowledge` are the one pair whose declaration and resolution are different *kinds* of
-value under one name (`"auto"`, or the object it built), so a type checker reading a subclass and
-one reading a run would each see a different half. They are typed `Any` and `Agent.__init__` is
-the guarantee instead: by the time a run reads either, it is an object or `None`.
-
-`Agent` is the one implementation. `run_internal.agent_shape.AgentShape` is deliberately not a
-second one: it is an agent's shape *resolved*, folding `mcp_servers` into `tools`, which is why
-the two places that take either say so (`AgentShape.of`, `run_loop._run_async`). What no
-annotation can state is the dynamic half, that `AgentShape.of` copies each member below into the
-field named for it, and that stays a test (`tests/test_agent.py`).
+`Agent` is the one implementation. `runa.run_internal.agent_shape.AgentShape` is the same agent
+*resolved*, with `mcp_servers` folded into `tools`.
 """
 
 from collections.abc import Callable

@@ -113,9 +113,8 @@ def baseline_clause(
     """Everything after `SELECT id FROM eval_runs` for `EvalStore.baseline`, and its values.
 
     One sentence of policy: the newest run of `agent_name`, strictly older than `before` when
-    there is one. `before=None` drops the comparison rather than widening it to a sentinel -- the
-    SQLite adapter used to bind `2**63 - 1` to cover both cases in one statement while the
-    Postgres one branched into two queries, which is two renderings of a rule with one boundary.
+    there is one. `before=None` drops the comparison rather than widening it to a sentinel, so
+    both adapters render the rule the same way.
 
     The whole tail rather than the `WHERE` alone, for the reason `tracing/store.py`'s
     `listing_clause` is: the `ORDER BY ... LIMIT 1` is what makes it "the latest", and a numbered

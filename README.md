@@ -37,8 +37,8 @@ delegate or hand off work to another.
 ## Context layer
 
 The _**Context layer**_ is what an agent remembers between and within runs.
-[Sessions](https://runa-agent.github.io/runa/sessions/) hold the
-conversation for a single run.
+[Sessions](https://runa-agent.github.io/runa/sessions/) keep a
+conversation going past the agent instance that started it.
 [Memory](https://runa-agent.github.io/runa/memory/) carries facts forward
 across runs. [Knowledge](https://runa-agent.github.io/runa/knowledge/) gives
 an agent access to your domain's documents, retrieved rather than pasted
@@ -52,8 +52,8 @@ outside world and to the model that powers it.
 and resources over the Model Context Protocol.
 [Models](https://runa-agent.github.io/runa/models/) are configured per
 agent, not globally, so different agents can run on different providers.
-Hooks let you observe or intercept a run at well-defined points without
-subclassing.
+Hooks let you observe or intercept a run at well-defined points, by
+overriding only the lifecycle methods you need.
 
 ## Built in, not bolted on
 

@@ -7,8 +7,8 @@ virtual table, for a deployment where every replica searches one set of memories
 Both the `pgvector` storage and the mapping onto it are shared (`db/vectors/postgres.py`,
 `memory/vector.py`). `user_id` is a filter column there rather than a partition key, since
 pgvector has no partition-key primitive, and it is indexed because this spec declares it as the
-partition. Distance is `<->` (Euclidean/L2), matching `sqlite-vec`'s default and `Memory`'s
-`_DUPLICATE_DISTANCE` assumption.
+partition. Distance is `<->` (Euclidean/L2), matching `sqlite-vec`'s default and the
+distance `Memory`'s duplicate threshold assumes.
 """
 
 from runa.db.vectors.postgres import PostgresVectorStore

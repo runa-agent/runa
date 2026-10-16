@@ -1,10 +1,8 @@
 """tracing/config.py: the privacy policy every captured span/trace goes through, plus `observe()`.
 
 Also the one place that knows how a finished trace reaches the exporters: `export_trace` for a
-synchronous caller, `export_trace_off_loop` for a run that has a loop to protect. Both are here
-rather than at the two call sites because they were the same six lines written twice, in
-`run_internal/spans.py` and `tracing/manual.py`, and because which thread an exporter runs on is
-this module's decision to make -- see `TraceExporter`.
+synchronous caller, `export_trace_off_loop` for a run that has a loop to protect. Which thread an
+exporter runs on is this module's decision to make -- see `TraceExporter`.
 
 One small policy, not a policy engine. `capture_inputs`/`capture_outputs` gate whether
 input/output are kept at all; `redact`/`redactor` scrub what's kept; the `max_*_bytes`
@@ -60,8 +58,8 @@ _exporting = ThreadPoolExecutor(max_workers=1, thread_name_prefix="runa-export")
 """The thread every off-loop export runs on, created on the first one.
 
 One worker, deliberately. An exporter is usually a user's own class, so "your `export` is never
-called from two threads at once" is a promise worth more than exporting two traces in parallel --
-and it keeps the ordering a single loop thread used to give for free. It is also why this is not
+called from two threads at once" is a promise worth more than exporting two traces in parallel,
+and it keeps traces exported in the order runs finished. It is also why this is not
 `asyncio.to_thread`: that pool is shared with the sync `@tool` and `@guardrail` offloads, where a
 burst of slow trace writes would sit in the slots a tool call needs.
 """
@@ -84,12 +82,11 @@ def export_trace(trace: Trace) -> None:
 async def export_trace_off_loop(trace: Trace) -> None:
     """`export_trace`, moved onto `_exporting` so a slow exporter can't stall the event loop.
 
-    The call site is a finishing run (`run_internal/run_loop.py`'s `_close_trace`), which under
-    `runa serve` is sharing one loop with every other request in flight. Calling a blocking
-    exporter from there -- a Langfuse OTLP POST with retries behind it, a `PostgresTraceStore.save`
-    that waits up to 30s on a struggling database -- stops that loop dead, so one run's
-    observability hiccup became every concurrent run's latency. Awaiting the same work on another
-    thread costs this run the same milliseconds it always did and costs the others nothing.
+    The caller is a finishing run, which under `runa serve` shares one loop with every other
+    request in flight. A blocking exporter called there -- a Langfuse OTLP POST with retries
+    behind it, a `PostgresTraceStore.save` that waits up to 30s on a struggling database -- would
+    stop that loop dead, turning one run's observability hiccup into every concurrent run's
+    latency.
 
     The run still waits for its own export, which is what keeps `Run` and the trace store
     consistent for the caller: once `run_sync` returns, the trace is written. The context is
@@ -107,12 +104,8 @@ class StoreExporter:
     The whole implementation, for every persistent exporter: which store it holds is decided once,
     when the exporter is built, instead of per write. `SQLiteExporter` and `PostgresExporter` are
     this class with a store already chosen, and `_local_exporter` builds one over whatever
-    `runa.db.traces()` resolved.
-
-    Deciding once is a fix, not a tidy-up. The old `SQLiteExporter.export` called a module-level
-    `save_trace` that asked `runa.db` for the backend all over again, so the exporter a
-    deployment had installed and the store its traces landed in were two separate answers to one
-    question.
+    `runa.db.traces()` resolved. The exporter a deployment installed and the store its traces land
+    in are therefore one answer, not two.
     """
 
     def __init__(self, store: TraceStore) -> None:
@@ -326,14 +319,12 @@ def _updates(named: dict[str, Any]) -> dict[str, Any]:
     """The overrides that were actually named, as the `Policy` field names `_merge` takes.
 
     `named` is the calling signature's own `locals()`, which holds exactly one entry per
-    parameter -- the same seam `Agent.__init__` hands `_settings`. Both call sites spell their
-    options out as keyword-only parameters, so a misspelled one is a `TypeError` where it was
-    written; this is only the shared translation of what they collected, and it reads the names
-    off `_OVERRIDABLE` instead of forwarding them one by one. That the forwarding is gone is the
-    point: five of the eight options share a type with a neighbour, so a hand-copied
-    `max_input_bytes`/`max_output_bytes` swap would have type-checked perfectly. A parameter
-    renamed out of step with its field now raises here on the first call rather than overriding
-    nothing. Anything else `named` carries (`self`) is never read.
+    parameter. Both call sites spell their options out as keyword-only parameters, so a
+    misspelled one is a `TypeError` where it was written; this is only the shared translation of
+    what they collected, reading the names off `_OVERRIDABLE` rather than forwarding them one by
+    one (five of the eight options share a type with a neighbour, so a swapped pair would
+    type-check). A parameter renamed out of step with its field raises here on the first call
+    rather than overriding nothing. Anything else `named` carries (`self`) is never read.
     """
     updates: dict[str, Any] = {n: named[n] for n in _OVERRIDABLE if named[n] is not None}
     if (exporter := named["exporter"]) is not None:

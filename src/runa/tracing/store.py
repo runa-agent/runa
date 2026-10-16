@@ -5,9 +5,8 @@ One interface, three adapters: `tracing/sqlite.py`, `tracing/postgres.py`,
 which is what lets `runa traces`, `runa ui` and the exporter stay backend-agnostic: they hold a
 `TraceStore` and get whichever history the deployment actually has.
 
-Asked once is the point. The exporter used to decide twice on a single write -- `tracing/config.py`
-picked an exporter by reading the environment, and the `save_trace` it called then read the
-environment again -- so the two could disagree.
+Asked once is the point: the exporter a deployment installs and the store its traces land in
+can't disagree.
 
 The two tables live here too, and so does the marshalling: `TRACES`/`SPANS` state what a row is
 (`db/schema.py` renders them for whichever dialect an adapter speaks) and
@@ -119,10 +118,8 @@ class TraceStore(Protocol):
 def require_trace(store: TraceStore, trace_id: str) -> Trace:
     """Look `trace_id` up in `store`, raising `TraceNotFound` when it has no such trace.
 
-    The raising form of `get`, which is the only form the three surfaces above a store want: each
-    of them used to ask `get` and then re-derive the same `if trace is None: raise` with the same
-    message, so rewording it meant rewording it three times. `get` stays as it is, since "is it
-    there" is still a question worth being able to ask.
+    The raising form of `get`, which is the only form the three surfaces above a store want, so
+    the message is worded once. `get` stays, since "is it there" is still a question worth asking.
     """
     trace = store.get(trace_id)
     if trace is None:

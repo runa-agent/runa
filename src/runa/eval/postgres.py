@@ -7,8 +7,7 @@ picked up automatically whenever `RUNA_DATABASE_URL` is a `postgresql://` one.
 
 Optional: part of the `runa[postgres]` extra, like `db/pool.py` and `tracing/postgres.py`. The
 two tables, the row marshalling and the clause selecting a baseline run are `eval/store.py`'s,
-shared with the SQLite adapter; `baseline` used to branch into two queries here where SQLite
-covered both cases with a sentinel, which is one rule written twice.
+shared with the SQLite adapter.
 """
 
 from datetime import UTC, datetime

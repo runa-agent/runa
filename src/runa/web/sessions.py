@@ -5,7 +5,7 @@ Data comes from the `SessionStore` and `TraceStore` `runa.db` resolves for this 
 and traces as two separate lists a reader has to cross-reference by hand.
 
 The listing is newest first, which is the order the store returns and the order `runa chat --list`
-prints. It used to be this page reversing an oldest-first read of its own.
+prints.
 """
 
 from datetime import UTC, datetime

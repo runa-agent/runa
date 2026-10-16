@@ -4,8 +4,7 @@ Every surface that drives someone else's app needs the same three answers: is `r
 project, has its `main.py` been imported (so its `load_dotenv()`, or whatever else it does, has
 run, same as `python main.py` would), and which `Agent` subclasses does it declare. `runa chat`,
 `runa serve` and `runa ui` all ask, so the answers live here rather than in whichever surface
-asked first. They used to live in `cli/_project.py`, which meant `runa.serve` and `runa.web`
-importing a private module of the CLI for machinery that was never about argv.
+asked first.
 
 **Which app this process reads is one fact, and `use(root)` is how it is said.** The fact itself
 lives in `runa._app`, a leaf this module and `runa.db` both read: `runa.db` resolves the app's
@@ -13,7 +12,7 @@ state against it, and this module imports the app's `main.py` from it. It is one
 can never name different apps. A second, different app is refused there, once, in one message.
 
 `use(root)` states the fact; the app's `main.py` is imported the first time anything reads its
-modules, and once per process however many callers ask (see `_ensure_imported`). That is what
+modules, and once per process however many callers ask. That is what
 lets `runa serve` fail at startup, where it lists the agents it is about to serve, while `runa ui`
 still renders Sessions and Evaluations for an app whose `main.py` is broken -- both surfaces say
 the same one thing, and the import lands where their own work puts it.
@@ -130,8 +129,8 @@ def loaded_app(root: Path) -> Iterator[None]:
     The root outlives the block, the way it outlives the command, so a `Session` or a `Memory`
     built inside still resolves against this project when a `finally:` elsewhere writes to it.
     Only the import is the block's own, and on the way out it goes back to what was true before.
-    A process that had already imported this app (a test opening a block inside a `create_app`'s
-    process, see `tests/serve/test_serve.py`) still has that import afterwards, so it is still
+    A process that had already imported this app (a block opened inside a `create_app`'s
+    process) still has that import afterwards, so it is still
     that process's to undo. A block on a *different* root is refused by `use` before anything
     moves.
     """
@@ -232,7 +231,7 @@ def _retrieval_label(setting: object) -> str:
 def _describe(agent_cls: type[Agent]) -> AgentInfo:
     """Summarize `agent_cls` for display: the settings worth a row on the Agents page.
 
-    Deliberately a subset of `agent._AGENT_FIELDS`, and deliberately the declared values rather
+    Deliberately a subset of `Agent`'s settings, and deliberately the declared values rather
     than the resolved ones (nothing here instantiates the class). A setting missing from this
     list configures the agent exactly as before; it just doesn't get a row, so this is not one of
     the paths a new setting has to join.

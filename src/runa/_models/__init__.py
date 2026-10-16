@@ -25,8 +25,8 @@ two).
 
 The two backends are resolved one name at a time, the way `runa`'s own facade resolves the
 public surface: a package's `__init__` runs before any of its submodules, so naming them here
-eagerly would make the Anthropic SDK -- three of the four seconds `runa` used to cost to import
--- a load-time dependency of everything that reads `DEFAULT_MODEL` or `check_model_name`, which
+eagerly would make the Anthropic SDK -- most of the cost of importing a provider -- a load-time
+dependency of everything that reads `DEFAULT_MODEL` or `check_model_name`, which
 is `runa.agent` and so every entry point. `ModelProvider.get_model` imports the backend it
 routes to; nothing else needs either.
 """

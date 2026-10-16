@@ -15,30 +15,18 @@ is what a test suite wants and what no deployment does.
 The factories below are how every call site asks, one per concern. Each returns a store object,
 so nothing above this module names a backend, a URL or a path: `runa ui` holds a `TraceStore`, not
 a file, and moving a deployment to Postgres stays one environment variable rather than an edit.
-Resolving here is also what keeps the promise honest, since a deployment where traces follow the
-variable but sessions don't is worse than one where neither does.
+Every concern follows the variable together; a deployment where traces moved but sessions didn't
+would be worse than one where neither did.
 
-Which project is being read is the one other thing every factory needs, and it is asked once too:
-`runa.project.use(root)` points the process at an app's directory, and every factory above resolves
-against it. The fact is held in `runa._app`, the leaf both this module and `runa.project` read,
-because this module cannot import that one. The process's cwd is the default, which is what a bare
-`python main.py` wants. A function handed someone else's project `root` says so through `use`
-(`runa`'s `main(cwd=...)`, both `create_app(root)`s, and the `loaded_app` blocks of
-`run_agent_repl`, `run_project_evals` and `run_project_tests`), so that taking a `root` and reading
-that project's state are never two different things. Everything downstream of them (`runa ui`'s
-readers, `agent.evaluate()`, a `@tool` opening a session) gets the answer without naming a
-directory. A `root` that survives elsewhere means a filesystem path, like `evals/`, rather than a
-second opinion about the database.
-
-A `root=` parameter per factory was the same promise made seven times and kept four: `Memory`
-and `Knowledge` are built inside `Agent.__init__`, which has no notion of a project root and
-should not grow one, so their stores silently used the cwd while sessions, traces and eval
-history followed the argument. One application's state split across two files is the exact
-failure this module exists to prevent, so the root is held once rather than threaded, the way
-`RUNA_DATABASE_URL` already is. For the database that moves the *local* file only; a shared
-deployment has one database and no such choice to make, so `sqlite_path` goes unread. State an
-app keeps as files rather than rows -- `Knowledge`'s source directory -- moves either way, and
-asks `project_path` instead.
+Which project is being read is the one other thing every factory needs, and it is held once too,
+rather than threaded as a `root=` per factory (`Memory` and `Knowledge` are built inside
+`Agent.__init__`, which has no notion of a project root): `runa.project.use(root)` points the
+process at an app's directory, and every factory resolves against it. The process's cwd is the
+default, which is what a bare `python main.py` wants. A function handed someone else's project
+`root` says so through `use`, so that taking a `root` and reading that project's state are never
+two different things. For the database that moves the *local* file only; a shared deployment has
+one database, so `sqlite_path` goes unread. State an app keeps as files rather than rows --
+`Knowledge`'s source directory -- moves either way, and asks `project_path` instead.
 
 Every adapter import is deferred into the function that needs it: an app without the `postgres`
 extra has to be able to ask the question and get the SQLite answer.

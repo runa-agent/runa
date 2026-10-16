@@ -47,11 +47,11 @@ from runa.session.store import (
 def _off_loop[**P, T](method: Callable[P, T]) -> Callable[P, Coroutine[Any, Any, T]]:
     """Turn one synchronous `sqlite3` method into the `async def` `Session` declares.
 
-    Off the event loop, like a sync `@tool`, a sync `@guardrail` and `Knowledge._digest`: these
-    bodies are file I/O, a session-backed turn runs three of them (a read, then the read and write
-    behind `_save_to_session`), and `runa serve`'s default deployment is this backend on the loop
-    that is also serving every other request. Awaiting something that never yields is how one
-    turn's `fsync` becomes every concurrent turn's latency.
+    Off the event loop, like a sync `@tool` and a sync `@guardrail`: these bodies are file I/O, a
+    session-backed turn runs three of them (a read, then a read and a write to save the turn), and
+    `runa serve`'s default deployment is this backend on the loop that is also serving every other
+    request. Awaiting something that never yields is how one turn's `fsync` becomes every concurrent
+    turn's latency.
 
     A thread hop costs a few hundred microseconds against a local file's millisecond, and it is
     what makes the `await` honest. What it does not buy is parallel writes: SQLite has one writer

@@ -136,10 +136,8 @@ class PostgresSessionStore(Shared):
     """The shared `SessionStore`: the read side of this deployment's session tables.
 
     Same ordering and the same timestamp rendering as `session/sqlite.py`, both of which come
-    from `session/store.py` rather than from here. They used to be this module's own: it broke
-    ties on `session_id` where SQLite broke them on `rowid`, and rendered a `TIMESTAMPTZ` with its
-    offset where SQLite's text had none, so one deployment's Sessions page and another's listed
-    the same two sessions in a different order and printed their timestamps differently.
+    from `session/store.py` rather than from here, so a local deployment and a shared one list
+    the same sessions in the same order with the same timestamps.
     """
 
     def __init__(self, url: str) -> None:
