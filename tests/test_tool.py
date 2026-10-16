@@ -11,18 +11,10 @@ from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase
 from runa.tool import FunctionTool
 
 
-def _run(g: BoundGuardrail, data: Any) -> GuardrailVerdict:
+def _run(g: BoundGuardrail, value: Any) -> GuardrailVerdict:
     """Call a wrapped tool guardrail's function directly, awaiting its always-async wrapper."""
-    coro = cast(Awaitable[GuardrailVerdict], g.guardrail_function(data))
+    coro = cast(Awaitable[GuardrailVerdict], g.guardrail_function(value))
     return run_awaitable(coro)
-
-
-class _Data:
-    """A stand-in for `ToolInputGuardrailData`/`ToolOutputGuardrailData`."""
-
-    def __init__(self, tool_arguments: str, output: Any = None) -> None:
-        self.context = cast(Any, type("Ctx", (), {"tool_arguments": tool_arguments})())
-        self.output = output
 
 
 @guardrail
@@ -105,8 +97,8 @@ def test_tool_input_guardrail_sees_parsed_arguments() -> None:
         return "now"
 
     (bound,) = now.guardrails[Phase.TOOL_INPUT]
-    assert _run(bound, _Data(tool_arguments='{"x": 1}')).tripped
-    assert not _run(bound, _Data(tool_arguments="{}")).tripped
+    assert _run(bound, '{"x": 1}').tripped
+    assert not _run(bound, "{}").tripped
 
 
 def test_tool_output_guardrail_sees_return_value() -> None:
@@ -118,5 +110,5 @@ def test_tool_output_guardrail_sees_return_value() -> None:
         return "now"
 
     (bound,) = now.guardrails[Phase.TOOL_OUTPUT]
-    assert _run(bound, _Data(tool_arguments="{}", output="x" * 101)).tripped
-    assert not _run(bound, _Data(tool_arguments="{}", output="short")).tripped
+    assert _run(bound, "x" * 101).tripped
+    assert not _run(bound, "short").tripped

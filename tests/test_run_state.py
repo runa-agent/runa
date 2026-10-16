@@ -129,7 +129,7 @@ fields that identify it, its spans being exported separately.
 """
 
 _NOT_SERIALIZED = {
-    "guardrail_results": "a guardrail's `output_info` is arbitrary, so not guaranteed JSON-safe",
+    "guardrail_results": "every guardrail that ran is already a span in the run's trace",
     "tool_calls": "a restored run reports the calls it makes itself, as its trace does",
 }
 """`RunState` fields deliberately left out of the JSON envelope, and why.

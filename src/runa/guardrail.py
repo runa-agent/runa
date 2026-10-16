@@ -25,8 +25,8 @@ class Phase(StrEnum):
 
     The phase decides everything the four used to spell out separately: which list an entry
     belongs to, what the one value its function is handed means (the agent's own input or final
-    output, a tool call's `data`), which key its results are recorded under, and how a tripwire
-    names it.
+    output, a tool call's arguments or return value), which key its results are recorded under,
+    and how a tripwire names it.
     """
 
     INPUT = "input"
@@ -52,7 +52,10 @@ class Phase(StrEnum):
 
 @dataclass
 class GuardrailVerdict:
-    """What a guardrail function returns: whatever it wants recorded, plus trip/no-trip.
+    """What a guardrail function returns: the predicate's docstring, plus trip/no-trip.
+
+    `output_info` is the `@guardrail` predicate's `__doc__` (or `None`), never anything it
+    computed: a predicate returns a bool, so what it checks for is all the audit trail can say.
 
     One shape for all four phases, because `tripped` is the only question anyone asks a verdict.
     Whether the guardrail watched an agent's turn or one tool call is `Phase`'s to say -- the
@@ -136,40 +139,6 @@ class GuardrailAudit:
 
 
 @dataclass
-class ToolInputGuardrailContext:
-    """What a tool input/output guardrail's `data.context` carries: the raw call it's checking."""
-
-    tool_arguments: str
-    tool_name: str = ""
-    call_id: str = ""
-
-
-@dataclass
-class ToolInputGuardrailData:
-    """What a tool guardrail function receives: the call's context, and its output once it ran."""
-
-    context: ToolInputGuardrailContext
-    output: Any = None
-
-    @classmethod
-    def of(cls, tool_name: str, args_json: str, call_id: str) -> ToolInputGuardrailData:
-        """Build what a call's guardrails see: which tool, the call, its arguments.
-
-        The only place a `ToolInputGuardrailContext` is constructed, so a field it carries can't
-        be populated for the input side and forgotten for the output side.
-        """
-        return cls(
-            context=ToolInputGuardrailContext(
-                tool_arguments=args_json, tool_name=tool_name, call_id=call_id
-            )
-        )
-
-    def returning(self, output: Any) -> ToolInputGuardrailData:
-        """The same call as the output side sees it: this context, plus what the tool returned."""
-        return ToolInputGuardrailData(context=self.context, output=output)
-
-
-@dataclass
 class BoundGuardrail:
     """A predicate bound to one `Phase`: what an `Agent`'s or a `@tool`'s guardrail list holds.
 
@@ -195,26 +164,26 @@ def _checked_input(value: str | list[ConversationItem]) -> str:
     return value if isinstance(value, str) else latest_text(value)
 
 
-def _tool_args(data: ToolInputGuardrailData) -> Any:
+def _tool_args(args_json: str) -> Any:
     """Parse a tool call's raw JSON arguments into a dict, falling back to the raw string."""
     try:
-        return parsed_arguments(data.context.tool_arguments)
+        return parsed_arguments(args_json)
     except ValueError:
-        return data.context.tool_arguments
+        return args_json
 
 
 def _checked(phase: Phase, value: Any) -> Any:
     """The value `phase`'s predicate actually sees, reduced from the one the runner passed.
 
     Every guardrail is called with exactly one argument, whatever its phase; what that argument
-    is, is this 2x2's only statement. An agent phase is handed the run's own input or final
-    output, a tool phase one `ToolInputGuardrailData`; an input phase checks what is going in
-    (the latest user text, the call's parsed arguments), an output phase what came back (the
-    agent's final output, the tool's return value).
+    is, is this 2x2's only statement. An output phase is handed what came back (the agent's
+    final output, the tool's return value) and checks it as-is; an input phase is handed what is
+    going in (the run's input, the call's raw JSON arguments) and checks it reduced (the latest
+    user text, the parsed arguments).
     """
-    if not phase.on_tool:
-        return value if phase.on_output else _checked_input(value)
-    return value.output if phase.on_output else _tool_args(value)
+    if phase.on_output:
+        return value
+    return _tool_args(value) if phase.on_tool else _checked_input(value)
 
 
 def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:

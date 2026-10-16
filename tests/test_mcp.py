@@ -11,7 +11,7 @@ from mcp_types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from runa import Agent, guardrail, mcp
 from runa._types import ModelResponse, RunContextWrapper, Usage
-from runa.guardrail import Phase, ToolInputGuardrailData
+from runa.guardrail import Phase
 from runa.mcp import (
     MCPServer,
     MCPServerStdio,
@@ -261,10 +261,8 @@ def test_a_servers_guardrails_are_bound_against_the_tool_call() -> None:
 
     assert function_tool.guardrails[Phase.TOOL_OUTPUT] == []
     (entry,) = function_tool.guardrails[Phase.TOOL_INPUT]
-    data = ToolInputGuardrailData.of("read_file", '{"path": "../etc/passwd"}', "call_1")
-    assert await_(entry.guardrail_function(data)).tripped
-    safe = ToolInputGuardrailData.of("read_file", '{"path": "notes.md"}', "call_2")
-    assert not await_(entry.guardrail_function(safe)).tripped
+    assert await_(entry.guardrail_function('{"path": "../etc/passwd"}')).tripped
+    assert not await_(entry.guardrail_function('{"path": "notes.md"}')).tripped
 
 
 def test_the_builder_carries_the_policy_onto_either_transport() -> None:

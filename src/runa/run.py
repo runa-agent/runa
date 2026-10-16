@@ -104,8 +104,9 @@ class Run(GuardrailAudit):
 
         One-way, unlike `RunState.to_json()`: a `Run` holds live objects (an `Agent`, a `Trace`'s
         spans) and there is no `from_payload`. The guardrail audit trail is left out for the same
-        reason `RunState` omits it -- a guardrail's `output_info` is arbitrary and not guaranteed
-        JSON-safe. Plain dicts only, no transport imported here, so this stays a runtime concern.
+        reason `RunState` omits it -- every guardrail that ran is already a span in the trace
+        `trace_id` names, tripped or not. Plain dicts only, no transport imported here, so this
+        stays a runtime concern.
         """
         return {
             "status": self.status,

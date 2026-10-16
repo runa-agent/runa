@@ -20,7 +20,7 @@ from runa._items import call_id as id_of  # `call_id` here is the id of the call
 from runa._types import RunContextWrapper
 from runa.agent_like import AgentLike
 from runa.exceptions import DuplicateToolCallError
-from runa.guardrail import Phase, ToolInputGuardrailData
+from runa.guardrail import Phase
 from runa.handoff import DelegatePaused
 from runa.run_internal.active_run import _Run
 from runa.run_internal.guardrails import _run_guardrails
@@ -47,10 +47,9 @@ async def _run_tool_call(
     span_type = "delegate" if tool.delegate is not None else "tool"
     span = run.span(tool.name, span_type, input=args_json)
     inside = run.spans.under(span)  # this call's guardrails belong under the call
-    data = ToolInputGuardrailData.of(tool.name, args_json, call_id)
     await run.hooks.on_tool_start(context_wrapper, run.current_agent, tool)
     try:
-        await _run_guardrails(run, Phase.TOOL_INPUT, data, tool=tool, spans=inside)
+        await _run_guardrails(run, Phase.TOOL_INPUT, args_json, tool=tool, spans=inside)
         try:
             result = await tool.on_invoke_tool(context_wrapper, args_json, call_id)
             error: str | None = None
@@ -61,9 +60,7 @@ async def _run_tool_call(
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
             result = f"error: {exc}"
             error = str(exc)
-        await _run_guardrails(
-            run, Phase.TOOL_OUTPUT, data.returning(result), tool=tool, spans=inside
-        )
+        await _run_guardrails(run, Phase.TOOL_OUTPUT, result, tool=tool, spans=inside)
     except BaseException as exc:  # a tripwire, a cancelled sibling call, ...: say which
         detail = str(exc)
         _close_span(span, error=f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)

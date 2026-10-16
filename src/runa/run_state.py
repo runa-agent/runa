@@ -83,9 +83,10 @@ class _RunStateSchema(BaseModel):
     here is written from nothing and no `RunState` field is left out unnamed.
 
     The guardrail audit trail (see `GuardrailResults`) and `RunState.tool_calls` are the fields
-    with no counterpart here at all: a guardrail's `output_info` isn't guaranteed JSON-safe, and
-    a restored run reports the calls it makes itself. A dataclass `context` does travel, but
-    loses its original type on the way back out (see `RunState.from_json`'s docstring).
+    with no counterpart here at all: every guardrail that ran is already a span in the trace
+    `trace_id` names, and a restored run reports the calls it makes itself. A dataclass `context`
+    does travel, but loses its original type on the way back out (see `RunState.from_json`'s
+    docstring).
 
     `delegates` and `delegate_owners` are the paused-delegate stash's two halves, straight off
     `PausedDelegates` and handed back to it by `from_json` -- which run owns a pending call is
