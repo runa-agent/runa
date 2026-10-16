@@ -55,8 +55,10 @@ calls then run one at a time, and the model is asked for one call per message.
 
 ## Reserved Parameters
 
-Name a parameter `ctx` or `call_id` to receive the run's `RunContextWrapper` or the tool call's
-id instead of a model-supplied argument. Neither appears in the tool's schema:
+Name a parameter `ctx` or `call_id` to receive the run's `RunContext` or the tool call's
+id instead of a model-supplied argument. Neither appears in the tool's schema. A `RunContext` is
+`ctx.context` (whatever was passed as `run(..., context=...)`) and `ctx.usage` (what the run has
+spent so far), nothing more:
 
 ```python
 @tool

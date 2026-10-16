@@ -13,7 +13,7 @@ in one object, rather than spread across `handoff`, the turn loop and `RunState`
 * taking a delegate back out drops its ownership with it, so a second pause records afresh.
 
 Ownership is recorded at stash time because that is the one moment it's known for free. A
-delegate of a delegate shares this stash (`RunContextWrapper.fork` passes it by reference, so
+delegate of a delegate shares this stash (a delegate runs on its caller's `_Governance`, so
 every depth lands in the same place), and the innermost run is the first to finish, so it is
 also the first to stash: `stash` keeps the earliest claim on a call id, which is the deepest
 one. That's the call stack unwinding, not a convention two modules have to agree on separately.
@@ -22,7 +22,7 @@ one. That's the call stack unwinding, not a convention two modules have to agree
 interruption is, and carries the whole stash through `to_json`/`from_json` via `restore`.
 
 This module imports nothing from `runa` at runtime, on purpose, for the same reason
-`runa.approval` doesn't: `_types` imports it to put one on every run's context.
+`runa.approval` doesn't: `_governance` imports it to put one beside every run's context.
 """
 
 from collections.abc import Mapping

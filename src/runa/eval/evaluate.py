@@ -7,9 +7,9 @@ metric past here takes a `Run`, so an application can grade a run it produced it
 to be an `AgentRun` in between, re-flattening five of `Run`'s fields, which meant every new
 graded fact cost two edits whose only job was keeping the two shapes in step.
 
-Each case gets a `_fresh()` copy of the agent for the same reason `agent_as_tool` does: a
-dataset's cases are independent, and up to `concurrency` of them run at once, so sharing one
-instance would let one case's conversation leak into the next.
+Each case gets a `_fresh()` copy of the agent: a dataset's cases are independent, and up to
+`concurrency` of them run at once, so sharing one instance would let one case's conversation
+leak into the next.
 
 Deterministic checks run first and cheaply; semantic metrics only run for a case whose run
 actually completed, so a case that errors doesn't also burn a judge-model call. See

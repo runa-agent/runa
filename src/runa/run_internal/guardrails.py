@@ -34,7 +34,7 @@ async def _run_guardrails(
     if not entries:
         return
     scope = run.spans if spans is None else spans
-    results = run.context_wrapper.guardrail_results
+    results = run.governance.guardrail_results
     for entry in entries:
         with scope.span(entry.get_name(), "guardrail") as span:
             verdict = await entry.guardrail_function(value)

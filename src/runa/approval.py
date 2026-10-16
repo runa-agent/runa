@@ -9,17 +9,18 @@ spread across the turn loop and `RunState`:
 * a rejection with no message of its own gets `ApprovalLedger.DEFAULT_REJECTION`;
 * a call id is claimed before it runs, and a claimed id never runs again.
 
-`RunContextWrapper` holds one `ApprovalLedger`, shared by reference with every delegate it
-forks (`RunContextWrapper.fork`), which is what makes a caller's "always" answer cover the
-delegate's matching tool. `run_internal.tool_execution` asks it `decide`/`claim`; `RunState`
-tells it `record` when an operator answers "always". Where a *paused delegate* is stashed, which
-of a run's interruptions are really its, and how both survive a restart belong to
-`runa.paused_delegates.PausedDelegates`, held on the context the same way this is.
+A run's `runa._governance._Governance` holds one `ApprovalLedger`, shared by reference with
+every delegate the run starts, which is what makes a caller's "always" answer cover the
+delegate's matching tool. It is never on the `RunContext` an `@approval` predicate is handed:
+the ledger is the framework's bookkeeping, not the app's. `run_internal.tool_execution` asks it
+`decide`/`claim`; `RunState` tells it `record` when an operator answers "always". Where a *paused
+delegate* is stashed, which of a run's interruptions are really its, and how both survive a
+restart belong to `runa.paused_delegates.PausedDelegates`, held beside this one.
 
-This module imports nothing from `runa` at runtime, on purpose: `_types` imports it to put a
-ledger on the context, and `runa.exceptions` imports `_types`. `runa.paused_delegates` is the
-other half of pausing a run, kept out of here for the same reason: a delegate's pause is about
-which *run* resolves a call, not which decision applies to it.
+This module imports nothing from `runa` at runtime, on purpose: `runa.tool` and `_governance`
+both import it, and it has no business pulling either back in. `runa.paused_delegates` is the
+other half of pausing a run, kept out of here: a delegate's pause is about which *run* resolves
+a call, not which decision applies to it.
 """
 
 import inspect
@@ -28,9 +29,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 if TYPE_CHECKING:
-    from runa._types import RunContextWrapper
+    from runa._types import RunContext
 
-_NeedsApproval = Callable[["RunContextWrapper[Any]", dict[str, Any], str], Awaitable[bool]]
+_NeedsApproval = Callable[["RunContext[Any]", dict[str, Any], str], Awaitable[bool]]
 
 
 def approval(func: Callable[..., bool | Awaitable[bool]]) -> _NeedsApproval:
@@ -42,7 +43,7 @@ def approval(func: Callable[..., bool | Awaitable[bool]]) -> _NeedsApproval:
     """
     names = list(inspect.signature(func).parameters)
 
-    async def wrapper(ctx: RunContextWrapper[Any], params: dict[str, Any], call_id: str) -> bool:
+    async def wrapper(ctx: RunContext[Any], params: dict[str, Any], call_id: str) -> bool:
         reserved = {"ctx": ctx, "call_id": call_id}
         bound = {name: reserved[name] if name in reserved else params[name] for name in names}
         result = func(**bound)

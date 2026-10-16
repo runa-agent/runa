@@ -6,7 +6,7 @@ import logging
 import pytest
 
 from runa import Agent, LoggingHooks
-from runa._types import ModelResponse, RunContextWrapper, Usage
+from runa._types import ModelResponse, RunContext, Usage
 from runa.lifecycle import _EVENTS, Hooks, _Dispatch
 from runa.tool import tool as tool_decorator
 from runa.tracing import observe
@@ -40,7 +40,7 @@ _response = ModelResponse(
 
 
 async def _run_all_hooks(hooks: Hooks[None]) -> None:
-    context: RunContextWrapper[None] = RunContextWrapper(context=None)
+    context: RunContext[None] = RunContext(context=None)
     researcher, translator = Researcher(), Translator()
 
     await hooks.on_agent_start(context, researcher)

@@ -14,9 +14,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from runa._items import ConversationItem
-from runa.approval import ApprovalLedger
-from runa.guardrail import GuardrailResults
-from runa.paused_delegates import PausedDelegates
 
 MessageContent = str | Sequence[str | Path | dict[str, Any]]
 """One user message's `content`: plain text, or a list for a multimodal message. Each list item
@@ -121,43 +118,20 @@ class ModelResponse:
 
 
 @dataclass
-class RunContextWrapper[TContext]:
-    """Wraps the `context` object passed to `Agent.run()`/`run_sync()`, plus usage-so-far.
+class RunContext[TContext]:
+    """What user code is told about the run calling it: the caller's `context`, and usage so far.
 
-    `context` is never sent to the model; it's how tools, guardrails, `needs_approval`, and a
-    single-argument `instructions` callable receive whatever the caller passed to `run`/`run_sync`.
+    `context` is whatever was passed to `Agent.run()`/`run_sync()`, never sent to the model; it's
+    how a tool's `ctx`, an `@approval` predicate's `ctx`, a `Hooks` method, and a single-argument
+    `instructions` callable reach it. `usage` is what this run has spent so far.
 
-    `approval_ledger` is the run's approval protocol -- sticky per-tool decisions, the replay
-    guard, and the rules for reading them; see `runa.approval.ApprovalLedger`, which owns all of
-    it. `paused_delegates` is the delegate-pause protocol -- which delegate runs this one paused
-    on and whose decision each of their interruptions is; see
-    `runa.paused_delegates.PausedDelegates`, which owns all of that. `guardrail_results` is every
-    `GuardrailResult` produced this run, tripped or not, keyed by the `Phase` it ran in -- an
-    audit trail, not just the one that stopped the run.
+    That is all of it, deliberately. How the run governs itself -- the approval ledger, the
+    paused-delegate stash, the guardrail audit trail -- is `runa._governance`'s, held beside this
+    by the loop rather than on it, so nothing an app is handed can reach into those protocols.
     """
 
     context: TContext = None  # pyright: ignore[reportAssignmentType]
     usage: Usage = field(default_factory=Usage)
-    approval_ledger: ApprovalLedger = field(default_factory=ApprovalLedger)
-    paused_delegates: PausedDelegates = field(default_factory=PausedDelegates)
-    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
-
-    def fork(self) -> RunContextWrapper[TContext]:
-        """Build a child context for a nested delegate-agent call (`agent_as_tool`).
-
-        Shares `context` and every governance object by reference -- so an approval, a replayed
-        call id, or a guardrail result recorded in either the parent or the delegate is visible
-        to both -- but starts `usage` at zero: the caller merges the delegate's usage back
-        explicitly (`ctx.usage.add(forked.usage)`), so it isn't double-counted against
-        `Agent.run`'s own usage accumulation.
-        """
-        return RunContextWrapper(
-            context=self.context,
-            usage=Usage(),
-            approval_ledger=self.approval_ledger,
-            paused_delegates=self.paused_delegates,
-            guardrail_results=self.guardrail_results,
-        )
 
 
 __all__ = [
@@ -167,7 +141,7 @@ __all__ = [
     "ModelSettings",
     "OutputTokensDetails",
     "ReasoningEffort",
-    "RunContextWrapper",
+    "RunContext",
     "ToolChoice",
     "Usage",
 ]

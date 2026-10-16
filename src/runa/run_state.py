@@ -7,8 +7,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
+from runa._governance import _Governance
 from runa._items import ConversationItem
-from runa._types import InputTokensDetails, OutputTokensDetails, RunContextWrapper, Usage
+from runa._types import InputTokensDetails, OutputTokensDetails, RunContext, Usage
 from runa.agent_like import AgentLike
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
@@ -142,6 +143,10 @@ class RunState(GuardrailAudit):
     already computed this turn for calls in that same message that *didn't* need approval:
     they're carried forward rather than re-executed on resume.
 
+    `run_context` is the paused run's `RunContext`, its `context` and usage so far. How the run
+    governs itself -- the approval ledger, the paused delegates -- is `_governance`, which a
+    caller reaches only through `approve`/`reject`, never directly (see `runa._governance`).
+
     `to_json()`/`to_string()`/`from_json()`/`from_string()` let a paused run survive a process
     restart -- see their docstrings for what is (and isn't) preserved.
     """
@@ -150,7 +155,8 @@ class RunState(GuardrailAudit):
     transcript: Transcript
     ready_results: list[ConversationItem]
     pending: list[Interruption]
-    context_wrapper: RunContextWrapper
+    run_context: RunContext
+    _governance: _Governance
     trace: Trace
     approvals: dict[str, bool] = field(default_factory=dict)
     rejection_messages: dict[str, str] = field(default_factory=dict)
@@ -170,12 +176,12 @@ class RunState(GuardrailAudit):
     def approve(self, interruption: Interruption, *, always: bool = False) -> None:
         """Mark `interruption` approved; its tool runs when the run is resumed.
 
-        `always=True` also records a sticky decision on `context_wrapper.approval_ledger`:
-        every future call to this tool (by name), in this run or a nested delegate call sharing
-        this context (see `RunContextWrapper.fork()`), skips the approval prompt entirely.
+        `always=True` also records a sticky decision on the run's approval ledger: every future
+        call to this tool (by name), in this run or a nested delegate call sharing it (see
+        `runa._governance`), skips the approval prompt entirely.
         """
         if always:
-            self.context_wrapper.approval_ledger.record(interruption.name, approved=True)
+            self._governance.approval_ledger.record(interruption.name, approved=True)
         self._deciding(interruption).approvals[interruption.call_id] = True
 
     def reject(
@@ -192,7 +198,7 @@ class RunState(GuardrailAudit):
         any) for every future call to this tool, the same way `approve(always=True)` does.
         """
         if always:
-            self.context_wrapper.approval_ledger.record(
+            self._governance.approval_ledger.record(
                 interruption.name, approved=False, message=rejection_message
             )
         deciding = self._deciding(interruption)
@@ -208,13 +214,13 @@ class RunState(GuardrailAudit):
         state keeps only the calls it will run itself. Which is which is the paused-delegate
         stash's to say (`runa.paused_delegates`).
         """
-        return self.context_wrapper.paused_delegates.owner_of(interruption) or self
+        return self._governance.paused_delegates.owner_of(interruption) or self
 
     def _to_schema(self, *, nested: bool = False) -> _RunStateSchema:
         """This state as JSON; `nested` for a delegate's, whose shared context the caller holds."""
-        usage = self.context_wrapper.usage
-        ledger = self.context_wrapper.approval_ledger
-        delegates = self.context_wrapper.paused_delegates
+        usage = self.run_context.usage
+        ledger = self._governance.approval_ledger
+        delegates = self._governance.paused_delegates
         return _RunStateSchema(
             schema_version=_SCHEMA_VERSION,
             agent_name=self.agent.name,
@@ -228,7 +234,7 @@ class RunState(GuardrailAudit):
             ],
             approvals=self.approvals,
             rejection_messages=self.rejection_messages,
-            context=_context_to_json(self.context_wrapper.context),
+            context=_context_to_json(self.run_context.context),
             usage=_UsageSchema(
                 requests=usage.requests,
                 input_tokens=usage.input_tokens,
@@ -287,41 +293,45 @@ class RunState(GuardrailAudit):
         except ValidationError as exc:
             raise UserError(f"invalid RunState JSON: {exc}") from exc
 
-        context_wrapper = RunContextWrapper(
-            context=schema.context,
+        governance = _Governance(
             approval_ledger=ApprovalLedger(
                 sticky=dict(schema.approval_ledger),
                 sticky_messages=dict(schema.approval_ledger_messages),
                 executed=set(schema.executed_call_ids),
             ),
         )
-        context_wrapper.paused_delegates.restore(
+        governance.paused_delegates.restore(
             {
-                call_id: cls._from_schema(initial_agent, delegate, context_wrapper.fork())
+                call_id: cls._from_schema(initial_agent, delegate, governance)
                 for call_id, delegate in schema.delegates.items()
             },
             schema.delegate_owners,
         )
-        return cls._from_schema(initial_agent, schema, context_wrapper)
+        return cls._from_schema(initial_agent, schema, governance)
 
     @classmethod
     def _from_schema(
-        cls, initial_agent: AgentLike, schema: _RunStateSchema, context_wrapper: RunContextWrapper
+        cls, initial_agent: AgentLike, schema: _RunStateSchema, governance: _Governance
     ) -> RunState:
-        """Rebuild one state (the caller's, or a paused delegate's) onto `context_wrapper`."""
+        """Rebuild one state (the caller's, or a paused delegate's) onto the shared `governance`.
+
+        Each gets a `RunContext` of its own, over the one `context` they all share, the way a
+        delegate's nested run did before the pause: its usage is its own to merge back.
+        """
         state = cls(
             agent=_find_agent_by_name(initial_agent, schema.agent_name),
             transcript=Transcript._from_schema(schema.transcript),
             ready_results=schema.ready_results,
             pending=[],
-            context_wrapper=context_wrapper,
+            run_context=RunContext(context=schema.context),
+            _governance=governance,
             trace=Trace(
                 id=schema.trace_id, name=schema.trace_name, start_time=schema.trace_start_time
             ),
             approvals=dict(schema.approvals),
             rejection_messages=dict(schema.rejection_messages),
         )
-        context_wrapper.usage = Usage(
+        state.run_context.usage = Usage(
             requests=schema.usage.requests,
             input_tokens=schema.usage.input_tokens,
             output_tokens=schema.usage.output_tokens,
