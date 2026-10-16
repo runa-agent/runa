@@ -10,6 +10,7 @@ It lives here rather than in `run_loop` for one reason: `tool_execution` takes a
 it has no business importing the loop that calls it.
 """
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -66,9 +67,9 @@ class _Run:
         """Where this run's steps put their spans: children of its one agent span."""
         return _Spans(self.trace, self.agent_span.id)
 
-    def span(self, name: str, span_type: Any, *, input: Any = None) -> Span:
-        """Open one span under this run's agent span."""
-        return self.spans.open(name, span_type, input=input)
+    def span(self, name: str, span_type: Any, *, input: Any = None) -> AbstractContextManager[Span]:
+        """A span under this run's agent span, for a `with` block (see `_Spans.span`)."""
+        return self.spans.span(name, span_type, input=input)
 
     def notify(self, event: StreamEvent) -> None:
         """Hand `event` to a streamed run's consumer; a non-streamed run has nowhere to put it."""

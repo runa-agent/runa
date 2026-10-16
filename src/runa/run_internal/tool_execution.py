@@ -24,7 +24,6 @@ from runa.guardrail import Phase
 from runa.handoff import DelegatePaused
 from runa.run_internal.active_run import _Run
 from runa.run_internal.guardrails import _run_guardrails
-from runa.run_internal.spans import _close_span
 from runa.run_state import Interruption, RunState
 from runa.tool import FunctionTool, ToolCall
 
@@ -45,27 +44,21 @@ async def _run_tool_call(
 
     args_json = call_arguments(call)
     span_type = "delegate" if tool.delegate is not None else "tool"
-    span = run.span(tool.name, span_type, input=args_json)
-    inside = run.spans.under(span)  # this call's guardrails belong under the call
-    await run.hooks.on_tool_start(context_wrapper, run.current_agent, tool)
-    try:
+    with run.span(tool.name, span_type, input=args_json) as span:
+        inside = run.spans.under(span)  # this call's guardrails belong under the call
+        await run.hooks.on_tool_start(context_wrapper, run.current_agent, tool)
         await _run_guardrails(run, Phase.TOOL_INPUT, args_json, tool=tool, spans=inside)
         try:
             result = await tool.on_invoke_tool(context_wrapper, args_json, call_id)
-            error: str | None = None
         except DelegatePaused as paused:
             context_wrapper.approval_ledger.release(call_id)
-            _close_span(span, output="paused for approval")
+            span.output = "paused for approval"
             return paused
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
             result = f"error: {exc}"
-            error = str(exc)
+            span.error = str(exc)
         await _run_guardrails(run, Phase.TOOL_OUTPUT, result, tool=tool, spans=inside)
-    except BaseException as exc:  # a tripwire, a cancelled sibling call, ...: say which
-        detail = str(exc)
-        _close_span(span, error=f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__)
-        raise
-    _close_span(span, error=error, output=result)
+        span.output = result
     if tool.delegate is None:  # a delegate's own run records its own calls, under its own trace
         run.transcript.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(context_wrapper, run.current_agent, tool, result)
@@ -157,9 +150,8 @@ async def _run_message_tool_calls(
         if name in handoff_map:
             handoff = handoff_map[name]
             switched_agent = handoff.agent
-            span = run.span(handoff.tool_name, "handoff")
-            _close_span(span)
-            await run.hooks.on_handoff(context_wrapper, agent, switched_agent)
+            with run.span(handoff.tool_name, "handoff"):
+                await run.hooks.on_handoff(context_wrapper, agent, switched_agent)
             slots.append(_Slot(tool_result(call_id, f"Transferred to {switched_agent.name}.")))
             continue
 

@@ -1,6 +1,8 @@
 """spans.py: tracing span helpers shared by the turn loop, guardrails, and tool execution."""
 
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,6 +39,27 @@ class _Spans:
             span.input = tracing_config.apply_policy(input, max_bytes=policy.max_input_bytes)
         self.trace.spans.append(span)
         return span
+
+    @contextmanager
+    def span(self, name: str, span_type: Any, *, input: Any = None) -> Iterator[Span]:
+        """Open a span for the `with` block and close it on the way out, however the block leaves.
+
+        The block sets `span.output`, or `span.error` for a failure it handles itself; one that
+        escapes the block is recorded as the span's error before it propagates. So a step that
+        raises can't leave its span open, and the failed span is the one worth inspecting.
+        `open`/`_close_span` remain for a span whose output comes from later code: the agent's.
+        """
+        span = self.open(name, span_type, input=input)
+        failure: str | None = None
+        try:
+            yield span
+        except BaseException as exc:  # a cancelled step is as unfinished as a failed one
+            detail = str(exc)
+            failure = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+            raise
+        finally:
+            output, span.output = span.output, None  # the block's raw value, before the policy
+            _close_span(span, error=failure or span.error, output=output)
 
     def under(self, span: Span) -> _Spans:
         """This same trace, with `span` as the parent: the scope inside a span just opened."""

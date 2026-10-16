@@ -139,18 +139,17 @@ async def _retrieve(
     Wrapped in a `"retrieval"` span so a trace shows whether memory/knowledge were consulted, what
     came back, and any failure -- not just the `llm`/`agent` spans around it.
     """
-    span = spans.open(label, "retrieval", input=query)
-    try:
-        matches = await source.search(query, **search_kwargs)
-        _close_span(span, output={"count": len(matches)})
+    with spans.span(label, "retrieval", input=query) as span:
+        try:
+            matches = await source.search(query, **search_kwargs)
+        except _NOT_A_BACKEND_FAULT:
+            raise
+        except Exception as exc:
+            span.error = str(exc)
+            logger.warning("%s retrieval failed for agent %s", label, agent_name, exc_info=True)
+            return []
+        span.output = {"count": len(matches)}
         return matches
-    except _NOT_A_BACKEND_FAULT as exc:
-        _close_span(span, error=str(exc))
-        raise
-    except Exception as exc:
-        _close_span(span, error=str(exc))
-        logger.warning("%s retrieval failed for agent %s", label, agent_name, exc_info=True)
-        return []
 
 
 async def _inject_retrieved(run: _Run, query: str) -> None:
@@ -206,10 +205,9 @@ def _maybe_compact(
     replacement = compactor(items, usage_tokens)
     if replacement is None or len(replacement) == len(items):
         return
-    span = spans.open("compact", "custom", input={"tokens": usage_tokens})
-    dropped = len(items) - len(replacement)
-    items[:] = replacement
-    _close_span(span, output={"dropped": dropped})
+    with spans.span("compact", "custom", input={"tokens": usage_tokens}) as span:
+        span.output = {"dropped": len(items) - len(replacement)}
+        items[:] = replacement
 
 
 async def _save_to_session(
@@ -285,24 +283,24 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         shape = run.shape
         agent = shape.agent
         model = shape.resolve_model(run_config.model_provider)
-        llm_span = run.span(str(shape.model), "llm", input=list(items))
-        system_instructions = await _resolve_instructions(shape, context_wrapper)
-        await hooks.on_llm_start(context_wrapper, agent, system_instructions, items)
-        request = ModelRequest(
-            input=items,
-            system_instructions=system_instructions,
-            model_settings=shape.model_settings,
-            tools=shape.tools,
-            output_schema=shape.output_type,
-            handoffs=list(shape.handoffs.values()),
-        )
-        if run.emit is None:
-            response = await model.get_response(request)
-        else:
-            response = await _stream_response(model, request, run.emit)
-        context_wrapper.usage.add(response.usage)
-        _check_token_budget(context_wrapper.usage, run_config.max_tokens)
-        _close_span(llm_span, output={"usage": response.usage.__dict__})
+        with run.span(str(shape.model), "llm", input=list(items)) as llm_span:
+            system_instructions = await _resolve_instructions(shape, context_wrapper)
+            await hooks.on_llm_start(context_wrapper, agent, system_instructions, items)
+            request = ModelRequest(
+                input=items,
+                system_instructions=system_instructions,
+                model_settings=shape.model_settings,
+                tools=shape.tools,
+                output_schema=shape.output_type,
+                handoffs=list(shape.handoffs.values()),
+            )
+            if run.emit is None:
+                response = await model.get_response(request)
+            else:
+                response = await _stream_response(model, request, run.emit)
+            context_wrapper.usage.add(response.usage)
+            llm_span.output = {"usage": response.usage.__dict__}
+            _check_token_budget(context_wrapper.usage, run_config.max_tokens)
         await hooks.on_llm_end(context_wrapper, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
         _maybe_compact(shape, items, context_tokens, run.spans)
@@ -452,20 +450,20 @@ async def _extract_memory(run: _Run, final_output: Any) -> None:
     query = latest_user_text([*run.transcript.original_input, *run.transcript.session_input])
     if memory is None or query is None:
         return
-    span = _Spans(run.trace).open("memory", "custom", input=query)  # the agent span is closed
-    try:
-        stored = await memory.remember_from_conversation(
-            f"User: {query}\nAssistant: {final_output}",
-            user_id=run.session.user_id if run.session is not None else None,
-            model=run.start.resolve_model(run.run_config.model_provider),
-        )
-        _close_span(span, output={"stored": len(stored)})
-    except _NOT_A_BACKEND_FAULT as exc:
-        _close_span(span, error=str(exc))
-        raise
-    except Exception as exc:
-        _close_span(span, error=str(exc))
-        logger.warning("memory extraction failed for agent %s", run.start.name, exc_info=True)
+    with _Spans(run.trace).span("memory", "custom", input=query) as span:  # agent span is closed
+        try:
+            stored = await memory.remember_from_conversation(
+                f"User: {query}\nAssistant: {final_output}",
+                user_id=run.session.user_id if run.session is not None else None,
+                model=run.start.resolve_model(run.run_config.model_provider),
+            )
+        except _NOT_A_BACKEND_FAULT:
+            raise
+        except Exception as exc:
+            span.error = str(exc)
+            logger.warning("memory extraction failed for agent %s", run.start.name, exc_info=True)
+            return
+        span.output = {"stored": len(stored)}
 
 
 async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:

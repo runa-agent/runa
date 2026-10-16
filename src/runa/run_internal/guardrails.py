@@ -5,7 +5,7 @@ from typing import Any
 from runa.exceptions import GuardrailTripwireTriggered
 from runa.guardrail import GuardrailResult, Phase
 from runa.run_internal.active_run import _Run
-from runa.run_internal.spans import _close_span, _Spans
+from runa.run_internal.spans import _Spans
 from runa.tool import FunctionTool
 
 
@@ -36,9 +36,10 @@ async def _run_guardrails(
     scope = run.spans if spans is None else spans
     results = run.context_wrapper.guardrail_results
     for entry in entries:
-        span = scope.open(entry.get_name(), "guardrail")
-        verdict = await entry.guardrail_function(value)
-        _close_span(span, error="tripwire triggered" if verdict.tripped else None)
+        with scope.span(entry.get_name(), "guardrail") as span:
+            verdict = await entry.guardrail_function(value)
+            if verdict.tripped:
+                span.error = "tripwire triggered"
         result = GuardrailResult(entry, verdict, verdict.tripped, phase)
         results.record(result)
         if verdict.tripped:

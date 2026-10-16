@@ -471,6 +471,58 @@ def test_a_failed_run_comes_back_as_an_error_run_with_its_trace() -> None:
     assert agent_span.error == "max turns (2) exceeded"
 
 
+def test_a_provider_error_closes_the_llm_span_with_the_error() -> None:
+    """The model call that failed is the span worth inspecting, so it isn't left open."""
+
+    class _Down(_ScriptedModel):
+        async def get_response(self, request):  # noqa: ANN001, ARG002
+            raise ConnectionError("provider is down")
+
+    result = asyncio.run(_run_async(_agent(model=_Down([])), "hi", run_config=_run_config()))
+
+    assert result.status == "error"
+    (llm_span,) = [s for s in result.trace.spans if s.type == "llm"]
+    assert llm_span.end_time is not None
+    assert llm_span.status == "error"
+    assert llm_span.error == "ConnectionError: provider is down"
+
+
+def test_an_exceeded_token_budget_closes_the_llm_span_with_its_usage() -> None:
+    """The call that went over budget still says what it spent, and that it ended the run."""
+    usage = Usage(input_tokens=5, output_tokens=5, total_tokens=10, requests=1)
+    agent = _agent(model=_ScriptedModel([_text_response("hi", usage)]))
+
+    result = asyncio.run(
+        _run_async(agent, "hi", run_config=RunConfig(workflow_name="x", max_tokens=3))
+    )
+
+    assert result.status == "error"
+    (llm_span,) = [s for s in result.trace.spans if s.type == "llm"]
+    assert llm_span.end_time is not None
+    assert llm_span.status == "error"
+    assert "max tokens (3) exceeded" in (llm_span.error or "")
+    assert llm_span.output["usage"]["total_tokens"] == 10
+
+
+def test_a_guardrail_that_raises_closes_its_span_with_the_error() -> None:
+    """A predicate that raises is a failed check, not one that never finished."""
+
+    async def _broken(value: Any) -> GuardrailVerdict:
+        raise ValueError("bad predicate")
+
+    agent = _agent(
+        guardrails={Phase.INPUT: [BoundGuardrail(_broken, Phase.INPUT, "broken")]},
+        model=_ScriptedModel([_text_response("should not be reached")]),
+    )
+
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+    assert result.status == "error"
+    (guardrail_span,) = [s for s in result.trace.spans if s.type == "guardrail"]
+    assert guardrail_span.end_time is not None
+    assert guardrail_span.error == "ValueError: bad predicate"
+
+
 def test_needs_approval_pauses_then_resumes_on_approve() -> None:
     """A tool requiring approval pauses the run with an `Interruption`; approving resumes it."""
 
