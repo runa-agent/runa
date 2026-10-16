@@ -15,6 +15,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from runa._items import ConversationItem, latest_text, parsed_arguments
+from runa.exceptions import UserError
 
 _Predicate = Callable[[Any], bool | Awaitable[bool]]
 _GuardrailFunction = Callable[[Any], Awaitable["GuardrailVerdict"]]
@@ -266,11 +267,11 @@ GuardrailsList = list["BoundGuardrail | Guardrail"]
 def _entries(guardrails: Any) -> list[Any]:
     """The `guardrails=` declaration as a list, the one shape it takes.
 
-    A dict grouping entries by side is a `TypeError` naming the list it should be, rather than
+    A dict grouping entries by side is a `UserError` naming the list it should be, rather than
     its keys reaching `flatten_guardrails` as entries.
     """
     if not isinstance(guardrails, list | tuple):
-        raise TypeError(
+        raise UserError(
             f"guardrails must be a list, e.g. [block_empty.input, contains_pii.output], "
             f"got {type(guardrails).__name__}"
         )
@@ -288,7 +289,7 @@ def _rebound(entry: BoundGuardrail, phase: Phase) -> BoundGuardrail:
     if entry.phase is phase:
         return entry
     if entry.predicate is None:
-        raise TypeError(
+        raise UserError(
             f"guardrails entries must be @guardrail predicates bound via .input/.output, "
             f"got one bound to {entry.phase.value!r} with no predicate to rebind"
         )
@@ -314,7 +315,7 @@ def flatten_guardrails(
             phase = sides[1] if entry.phase.on_output else sides[0]
             bound[phase].append(_rebound(entry, phase))
         else:
-            raise TypeError(
+            raise UserError(
                 f"guardrails entries must be @guardrail predicates bound via "
                 f".input/.output, got {type(entry).__name__}"
             )

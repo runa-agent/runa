@@ -7,6 +7,7 @@ import pytest
 from helpers import run as run_awaitable
 
 from runa import guardrail, tool
+from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase
 from runa.tool import FunctionTool
 
@@ -69,7 +70,7 @@ def test_bare_guardrail_wires_both_sides() -> None:
 
 def test_invalid_guardrail_entry_raises() -> None:
     """A `guardrail` entry not bound via `.input`/`.output` is rejected."""
-    with pytest.raises(TypeError, match="guardrails entries must be"):
+    with pytest.raises(UserError, match="guardrails entries must be"):
 
         @tool(guardrails=cast(Any, [lambda value: False]))
         def now() -> str:

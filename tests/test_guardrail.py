@@ -7,6 +7,7 @@ import pytest
 from helpers import run as run_awaitable
 
 from runa import Agent, guardrail
+from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase, declared_names
 
 
@@ -64,7 +65,7 @@ def test_invalid_guardrail_entry_raises() -> None:
         instructions = "support"
         guardrails = [lambda value: False]
 
-    with pytest.raises(TypeError, match="guardrails entries must be"):
+    with pytest.raises(UserError, match="guardrails entries must be"):
         Support()
 
 
@@ -83,14 +84,14 @@ def test_bare_guardrail_wires_both_input_and_output() -> None:
 
 
 def test_dict_guardrails_are_rejected() -> None:
-    """`guardrails` is a list; a dict grouping it by side is a `TypeError`, not keys as entries."""
+    """`guardrails` is a list; a dict grouping it by side is a `UserError`, not keys as entries."""
 
     class Support(Agent):
         name = "Support"
         instructions = "support"
         guardrails = cast(Any, {"input": [block_empty]})
 
-    with pytest.raises(TypeError, match="guardrails must be a list"):
+    with pytest.raises(UserError, match="guardrails must be a list"):
         Support()
 
 

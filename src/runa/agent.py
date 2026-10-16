@@ -502,14 +502,14 @@ class Agent:
         """
         cls = type(self)
         if cls is Agent:
-            raise TypeError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
+            raise UserError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
         _reject_unknown_settings(cls)
 
         setting = _settings(cls, locals())
 
         name = setting["name"]
         if name is _UNSET:
-            raise TypeError(f"{cls.__name__}(...) is missing the required 'name'")
+            raise UserError(f"{cls.__name__}(...) is missing the required 'name'")
         instructions = setting["instructions"]
         if instructions is _UNSET:
             instructions = _load_prompt(cls, name)

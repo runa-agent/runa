@@ -23,6 +23,7 @@ from runa.eval.case import Case
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.eval.evaluation.metrics import DEFAULT_THRESHOLDS, evaluate_semantic
 from runa.eval.report import CaseReport, Report
+from runa.exceptions import UserError
 
 
 def _resolve_thresholds(
@@ -40,7 +41,7 @@ def _resolve_judge(judge: str | None, agent: Agent) -> str:
     if judge is not None:
         return judge
     if not isinstance(agent.model, str):
-        raise TypeError(
+        raise UserError(
             "agent.evaluate() needs judge=<model name> when the agent's own `model` isn't a "
             "plain model name string"
         )

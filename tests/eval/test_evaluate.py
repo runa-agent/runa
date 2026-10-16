@@ -1,7 +1,7 @@
 """Tests for `runa.eval.evaluate`: `evaluate_agent`, behind `agent.evaluate()`."""
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -11,6 +11,7 @@ from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.evaluate import evaluate_agent
 from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.exceptions import UserError
 from runa.run import Run
 from runa.tracing import Trace
 
@@ -160,6 +161,15 @@ def test_evaluate_agent_defaults_the_judge_to_the_agent_s_own_model(
     asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
 
     assert captured["model"] == "gpt-5.4-nano"
+
+
+def test_evaluate_agent_needs_a_judge_when_the_model_isn_t_a_name() -> None:
+    """An agent whose `model` is a constructed `Model` has no name to grade with by default."""
+    agent = _TestAgent()
+    agent.model = cast(Any, object())
+
+    with pytest.raises(UserError, match="needs judge="):
+        asyncio.run(evaluate_agent(agent, [Case(input="hi")]))
 
 
 def test_evaluate_agent_lets_judge_override_the_grading_model(

@@ -4,7 +4,9 @@ How an application is meant to use each Runa primitive. Runa is
 opinionated: for every primitive below there is exactly one sanctioned
 shape, not a menu of equivalent options. Where the rule is enforced in
 code (a raised error, not just a docs recommendation), that's noted:
-breaking it isn't a style nit, it's a `TypeError` at runtime.
+breaking it isn't a style nit, it's an error at runtime: a `UserError` for
+any mistake in a declared value, and a `TypeError` only where Python itself
+raises one from a signature (an unknown keyword argument).
 
 14 primitives:
 

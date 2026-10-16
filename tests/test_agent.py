@@ -85,8 +85,18 @@ def test_graph_draws_delegates_and_handoffs_as_agents() -> None:
 
 def test_agent_cannot_be_instantiated_directly() -> None:
     """`Agent` itself must be subclassed; it isn't a usable agent on its own."""
-    with pytest.raises(TypeError):
+    with pytest.raises(UserError):
         Agent(name="Bare")
+
+
+def test_missing_name_is_a_user_error() -> None:
+    """A subclass that never declares `name` fails like any other declaration mistake."""
+
+    class Nameless(Agent):
+        instructions = "nameless"
+
+    with pytest.raises(UserError, match="missing the required 'name'"):
+        Nameless()
 
 
 def test_instructions_auto_load_from_a_sibling_prompts_file(tmp_path: Path) -> None:

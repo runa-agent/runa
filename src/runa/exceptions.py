@@ -15,7 +15,10 @@ come from the surfaces around a run (the CLI, the dashboard), mostly before one 
 the one exception a run deliberately lets through, which is what being a sibling buys.
 """
 
-from runa.guardrail import GuardrailResult
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from runa.guardrail import GuardrailResult
 
 
 class OperatorError(Exception):
