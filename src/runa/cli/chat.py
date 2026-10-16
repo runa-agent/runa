@@ -136,8 +136,8 @@ def run_agent_repl(
     `root` is the project being chatted with, which makes this an entry point like the two
     `create_app`s: the `loaded_app` block says so for the whole project -- its database as much
     as its imports -- rather than taking a directory it only half applies. `runa chat` has
-    already said the data half from `cwd`; saying it again costs nothing and is what makes this
-    callable on its own.
+    already said it from `cwd`; saying it again costs nothing and is what makes this callable on
+    its own.
     """
     agents_dir = require_agents_dir(root)
 

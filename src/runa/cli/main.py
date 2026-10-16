@@ -11,7 +11,7 @@ that runs it, never at module scope. One invocation runs one command, and
 `runa --version` or `runa generate tool` has no use for the chat REPL, the
 eval runner or the trace viewer; `serve` and `ui` already defer their web
 stack, and this is the same rule applied to the other eight. Only the four
-things every invocation needs -- `db`, `DEFAULT_MODEL` for the parser's
+things every invocation needs -- `project`, `DEFAULT_MODEL` for the parser's
 help text, and the two error types `main` catches -- are imported up here.
 """
 
@@ -20,7 +20,7 @@ import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from runa import db
+from runa import project
 from runa._models import DEFAULT_MODEL
 from runa.exceptions import OperatorError
 from runa.project import AppLoadError
@@ -216,13 +216,13 @@ def main(argv: list[str] | None = None, *, cwd: Path | None = None) -> int:
     new error needs nothing added to this function. The other two clauses are the failures that
     earn a more specific message than `error: {exc}`, not a second copy of that decision.
 
-    `cwd` is this invocation's project, and telling `runa.db` once here is what makes every
+    `cwd` is this invocation's project, and saying `project.use` once here is what makes every
     command below read and write the same `db/runa.db` -- sessions, traces, eval history, memory,
     knowledge and the cache alike. A command that passed it along itself could only reach the
     concerns that take a parameter.
     """
     cwd = cwd or Path.cwd()
-    db.use_project(cwd)
+    project.use(cwd)
     args = _build_parser().parse_args(argv)
 
     try:

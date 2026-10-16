@@ -217,7 +217,7 @@ imported at startup too.
 One process serves one app. Importing an app runs its `main.py` under the names `main` and
 `app.*`, and its local state resolves against one directory -- one fact, said once, by the `root`
 you hand `create_app`. Runa says it out loud rather than leaving it to chance: mounting a second
-Runa app in the same process -- a second `create_app`, or a second `db.use_project` naming a
+Runa app in the same process -- a second `create_app`, or a second `project.use` naming a
 different project -- raises a `UserError` instead of quietly pointing both at whichever one was
 built last. Serve the second app from a second process.
 

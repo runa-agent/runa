@@ -28,6 +28,7 @@ from contracts import trace as trace_contract
 
 import runa.db.pool as pool_module
 from runa import db
+from runa.project import use
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -129,7 +130,7 @@ def test_without_the_env_var_traces_stay_in_sqlite(
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
     trace = _trace(unique_id)
 
-    db.use_project(tmp_path)
+    use(tmp_path)
     db.traces().save(trace)
 
     assert (tmp_path / "db" / "runa.db").exists()

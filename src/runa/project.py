@@ -7,32 +7,20 @@ run, same as `python main.py` would), and which `Agent` subclasses does it decla
 asked first. They used to live in `cli/_project.py`, which meant `runa.serve` and `runa.web`
 importing a private module of the CLI for machinery that was never about argv.
 
-**Which app this process reads is one fact, and `use(root)` is how it is said.** It has two
-halves -- the directory this app's state resolves against, which is `runa.db`'s answer, and the
-directory its `main.py` was imported from, which is this module's -- and a process whose halves
-disagree serves one project's agents off another project's database, the same split-in-two
-failure `runa.db` was centralized to prevent, one level further out. So no surface that fronts an
-app says half of it: `use` hands the root to `db.use_project` and records it here, and a second,
-different app is refused there, once, in one message. `use(None)` clears the whole fact again,
-standing in for the process boundary a deployment has (see `tests/conftest.py`). `db.use_project`
-alone is the data root alone, which is the honest answer for exactly one caller: `runa`, pointing
-at `cwd` before it knows whether the command it dispatches reads an app at all.
-
-That is also the direction the dependency goes, and the only direction it can: this module
-imports `runa.db` for the half it doesn't own, so `runa.db` must never import this one. The two
-globals stay where they are, one per module; what is shared is this entry point, not the state.
+**Which app this process reads is one fact, and `use(root)` is how it is said.** The fact itself
+lives in `runa._app`, a leaf this module and `runa.db` both read: `runa.db` resolves the app's
+state against it, and this module imports the app's `main.py` from it. It is one value, so the two
+can never name different apps. A second, different app is refused there, once, in one message.
 
 `use(root)` states the fact; the app's `main.py` is imported the first time anything reads its
 modules, and once per process however many callers ask (see `_ensure_imported`). That is what
 lets `runa serve` fail at startup, where it lists the agents it is about to serve, while `runa ui`
 still renders Sessions and Evaluations for an app whose `main.py` is broken -- both surfaces say
-the same one thing, and the import lands where their own work puts it rather than each ordering
-the two halves itself.
+the same one thing, and the import lands where their own work puts it.
 
-`loaded_app(root)` is the scoped variant of that fact, for the one-shot commands that import an
-app, use what they found and exit: it states both halves too, and unmakes the import on the way
-out. Which shape a surface wants follows from how long it lives; nothing re-imports an app per
-request.
+`loaded_app(root)` is the scoped variant, for the one-shot commands that import an app, use what
+they found and exit: it says `use(root)` too, and undoes the import on the way out. Which shape a
+surface wants follows from how long it lives; nothing re-imports an app per request.
 
 No `Agent` is ever instantiated: `list_agents` reads class attributes only, so listing an app's
 agents never triggers memory/knowledge setup, prompt-file creation, or any API call.
@@ -41,13 +29,13 @@ agents never triggers memory/knowledge setup, prompt-file creation, or any API c
 import importlib
 import inspect
 import sys
-import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from runa import db
+from runa import _app
+from runa._app import use
 from runa.agent import Agent, Subagent, _flatten_subagents, declared_name
 from runa.exceptions import OperatorError
 from runa.guardrail import declared_names
@@ -79,23 +67,6 @@ class AgentNotFound(OperatorError):
     """Raised when no Agent under `app/agents/` declares the given `name`."""
 
 
-_PROJECT_MODULE_NAMES = ("main", "app", "tests", "evals")
-
-
-def _reset_project_modules() -> None:
-    """Drop cached `main`/`app`/`tests`/`evals` modules from a previous project's import.
-
-    Each call may target a different project root, but Python caches imports by name in
-    `sys.modules`; without this, a later call in the same process (e.g. across tests) would
-    silently reuse a previous project's `main`/`app`/`tests`/`evals` instead of the one at `root`.
-    """
-    for name in list(sys.modules):
-        if name in _PROJECT_MODULE_NAMES or name.startswith(
-            tuple(f"{prefix}." for prefix in _PROJECT_MODULE_NAMES)
-        ):
-            del sys.modules[name]
-
-
 def _import_main() -> None:
     """Import the `main` module off `sys.path`, the way `python main.py` would run it.
 
@@ -113,66 +84,16 @@ def _import_main() -> None:
         raise AppLoadError(str(exc)) from exc
 
 
-_root: Path | None = None
-"""The app this process reads, or `None` while it reads none. Written by `use`/`loaded_app`."""
-
-_imported = False
-"""Whether `_root`'s `main.py` has run in this process yet; see `_ensure_imported`."""
-
-_load_lock = threading.Lock()
-"""Held across the check and the import, so concurrent first callers load the app once.
-
-`runa ui`'s routes are plain `def`, which uvicorn runs in a thread pool: without this, two page
-views arriving together would both find `_imported` false and both re-execute `main.py`, each
-tearing down the other's half-imported `app.*` modules through `_reset_project_modules`.
-"""
-
-
-def use(root: Path | None) -> None:
-    """Point this process at the Runa app in `root`; `None` means it reads no app.
-
-    Startup configuration, said once, by every surface that fronts someone else's app: `runa
-    serve` and `runa ui` at build time, `runa chat`/`eval`/`test` through the `loaded_app` block
-    below. Saying it covers both halves of the one fact -- `runa.db` resolves this app's state
-    against `root`, and this app's `main.py` is the one that gets imported -- because a surface
-    able to say only one of them is a process whose data root and import root can disagree (see
-    this module's docstring).
-
-    A second, *different* `root` in one process is a `UserError`, raised by `db.use_project`:
-    both apps' modules would want the same `main`/`app.*` names, so the one that lost would be
-    quietly serving the other's agents off the winner's database. The refusal lives there rather
-    than here because the root reaches `runa.db` either way -- through this function or, for a
-    command that reads an app's data without importing it, on its own -- and one fact deserves
-    one message. A deployment that really fronts two apps runs two processes.
-
-    `None` is how a process goes back to reading no app at all: the import is undone along with
-    the fact, so the next `use` is a first `use`. Nothing in a running app calls it -- there, the
-    second app is a second process -- but a test pointing this at a `tmp_path` project stands in
-    for the `create_app` that would have said it once at startup, and the next test is a
-    different directory.
-    """
-    global _root, _imported
-    db.use_project(root)
-    root = root.resolve() if root is not None else None
-    with _load_lock:
-        if root == _root:
-            return
-        previous, was_imported = _root, _imported
-        _root, _imported = root, False
-        if previous is not None and was_imported:
-            _unimport(previous)
-
-
 def _ensure_imported() -> None:
     """Import the app `use` named, the first time anything reads its modules.
 
     Importing an app is a process-global fact rather than something a caller does for itself: it
     executes the developer's `main.py` and imports their `app/`, so doing it a second time re-runs
     whatever that file set up -- a client, a pool, an exporter `tracing.add_exporter` appends to
-    rather than replaces -- underneath everything already holding the first copy. So this is a
-    fact the module keeps, and `iter_agent_classes` below asks for it on behalf of every caller
-    that reads an app's agents: `runa ui` reaches it once per page view, `runa serve` once at
-    startup, and both get the one import.
+    rather than replaces -- underneath everything already holding the first copy. So the fact is
+    kept in `runa._app`, and `iter_agent_classes` below asks for it on behalf of every caller that
+    reads an app's agents: `runa ui` reaches it once per page view, `runa serve` once at startup,
+    and both get the one import.
 
     `root` stays on `sys.path` afterwards, the way `python main.py` leaves the script's directory
     there, so an `app/` module the app imports lazily still resolves on the hundredth request.
@@ -180,66 +101,52 @@ def _ensure_imported() -> None:
     gets a first attempt rather than a process that can never load the app it was pointed at.
 
     Inside a `loaded_app` block the import has already happened and this does nothing, which is
-    the same answer it gives when no app has been said at all (`_root is None`): then there is
+    the same answer it gives when no app has been said at all (`root is None`): then there is
     nothing to import and the caller is reading a directory it put on `sys.path` itself.
     """
-    global _imported
-    with _load_lock:
-        if _imported or _root is None:
+    with _app.lock:
+        root = _app.root
+        if _app.imported or root is None:
             return
-        root_str = str(_root)
-        sys.path.insert(0, root_str)
-        _reset_project_modules()
+        sys.path.insert(0, _app.import_path(root))
+        _app.reset_modules()
         try:
             _import_main()
         except BaseException:
-            _unimport(_root)
+            _app.unimport(root)
             raise
-        _imported = True
-
-
-def _unimport(root: Path) -> None:
-    """Undo `root`'s import: drop its `sys.path` entry and the modules it brought in."""
-    root_str = str(root)
-    if root_str in sys.path:
-        sys.path.remove(root_str)
-    _reset_project_modules()
+        _app.imported = True
 
 
 @contextmanager
 def loaded_app(root: Path) -> Iterator[None]:
-    """Say `use(root)` for the length of the block, importing `root/main.py` now.
+    """Say `use(root)` and import `root/main.py` now, undoing the import when the block ends.
 
     The scoped shape of the same fact, for the one-shot commands that import an app, use what
     they found and exit: `runa chat`, `runa eval`, `runa test`. Each entry re-executes `main.py`,
     which is exactly what a process living longer than one command must not do -- those say
     `use` and let the import happen once.
 
-    The data half outlives the block, the way it outlives the command: a `Session` or a `Memory`
-    built inside is still resolving against this project when a `finally:` elsewhere writes to it.
-    What the block restores on the way out is what was true before it, not nothing -- a process
-    that had already said `use` is still reading that app afterwards, so its one import is still
-    its own to undo. That is how a test opens a block inside a `create_app`'s process (see
-    `tests/serve/test_serve.py`) without stranding the import `create_app` made.
-
-    Restoring one half and keeping the other is only safe because the halves cannot name two
-    different apps: `db.use_project` is called here too, so a block opening on a *different* root
-    than the process already reads is refused before either half moves. The two halves this exits
-    with are therefore the same app's, never one each.
+    The root outlives the block, the way it outlives the command, so a `Session` or a `Memory`
+    built inside still resolves against this project when a `finally:` elsewhere writes to it.
+    Only the import is the block's own, and on the way out it goes back to what was true before.
+    A process that had already imported this app (a test opening a block inside a `create_app`'s
+    process, see `tests/serve/test_serve.py`) still has that import afterwards, so it is still
+    that process's to undo. A block on a *different* root is refused by `use` before anything
+    moves.
     """
-    global _root, _imported
-    db.use_project(root)
-    root_str = str(root)
-    previous = (_root, _imported)
-    _reset_project_modules()
-    sys.path.insert(0, root_str)
+    use(root)
+    entry = _app.import_path(root)
+    was_imported = _app.imported
+    _app.reset_modules()
+    sys.path.insert(0, entry)
     try:
         _import_main()
-        _root, _imported = root.resolve(), True
+        _app.imported = True
         yield
     finally:
-        _root, _imported = previous
-        sys.path.remove(root_str)
+        _app.imported = was_imported
+        sys.path.remove(entry)
 
 
 def require_agents_dir(root: Path) -> Path:

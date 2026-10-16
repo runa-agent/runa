@@ -15,6 +15,7 @@ from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
 from runa.exceptions import OperatorError
+from runa.project import use
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.web._html import session_path, trace_path
@@ -27,7 +28,7 @@ def project(tmp_path: Path) -> Path:
     project_dir = scaffold_project("demo", root=tmp_path)
     generate_agent("SupportAgent", root=project_dir)
 
-    db.use_project(project_dir)
+    use(project_dir)
     session = db.session("support_agent-1")
     asyncio.run(session.add_items([{"role": "user", "content": "hi there"}]))
 
@@ -118,7 +119,7 @@ def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
     handed has to reach every concern: a dashboard reading sessions out of `root` while the agents
     it serves wrote memory to the cwd is the split `runa.db` exists to prevent.
     """
-    db.use_project(None)
+    use(None)
 
     TestClient(create_app(project))
 

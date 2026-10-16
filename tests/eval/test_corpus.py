@@ -8,6 +8,7 @@ from runa import db
 from runa.cli.new import scaffold_project
 from runa.eval import Case, Dataset
 from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
+from runa.project import use
 from runa.tracing import Span, Trace, TraceNotFound
 
 
@@ -25,7 +26,7 @@ def _save_agent_trace(project_dir: Path, trace_id: str, input: str | None) -> No
             input=input,
         )
     ]
-    db.use_project(project_dir)
+    use(project_dir)
     db.traces().save(trace)
 
 

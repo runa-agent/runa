@@ -169,20 +169,21 @@ carries what a person reads -- `label`, `name`, `duration`, `tokens` -- plus the
 everything else, and `hands_off` to mark the row after which the remaining siblings are the work
 of the agent that was handed to. Both `runa traces show` and `runa ui` render from this.
 
-Point `runa.db` at another project to read its local history:
+Point the process at another project to read its local history:
 
 ```python
-db.use_project(Path("../other-app"))
+from runa import project
+
+project.use(Path("../other-app"))
 db.traces().list(limit=5)
 ```
 
-`use_project` is startup configuration, said once: it moves every concern at once -- sessions,
+`project.use` is startup configuration, said once: it moves every concern at once -- sessions,
 traces, eval history, memory, knowledge and the cache -- so an app read from outside its own
-directory can't end up with half its state in one file and half in another. `runa` sets it from
-the current directory, and both `create_app`s from the `root` they're given (through
-`project.use`, which points the process's imports at that app too), so most code never calls it.
-Reading another project's history is what the bare call above is for: it moves the data without
-importing anyone's `main.py`.
+directory can't end up with half its state in one file and half in another. `runa` says it from
+the current directory, and both `create_app`s from the `root` they're given, so most code never
+calls it. Saying it imports nothing: that app's `main.py` only runs once something reads its
+agents, so the call above reads another project's history without running its code.
 
 `db.sessions()` and `db.evals()` are the same shape for conversation history and eval runs. All
 three replaced the module-level `list_traces(db_path=...)`-style functions in 0.x; see

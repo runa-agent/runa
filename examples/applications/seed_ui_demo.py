@@ -32,6 +32,7 @@ from runa.cli.new import scaffold_project
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
+from runa.project import use
 from runa.run import Run
 from runa.session import Session
 from runa.tracing.spans import Span
@@ -45,7 +46,7 @@ project = scaffold_project("ui_demo", root=REPO_ROOT)
 generate_agent("SupportAgent", root=project, model="gpt-5.4-nano")
 generate_agent("BillingAgent", root=project, model="gpt-5.4-nano")
 generate_agent("PolicyResearcherAgent", root=project, model="gpt-5.4-nano")
-db.use_project(project)
+use(project)
 traces = db.traces()
 
 # Wire the real subagent relationships (`generate_agent` has no --subagent flag; you write these

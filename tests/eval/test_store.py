@@ -26,6 +26,7 @@ from runa.eval.case import Case
 from runa.eval.evaluation.core import EvaluationResult, Status
 from runa.eval.report import CaseReport, Report
 from runa.eval.store import EvalStore, baseline_clause
+from runa.project import use
 
 
 @pytest.fixture(params=["sqlite", "ephemeral"])
@@ -37,7 +38,7 @@ def store(
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
         return db.evals()
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
-    db.use_project(tmp_path)
+    use(tmp_path)
     return db.evals()
 
 
@@ -83,7 +84,7 @@ def test_adds_trace_id_to_an_older_local_file(tmp_path: Path) -> None:
         results=[EvaluationResult(metric="task_completion", status=Status.PASS, reason="r")],
     )
 
-    db.use_project(tmp_path)
+    use(tmp_path)
     store = db.evals()
     store.save(Report("A", [graded]))
 

@@ -19,6 +19,7 @@ from contracts.trace import CONTRACT, Check
 
 from runa import db
 from runa.db.schema import POSTGRES, SQLITE, Dialect
+from runa.project import use
 from runa.tracing.store import TraceStore, listing_clause
 
 
@@ -35,7 +36,7 @@ def store(
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
         return db.traces()
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
-    db.use_project(tmp_path)
+    use(tmp_path)
     return db.traces()
 
 

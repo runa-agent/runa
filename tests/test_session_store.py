@@ -20,6 +20,7 @@ from contracts.session import CONTRACT, Check, SessionPair
 
 from runa import db
 from runa.db.schema import POSTGRES, SQLITE, Dialect
+from runa.project import use
 from runa.session.store import listing_clause
 
 
@@ -36,7 +37,7 @@ def project(
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
     else:
         monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)
-    db.use_project(tmp_path)
+    use(tmp_path)
 
 
 def _pair(tag: str = "SupportAgent") -> SessionPair:

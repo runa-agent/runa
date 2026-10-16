@@ -18,23 +18,23 @@ a file, and moving a deployment to Postgres stays one environment variable rathe
 Resolving here is also what keeps the promise honest, since a deployment where traces follow the
 variable but sessions don't is worse than one where neither does.
 
-Which project is being read is this module's one other decision, and it is asked once too:
-`use_project(root)` points the process at an app's directory, and every factory above resolves
-against it. The process's cwd is the default, which is what a bare `python main.py` wants. The
-rule for the rest is that a function handed someone else's project `root` says so -- here if it
-only reads that project's data (`main(cwd=...)`), and through `runa.project.use`, which calls
-this, if it also imports the app (both `create_app(root)`s, `run_agent_repl`,
-`run_project_evals`, `run_project_tests`) -- so that taking a `root` and reading that project's
-state are never two different things. Everything downstream of them (`runa ui`'s readers,
-`agent.evaluate()`, a `@tool` opening a session) gets the answer without naming a directory, and
-a `root` that survives elsewhere means a filesystem path, like `evals/`, rather than a second
-opinion about the database.
+Which project is being read is the one other thing every factory needs, and it is asked once too:
+`runa.project.use(root)` points the process at an app's directory, and every factory above resolves
+against it. The fact is held in `runa._app`, the leaf both this module and `runa.project` read,
+because this module cannot import that one. The process's cwd is the default, which is what a bare
+`python main.py` wants. A function handed someone else's project `root` says so through `use`
+(`runa`'s `main(cwd=...)`, both `create_app(root)`s, and the `loaded_app` blocks of
+`run_agent_repl`, `run_project_evals` and `run_project_tests`), so that taking a `root` and reading
+that project's state are never two different things. Everything downstream of them (`runa ui`'s
+readers, `agent.evaluate()`, a `@tool` opening a session) gets the answer without naming a
+directory. A `root` that survives elsewhere means a filesystem path, like `evals/`, rather than a
+second opinion about the database.
 
 A `root=` parameter per factory was the same promise made seven times and kept four: `Memory`
 and `Knowledge` are built inside `Agent.__init__`, which has no notion of a project root and
 should not grow one, so their stores silently used the cwd while sessions, traces and eval
 history followed the argument. One application's state split across two files is the exact
-failure this module exists to prevent, so the root is held here rather than threaded, the way
+failure this module exists to prevent, so the root is held once rather than threaded, the way
 `RUNA_DATABASE_URL` already is. For the database that moves the *local* file only; a shared
 deployment has one database and no such choice to make, so `sqlite_path` goes unread. State an
 app keeps as files rather than rows -- `Knowledge`'s source directory -- moves either way, and
@@ -52,7 +52,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from runa.exceptions import OperatorError, UserError
+from runa import _app
+from runa.exceptions import OperatorError
 
 if TYPE_CHECKING:
     from runa.cache import Cache
@@ -114,47 +115,8 @@ def ephemeral() -> bool:
     return url is not None and url.startswith(_MEMORY_SCHEME)
 
 
-_project_root: Path | None = None
-"""The project directory this process reads, or `None` for its cwd. Written by `use_project`."""
-
-
-def use_project(root: Path | None) -> None:
-    """Point this process's local state at the project in `root`; `None` means its cwd.
-
-    Startup configuration, said once, like `tracing.add_exporter` and for the same reason: a
-    process reads one app, and a root passed per call site is a root three of the seven concerns
-    below can't be passed at all.
-
-    This is the data half of "this process reads the app at `root`", and a surface that also
-    imports that app says the whole thing instead -- `runa.project.use(root)`, which calls this
-    one. The half is said alone by exactly one caller, `runa`, which points at `cwd` before it
-    knows whether the command it is about to dispatch reads an app at all: `runa traces show` and
-    `runa chat --list` read this project's database without importing a line of it.
-
-    "Once" is enforced rather than asked for: a second call naming a *different* project is a
-    `UserError`, because the alternative is both apps resolving to whichever root was built last,
-    including for runs already in flight. It is raised here for both halves, since the root
-    reaches this function either way, and an app that genuinely fronts two projects runs two
-    processes.
-
-    `None` is the default, not a second app, so it always applies and clears the way for another
-    root. That is what `project.use(None)` resets to between projects (see `tests/conftest.py`),
-    standing in for the process boundary a deployment would have.
-
-    Unread unless this deployment's state is local: a `postgresql://` or `memory://` URL has no
-    file to place.
-    """
-    global _project_root
-    if root is not None and _project_root is not None and _project_root.resolve() != root.resolve():
-        raise UserError(
-            f"this process already reads the Runa app at {_project_root}, so it cannot also read "
-            f"the one at {root}: a process reads one app."
-        )
-    _project_root = root
-
-
 def project_path(path: str | Path) -> Path:
-    """Resolve a relative `path` against the project `use_project` named; absolute ones unchanged.
+    """Resolve a relative `path` against the project `project.use` named; absolute ones unchanged.
 
     The non-database half of `sqlite_path` below, for the state an app keeps as files rather than
     as rows: `app/knowledge/` is this application's state exactly as much as `db/runa.db` is, and
@@ -164,9 +126,9 @@ def project_path(path: str | Path) -> Path:
     root to resolve against, which is why the answer lives here.
     """
     path = Path(path)
-    if _project_root is None or path.is_absolute():
+    if _app.root is None or path.is_absolute():
         return path
-    return _project_root / path
+    return _app.root / path
 
 
 def sqlite_path() -> Path:
@@ -176,8 +138,8 @@ def sqlite_path() -> Path:
     `DATABASE_URL` convention already use, so `sqlite:///data/runa.db` relocates the file without
     a `db_path=` argument on five different constructors.
 
-    A relative path is taken relative to the project `use_project` named, so under
-    `use_project(Path("../other-app"))` this is `../other-app/db/runa.db` -- the same file that
+    A relative path is taken relative to the project `project.use` named, so under
+    `project.use(Path("../other-app"))` this is `../other-app/db/runa.db` -- the same file that
     app's own `runa chat` writes to. Absolute paths and an unset project (an app running in its
     own directory) are unaffected.
     """
@@ -370,6 +332,5 @@ __all__ = [
     "shared_url",
     "sqlite_path",
     "traces",
-    "use_project",
     "vector_store",
 ]

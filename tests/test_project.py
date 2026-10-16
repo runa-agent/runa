@@ -210,8 +210,8 @@ def test_use_refuses_a_second_project(tmp_path: Path) -> None:
 
     The alternative is the quiet one: the loser's `sys.modules` entries are deleted underneath it
     and it serves the winner's agents. The message names both roots, since which two projects
-    collided is the only thing the caller can act on -- and there is one message, because the
-    root reaches `db.use_project` whichever half of the fact a caller came for.
+    collided is the only thing the caller can act on -- and there is one message, because there
+    is one root, read by `runa.db` and this module alike.
     """
     first = scaffold_project("first", root=tmp_path)
     second = scaffold_project("second", root=tmp_path)
@@ -225,14 +225,12 @@ def test_use_refuses_a_second_project(tmp_path: Path) -> None:
 
 
 def test_loaded_app_refuses_a_second_project_too(tmp_path: Path) -> None:
-    """The scoped shape is refused on the way in, so neither half is left pointing at it.
+    """The scoped shape is refused on the way in, so the process still reads the first app.
 
-    This is what keeps the asymmetry in `loaded_app` honest: it restores the import half and
-    leaves the data half, so a block that could open on a *different* root than the process
-    already reads would leave `project` reporting the first app while `runa.db` resolved against
-    the second -- the split-in-two state this module exists to prevent. It cannot, because the
-    root reaches `db.use_project` here as well, and both halves are still the first app's
-    afterwards.
+    `loaded_app` keeps the root after its block and undoes only the import, so a block that could
+    open on a *different* root would leave the process reading the second app's data with the
+    first app's modules loaded. It says `use` on the way in, and that refuses it before anything
+    moves.
     """
     first = scaffold_project("first", root=tmp_path)
     second = scaffold_project("second", root=tmp_path)
@@ -246,7 +244,7 @@ def test_loaded_app_refuses_a_second_project_too(tmp_path: Path) -> None:
     assert [info.name for info in list_agents(root=first)] == ["support_agent"]
 
 
-def test_use_none_clears_both_halves(tmp_path: Path) -> None:
+def test_use_none_clears_the_whole_fact(tmp_path: Path) -> None:
     """`None` is the process boundary a second app really has, and it clears the whole fact."""
     first = scaffold_project("first", root=tmp_path)
     second = scaffold_project("second", root=tmp_path)

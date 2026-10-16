@@ -11,6 +11,7 @@ import pytest
 
 from runa import db
 from runa.exceptions import UserError
+from runa.project import use
 
 _URL = "postgresql://runa:runa@localhost:5432/runa"
 
@@ -113,14 +114,14 @@ def test_a_shared_deployment_ignores_the_project(monkeypatch: pytest.MonkeyPatch
 
     from runa.session.postgres import PostgresSession
 
-    db.use_project(Path("/somewhere/else"))
+    use(Path("/somewhere/else"))
     session = db.session("s")
 
     assert isinstance(session, PostgresSession)
     assert session.url == _URL
 
 
-def test_use_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) -> None:
     """All seven concerns land in one file, which is the whole point of resolving them here.
 
     `root` used to be a per-factory argument, which meant four concerns took it and three could
@@ -133,7 +134,7 @@ def test_use_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) 
     root = Path("other/project")
     expected = root / "db" / "runa.db"
 
-    db.use_project(root)
+    use(root)
 
     assert db.sqlite_path() == expected
     assert db.session("s").db_path == expected  # type: ignore[attr-defined]
@@ -145,17 +146,17 @@ def test_use_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) 
     assert db.cache().db_path == expected  # type: ignore[attr-defined]
 
 
-def test_use_project_none_is_the_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_project_is_the_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
     """The default an app running in its own directory wants, and what a test resets to."""
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
-    db.use_project(Path("other/project"))
-    db.use_project(None)
+    use(Path("other/project"))
+    use(None)
 
     assert db.sqlite_path() == Path("db/runa.db")
 
 
-def test_use_project_accepts_the_same_project_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_same_project_twice_is_one_project(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two startup paths naming one project is the normal case, not a conflict.
 
     `runa ui` says it twice by design: `cli/main` from the cwd before dispatching, then
@@ -164,25 +165,25 @@ def test_use_project_accepts_the_same_project_twice(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
     root = Path("other/project")
 
-    db.use_project(root)
-    db.use_project(root)
+    use(root)
+    use(root)
 
     assert db.sqlite_path() == root / "db" / "runa.db"
 
 
-def test_use_project_refuses_a_second_project(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_second_project_leaves_the_first_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
     """A process reads one app, so the second one is an error instead of a silent repoint.
 
     Two Runa apps mounted in one process used to leave both resolving against whichever root was
     built last -- including runs already in flight, whose sessions and memory would land in
-    another app's file. This is also the refusal `runa.project.use` relies on for the import half
-    of the same fact, rather than keeping a second copy of it.
+    another app's file. The root `runa.db` resolves against is the same value `runa.project`
+    imports from, so a refused second app moves neither.
     """
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
-    db.use_project(Path("one/project"))
+    use(Path("one/project"))
 
     with pytest.raises(UserError):
-        db.use_project(Path("other/project"))
+        use(Path("other/project"))
 
     assert db.sqlite_path() == Path("one/project/db/runa.db")
 
@@ -190,10 +191,10 @@ def test_use_project_refuses_a_second_project(monkeypatch: pytest.MonkeyPatch) -
 def test_a_project_applies_an_explicit_sqlite_url_relative_to_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A relative `sqlite://` path is relative to the project, so `use_project` relocates it."""
+    """A relative `sqlite://` path is relative to the project, so `project.use` relocates it."""
     monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:///data/runa.db")
 
-    db.use_project(Path("other/project"))
+    use(Path("other/project"))
 
     assert db.sqlite_path() == Path("other/project/data/runa.db")
 
@@ -202,7 +203,7 @@ def test_a_project_leaves_an_absolute_sqlite_url_alone(monkeypatch: pytest.Monke
     """An absolute path is already an answer; the project has nothing to add to it."""
     monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:////var/lib/runa.db")
 
-    db.use_project(Path("other/project"))
+    use(Path("other/project"))
 
     assert db.sqlite_path() == Path("/var/lib/runa.db")
 
@@ -215,7 +216,7 @@ def test_a_project_moves_a_file_path_too(monkeypatch: pytest.MonkeyPatch) -> Non
     """
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
-    db.use_project(Path("other/project"))
+    use(Path("other/project"))
 
     assert db.project_path("app/knowledge") == Path("other/project/app/knowledge")
     assert db.project_path(Path("/srv/corpus")) == Path("/srv/corpus")
@@ -225,7 +226,7 @@ def test_a_shared_deployment_still_places_a_file_path(monkeypatch: pytest.Monkey
     """Unlike `sqlite_path`, this is read whatever the database is: files are on disk either way."""
     monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
 
-    db.use_project(Path("other/project"))
+    use(Path("other/project"))
 
     assert db.project_path("app/knowledge") == Path("other/project/app/knowledge")
 
@@ -447,7 +448,7 @@ def test_a_local_read_leaves_no_file_behind(
     import asyncio
 
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
-    db.use_project(tmp_path)
+    use(tmp_path)
 
     assert db.sessions().listing() == []
     assert db.traces().list() == []
@@ -526,7 +527,7 @@ def test_a_local_read_of_another_concerns_file_is_no_rows(tmp_path: Path) -> Non
     from runa.session.store import MESSAGES, SESSIONS
     from runa.tracing import Trace
 
-    db.use_project(tmp_path)
+    use(tmp_path)
     db.traces().save(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[]))
 
     assert db.sessions().listing() == []
@@ -552,7 +553,7 @@ def test_deleting_a_trace_takes_its_spans(tmp_path: Path) -> None:
         end_time=1.0,
         status="ok",
     )
-    db.use_project(tmp_path)
+    use(tmp_path)
     db.traces().save(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[span]))
 
     from runa.db.sqlite import connect

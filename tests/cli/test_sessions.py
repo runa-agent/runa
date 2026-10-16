@@ -13,17 +13,18 @@ import pytest
 from runa import db
 from runa.cli.new import scaffold_project
 from runa.cli.sessions import SessionNotFound, list_sessions, show_session
+from runa.project import use
 
 
 def _add_history(root: Path, session_id: str) -> None:
-    db.use_project(root)
+    use(root)
     session = db.session(session_id)
     asyncio.run(session.add_items([{"role": "user", "content": "hello"}]))
 
 
 def test_list_sessions_reports_none_when_there_is_no_history(tmp_path: Path) -> None:
     """`list_sessions` reports no sessions when the project has no history yet."""
-    db.use_project(scaffold_project("demo", root=tmp_path))
+    use(scaffold_project("demo", root=tmp_path))
 
     assert list_sessions() == "no sessions found"
 
@@ -38,28 +39,28 @@ def test_list_sessions_lists_a_session_with_history(tmp_path: Path) -> None:
 
 
 def test_list_sessions_reads_the_project_in_use(tmp_path: Path) -> None:
-    """The project `db.use_project` named is the one whose `db/runa.db` gets opened.
+    """The project `project.use` named is the one whose `db/runa.db` gets opened.
 
     The convention that resolves to lives in `runa.db` now, applied to every concern at once;
     this is the test that it still holds from a caller that names no directory at all. The
-    `use_project(None)` between the two is the process boundary a second app has in reality:
+    `use(None)` between the two is the process boundary a second app has in reality:
     naming another project outright is a `UserError`, which is `tests/test_db.py`'s own test.
     """
     other = scaffold_project("other", root=tmp_path)
     _add_history(other, "SupportAgent")
     empty = scaffold_project("empty", root=tmp_path)
 
-    db.use_project(other)
+    use(other)
     assert "SupportAgent" in list_sessions()
 
-    db.use_project(None)
-    db.use_project(empty)
+    use(None)
+    use(empty)
     assert list_sessions() == "no sessions found"
 
 
 def test_show_session_raises_for_an_unknown_session(tmp_path: Path) -> None:
     """`show_session` raises `SessionNotFound` for a session id with no history."""
-    db.use_project(scaffold_project("demo", root=tmp_path))
+    use(scaffold_project("demo", root=tmp_path))
 
     with pytest.raises(SessionNotFound):
         show_session("nope")

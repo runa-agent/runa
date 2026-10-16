@@ -18,7 +18,7 @@ from runa import db
 from runa import knowledge as knowledge_module
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
-from runa.project import AppLoadError, iter_agent_classes, loaded_app
+from runa.project import AppLoadError, iter_agent_classes, loaded_app, use
 from runa.run_state import RunState
 from runa.serve import MissingAPIKey, create_app, resolve_api_key
 
@@ -170,7 +170,7 @@ def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
     same request resolved to the server's cwd is the split `runa.db` exists to prevent, so the
     assertion covers one concern from each side of that old divide.
     """
-    db.use_project(None)
+    use(None)
 
     create_app(project, api_key="secret-token")
 

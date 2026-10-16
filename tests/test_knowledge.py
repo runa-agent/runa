@@ -25,6 +25,7 @@ from runa.knowledge import (
     KnowledgeStore,
     SQLiteKnowledgeStore,
 )
+from runa.project import use
 
 _DIMENSIONS = DIMENSIONS
 
@@ -107,7 +108,7 @@ def test_explicit_directory_overrides_the_default() -> None:
 
 
 def test_a_project_moves_the_source_directory(tmp_path: Path) -> None:
-    """A relative `directory` follows `db.use_project`, the way the store's own file does.
+    """A relative `directory` follows `project.use`, the way the store's own file does.
 
     `Knowledge` is built inside `Agent.__init__`, which has no root to hand it, so an app served
     from outside its own directory (`runa serve`, `create_app(root)`) read its corpus from the
@@ -117,14 +118,14 @@ def test_a_project_moves_the_source_directory(tmp_path: Path) -> None:
     corpus = tmp_path / "app" / "knowledge"
     corpus.mkdir(parents=True)
 
-    db.use_project(tmp_path)
+    use(tmp_path)
 
     assert Knowledge().directory == corpus
 
 
 def test_an_absolute_directory_ignores_the_project(tmp_path: Path) -> None:
     """An absolute path is already an answer, and is how app code names a corpus elsewhere."""
-    db.use_project(tmp_path)
+    use(tmp_path)
 
     assert Knowledge("/srv/shared-corpus").directory == Path("/srv/shared-corpus")
 

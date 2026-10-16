@@ -172,7 +172,7 @@ class Knowledge:
 
         `dimensions` only needs setting for a model not in Runa's built-in size table.
 
-        A relative `directory` is resolved against the project `runa.db.use_project` named, the
+        A relative `directory` is resolved against the project `runa.project.use` named, the
         same way the store's own file is, so an app served from outside its own directory reads
         its corpus and writes its vectors in one place. Absolute paths are left alone, which is
         how app code that means a directory somewhere else says so.
