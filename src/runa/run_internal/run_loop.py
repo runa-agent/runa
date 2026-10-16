@@ -1,9 +1,10 @@
 """run_loop.py: the turn loop (`_run_turns`), and run/resume orchestration.
 
 `Agent.run`/`run_streamed` are the only public way in: this is the Agent's implementation, not a
-seam of its own, which is why everything here is underscore-prefixed. `_finish` returns the same
-`Run` the caller gets, so there is one result shape from the loop's last line to the caller's
-hands and nothing in between translating one into another.
+seam of its own, which is why everything here is underscore-prefixed. `_finish` and `_errored`
+return the same `Run` the caller gets -- completed, paused, or failed -- so there is one result
+shape from the loop's last line to the caller's hands, built here on every path and nothing in
+between translating one into another.
 """
 
 import asyncio
@@ -33,7 +34,6 @@ from runa.exceptions import (
     ModelBehaviorError,
     OperatorError,
     RunaError,
-    RunErrorDetails,
     RunTimeout,
     UnexpectedError,
     UserError,
@@ -52,6 +52,7 @@ from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent
 from runa.tracing.config import export_trace_off_loop
+from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 
@@ -344,42 +345,67 @@ async def _close_trace(trace: Trace) -> None:
     await export_trace_off_loop(trace)
 
 
-async def _report(run: _Run, failure: RunaError) -> None:
-    """Close `run` out around `failure`, and hang what it had accumulated off the exception.
+async def _errored(
+    failure: RunaError,
+    *,
+    trace: Trace,
+    agent_span: Span,
+    context_wrapper: RunContextWrapper,
+) -> Run:
+    """Close the run out around `failure` and return it as the `Run` the caller was promised.
 
-    `run_data` travels on the exception because the exception is the only thing that crosses the
-    seam to `Agent.run`, which reads it there to report the usage, trace and guardrail trail of a
-    run that errored (`Agent._failed`).
+    The third way out of the loop, beside `_finish`'s completed and paused `Run`s, and built here
+    for the same reason those are built there: one result shape, produced by the loop on every
+    path, rather than a payload bolted onto the exception for the layer above to rebuild one from.
+
+    What a failed run can say is exactly what the trace and the context wrapper already hold --
+    the spans around the failure, what it spent, which guardrails ran -- so this needs nothing the
+    run hadn't put somewhere a caller can read. The items it generated before failing are not
+    among them: an unfinished turn is not history, and `Run._history()` is what history is read
+    from.
     """
-    _close_span(run.agent_span, error=str(failure))
-    await _close_trace(run.trace)
-    failure.run_data = RunErrorDetails(
-        input=run.input,
-        new_items=list(run.generated),
-        raw_responses=[],
-        last_agent=run.start.agent,
-        context_wrapper=run.context_wrapper,
-        trace=run.trace,
-        guardrail_results=run.context_wrapper.guardrail_results.snapshot(),
+    _close_span(agent_span, error=str(failure))
+    await _close_trace(trace)
+    return Run(
+        output=None,
+        trace=trace,
+        usage=context_wrapper.usage,
+        status="error",
+        error=str(failure),
+        guardrail_results=context_wrapper.guardrail_results.snapshot(),
     )
 
 
-async def _guarded(run: _Run, turn: Awaitable[Run]) -> Run:
-    """Await the whole run, and report any failure as a `RunaError` carrying what it had so far.
+async def _guarded(
+    turn: Awaitable[Run],
+    *,
+    trace: Trace,
+    agent_span: Span,
+    context_wrapper: RunContextWrapper,
+    timeout: float | None,
+) -> Run:
+    """Await the whole run and return its `Run`, the `"error"` one included.
 
     This is the boundary the "errors never raise out of a run" promise is kept at, which is why
-    it encloses everything a run does -- loading a `session`, dispatching hooks, the turn loop,
-    and `_finish`'s saving and memory extraction -- and why it catches `Exception` rather than
-    Runa's own root. Half of what a run calls is application code reached through a sanctioned
-    extension point (a `Hooks` method, a custom `Session`, a `Compactor`), and a contract that
-    held for `MaxTurnsExceeded` but not for a locked SQLite file would be no contract at all:
-    `Agent.run` would hand the caller a traceback where `Run(status="error")` was documented, and
-    the failure would skip the close-out below, leaving the one run worth inspecting with no
-    exported trace. So anything unrecognized becomes `UnexpectedError`, logged with its traceback
-    on the way past, and the `Run` says what happened.
+    it encloses everything a run does -- resolving the agent's shape, loading a `session`,
+    dispatching hooks, the turn loop, and `_finish`'s saving and memory extraction -- and why it
+    catches `Exception` rather than Runa's own root. Half of what a run calls is application code
+    reached through a sanctioned extension point (a `Hooks` method, a custom `Session`, a
+    `Compactor`), and a contract that held for `MaxTurnsExceeded` but not for a locked SQLite file
+    would be no contract at all: `Agent.run` would hand the caller a traceback where
+    `Run(status="error")` was documented, and the failure would skip the close-out below, leaving
+    the one run worth inspecting with no exported trace. So anything unrecognized becomes
+    `UnexpectedError`, logged with its traceback on the way past, and the `Run` says what happened.
 
-    `run_config.timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding
-    it is translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
+    It takes the four things a run is known by before its first turn rather than the `_Run` the
+    loop works on, because resolving the agent's shape is itself inside here: listing an MCP
+    server's tools starts a subprocess, and a server that won't start used to be the one failure
+    that happened before a run had a trace -- which is the whole reason `Run.trace` was once
+    optional. The trace and the span exist first, the shape is resolved under them, and every way
+    out of a run now ends with a trace to read.
+
+    `timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding it is
+    translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
     span, exports its partial trace, and comes back as `Run(status="error")` rather than leaving
     a half-finished trace behind.
 
@@ -389,7 +415,6 @@ async def _guarded(run: _Run, turn: Awaitable[Run]) -> Run:
     And an `OperatorError` is a sibling of `RunaError` precisely so a run never reports one as its
     own failure (see `runa.exceptions`); the trace is still closed out around it.
     """
-    timeout = run.run_config.timeout
     try:
         if timeout is None:
             result = await turn
@@ -400,24 +425,25 @@ async def _guarded(run: _Run, turn: Awaitable[Run]) -> Run:
             except TimeoutError as exc:
                 raise RunTimeout(f"run timed out after {timeout}s") from exc
     except OperatorError as exc:
-        _close_span(run.agent_span, error=str(exc))
-        await _close_trace(run.trace)
+        _close_span(agent_span, error=str(exc))
+        await _close_trace(trace)
         raise
     except RunaError as exc:
-        await _report(run, exc)
-        raise
+        failure = exc
     except Exception as exc:
-        failure = UnexpectedError(exc)
         logger.error(
             "agent %s failed with an unhandled %s",
-            run.start.name,
+            agent_span.name,
             type(exc).__name__,
             exc_info=True,
         )
-        await _report(run, failure)
-        raise failure from exc
-    await _close_trace(run.trace)
-    return result
+        failure = UnexpectedError(exc)
+    else:
+        await _close_trace(trace)
+        return result
+    return await _errored(
+        failure, trace=trace, agent_span=agent_span, context_wrapper=context_wrapper
+    )
 
 
 async def _extract_memory(run: _Run, final_output: Any) -> None:
@@ -545,28 +571,32 @@ async def _run_async(
 
     turn_input = [user_message(input)] if isinstance(input, str) else list(input)
     query = latest_user_text(turn_input)
-    shape = await AgentShape.of(agent)
-    run = _Run(
-        shape=shape,
-        input=input if isinstance(input, str) else list(input),
-        items=list(turn_input),
-        context_wrapper=context_wrapper,
-        trace=trace,
-        agent_span=_Spans(trace).open(shape.name, "agent", input=query),
-        original_input=[] if session is not None else list(turn_input),
-        session=session,
-        session_input=turn_input if session is not None else [],
-        generated=[],
-        hooks=dispatch,
-        run_config=run_config,
-        emit=emit,
-    )
+    agent_span = _Spans(trace).open(agent.name, "agent", input=query)
 
     async def turn() -> Run:
-        # The session's prior turns are read here, not above, for the reason the hooks below are
-        # dispatched here: both are the run's work, and a `Session` is the application's to
-        # implement, so a backend that doesn't answer (a locked SQLite file under `runa serve`)
-        # ends the run the way every other failure does instead of escaping the boundary.
+        # The agent's shape is resolved here, not above, for the reason the session's prior turns
+        # are read here and the hooks below are dispatched here: all three are the run's work, and
+        # all three reach something that can refuse. `AgentShape.of` lists an MCP server's tools,
+        # which starts its subprocess; a `Session` is the application's to implement, and a locked
+        # SQLite file under `runa serve` is its most ordinary failure. Inside the boundary each
+        # ends the run the way every other failure does, with a trace to read, instead of
+        # escaping it.
+        shape = await AgentShape.of(agent)
+        run = _Run(
+            shape=shape,
+            input=input if isinstance(input, str) else list(input),
+            items=list(turn_input),
+            context_wrapper=context_wrapper,
+            trace=trace,
+            agent_span=agent_span,
+            original_input=[] if session is not None else list(turn_input),
+            session=session,
+            session_input=turn_input if session is not None else [],
+            generated=[],
+            hooks=dispatch,
+            run_config=run_config,
+            emit=emit,
+        )
         if session is not None:
             run.items[:0] = await session.get_items()
         await dispatch.on_agent_start(context_wrapper, shape.agent)
@@ -575,7 +605,13 @@ async def _run_async(
         await _run_guardrails(run, Phase.INPUT, input)
         return await _finish(run, await _run_turns(run))
 
-    return await _guarded(run, turn())
+    return await _guarded(
+        turn(),
+        trace=trace,
+        agent_span=agent_span,
+        context_wrapper=context_wrapper,
+        timeout=run_config.timeout,
+    )
 
 
 async def _resume(
@@ -590,30 +626,37 @@ async def _resume(
     The agent starts again here, so it gets its own `on_agent_start`: `_finish` always fires
     `on_agent_end`, and a resumed run that skipped the start would emit an unpaired end.
     """
-    shape = await AgentShape.of(state.agent)
-    run = _Run(
-        shape=shape,
-        input=state.original_input,
-        items=list(state.generated_items),
-        context_wrapper=state.context_wrapper,
-        trace=state.trace,
-        agent_span=_Spans(state.trace).open(shape.name, "agent"),
-        original_input=state.original_input,
-        session=session,
-        session_input=state.session_input,
-        generated=list(state.new_items),
-        hooks=dispatch,
-        run_config=run_config,
-        emit=emit,
-        tool_calls=list(state.tool_calls),
-        resumed=state,
-    )
+    agent_span = _Spans(state.trace).open(state.agent.name, "agent")
 
     async def turn() -> Run:
+        shape = await AgentShape.of(state.agent)  # inside the boundary: see `_run_async`
+        run = _Run(
+            shape=shape,
+            input=state.original_input,
+            items=list(state.generated_items),
+            context_wrapper=state.context_wrapper,
+            trace=state.trace,
+            agent_span=agent_span,
+            original_input=state.original_input,
+            session=session,
+            session_input=state.session_input,
+            generated=list(state.new_items),
+            hooks=dispatch,
+            run_config=run_config,
+            emit=emit,
+            tool_calls=list(state.tool_calls),
+            resumed=state,
+        )
         await dispatch.on_agent_start(state.context_wrapper, state.agent)
         return await _finish(run, await _run_turns(run))
 
-    return await _guarded(run, turn())
+    return await _guarded(
+        turn(),
+        trace=state.trace,
+        agent_span=agent_span,
+        context_wrapper=state.context_wrapper,
+        timeout=run_config.timeout,
+    )
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]

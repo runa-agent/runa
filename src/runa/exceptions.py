@@ -3,9 +3,11 @@
 `RunaError` is the base every run-ending failure raises: a tripped guardrail, `MaxTurnsExceeded`, a
 model behaving unexpectedly, or a `UserError` in how the framework itself was used. A run reports
 every one of them as `Run(status="error", ...)` instead of raising -- but it is the boundary that
-decides that, not this hierarchy: anything else a run touches raises (an app's own hook, `Session`
-or `Compactor`) is wrapped in `UnexpectedError` as the run unwinds, so one type reaches
-`runa.agent` and the promise holds for failures no subclass here anticipated.
+decides that, not this hierarchy: these are raised freely inside a run and caught there, and
+anything else a run touches raises (an app's own hook, `Session` or `Compactor`) is wrapped in
+`UnexpectedError` at that same boundary, so the promise holds for failures no subclass here
+anticipated. None of them cross out of a run, which is why nothing here carries a payload for the
+layer above: by the time a caller is looking, the failure is a `Run`.
 
 `OperatorError` is the other half: the person running a Runa app typed something wrong. A sibling
 of `RunaError` rather than a subclass, because a mistyped session id is not a run failure -- these
@@ -13,29 +15,7 @@ come from the surfaces around a run (the CLI, the dashboard), mostly before one 
 the one exception a run deliberately lets through, which is what being a sibling buys.
 """
 
-from dataclasses import dataclass, field
-from typing import Any
-
-from runa._types import RunContextWrapper
-from runa.guardrail import GuardrailAudit, GuardrailResult, GuardrailResults
-
-
-@dataclass
-class RunErrorDetails(GuardrailAudit):
-    """Whatever a run had accumulated when a `RunaError` cut it short.
-
-    `context_wrapper.usage` is what `Agent.run`/`run_sync` read to still record token usage for a
-    run that errored instead of completing; the rest is here for a caller that wants more detail
-    than `Run.error`'s message.
-    """
-
-    input: str | list[Any]
-    new_items: list[Any]
-    raw_responses: list[Any]
-    last_agent: Any
-    context_wrapper: RunContextWrapper
-    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
-    trace: Any = None
+from runa.guardrail import GuardrailResult
 
 
 class OperatorError(Exception):
@@ -57,19 +37,18 @@ class OperatorError(Exception):
 class RunaError(Exception):
     """Base class for every exception a Runa agent run can end with.
 
-    One message, carried as both the exception's args and its `.message`, and `run_data` left
-    unset for the runner to fill in as the run unwinds. Every subclass is that plus its docstring:
-    the ones built from structured fields (`GuardrailTripwireTriggered`, `DuplicateToolCallError`)
-    keep their own `__init__` to compose the message, then hand it here like any other.
+    One message, carried as both the exception's args and its `.message`, and nothing else: what a
+    failed run accumulated is reported on the `Run` the turn loop returns in its place
+    (`run_internal/run_loop._errored`), not hung off the exception on its way up. Every subclass is
+    that plus its docstring: the ones built from structured fields (`GuardrailTripwireTriggered`,
+    `DuplicateToolCallError`) keep their own `__init__` to compose the message, then hand it here
+    like any other.
     """
-
-    run_data: RunErrorDetails | None
 
     def __init__(self, message: str) -> None:
         """Store `message` as both the exception's args and its `.message`."""
         super().__init__(message)
         self.message = message
-        self.run_data = None
 
 
 class MaxTurnsExceeded(RunaError):
@@ -113,8 +92,9 @@ class UnexpectedError(RunaError):
     that divides by zero: the extension points a run calls are application code, and the run
     boundary owes them the same contract it gives a tripped guardrail (`Run(status="error")`,
     with the trace around the failure) rather than one that holds only for failures Runa itself
-    declared. The original exception is the `__cause__`, and is logged with its traceback where
-    it was caught, so nothing about it is lost by coming back as a result.
+    declared. The message names the original's type as well as its text, since neither alone
+    identifies it, and the original is logged with its traceback where it was caught, so nothing
+    about it is lost by coming back as a result.
 
     Not raised for `OperatorError` (a sibling root, deliberately let through) nor for anything
     deriving from `BaseException` alone -- `asyncio.CancelledError` above all, which a caller
@@ -168,7 +148,6 @@ __all__ = [
     "MaxTurnsExceeded",
     "ModelBehaviorError",
     "OperatorError",
-    "RunErrorDetails",
     "RunTimeout",
     "RunaError",
     "UnexpectedError",

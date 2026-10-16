@@ -14,20 +14,13 @@ def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides:
 
     `Run`'s required fields are the turn loop's to fill (`run_internal/run_loop._finish`), and a
     test asserting on an eval metric or an evaluation page cares about one or two of them. Pass
-    `status=`/`error=`/`_tool_calls=` for the rest.
+    `status=`/`error=`/`_tool_calls=` for the rest, or `trace=` for a test that reads the trace
+    itself -- a run always has one, so an anonymous stand-in stands in when it doesn't matter.
     """
-    return Run(output=output, trace=trace, usage=Usage(), **overrides)
-
-
-def trace_of(result: Run) -> Trace:
-    """`result.trace`, narrowed away from its public `| None`.
-
-    A run that reached the turn loop always finishes with a trace. `Run.trace` is optional
-    because `Agent.run` also reports a failure that never got that far (see `Agent._failed`),
-    so a test that did reach the loop asserts the difference away rather than carrying it.
-    """
-    assert result.trace is not None
-    return result.trace
+    stand_in = Trace(id="trace_stub", name="stub", start_time=0.0)
+    return Run(
+        output=output, trace=trace if trace is not None else stand_in, usage=Usage(), **overrides
+    )
 
 
 def context_of(result: Run) -> RunContextWrapper:

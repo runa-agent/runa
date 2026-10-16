@@ -104,9 +104,9 @@ class GuardrailResults:
 class GuardrailAudit:
     """The four `*_guardrail_results` names RUNA.md documents, over one phase-keyed mapping.
 
-    Mixed into `Run`, `RunState` and `RunErrorDetails`, each of which holds the trail as a single
+    Mixed into `Run` and `RunState`, each of which holds the trail as a single
     `guardrail_results` field: the four public names are written here once instead of once per
-    holder, and a fifth phase adds nothing to any of the three.
+    holder, and a fifth phase adds nothing to either.
     """
 
     if TYPE_CHECKING:

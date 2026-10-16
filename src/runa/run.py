@@ -47,8 +47,9 @@ class Run(GuardrailAudit):
 
     `output` is the agent's final output (parsed into `Agent.output_type` when it declares one),
     `None` unless `status` is `"completed"`. `trace` is the hierarchical `Trace` (agent/LLM/tool/
-    handoff/guardrail spans) captured for this call, see `runa.tracing`. `usage` is this call's
-    token usage, same value as `Agent.last_usage` after the call.
+    handoff/guardrail spans) captured for this call, see `runa.tracing`; always present, whatever
+    the `status`, because the trace is opened before anything a run can fail on. `usage` is this
+    call's token usage, same value as `Agent.last_usage` after the call.
 
     `status` is `"paused"` when a tool call needs human approval: resolve each of
     `interruptions` on `to_state()`, then pass that state back to `run`/`run_sync` in place of a
@@ -65,7 +66,7 @@ class Run(GuardrailAudit):
     """
 
     output: Any
-    trace: Trace | None
+    trace: Trace
     usage: Usage
     status: Status = "completed"
     error: str | None = None
@@ -110,7 +111,7 @@ class Run(GuardrailAudit):
             "status": self.status,
             "output": _jsonable(self.output),
             "error": self.error,
-            "trace_id": self.trace.id if self.trace else None,
+            "trace_id": self.trace.id,
             "usage": {
                 "input_tokens": self.usage.input_tokens,
                 "output_tokens": self.usage.output_tokens,

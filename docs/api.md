@@ -180,8 +180,6 @@ signature-level reference.
 
 ::: runa.exceptions.RunaError
 
-::: runa.exceptions.RunErrorDetails
-
 ::: runa.exceptions.MaxTurnsExceeded
 
 ::: runa.exceptions.ModelBehaviorError

@@ -1,6 +1,6 @@
 """Tests for `runa.eval.evaluation.deterministic`: checks that don't need a judge model."""
 
-from helpers import finished_run, trace_of
+from helpers import finished_run
 
 from runa.eval.case import Case
 from runa.eval.evaluation.core import Status
@@ -103,4 +103,4 @@ def test_check_expected_tool_called_grades_the_runs_own_record_not_its_trace_spa
 
     assert result is not None
     assert result.status == Status.PASS
-    assert any(span.type == "tool" for span in trace_of(run).spans)
+    assert any(span.type == "tool" for span in run.trace.spans)

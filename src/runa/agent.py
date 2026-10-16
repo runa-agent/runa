@@ -15,6 +15,7 @@ import inspect
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -25,7 +26,7 @@ from runa._log import logger
 from runa._models import DEFAULT_MODEL, Model, ModelProvider, check_model_name
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
-from runa.exceptions import OperatorError, RunaError, UserError
+from runa.exceptions import UserError
 from runa.guardrail import (
     BoundGuardrail,
     GuardrailsDict,
@@ -227,6 +228,35 @@ def _flatten_subagents(subagents: SubagentsList | SubagentsDict) -> SubagentsLis
         for sub in subs:
             flat.append(sub if mode == "auto" or isinstance(sub, Subagent) else Subagent(sub, mode))
     return flat
+
+
+_under_construction: ContextVar[dict[type[Agent], Agent] | None] = ContextVar(
+    "_under_construction", default=None
+)
+
+
+@contextmanager
+def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
+    """Yield the one way `agent`'s `__init__` builds a subagent: each class once per graph.
+
+    Building an agent builds its subagents, and theirs, so without this a class listed twice
+    below one root is built twice (per request, under `runa serve`), and two agents listing each
+    other -- a specialist handing back to triage -- recurse until `RecursionError`. Instead,
+    every agent built while constructing one root is recorded by class, and a class already in
+    the graph is the instance already there: a cycle closes onto the agent still being built,
+    the same identity `runa.handoff.reachable` already walks a cycle by.
+
+    Construction stays eager, so a broken subagent declaration still fails when the root is
+    built, not on whichever turn first reaches it.
+    """
+    built = _under_construction.get()
+    token = _under_construction.set(built := {}) if built is None else None
+    built[type(agent)] = agent
+    try:
+        yield lambda cls: built[cls] if cls in built else cls()
+    finally:
+        if token is not None:
+            _under_construction.reset(token)
 
 
 def _resolve_compactor(compact: Any) -> Compactor | None:
@@ -500,25 +530,28 @@ class Agent:
         if instructions is _UNSET:
             instructions = _load_prompt(cls, name)
 
+        # Before the subagents: one that lists this agent back wraps it as a tool named after it.
+        self.name: str = name
+
         handoffs: list[Any] = []
         tools = list(setting["tools"] or [])
         mcp_servers = [*(setting["mcp_servers"] or []), *(setting["mcp"] or [])]
-        for sub in _flatten_subagents(setting["subagents"] or []):
-            if isinstance(sub, Subagent):
-                agent = sub.agent()
-                if sub.mode == "handoff":
-                    handoffs.append(agent)
+        with _agent_graph(self) as build:
+            for sub in _flatten_subagents(setting["subagents"] or []):
+                if isinstance(sub, Subagent):
+                    agent = build(sub.agent)
+                    if sub.mode == "handoff":
+                        handoffs.append(agent)
+                    else:
+                        tools.append(agent.as_tool(sub.tool_name, sub.tool_description))
                 else:
-                    tools.append(agent.as_tool(sub.tool_name, sub.tool_description))
-            else:
-                agent = sub()
-                handoffs.append(agent)
-                tools.append(agent.as_tool(None, None))
+                    agent = build(sub)
+                    handoffs.append(agent)
+                    tools.append(agent.as_tool(None, None))
 
         self.memory = _resolve_retrieval_setting(setting["memory"], Memory, tools)
         self.knowledge = _resolve_retrieval_setting(setting["knowledge"], Knowledge, tools)
 
-        self.name: str = name
         self.instructions = _adapt_instructions(instructions)
         self.model: str | Any = _checked_model(setting["model"])
         self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
@@ -571,53 +604,34 @@ class Agent:
             timeout=self.timeout,
         )
 
-    def _completed(self, run: Run, session: Session | None) -> Run:
-        """Record `run`'s usage (and, unless paused or session-backed, its history), and return it.
+    def _record(self, run: Run, session: Session | None) -> Run:
+        """Record `run`'s usage (and, if it completed a session-less turn, its history).
 
-        The loop builds the `Run` itself, so all that is left here is the bookkeeping only an
-        Agent instance can do: which conversation this run belongs to, and what it has spent
-        across every run so far. A paused run's history is not written back: the turn is not over,
-        and `to_state()` already carries what resuming it needs.
+        The one thing an `Agent` does to a finished run, whichever of the three ways it finished:
+        the loop builds the `Run` itself, so all that is left here is the bookkeeping only an
+        instance can do -- which conversation this run belongs to, and what it has spent across
+        every run so far. Usage is recorded for a failed run too, since the tokens were spent
+        either way.
+
+        History is written back only by a turn that completed. A paused run's is not over, and
+        `to_state()` already carries what resuming it needs; a failed one's never will be, and an
+        unfinished turn is not something the next one should start from.
         """
         self.last_usage = run.usage
         self.usage.add(self.last_usage)
-        if run.status != "paused" and session is None:
+        if run.status == "completed" and session is None:
             self.history = run._history()
         return run
-
-    def _failed(self, exc: Exception) -> Run:
-        """Record what a run that `exc` stopped had used, and ran, as an `"error"` `Run`.
-
-        `run_data` is there whenever the failure happened inside the turn loop, which attaches it
-        on the way out (`run_internal/run_loop._guarded`) whatever the exception was. Without it
-        the run never got that far -- an MCP server that won't start, say -- so there is no trace
-        to report and nothing was spent; the message still comes back as a `Run`, because a caller
-        holding `agent.run(...)` was promised one either way.
-        """
-        run_data = exc.run_data if isinstance(exc, RunaError) else None
-        if run_data is None:
-            logger.error("%s failed before its run began", type(self).__name__, exc_info=True)
-        context_wrapper = run_data.context_wrapper if run_data else RunContextWrapper()
-        self.last_usage = context_wrapper.usage
-        self.usage.add(self.last_usage)
-        return Run(
-            output=None,
-            trace=run_data.trace if run_data else None,
-            usage=self.last_usage,
-            status="error",
-            error=str(exc),
-            guardrail_results=context_wrapper.guardrail_results.snapshot(),
-        )
 
     def _fresh(self) -> Agent:
         """A copy of this agent with empty per-run state, sharing its config.
 
         For a run that must not inherit this instance's conversation, and may be one of several
         in flight on it. An agent declared once is reused for many such runs -- a `Subagent` is
-        built once per caller, an eval's agent once per dataset -- so running the shared instance
-        directly would both accumulate history across unrelated runs and corrupt it when two
-        overlap, whether the model delegated twice in one message or two eval cases are running
-        concurrently.
+        built once per agent graph, an eval's agent once per dataset -- so running the shared
+        instance directly would both accumulate history across unrelated runs and corrupt it when
+        two overlap, whether the model delegated twice in one message or two eval cases are
+        running concurrently.
         """
         clone = copy.copy(self)
         clone.history = []
@@ -714,21 +728,20 @@ class Agent:
         session = _resolve_session(session)
         turn_input = _turn_input(message, self.history, session, context)
         with self._exclusive(session):
-            try:
-                run = await _run_async(
-                    self,
-                    turn_input,
-                    context=context,
-                    hooks=hooks,
-                    run_config=self._run_config(session),
-                    session=session,
-                    _context_wrapper=_context_wrapper,
-                )
-            except OperatorError:
-                raise  # the operator's input, not this run's failure: see `runa.exceptions`
-            except Exception as exc:
-                return self._failed(exc)
-            return self._completed(run, session)
+            # No `except` for a run's own failure: the loop's boundary returns the `"error"` `Run`
+            # itself (`run_internal/run_loop._errored`), so there is nothing here to translate.
+            # What still comes through is what a run is not allowed to swallow -- an
+            # `OperatorError`, a `CancelledError` -- and those are the caller's to see.
+            run = await _run_async(
+                self,
+                turn_input,
+                context=context,
+                hooks=hooks,
+                run_config=self._run_config(session),
+                session=session,
+                _context_wrapper=_context_wrapper,
+            )
+            return self._record(run, session)
 
     def run_sync(
         self,
@@ -795,8 +808,8 @@ class Agent:
                 # because it has to keep running between a consumer's `__anext__` calls: a tool
                 # call and the model request after it are the loop's work, not the caller's, and
                 # a caller that stops iterating must not leave a turn half-executed.
-                # `task.result()` re-raises whatever the run raised, on this side of the seam,
-                # where `_failed` turns it into the same `Run` the non-streamed path returns.
+                # `task.result()` is the finished `Run`, errored included -- see `run`, which has
+                # no `except` for a run's own failure either.
                 queue: asyncio.Queue[StreamEvent | None] = asyncio.Queue()
                 task = asyncio.ensure_future(
                     _run_async(
@@ -813,11 +826,7 @@ class Agent:
                 try:
                     while (event := await queue.get()) is not None:
                         yield event
-                    stream.run = self._completed(task.result(), session)
-                except OperatorError:
-                    raise  # see `run`: not this run's failure to report
-                except Exception as exc:
-                    stream.run = self._failed(exc)
+                    stream.run = self._record(task.result(), session)
                 finally:
                     task.cancel()
 

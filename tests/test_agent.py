@@ -193,6 +193,52 @@ def test_h_and_d_are_shorthand_for_handoff_and_delegate() -> None:
     assert _tool_names(agent) == [Translator().as_tool(None, None).name]
 
 
+def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
+    """A specialist handing back to triage closes onto the triage agent being built."""
+
+    class Triage(Agent):
+        name = "Triage"
+        instructions = "triage"
+        subagents: list[Any] = []  # filled in below, once `Billing` exists
+
+    class Billing(Agent):
+        name = "Billing"
+        instructions = "billing"
+        subagents = [Triage.handoff]
+
+    Triage.subagents = [Billing.delegate]
+
+    triage = Triage()
+
+    (billing,) = [tool.delegate for tool in triage.tools]
+    assert billing is not None
+    assert billing.handoffs == [triage]
+
+
+def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
+    """A leaf shared by two subagents is one instance, not one per path to it."""
+
+    class Left(Agent):
+        name = "Left"
+        instructions = "left"
+        subagents = [Translator.delegate]
+
+    class Right(Agent):
+        name = "Right"
+        instructions = "right"
+        subagents = [Translator.delegate]
+
+    class Main(Agent):
+        name = "Main"
+        instructions = "main"
+        subagents = [Left.delegate, Right.delegate]
+
+    left, right = [tool.delegate for tool in Main().tools]
+
+    assert left is not None and right is not None
+    assert left.tools[0].delegate is right.tools[0].delegate
+
+
 def test_delegate_tool_name_and_description_override() -> None:
     """Calling a `.delegate` subagent overrides the generated tool's name/description."""
 

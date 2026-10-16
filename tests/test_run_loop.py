@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from helpers import context_of, trace_of
+from helpers import context_of
 
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
@@ -237,11 +237,11 @@ def test_tool_call_then_final_text() -> None:
 
     assert result.output == "it is 2024-01-01"
     assert result._tool_calls == [ToolCall(name="now", arguments="{}", output="2024-01-01")]
-    tool_spans = [s for s in trace_of(result).spans if s.type == "tool"]
+    tool_spans = [s for s in result.trace.spans if s.type == "tool"]
     assert len(tool_spans) == 1
     assert tool_spans[0].name == "now"
     assert tool_spans[0].status == "ok"
-    agent_spans = [s for s in trace_of(result).spans if s.type == "agent"]
+    agent_spans = [s for s in result.trace.spans if s.type == "agent"]
     assert agent_spans[0].name == "TestAgent"
 
 
@@ -261,7 +261,7 @@ def test_tool_error_is_fed_back_and_run_continues() -> None:
     result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
     assert result.output == "handled it"
-    (tool_span,) = [s for s in trace_of(result).spans if s.type == "tool"]
+    (tool_span,) = [s for s in result.trace.spans if s.type == "tool"]
     assert tool_span.status == "error"
     assert "boom" in (tool_span.error or "")
 
@@ -312,7 +312,7 @@ def test_handoff_switches_current_agent() -> None:
     result = asyncio.run(_run_async(main, "please transfer", run_config=_run_config()))
 
     assert result.output == "handled by target"
-    handoff_spans = [s for s in trace_of(result).spans if s.type == "handoff"]
+    handoff_spans = [s for s in result.trace.spans if s.type == "handoff"]
     assert len(handoff_spans) == 1
 
 
@@ -344,9 +344,9 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     result = asyncio.run(_run_async(caller, "what's the policy?", run_config=_run_config()))
 
     assert result.output == "it's 30 days"
-    (delegate_span,) = [s for s in trace_of(result).spans if s.name == "researcher"]
+    (delegate_span,) = [s for s in result.trace.spans if s.name == "researcher"]
     assert delegate_span.type == "delegate"
-    assert not [s for s in trace_of(result).spans if s.type == "tool"]
+    assert not [s for s in result.trace.spans if s.type == "tool"]
     assert result._tool_calls == []  # the delegate's own run records its own calls
 
 
@@ -369,7 +369,7 @@ def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
 
 
 def test_input_guardrail_tripwire_halts_the_run() -> None:
-    """A tripped input guardrail raises before the model is ever called."""
+    """A tripped input guardrail ends the run before the model is ever called."""
 
     async def _trip(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="blocked", tripped=True)
@@ -379,12 +379,14 @@ def test_input_guardrail_tripwire_halts_the_run() -> None:
         model=_ScriptedModel([_text_response("should not be reached")]),
     )
 
-    with pytest.raises(GuardrailTripwireTriggered):
-        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+    assert result.status == "error"
+    assert "block_all" in str(result.error)
 
 
 def test_output_guardrail_tripwire_halts_the_run() -> None:
-    """A tripped output guardrail raises after the model responds, before returning."""
+    """A tripped output guardrail ends the run after the model responds, before returning."""
 
     async def _trip(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="too long", tripped=len(value) > 3)
@@ -394,12 +396,15 @@ def test_output_guardrail_tripwire_halts_the_run() -> None:
         model=_ScriptedModel([_text_response("way too long")]),
     )
 
-    with pytest.raises(GuardrailTripwireTriggered):
-        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+
+    assert result.status == "error"
+    assert result.output is None
+    assert "block_long" in str(result.error)
 
 
 def test_tool_input_guardrail_tripwire_halts_the_run() -> None:
-    """A tripped tool input guardrail raises and aborts the run, unlike a plain tool exception."""
+    """A tripped tool input guardrail aborts the whole run, unlike a plain tool exception."""
     from runa.guardrail import guardrail
 
     @guardrail
@@ -417,12 +422,14 @@ def test_tool_input_guardrail_tripwire_halts_the_run() -> None:
         model=_ScriptedModel([_tool_call_response("search", '{"query": "x"}')]),
     )
 
-    with pytest.raises(GuardrailTripwireTriggered):
-        asyncio.run(_run_async(agent, "search for x", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "search for x", run_config=_run_config()))
+
+    assert result.status == "error"
+    assert "block_args" in str(result.error)
 
 
 def test_max_turns_exceeded() -> None:
-    """A model that keeps calling tools forever eventually raises `MaxTurnsExceeded`."""
+    """A model that keeps calling tools forever ends the run with `MaxTurnsExceeded`'s message."""
 
     @tool
     def loop_tool() -> str:
@@ -432,12 +439,20 @@ def test_max_turns_exceeded() -> None:
     responses = [_tool_call_response("loop_tool", "{}", call_id=f"call_{i}") for i in range(5)]
     agent = _agent(tools=[loop_tool], model=_ScriptedModel(responses))
 
-    with pytest.raises(MaxTurnsExceeded):
-        asyncio.run(_run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=3)))
+    result = asyncio.run(
+        _run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=3))
+    )
+
+    assert result.status == "error"
+    assert result.error == "max turns (3) exceeded"
 
 
-def test_a_run_error_reports_the_items_generated_before_it() -> None:
-    """`exc.run_data.new_items` holds what the run produced before failing, not an empty list."""
+def test_a_failed_run_comes_back_as_an_error_run_with_its_trace() -> None:
+    """A failure is the loop's third `Run`, not an exception carrying what the run had.
+
+    The spans are what report what it produced before failing: the run reached the model twice
+    and ran a tool each time, and the trace says so even though nothing was answered.
+    """
 
     @tool
     def loop_tool() -> str:
@@ -447,16 +462,17 @@ def test_a_run_error_reports_the_items_generated_before_it() -> None:
     responses = [_tool_call_response("loop_tool", "{}", call_id=f"call_{i}") for i in range(2)]
     agent = _agent(tools=[loop_tool], model=_ScriptedModel(responses))
 
-    with pytest.raises(MaxTurnsExceeded) as caught:
-        asyncio.run(_run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=2)))
+    result = asyncio.run(
+        _run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=2))
+    )
 
-    assert caught.value.run_data is not None
-    assert [item["role"] for item in caught.value.run_data.new_items] == [
-        "assistant",
-        "tool",
-        "assistant",
-        "tool",
-    ]
+    assert result.status == "error"
+    assert result.output is None
+    assert len([s for s in result.trace.spans if s.type == "llm"]) == 2
+    assert len([s for s in result.trace.spans if s.type == "tool"]) == 2
+    (agent_span,) = [s for s in result.trace.spans if s.type == "agent"]
+    assert agent_span.status == "error"
+    assert agent_span.error == "max turns (2) exceeded"
 
 
 def test_needs_approval_pauses_then_resumes_on_approve() -> None:
@@ -820,12 +836,10 @@ def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
         def export(self, trace: Any) -> None:
             exported.update({s.name: s.error for s in trace.spans if s.type == "tool"})
 
-    with (
-        observe.scoped(exporter=[_Capture()]),
-        pytest.raises(GuardrailTripwireTriggered),
-    ):
-        asyncio.run(_run_async(agent, "go", run_config=_run_config()))
+    with observe.scoped(exporter=[_Capture()]):
+        result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
+    assert result.status == "error"
     # As exported, not after `asyncio.run` tidied up leftover tasks.
     assert exported["slow"] == "CancelledError"
     assert (exported["blocked"] or "").startswith("GuardrailTripwireTriggered")
@@ -860,7 +874,7 @@ def test_parallel_tool_calls_false_runs_calls_one_at_a_time() -> None:
     assert log == ["first start", "first end", "second start"]
 
 
-def test_resuming_the_same_state_twice_raises_duplicate_call_id_error() -> None:
+def test_resuming_the_same_state_twice_reports_a_duplicate_call_id() -> None:
     """Resuming the same paused `RunState` a second time doesn't silently re-run the tool."""
 
     @tool(needs_approval=True)
@@ -879,8 +893,10 @@ def test_resuming_the_same_state_twice_raises_duplicate_call_id_error() -> None:
 
     asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
-    with pytest.raises(DuplicateToolCallError):
-        asyncio.run(_run_async(agent, state, run_config=_run_config()))
+    replayed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
+
+    assert replayed.status == "error"
+    assert "already executed" in str(replayed.error)
 
 
 def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> None:
@@ -901,7 +917,7 @@ def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> 
 
 
 def test_a_tripped_input_guardrail_still_records_the_guardrails_that_passed_before_it() -> None:
-    """Earlier passing guardrails aren't lost when a later one trips and raises."""
+    """Earlier passing guardrails aren't lost when a later one trips and ends the run."""
 
     async def _pass(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="ok", tripped=False)
@@ -919,13 +935,11 @@ def test_a_tripped_input_guardrail_still_records_the_guardrails_that_passed_befo
         model=_ScriptedModel([_text_response("should not be reached")]),
     )
 
-    with pytest.raises(GuardrailTripwireTriggered) as exc_info:
-        asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
+    result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    run_data = exc_info.value.run_data
-    assert run_data is not None
-    assert len(run_data.input_guardrail_results) == 2
-    assert [r.tripped for r in run_data.input_guardrail_results] == [False, True]
+    assert result.status == "error"
+    assert len(result.input_guardrail_results) == 2
+    assert [r.tripped for r in result.input_guardrail_results] == [False, True]
 
 
 def test_tool_input_guardrail_results_are_recorded_even_when_they_pass() -> None:
@@ -1344,7 +1358,7 @@ def test_compact_drops_history_before_the_latest_user_message_once_over_budget()
         {"role": "user", "content": "new question"},
         {"role": "assistant", "content": "ok", "tool_calls": None},
     ]
-    spans = trace_of(result).spans
+    spans = result.trace.spans
     compact_spans = [s for s in spans if s.type == "custom" and s.name == "compact"]
     assert compact_spans
     assert all(s.output == {"dropped": 2} for s in compact_spans)
@@ -1409,7 +1423,7 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
 
     assert context_of(result).usage.total_tokens > 200_000
     assert result._history()[:3] == history
-    assert not [s for s in trace_of(result).spans if s.type == "custom" and s.name == "compact"]
+    assert not [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
 
 
 def test_compact_defaults_to_off() -> None:
@@ -1427,7 +1441,7 @@ def test_compact_defaults_to_off() -> None:
         *history,
         {"role": "assistant", "content": "ok", "tool_calls": None},
     ]
-    assert not [s for s in trace_of(result).spans if s.type == "custom" and s.name == "compact"]
+    assert not [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
 
 
 def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
@@ -1526,8 +1540,8 @@ def test_memory_is_searched_before_the_turn_and_injected_as_a_labeled_block() ->
     assert ("system", "Relevant memories:\n- User prefers Japanese.") in sent
     assert result.output == "ok"
 
-    (agent_span,) = [s for s in trace_of(result).spans if s.type == "agent"]
-    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
+    (agent_span,) = [s for s in result.trace.spans if s.type == "agent"]
+    (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
     assert retrieval_span.name == "memory"
     assert retrieval_span.parent_id == agent_span.id
     assert retrieval_span.status == "ok"
@@ -1605,7 +1619,7 @@ def test_memory_extraction_runs_after_the_turn_with_the_exchange_and_resolved_mo
     assert user_id is None
     assert resolved_model is model
 
-    (extraction_span,) = [s for s in trace_of(result).spans if s.type == "custom"]
+    (extraction_span,) = [s for s in result.trace.spans if s.type == "custom"]
     assert extraction_span.name == "memory"
     assert extraction_span.status == "ok"
     assert extraction_span.output == {"stored": 0}
@@ -1634,7 +1648,7 @@ def test_trace_session_id_is_derived_from_the_session(tmp_path: Any) -> None:
 
     result = asyncio.run(_run_async(agent, "hi", session=session, run_config=_run_config()))
 
-    assert trace_of(result).session_id == "s1"
+    assert result.trace.session_id == "s1"
 
 
 def test_trace_session_id_is_none_without_a_session() -> None:
@@ -1643,7 +1657,7 @@ def test_trace_session_id_is_none_without_a_session() -> None:
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
-    assert trace_of(result).session_id is None
+    assert result.trace.session_id is None
 
 
 def test_memory_retrieval_failure_degrades_gracefully() -> None:
@@ -1662,7 +1676,7 @@ def test_memory_retrieval_failure_degrades_gracefully() -> None:
 
     assert result.output == "ok"
 
-    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
+    (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
     assert retrieval_span.status == "error"
     assert retrieval_span.error == "boom"
 
@@ -1683,7 +1697,7 @@ def test_memory_extraction_failure_degrades_gracefully() -> None:
 
     assert result.output == "ok"
 
-    (extraction_span,) = [s for s in trace_of(result).spans if s.type == "custom"]
+    (extraction_span,) = [s for s in result.trace.spans if s.type == "custom"]
     assert extraction_span.status == "error"
     assert extraction_span.error == "boom"
 
@@ -1728,7 +1742,7 @@ def test_retrieval_fails_open_on_a_loop_lifetime_fault() -> None:
 
     assert result.output == "ok"
 
-    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
+    (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
     assert retrieval_span.status == "error"
     assert retrieval_span.error == "Event loop is closed"
 
@@ -1788,7 +1802,7 @@ def test_knowledge_is_searched_before_the_turn_and_injected_as_a_labeled_block()
     assert ("system", "Relevant knowledge:\n- Refunds take 5 business days.") in sent
     assert result.output == "ok"
 
-    (retrieval_span,) = [s for s in trace_of(result).spans if s.type == "retrieval"]
+    (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
     assert retrieval_span.name == "knowledge"
     assert retrieval_span.status == "ok"
     assert retrieval_span.output == {"count": 1}
@@ -1843,7 +1857,7 @@ def test_knowledge_none_behaves_exactly_as_before() -> None:
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert result.output == "ok"
-    assert [s for s in trace_of(result).spans if s.type == "retrieval"] == []
+    assert [s for s in result.trace.spans if s.type == "retrieval"] == []
 
 
 def test_memory_none_behaves_exactly_as_before() -> None:
@@ -1853,7 +1867,7 @@ def test_memory_none_behaves_exactly_as_before() -> None:
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
     assert result.output == "ok"
-    assert [s for s in trace_of(result).spans if s.type == "retrieval"] == []
+    assert [s for s in result.trace.spans if s.type == "retrieval"] == []
 
 
 def test_mcp_server_tools_are_merged_in_and_callable() -> None:
@@ -1882,7 +1896,7 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
     result = asyncio.run(_run_async(agent, "what's the answer?", run_config=_run_config()))
 
     assert result.output == "it's 42"
-    (tool_span,) = [s for s in trace_of(result).spans if s.type == "tool"]
+    (tool_span,) = [s for s in result.trace.spans if s.type == "tool"]
     assert tool_span.name == "answer"
 
 
