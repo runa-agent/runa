@@ -12,7 +12,7 @@ import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from runa._items import ConversationItem, latest_text, parsed_arguments
 
@@ -294,22 +294,20 @@ def guardrail(func: _Predicate) -> Guardrail:
 
 
 GuardrailsList = list["BoundGuardrail | Guardrail"]
-GuardrailsDict = dict[Literal["input", "output"], GuardrailsList]
 
 
 def _entries(guardrails: Any) -> list[Any]:
-    """Normalize a flat list or `{"input": [...], "output": [...]}` dict to a flat entry list.
+    """The `guardrails=` declaration as a list, the one shape it takes.
 
-    A bare `Guardrail` nested in a dict bucket binds to that bucket's side; an already-bound
-    entry passes through untouched.
+    A dict grouping entries by side is a `TypeError` naming the list it should be, rather than
+    its keys reaching `flatten_guardrails` as entries.
     """
-    if not isinstance(guardrails, dict):
-        return list(guardrails)
-    return [
-        getattr(sub, mode) if isinstance(sub, Guardrail) else sub
-        for mode, subs in guardrails.items()
-        for sub in subs
-    ]
+    if not isinstance(guardrails, list | tuple):
+        raise TypeError(
+            f"guardrails must be a list, e.g. [block_empty.input, contains_pii.output], "
+            f"got {type(guardrails).__name__}"
+        )
+    return list(guardrails)
 
 
 def _rebound(entry: BoundGuardrail, phase: Phase) -> BoundGuardrail:
@@ -331,9 +329,9 @@ def _rebound(entry: BoundGuardrail, phase: Phase) -> BoundGuardrail:
 
 
 def flatten_guardrails(
-    guardrails: GuardrailsList | GuardrailsDict, *, tool: bool = False
+    guardrails: GuardrailsList, *, tool: bool = False
 ) -> dict[Phase, list[BoundGuardrail]]:
-    """Sort a `guardrails=` list/dict into entries by `Phase`; a bare entry wires as both sides.
+    """Sort a `guardrails=` list into entries by `Phase`; a bare entry wires as both sides.
 
     One function for both lists Runa accepts -- an `Agent`'s, checked against its input and its
     final output, and a `@tool`'s, checked against the call's arguments and its return value --
@@ -365,14 +363,12 @@ def _entry_name(entry: Any) -> str:
     return str(entry)
 
 
-def declared_names(guardrails: GuardrailsList | GuardrailsDict) -> list[str]:
+def declared_names(guardrails: GuardrailsList) -> list[str]:
     """Name every guardrail a `guardrails=` declaration lists, in the order it lists them.
 
-    What such a declaration may hold -- a flat list or an `{"input": [...], "output": [...]}`
-    dict, holding bound entries or bare `Guardrail`s -- is this module's own knowledge, so
-    naming them for display lives here beside `flatten_guardrails` rather than in whichever
-    caller (`runa ui`'s Agents page, today) needs it next. The dict form and the bare entry are
-    exactly what a caller re-deriving this gets wrong, and what `_entries` exists to normalize.
+    What such a declaration may hold -- bound entries or bare `Guardrail`s -- is this module's
+    own knowledge, so naming them for display lives here beside `flatten_guardrails` rather than
+    in whichever caller (`runa ui`'s Agents page, today) needs it next.
     """
     return [_entry_name(entry) for entry in _entries(guardrails)]
 
@@ -384,7 +380,6 @@ __all__ = [
     "GuardrailResult",
     "GuardrailResults",
     "GuardrailVerdict",
-    "GuardrailsDict",
     "GuardrailsList",
     "Phase",
     "declared_names",

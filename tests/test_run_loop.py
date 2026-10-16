@@ -21,7 +21,6 @@ from runa.compact import default_compactor
 from runa.exceptions import (
     DuplicateToolCallError,
     GuardrailTripwireTriggered,
-    MaxTurnsExceeded,
     UnexpectedError,
     UserError,
 )

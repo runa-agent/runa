@@ -101,7 +101,7 @@ def test_list_agents_reports_defaults_for_a_bare_agent(tmp_path: Path) -> None:
 
 
 def test_list_agents_names_guardrails_however_they_were_declared(tmp_path: Path) -> None:
-    """Bound, bare and dict-shaped `guardrails=` declarations all list the predicate's name."""
+    """Bound and bare `guardrails=` entries both list the predicate's name."""
     project_dir = scaffold_project("demo", root=tmp_path)
     _write_agent(
         project_dir,
@@ -116,17 +116,13 @@ def test_list_agents_names_guardrails_however_they_were_declared(tmp_path: Path)
         "    guardrails = [block_empty.input]\n\n\n"
         "class BareAgent(Agent):\n"
         "    name = 'bare'\n"
-        "    guardrails = [block_empty]\n\n\n"
-        "class DictAgent(Agent):\n"
-        "    name = 'dict'\n"
-        "    guardrails = {'input': [block_empty]}\n",
+        "    guardrails = [block_empty]\n",
     )
 
     named = {info.name: info.guardrails for info in list_agents(root=project_dir)}
 
     assert named["bound"] == ["block_empty"]
     assert named["bare"] == ["block_empty"]
-    assert named["dict"] == ["block_empty"]
 
 
 def test_list_agents_returns_empty_list_when_no_agents_declared(tmp_path: Path) -> None:

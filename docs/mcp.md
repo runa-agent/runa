@@ -21,8 +21,6 @@ exposed to the model exactly like an ordinary `@tool` function. The model can't 
 difference. The connection itself opens lazily and stays open for the agent's whole lifetime,
 not reopened every turn.
 
-`mcp=` is sugar for `mcp_servers=`. Pass either.
-
 ## Approval and Guardrails
 
 Exactly like an ordinary tool includes the two things a tool carries besides its schema: whether

@@ -75,18 +75,6 @@ def test_bare_guardrail_wires_both_sides() -> None:
     assert [g.get_name() for g in now.guardrails[Phase.TOOL_OUTPUT]] == ["block_args"]
 
 
-def test_dict_guardrails_wire_by_key() -> None:
-    """A `{"input": [...], "output": [...]}` dict binds each bare entry by its key."""
-
-    @tool(guardrails={"input": [block_args], "output": [block_long]})
-    def now() -> str:
-        """Return a constant string."""
-        return "now"
-
-    assert [g.get_name() for g in now.guardrails[Phase.TOOL_INPUT]] == ["block_args"]
-    assert [g.get_name() for g in now.guardrails[Phase.TOOL_OUTPUT]] == ["block_long"]
-
-
 def test_invalid_guardrail_entry_raises() -> None:
     """A `guardrail` entry not bound via `.input`/`.output` is rejected."""
     with pytest.raises(TypeError, match="guardrails entries must be"):

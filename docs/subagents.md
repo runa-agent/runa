@@ -67,22 +67,6 @@ description it is given:
 subagents = [Researcher.delegate(tool_name="research", tool_description="Research a topic.")]
 ```
 
-## Grouping by Mode
-
-For a longer list, group entries under `"handoff"`, `"delegate"`, or `"auto"` instead of
-repeating `.handoff`/`.delegate` on each:
-
-```python
-subagents = {
-    "handoff": [Billing, Returns],
-    "delegate": [Researcher, Translator],
-}
-```
-
-Entries under `"auto"` pass through as given, whether bare (wired as both) or already
-`.handoff`/`.delegate`-bound, for mixing modes within one dict without forcing every entry the
-same way.
-
 ## Workflows in Code
 
 Subagents are for when the model picks the order. When your code picks it, write a plain

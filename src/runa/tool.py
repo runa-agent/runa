@@ -17,13 +17,7 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 from runa._items import parsed_arguments
 from runa._types import RunContextWrapper
 from runa.approval import _NeedsApproval as _ApprovalPredicate
-from runa.guardrail import (
-    BoundGuardrail,
-    GuardrailsDict,
-    GuardrailsList,
-    Phase,
-    flatten_guardrails,
-)
+from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 
 _RESERVED_PARAMS = ("ctx", "call_id")
 _NeedsApproval = bool | _ApprovalPredicate
@@ -141,7 +135,7 @@ def tool(
     *,
     name_override: str | None = None,
     description_override: str | None = None,
-    guardrails: GuardrailsList | GuardrailsDict | None = None,
+    guardrails: GuardrailsList | None = None,
     needs_approval: _NeedsApproval = False,
 ) -> Callable[[Callable[..., Any]], FunctionTool]: ...
 
@@ -151,7 +145,7 @@ def tool(
     *,
     name_override: str | None = None,
     description_override: str | None = None,
-    guardrails: GuardrailsList | GuardrailsDict | None = None,
+    guardrails: GuardrailsList | None = None,
     needs_approval: _NeedsApproval = False,
 ) -> FunctionTool | Callable[[Callable[..., Any]], FunctionTool]:
     """Wrap a plain function as a `FunctionTool`, deriving its schema from its signature.

@@ -27,13 +27,7 @@ from runa._models import DEFAULT_MODEL, Model, ModelProvider, check_model_name
 from runa._types import MessageContent, ModelSettings, RunContextWrapper, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import UserError
-from runa.guardrail import (
-    BoundGuardrail,
-    GuardrailsDict,
-    GuardrailsList,
-    Phase,
-    flatten_guardrails,
-)
+from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 from runa.handoff import Mode, agent_as_tool
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks
@@ -211,23 +205,20 @@ def _load_prompt(cls: type, name: str) -> str | None:
 
 
 SubagentsList = list["type[Agent] | Subagent"]
-SubagentsDict = dict[Mode | Literal["auto"], SubagentsList]
 
 
-def _flatten_subagents(subagents: SubagentsList | SubagentsDict) -> SubagentsList:
-    """Normalize the `subagents` class attribute to the flat list the wiring loop expects.
+def _subagents(subagents: SubagentsList) -> SubagentsList:
+    """The `subagents` declaration as a list: each entry bare (auto) or `.handoff`/`.delegate`.
 
-    Accepts either a plain list (each entry bare, or `.handoff`/`.delegate`-wrapped) or a
-    `{"handoff": [...], "delegate": [...], "auto": [...]}` dict, where the key supplies the
-    mode for any bare entry.
+    A list is the one shape, so a dict -- grouping entries by mode -- is a `UserError` naming
+    the list it should be rather than its keys being built as agents.
     """
-    if not isinstance(subagents, dict):
-        return list(subagents)
-    flat: SubagentsList = []
-    for mode, subs in subagents.items():
-        for sub in subs:
-            flat.append(sub if mode == "auto" or isinstance(sub, Subagent) else Subagent(sub, mode))
-    return flat
+    if not isinstance(subagents, list | tuple):
+        raise UserError(
+            f"subagents must be a list, e.g. [Billing.handoff, Researcher.delegate, Helper], "
+            f"got {type(subagents).__name__}"
+        )
+    return list(subagents)
 
 
 _under_construction: ContextVar[dict[type[Agent], Agent] | None] = ContextVar(
@@ -456,10 +447,9 @@ class Agent:
         model: str | Model = _UNSET,
         model_settings: ModelSettings | None = _UNSET,
         tools: list[FunctionTool] | None = _UNSET,
-        subagents: SubagentsList | SubagentsDict | None = _UNSET,
-        guardrails: GuardrailsList | GuardrailsDict | None = _UNSET,
+        subagents: SubagentsList | None = _UNSET,
+        guardrails: GuardrailsList | None = _UNSET,
         mcp: list[Any] | None = _UNSET,
-        mcp_servers: list[Any] | None = _UNSET,
         output_type: type | None = _UNSET,
         hooks: Hooks[Any] | None = _UNSET,
         memory: MemoryLike | Literal["auto", "llm"] | None = _UNSET,
@@ -479,8 +469,7 @@ class Agent:
         setting it probably meant when it is declared in a class body instead (see
         `_reject_unknown_settings`).
 
-        `mcp=[...]` (as a constructor kwarg, or a `mcp` class attribute) is sugar for
-        `mcp_servers=[...]`; both are merged into `mcp_servers` if given together.
+        `mcp` lists the agent's MCP servers; `self.mcp_servers` is what it resolved to.
 
         `memory` opts this agent into long-term memory, one of:
           - `"auto"` (or a `Memory(...)` instance, or any object shaped like `runa.memory`'s
@@ -535,9 +524,8 @@ class Agent:
 
         handoffs: list[Any] = []
         tools = list(setting["tools"] or [])
-        mcp_servers = [*(setting["mcp_servers"] or []), *(setting["mcp"] or [])]
         with _agent_graph(self) as build:
-            for sub in _flatten_subagents(setting["subagents"] or []):
+            for sub in _subagents(setting["subagents"] or []):
                 if isinstance(sub, Subagent):
                     agent = build(sub.agent)
                     if sub.mode == "handoff":
@@ -557,8 +545,8 @@ class Agent:
         self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
         self.tools: list[FunctionTool] = tools
         self.handoffs: list[Any] = handoffs
-        self.mcp_servers: list[Any] = mcp_servers
-        # Not `self.guardrails`: that name belongs to the list/dict a subclass declares, the way
+        self.mcp_servers: list[Any] = list(setting["mcp"] or [])
+        # Not `self.guardrails`: that name belongs to the list a subclass declares, the way
         # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
         self.bound_guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
             setting["guardrails"] or []

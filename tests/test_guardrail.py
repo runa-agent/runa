@@ -82,18 +82,16 @@ def test_bare_guardrail_wires_both_input_and_output() -> None:
     assert [g.name for g in agent.bound_guardrails[Phase.OUTPUT]] == ["block_empty"]
 
 
-def test_dict_guardrails_wire_by_key() -> None:
-    """A `{"input": [...], "output": [...]}` dict binds each bare entry by its key."""
+def test_dict_guardrails_are_rejected() -> None:
+    """`guardrails` is a list; a dict grouping it by side is a `TypeError`, not keys as entries."""
 
     class Support(Agent):
         name = "Support"
         instructions = "support"
-        guardrails = {"input": [block_empty], "output": [block_long]}
+        guardrails = cast(Any, {"input": [block_empty]})
 
-    agent = Support()
-
-    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
-    assert [g.name for g in agent.bound_guardrails[Phase.OUTPUT]] == ["block_long"]
+    with pytest.raises(TypeError, match="guardrails must be a list"):
+        Support()
 
 
 def test_input_predicate_reduces_item_list_to_latest_text() -> None:
@@ -141,10 +139,7 @@ def test_async_predicate_is_awaited() -> None:
 
 
 def test_declared_names_covers_every_declaration_shape() -> None:
-    """`declared_names` names a bound entry, a bare `Guardrail` and a dict bucket alike."""
+    """`declared_names` names a bound entry and a bare `Guardrail` alike, in declared order."""
     assert declared_names([block_empty.input]) == ["block_empty"]
     assert declared_names([block_empty]) == ["block_empty"]
-    assert declared_names({"input": [block_empty], "output": [block_long.output]}) == [
-        "block_empty",
-        "block_long",
-    ]
+    assert declared_names([block_empty, block_long.output]) == ["block_empty", "block_long"]

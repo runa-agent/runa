@@ -310,7 +310,7 @@ Knowledge = application/domain information
 ## 9. MCP Server
 
 **Always built as `MCPServer(...).http(...)` or `MCPServer(...).stdio(...)`,
-listed in `mcp=`/`mcp_servers=`.** `MCPServer` is the only exported name:
+listed in `mcp=`.** `MCPServer` is the only exported name:
 the per-transport classes it returns aren't a second call site, and a third
 transport is written by subclassing `_MCPServerBase`, not by constructing
 them. Enforced in code, in the ordinary Python way: every parameter of
@@ -461,3 +461,11 @@ When a change would let a user reach the same result through a second
 shape (a new `Handoff(...)` call site, a hand-built tool schema, a
 `Hooks` subclass that overrides `LoggingHooks`), that's a sign to close the
 second path, not to document it alongside the first.
+
+"One shape" applies to declarations as well as primitives. Every list
+setting (`tools`, `subagents`, `guardrails`, `mcp`) is a list, never a
+dict grouping its entries, and each setting has one name. A shorthand alias
+(`.h`/`.d`, `.i`/`.o`) is a shorter spelling of the same binding and
+produces the same object, so it doesn't count as a second shape. A bare
+entry isn't one either: it means something of its own (auto for a
+subagent, both sides for a guardrail).

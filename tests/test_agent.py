@@ -18,7 +18,7 @@ from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContextWrapper, Usage
 from runa.agent import _AGENT_FIELDS, Subagent
 from runa.compact import default_compactor
-from runa.exceptions import MaxTurnsExceeded, RunErrorDetails
+from runa.exceptions import MaxTurnsExceeded, RunErrorDetails, UserError
 from runa.guardrail import Phase, guardrail
 from runa.knowledge import Knowledge
 from runa.lifecycle import Hooks, LoggingHooks
@@ -296,48 +296,28 @@ def test_no_subagents_leaves_handoffs_and_tools_empty() -> None:
     assert agent.tools == []
 
 
-def test_dict_subagents_wire_by_key() -> None:
-    """A `{"handoff": [...], "delegate": [...], "auto": [...]}` dict wires each bucket."""
-
-    class Helper(Agent):
-        name = "Helper"
-        instructions = "helper"
+def test_dict_subagents_are_rejected() -> None:
+    """`subagents` is a list; a dict grouping it by mode is a `UserError`, not keys as agents."""
 
     class Main(Agent):
         name = "Main"
         instructions = "main"
-        subagents = {
-            "handoff": [Researcher],
-            "delegate": [Translator],
-            "auto": [Helper],
-        }
+        subagents = cast(Any, {"handoff": [Researcher]})
 
-    agent = Main()
-
-    assert sorted(_handoff_names(agent)) == ["Helper", "Researcher"]
-    assert sorted(_tool_names(agent)) == sorted(
-        [Translator().as_tool(None, None).name, Helper().as_tool(None, None).name]
-    )
+    with pytest.raises(UserError, match="subagents must be a list"):
+        Main()
 
 
-def test_dict_subagents_delegate_bucket_keeps_tool_overrides() -> None:
-    """A `.delegate(...)` override still applies inside the dict format's `delegate` bucket."""
+def test_mcp_servers_is_not_a_setting() -> None:
+    """`mcp` is the one way to declare MCP servers; `mcp_servers` is only what it resolved to."""
 
     class Main(Agent):
         name = "Main"
         instructions = "main"
-        subagents = {
-            "delegate": [
-                Researcher.delegate(tool_name="do_research", tool_description="Look into it.")
-            ]
-        }
+        mcp_servers = cast(Any, [])
 
-    agent = Main()
-
-    (tool_obj,) = agent.tools
-    assert isinstance(tool_obj, FunctionTool)
-    assert tool_obj.name == "do_research"
-    assert tool_obj.description == "Look into it."
+    with pytest.raises(UserError, match="'mcp_servers', which is not an Agent setting"):
+        Main()
 
 
 def test_subagent_descriptor_returns_fresh_immutable_instance() -> None:

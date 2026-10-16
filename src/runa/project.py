@@ -36,7 +36,7 @@ from pathlib import Path
 
 from runa import _app
 from runa._app import use
-from runa.agent import Agent, Subagent, _flatten_subagents, declared_name
+from runa.agent import Agent, Subagent, declared_name
 from runa.exceptions import OperatorError
 from runa.guardrail import declared_names
 
@@ -217,11 +217,7 @@ def _tool_name(tool: object) -> str:
 
 
 def _subagent_label(subagent: Subagent | type[Agent]) -> str:
-    """Label one flattened subagent entry, `Subagent`-wrapped or bare (auto mode).
-
-    `_flatten_subagents` only wraps a bare `Agent` subclass in a `Subagent` when a dict-shaped
-    `subagents` gave it an explicit `.handoff`/`.delegate` mode; unwrapped means "auto".
-    """
+    """Label one `subagents` entry: `.handoff`/`.delegate`-bound, or bare, which means auto."""
     if isinstance(subagent, Subagent):
         return f"{declared_name(subagent.agent)} ({subagent.mode})"
     return f"{declared_name(subagent)} (auto)"
@@ -241,14 +237,13 @@ def _describe(agent_cls: type[Agent]) -> AgentInfo:
     list configures the agent exactly as before; it just doesn't get a row, so this is not one of
     the paths a new setting has to join.
     """
-    subagents_raw = getattr(agent_cls, "subagents", [])
     return AgentInfo(
         name=declared_name(agent_cls),
         class_name=agent_cls.__name__,
         model=agent_cls.model,
         tools=[_tool_name(tool) for tool in getattr(agent_cls, "tools", [])],
         guardrails=declared_names(getattr(agent_cls, "guardrails", [])),
-        subagents=[_subagent_label(sub) for sub in _flatten_subagents(subagents_raw)],
+        subagents=[_subagent_label(sub) for sub in getattr(agent_cls, "subagents", [])],
         memory=_retrieval_label(getattr(agent_cls, "memory", None)),
         knowledge=_retrieval_label(getattr(agent_cls, "knowledge", None)),
     )

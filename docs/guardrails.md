@@ -33,11 +33,7 @@ Listed bare, with no `.input`/`.output`, a guardrail is wired to both sides:
 guardrails = [block_empty.input, contains_pii]  # contains_pii checks input and output
 ```
 
-Group them explicitly instead, if you would rather be specific:
-
-```python
-guardrails = {"input": [block_empty], "output": [contains_pii]}
-```
+`guardrails` is always a list. A dict grouping entries by side raises a `TypeError`.
 
 A tripped guardrail stops the run before the model call (input side), or before the caller sees
 the output (output side). `run`/`run_sync` come back with `status="error"` instead of raising.

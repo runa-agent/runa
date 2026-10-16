@@ -35,7 +35,7 @@ from mcp_types import TextContent
 from runa._items import parsed_arguments
 from runa._loop import LoopCache
 from runa._types import RunContextWrapper
-from runa.guardrail import BoundGuardrail, GuardrailsDict, GuardrailsList, Phase, flatten_guardrails
+from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 from runa.tool import FunctionTool, _NeedsApproval
 
 
@@ -62,7 +62,7 @@ class _MCPServerBase:
         name: str | None = None,
         address: str,
         needs_approval: _NeedsApproval = False,
-        guardrails: GuardrailsList | GuardrailsDict | None = None,
+        guardrails: GuardrailsList | None = None,
     ) -> None:
         """Store the server's display `name`, the `address` its connections are keyed by, policy.
 
@@ -163,7 +163,7 @@ class MCPServerStdio(_MCPServerBase):
         env: dict[str, str] | None = None,
         cwd: str | None = None,
         needs_approval: _NeedsApproval = False,
-        guardrails: GuardrailsList | GuardrailsDict | None = None,
+        guardrails: GuardrailsList | None = None,
     ) -> None:
         """Store the command to spawn; nothing runs until the first `connect`/`list_tools`."""
         super().__init__(
@@ -187,7 +187,7 @@ class MCPServerStreamableHttp(_MCPServerBase):
         *,
         name: str | None = None,
         needs_approval: _NeedsApproval = False,
-        guardrails: GuardrailsList | GuardrailsDict | None = None,
+        guardrails: GuardrailsList | None = None,
     ) -> None:
         """Store the server's `url`; nothing connects until the first `connect`/`list_tools`."""
         super().__init__(
@@ -220,7 +220,7 @@ class MCPServer:
         *,
         name: str | None = None,
         needs_approval: _NeedsApproval = False,
-        guardrails: GuardrailsList | GuardrailsDict | None = None,
+        guardrails: GuardrailsList | None = None,
     ) -> None:
         """Hold config shared by every transport, applied when `http`/`stdio` is called.
 

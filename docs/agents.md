@@ -24,7 +24,7 @@ class SupportAgent(Agent):
 | `tools` | `[]` | `@tool`-decorated functions. See [Tools](tools.md). |
 | `subagents` | `[]` | Other agents to hand off or delegate to. See [Subagents](subagents.md). |
 | `guardrails` | `[]` | Input/output checks. See [Guardrails](guardrails.md). |
-| `mcp` / `mcp_servers` | `[]` | MCP servers whose tools this agent can call. See [MCP Servers](mcp.md). |
+| `mcp` | `[]` | MCP servers whose tools this agent can call. See [MCP Servers](mcp.md). |
 | `memory` | `None` | Long-term memory across conversations. See [Memory](memory.md). |
 | `knowledge` | `None` | Retrieval from application documents. See [Knowledge](knowledge.md). |
 | `output_type` | `None` | A dataclass, Pydantic model or `TypedDict` the final output is parsed into. |
