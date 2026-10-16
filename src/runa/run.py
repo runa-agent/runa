@@ -4,8 +4,8 @@ One result shape, built once by the turn loop (`run_internal/run_loop._finish`) 
 unchanged. The loop used to return a `RunResult` of its own that the Agent translated field by
 field into this one, which meant two dataclasses carrying the same ten values and a translator
 that had to be kept honest between them. What the loop needs and a caller doesn't -- the context
-wrapper, the input it started from, the items it generated -- is here too, underscore-prefixed:
-private fields on the one result, rather than a second result shape to convert from.
+wrapper and the run's `Transcript` -- is here too, underscore-prefixed: private fields on the one
+result, rather than a second result shape to convert from.
 """
 
 from collections.abc import AsyncIterator
@@ -14,14 +14,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from runa._items import ConversationItem
 from runa._types import RunContextWrapper, Usage
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_state import Interruption, RunState
 from runa.stream_events import StreamEvent
-from runa.tool import ToolCall
 from runa.tracing import Trace
+from runa.transcript import Transcript
 
 Status = Literal["completed", "paused", "error"]
 
@@ -74,12 +73,11 @@ class Run(GuardrailAudit):
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     _state: RunState | None = field(default=None, repr=False)
     _context_wrapper: RunContextWrapper | None = field(default=None, repr=False)
-    _original_input: list[ConversationItem] = field(default_factory=list, repr=False)
-    _generated_items: list[ConversationItem] = field(default_factory=list, repr=False)
-    _tool_calls: list[ToolCall] = field(default_factory=list, repr=False)
-    """Every tool call this run executed, as the turn loop saw it (see `ToolCall`). Private because
-    `trace` is how a caller inspects a run: this is the unfiltered copy `runa.eval` grades, which
-    a trace span can't be, since spans pass through the tracing privacy policy."""
+    _transcript: Transcript = field(default_factory=Transcript, repr=False)
+    """The run's conversation (see `Transcript`): `history()` is what `Agent.run` writes back to
+    `Agent.history`, and `tool_calls` the unfiltered record `runa.eval` grades. Private because
+    `trace` is how a caller inspects a run, and a session holds a session-backed run's history.
+    Empty for a run that failed: an unfinished turn is not history."""
 
     def to_state(self) -> RunState:
         """The paused run's `RunState`: approve or reject its `interruptions`, then resume."""
@@ -130,15 +128,6 @@ class Run(GuardrailAudit):
             ],
             "state": self._state.to_json() if self._state is not None else None,
         }
-
-    def _history(self) -> list[ConversationItem]:
-        """`original_input + generated_items`: the conversation as it stands after this run.
-
-        What `Agent.run` writes back to `self.history` on a session-less run. Private because a
-        session-backed run's history lives in the session, and `Agent.history` is the supported
-        way to read the other kind.
-        """
-        return [*self._original_input, *self._generated_items]
 
 
 class RunStream:

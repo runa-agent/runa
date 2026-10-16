@@ -7,6 +7,7 @@ from runa.eval.evaluation.core import Status
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.tool import ToolCall
 from runa.tracing import Span, Trace
+from runa.transcript import Transcript
 
 
 def test_check_run_completed_passes_for_a_completed_run() -> None:
@@ -49,7 +50,10 @@ def test_check_expected_tool_called_passes_when_the_tool_was_called() -> None:
     """Passes when a tool call in the run matches `case.expected_tool`."""
     case = Case(input="cancel order 123", expected_tool="cancel_order")
     run = finished_run(
-        "done", _tool_calls=[ToolCall(name="cancel_order", arguments="{}", output="done")]
+        "done",
+        _transcript=Transcript(
+            tool_calls=[ToolCall(name="cancel_order", arguments="{}", output="done")]
+        ),
     )
 
     result = check_expected_tool_called(case, run)
@@ -62,7 +66,10 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
     """Fails, naming what was actually called, when `expected_tool` never ran."""
     case = Case(input="cancel order 123", expected_tool="cancel_order")
     run = finished_run(
-        "done", _tool_calls=[ToolCall(name="search", arguments="{}", output="nothing")]
+        "done",
+        _transcript=Transcript(
+            tool_calls=[ToolCall(name="search", arguments="{}", output="nothing")]
+        ),
     )
 
     result = check_expected_tool_called(case, run)
@@ -74,7 +81,7 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
 
 
 def test_check_expected_tool_called_grades_the_runs_own_record_not_its_trace_spans() -> None:
-    """Graded evidence is `Run._tool_calls`, which no tracing privacy policy has filtered.
+    """Graded evidence is the run's own tool calls, which no tracing privacy policy has filtered.
 
     A `"tool"` span's input/output goes through `runa.tracing.observe` first, so reading the
     judge's evidence off the trace let an observability setting decide an eval score. The trace is
@@ -96,7 +103,7 @@ def test_check_expected_tool_called_grades_the_runs_own_record_not_its_trace_spa
     run = finished_run(
         "done",
         trace=Trace(id="t1", name="UnderTest", start_time=0.0, end_time=0.0, spans=[redacted]),
-        _tool_calls=[call],
+        _transcript=Transcript(tool_calls=[call]),
     )
 
     result = check_expected_tool_called(case, run)

@@ -371,9 +371,10 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
 def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> None:
     """A privacy setting decides what a trace shows, never what the run reports it did.
 
-    `runa.eval` grades `Run._tool_calls`, so this is what keeps an operational decision --
-    switching input capture off for PII reasons, or any tool result over `max_tool_result_bytes`
-    -- from quietly weakening `task_completion`/`faithfulness` grading instead.
+    `runa.eval` grades `Run._transcript.tool_calls`, so this is what keeps an operational
+    decision -- switching input capture off for PII reasons, or any tool result over
+    `max_tool_result_bytes` -- from quietly weakening `task_completion`/`faithfulness` grading
+    instead.
     """
     long_result = "y" * 100
 
@@ -396,6 +397,6 @@ def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> No
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
     assert tool_span.input is None
     assert tool_span.output.endswith("[truncated]")
-    assert result._tool_calls == [
+    assert result._transcript.tool_calls == [
         ToolCall(name="lookup", arguments='{"order_id": "4821"}', output=long_result)
     ]

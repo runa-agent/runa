@@ -28,11 +28,11 @@ _CORRECTNESS_CRITERIA = (
 
 
 def _format_tool_calls(run: Run) -> str:
-    if not run._tool_calls:
+    if not run._transcript.tool_calls:
         return "(no tools were called)"
     return "\n".join(
         f"- {call.name}(arguments={call.arguments!r}) -> {call.output!r}"
-        for call in run._tool_calls
+        for call in run._transcript.tool_calls
     )
 
 

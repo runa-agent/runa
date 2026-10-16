@@ -28,7 +28,7 @@ def check_expected_tool_called(case: Case, run: Run) -> EvaluationResult | None:
     """Assert `case.expected_tool` was called, or `None` if the case declares no expected tool."""
     if case.expected_tool is None:
         return None
-    called = {tool_call.name for tool_call in run._tool_calls}
+    called = {tool_call.name for tool_call in run._transcript.tool_calls}
     if case.expected_tool in called:
         return TOOL_CORRECTNESS.result(Status.PASS, f"called {case.expected_tool!r}", score=1.0)
     return TOOL_CORRECTNESS.result(

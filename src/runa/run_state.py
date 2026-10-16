@@ -14,10 +14,10 @@ from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.handoff import reachable
-from runa.tool import ToolCall
 from runa.tracing.traces import Trace
+from runa.transcript import Transcript, _TranscriptSchema
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -82,9 +82,9 @@ class _RunStateSchema(BaseModel):
     `schema_version` anyway. `tests/test_run_state.py` checks the other direction, that no field
     here is written from nothing and no `RunState` field is left out unnamed.
 
-    The guardrail audit trail (see `GuardrailResults`) and `RunState.tool_calls` are the fields
-    with no counterpart here at all: every guardrail that ran is already a span in the trace
-    `trace_id` names, and a restored run reports the calls it makes itself. A dataclass `context`
+    The guardrail audit trail (see `GuardrailResults`) is the one field with no counterpart here
+    at all: every guardrail that ran is already a span in the trace `trace_id` names. The
+    transcript serializes itself (see `Transcript`), all but its tool calls. A dataclass `context`
     does travel, but loses its original type on the way back out (see `RunState.from_json`'s
     docstring).
 
@@ -93,13 +93,10 @@ class _RunStateSchema(BaseModel):
     recorded here rather than left to be inferred from the shape of what came back.
     """
 
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     agent_name: str
-    original_input: list[dict[str, Any]]
-    generated_items: list[dict[str, Any]]
+    transcript: _TranscriptSchema
     ready_results: list[dict[str, Any]]
-    new_items: list[dict[str, Any]]
-    session_input: list[dict[str, Any]]
     pending: list[_InterruptionSchema]
     approvals: dict[str, bool]
     rejection_messages: dict[str, str]
@@ -140,43 +137,35 @@ def _find_agent_by_name(root: AgentLike, name: str) -> AgentLike:
 class RunState(GuardrailAudit):
     """Enough of a paused run to resume it once its `interruptions` are approved or rejected.
 
-    `generated_items` ends with the assistant message that requested the paused calls;
-    `ready_results` holds results already computed this turn for calls in that same message that
-    *didn't* need approval: they're carried forward rather than re-executed on resume.
-    `new_items` is what this run generated before the pause, and `session_input` the user turn
-    a session-backed run still has to persist: both are saved once the resumed run finishes.
+    `transcript` is the conversation as it stood at the pause (see `Transcript`): its `items` end
+    with the assistant message that requested the paused calls. `ready_results` holds results
+    already computed this turn for calls in that same message that *didn't* need approval:
+    they're carried forward rather than re-executed on resume.
 
     `to_json()`/`to_string()`/`from_json()`/`from_string()` let a paused run survive a process
     restart -- see their docstrings for what is (and isn't) preserved.
     """
 
     agent: AgentLike
-    original_input: list[ConversationItem]
-    generated_items: list[ConversationItem]
+    transcript: Transcript
     ready_results: list[ConversationItem]
     pending: list[Interruption]
     context_wrapper: RunContextWrapper
     trace: Trace
-    new_items: list[ConversationItem] = field(default_factory=list)
-    session_input: list[ConversationItem] = field(default_factory=list)
     approvals: dict[str, bool] = field(default_factory=dict)
     rejection_messages: dict[str, str] = field(default_factory=dict)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
-    tool_calls: list[ToolCall] = field(default_factory=list)
-    """The calls that already ran before the pause, so the resumed run's `Run` reports the whole
-    turn's. Not serialized, for the same reason `trace`'s spans aren't: a restored run reports
-    what it did after being restored."""
 
     @property
     def paused_message(self) -> ConversationItem:
-        """The assistant message whose calls paused the run: `generated_items`' last, always.
+        """The assistant message whose calls paused the run: the transcript's last, always.
 
         Where a resumed run picks the turn back up -- it finishes this one message's calls before
         calling the model again, with `approvals`/`rejection_messages` as the decisions about them
         and `ready_results` as the results it already has. The turn loop reads the four from here
         rather than from a resumed-turn shape of its own.
         """
-        return self.generated_items[-1]
+        return self.transcript.items[-1]
 
     def approve(self, interruption: Interruption, *, always: bool = False) -> None:
         """Mark `interruption` approved; its tool runs when the run is resumed.
@@ -229,11 +218,8 @@ class RunState(GuardrailAudit):
         return _RunStateSchema(
             schema_version=_SCHEMA_VERSION,
             agent_name=self.agent.name,
-            original_input=self.original_input,
-            generated_items=self.generated_items,
+            transcript=self.transcript._to_schema(),
             ready_results=self.ready_results,
-            new_items=self.new_items,
-            session_input=self.session_input,
             pending=[
                 _InterruptionSchema(
                     name=i.name, arguments=i.arguments, call_id=i.call_id, agent_name=i.agent.name
@@ -325,16 +311,13 @@ class RunState(GuardrailAudit):
         """Rebuild one state (the caller's, or a paused delegate's) onto `context_wrapper`."""
         state = cls(
             agent=_find_agent_by_name(initial_agent, schema.agent_name),
-            original_input=schema.original_input,
-            generated_items=schema.generated_items,
+            transcript=Transcript._from_schema(schema.transcript),
             ready_results=schema.ready_results,
             pending=[],
             context_wrapper=context_wrapper,
             trace=Trace(
                 id=schema.trace_id, name=schema.trace_name, start_time=schema.trace_start_time
             ),
-            new_items=schema.new_items,
-            session_input=schema.session_input,
             approvals=dict(schema.approvals),
             rejection_messages=dict(schema.rejection_messages),
         )

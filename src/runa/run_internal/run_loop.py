@@ -55,6 +55,7 @@ from runa.tracing.config import export_trace_off_loop
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
+from runa.transcript import Transcript
 
 
 async def _resolve_instructions(
@@ -153,7 +154,7 @@ async def _retrieve(
 
 
 async def _inject_retrieved(run: _Run, query: str) -> None:
-    """Search `agent.memory`/`agent.knowledge` for `query` and fold the matches into `run.items`.
+    """Search `agent.memory`/`agent.knowledge` for `query` and fold the matches into the run.
 
     Both are searched concurrently, and each block goes right before the message it was retrieved
     for. Called from inside `_guarded`, so a retrieval failure that isn't the backend's fault
@@ -180,12 +181,13 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
         else _no_matches(),
     )
     # Right before the message they were retrieved for, wherever it sits in `items`.
-    at = latest_user_index(run.items)
+    items = run.transcript.items
+    at = latest_user_index(items)
     assert at is not None  # `query` came from that same message
     if knowledge_matches:
-        run.items.insert(at, _knowledge_block(knowledge_matches))
+        items.insert(at, _knowledge_block(knowledge_matches))
     if memory_matches:
-        run.items.insert(at, _memory_block(memory_matches))
+        items.insert(at, _memory_block(memory_matches))
 
 
 def _maybe_compact(
@@ -252,8 +254,8 @@ async def _record_tool_results(
     The loop reaches this twice -- after a resumed message's calls, and after each turn's own --
     and a result recorded one way but not the other is how a resumed run drifts from a fresh one.
     """
-    run.items.extend(results)
-    run.generated.extend(results)
+    run.transcript.items.extend(results)
+    run.transcript.generated.extend(results)
     for result in results:
         run.notify(RunItemStreamEvent(name="tool_output", item=result))
     if switched is not None:
@@ -266,10 +268,9 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     """Call the model and run its tool calls until it answers, pauses, or runs out of turns.
 
     With `run.emit` (a streamed run), the model is streamed and every step is emitted as a
-    `StreamEvent`. Every generated item is appended to `run.generated`, which outlives the loop,
-    so a run that errors can still report what it produced.
+    `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
-    items, hooks, run_config = run.items, run.hooks, run.run_config
+    items, hooks, run_config = run.transcript.items, run.hooks, run.run_config
     context_wrapper = run.context_wrapper
 
     if run.resumed is not None:
@@ -310,7 +311,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             raise ModelBehaviorError("model returned no output items")
         message = response.output[0]
         items.append(message)
-        run.generated.append(message)
+        run.transcript.generated.append(message)
         run.notify(RunItemStreamEvent(name="message_output_created", item=message))
 
         calls = tool_calls(message)
@@ -361,8 +362,7 @@ async def _errored(
     What a failed run can say is exactly what the trace and the context wrapper already hold --
     the spans around the failure, what it spent, which guardrails ran -- so this needs nothing the
     run hadn't put somewhere a caller can read. The items it generated before failing are not
-    among them: an unfinished turn is not history, and `Run._history()` is what history is read
-    from.
+    among them: an unfinished turn is not history, so the `Run` carries an empty `Transcript`.
     """
     _close_span(agent_span, error=str(failure))
     await _close_trace(trace)
@@ -449,7 +449,7 @@ async def _guarded(
 async def _extract_memory(run: _Run, final_output: Any) -> None:
     """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
     memory = run.start.memory
-    query = latest_user_text([*run.original_input, *run.session_input])
+    query = latest_user_text([*run.transcript.original_input, *run.transcript.session_input])
     if memory is None or query is None:
         return
     span = _Spans(run.trace).open("memory", "custom", input=query)  # the agent span is closed
@@ -483,21 +483,17 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     or failed here -- saving to a session is as able to fail as any other step.
     """
     _close_span(run.agent_span, output=outcome.final_output)
-    context_wrapper = run.context_wrapper
+    context_wrapper, transcript = run.context_wrapper, run.transcript
 
     if outcome.interruptions:
         state = RunState(
             agent=run.current_agent,
-            original_input=run.original_input,
-            generated_items=list(run.items),
+            transcript=transcript,
             ready_results=outcome.ready_results,
             pending=outcome.interruptions,
             context_wrapper=context_wrapper,
             trace=run.trace,
-            new_items=list(run.generated),
-            session_input=run.session_input,
             guardrail_results=context_wrapper.guardrail_results.snapshot(),
-            tool_calls=list(run.tool_calls),
         )
         return Run(
             output=None,
@@ -507,24 +503,22 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             interruptions=outcome.interruptions,
             _state=state,
             _context_wrapper=context_wrapper,
-            _original_input=run.original_input,
-            _generated_items=list(run.generated),
-            _tool_calls=list(run.tool_calls),
+            _transcript=transcript,
             guardrail_results=context_wrapper.guardrail_results.snapshot(),
         )
 
     # The next call's history starts from the same cut compaction made mid-run: the session's
-    # stored history, or `original_input` (what `to_input_list()` returns) without one.
+    # stored history, or `original_input` (what `Agent.history` is written from) without one.
     if run.session is not None:
         await _save_to_session(
             run.start,
             run.session,
-            [*run.session_input, *run.generated],
+            [*transcript.session_input, *transcript.generated],
             outcome.context_tokens,
             run.spans,
         )
     else:
-        _maybe_compact(run.start, run.original_input, outcome.context_tokens, run.spans)
+        _maybe_compact(run.start, transcript.original_input, outcome.context_tokens, run.spans)
     await _extract_memory(run, outcome.final_output)
 
     await run.hooks.on_agent_end(context_wrapper, run.current_agent, outcome.final_output)
@@ -533,9 +527,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
         trace=run.trace,
         usage=context_wrapper.usage,
         _context_wrapper=context_wrapper,
-        _original_input=run.original_input,
-        _generated_items=list(run.generated),
-        _tool_calls=list(run.tool_calls),
+        _transcript=transcript,
         guardrail_results=context_wrapper.guardrail_results.snapshot(),
     )
 
@@ -582,23 +574,22 @@ async def _run_async(
         # ends the run the way every other failure does, with a trace to read, instead of
         # escaping it.
         shape = await AgentShape.of(agent)
+        transcript = (
+            Transcript(session_input=turn_input, items=[*await session.get_items(), *turn_input])
+            if session is not None
+            else Transcript(original_input=list(turn_input), items=list(turn_input))
+        )
         run = _Run(
             shape=shape,
-            input=input if isinstance(input, str) else list(input),
-            items=list(turn_input),
+            transcript=transcript,
             context_wrapper=context_wrapper,
             trace=trace,
             agent_span=agent_span,
-            original_input=[] if session is not None else list(turn_input),
             session=session,
-            session_input=turn_input if session is not None else [],
-            generated=[],
             hooks=dispatch,
             run_config=run_config,
             emit=emit,
         )
-        if session is not None:
-            run.items[:0] = await session.get_items()
         await dispatch.on_agent_start(context_wrapper, shape.agent)
         if query is not None:
             await _inject_retrieved(run, query)
@@ -632,19 +623,14 @@ async def _resume(
         shape = await AgentShape.of(state.agent)  # inside the boundary: see `_run_async`
         run = _Run(
             shape=shape,
-            input=state.original_input,
-            items=list(state.generated_items),
+            transcript=state.transcript.copy(),
             context_wrapper=state.context_wrapper,
             trace=state.trace,
             agent_span=agent_span,
-            original_input=state.original_input,
             session=session,
-            session_input=state.session_input,
-            generated=list(state.new_items),
             hooks=dispatch,
             run_config=run_config,
             emit=emit,
-            tool_calls=list(state.tool_calls),
             resumed=state,
         )
         await dispatch.on_agent_start(state.context_wrapper, state.agent)

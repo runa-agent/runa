@@ -230,7 +230,9 @@ def test_tool_call_then_final_text() -> None:
     result = asyncio.run(_run_async(agent, "what time is it?", run_config=_run_config()))
 
     assert result.output == "it is 2024-01-01"
-    assert result._tool_calls == [ToolCall(name="now", arguments="{}", output="2024-01-01")]
+    assert result._transcript.tool_calls == [
+        ToolCall(name="now", arguments="{}", output="2024-01-01")
+    ]
     tool_spans = [s for s in result.trace.spans if s.type == "tool"]
     assert len(tool_spans) == 1
     assert tool_spans[0].name == "now"
@@ -341,7 +343,7 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     (delegate_span,) = [s for s in result.trace.spans if s.name == "researcher"]
     assert delegate_span.type == "delegate"
     assert not [s for s in result.trace.spans if s.type == "tool"]
-    assert result._tool_calls == []  # the delegate's own run records its own calls
+    assert result._transcript.tool_calls == []  # the delegate's own run records its own calls
 
 
 def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
@@ -568,7 +570,9 @@ def test_reject_with_a_custom_rejection_message_feeds_the_custom_text_back() -> 
     state.reject(result.interruptions[0], rejection_message="not allowed today")
     resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
-    tool_messages = [item["content"] for item in resumed._history() if item.get("role") == "tool"]
+    tool_messages = [
+        item["content"] for item in resumed._transcript.history() if item.get("role") == "tool"
+    ]
     assert "not allowed today" in tool_messages
 
 
@@ -598,7 +602,9 @@ def test_needs_approval_always_reject_feeds_back_the_sticky_message_for_later_ca
     resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
     assert resumed.interruptions == []
-    tool_messages = [item["content"] for item in resumed._history() if item.get("role") == "tool"]
+    tool_messages = [
+        item["content"] for item in resumed._transcript.history() if item.get("role") == "tool"
+    ]
     assert tool_messages.count("not allowed, ever") == 2
 
 
@@ -658,7 +664,7 @@ def test_resume_runs_the_approved_call_and_reuses_the_ready_result_from_the_same
     assert resumed.output == "all done"
     assert [item["role"] for item in model.calls[1]] == ["user", "assistant", "tool", "tool"]
     assert [item["content"] for item in model.calls[1][2:]] == ["safe done", "gated done"]
-    assert resumed._history() == [
+    assert resumed._transcript.history() == [
         {"role": "user", "content": "go"},
         _safe_and_gated_calls_response().output[0],
         {"role": "tool", "tool_call_id": "c1", "content": "safe done"},
@@ -681,16 +687,23 @@ def test_a_resumed_run_reports_the_calls_that_ran_before_the_pause_too() -> None
     )
 
     result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
-    assert result._tool_calls == [ToolCall(name="safe", arguments="{}", output="safe done")]
+    assert result._transcript.tool_calls == [
+        ToolCall(name="safe", arguments="{}", output="safe done")
+    ]
 
     state = result.to_state()
     state.approve(result.interruptions[0])
     resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
-    assert resumed._tool_calls == [
+    assert resumed._transcript.tool_calls == [
         ToolCall(name="safe", arguments="{}", output="safe done"),
         ToolCall(name="gated", arguments="{}", output="gated done"),
     ]
+    # The resumed run continued from a copy: the paused run still reads as it was paused.
+    assert result._transcript.tool_calls == [
+        ToolCall(name="safe", arguments="{}", output="safe done")
+    ]
+    assert state.paused_message == _safe_and_gated_calls_response().output[0]
 
 
 def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
@@ -721,7 +734,7 @@ def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
 
 
 def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
-    """`new_items`/`session_input` survive `to_json`/`from_json`, so a restart still persists."""
+    """The transcript's `session_input`/`generated` survive JSON, so a restart persists."""
     from runa.run_state import RunState
     from runa.session import SQLiteSession
 
@@ -1252,7 +1265,7 @@ def test_stream_exposes_the_finished_result_with_a_trace() -> None:
 
     assert streamed.run is not None
     assert streamed.output == "Hi"
-    assert streamed.run._history() == [
+    assert streamed.run._transcript.history() == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "Hi", "tool_calls": None},
     ]
@@ -1311,7 +1324,7 @@ def test_to_input_list_does_not_duplicate_generated_items() -> None:
 
     `_run_turns` appends every generated message straight onto the `items` list it's handed; if
     `original_input` aliased that same list (as it used to), `to_input_list` would return the
-    turn's output twice -- once folded into `original_input`, once from `_generated_items`.
+    turn's output twice -- once folded into `original_input`, once from `generated`.
     """
     agent = _agent(model=_ScriptedModel([_text_response("hi there")]))
 
@@ -1319,7 +1332,7 @@ def test_to_input_list_does_not_duplicate_generated_items() -> None:
         _run_async(agent, [{"role": "user", "content": "hi"}], run_config=_run_config())
     )
 
-    assert result._history() == [
+    assert result._transcript.history() == [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hi there", "tool_calls": None},
     ]
@@ -1343,7 +1356,7 @@ def test_compact_drops_history_before_the_latest_user_message_once_over_budget()
 
     result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
-    assert result._history() == [
+    assert result._transcript.history() == [
         {"role": "user", "content": "new question"},
         {"role": "assistant", "content": "ok", "tool_calls": None},
     ]
@@ -1411,7 +1424,7 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
     result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
     assert context_of(result).usage.total_tokens > 200_000
-    assert result._history()[:3] == history
+    assert result._transcript.history()[:3] == history
     assert not [s for s in result.trace.spans if s.type == "custom" and s.name == "compact"]
 
 
@@ -1426,7 +1439,7 @@ def test_compact_defaults_to_off() -> None:
 
     result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
-    assert result._history() == [
+    assert result._transcript.history() == [
         *history,
         {"role": "assistant", "content": "ok", "tool_calls": None},
     ]
@@ -1483,7 +1496,7 @@ def test_compact_runs_whatever_compactor_the_shape_carries() -> None:
     result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
     assert calls == [2, 2]  # consulted twice: mid-run on `items`, again on `original_input`
-    assert result._history() == [
+    assert result._transcript.history() == [
         {"role": "assistant", "content": "old answer", "tool_calls": None},
         {"role": "user", "content": "new question"},
         {"role": "assistant", "content": "ok", "tool_calls": None},

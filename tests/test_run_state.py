@@ -101,12 +101,9 @@ def _fresh_agent_like(agent: Any) -> Any:
 
 _SERIALIZED_AS = {
     "agent": ("agent_name",),
-    "original_input": ("original_input",),
-    "generated_items": ("generated_items",),
+    "transcript": ("transcript",),
     "ready_results": ("ready_results",),
     "pending": ("pending",),
-    "new_items": ("new_items",),
-    "session_input": ("session_input",),
     "approvals": ("approvals",),
     "rejection_messages": ("rejection_messages",),
     "context_wrapper": (
@@ -130,13 +127,12 @@ fields that identify it, its spans being exported separately.
 
 _NOT_SERIALIZED = {
     "guardrail_results": "every guardrail that ran is already a span in the run's trace",
-    "tool_calls": "a restored run reports the calls it makes itself, as its trace does",
 }
 """`RunState` fields deliberately left out of the JSON envelope, and why.
 
-Both reasons are also written where a reader meets the field -- `RunState.tool_calls`' docstring
-and `_RunStateSchema`'s -- and this is the list that makes leaving a *third* field out a
-deliberate act rather than an omission nothing notices.
+The reason is also written where a reader meets the field -- `_RunStateSchema`'s docstring -- and
+this is the list that makes leaving a *second* field out a deliberate act rather than an omission
+nothing notices. (`Transcript.tool_calls` is left out one level down; see `test_transcript.py`.)
 """
 
 

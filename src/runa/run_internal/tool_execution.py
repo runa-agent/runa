@@ -67,7 +67,7 @@ async def _run_tool_call(
         raise
     _close_span(span, error=error, output=result)
     if tool.delegate is None:  # a delegate's own run records its own calls, under its own trace
-        run.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
+        run.transcript.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(context_wrapper, run.current_agent, tool, result)
     return tool_result(call_id, result)
 

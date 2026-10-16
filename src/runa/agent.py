@@ -608,7 +608,7 @@ class Agent:
         self.last_usage = run.usage
         self.usage.add(self.last_usage)
         if run.status == "completed" and session is None:
-            self.history = run._history()
+            self.history = run._transcript.history()
         return run
 
     def _fresh(self) -> Agent:
