@@ -9,30 +9,33 @@ being handed back as the objects that went in.
 from datetime import UTC, datetime
 from typing import Any
 
+from runa import _app
 from runa.eval.report import Report
 from runa.eval.store import CASES, EvalRun, baseline_row, case_values, to_run
 
-_runs: list[dict[str, Any]] = []
-_cases: dict[int, list[dict[str, Any]]] = {}
+
+def _runs() -> list[dict[str, Any]]:
+    """Every stored run row, oldest first: a table in the `memory://` database `runa._app` holds."""
+    return _app.held(f"{_app.MEMORY_DATABASE}eval_runs", list)
 
 
-def reset() -> None:
-    """Drop every stored run. `runa.db.reset_ephemeral()` is how a test reaches this."""
-    _runs.clear()
-    _cases.clear()
+def _cases() -> dict[int, list[dict[str, Any]]]:
+    """Every stored run's case rows, by run id, in the same database."""
+    return _app.held(f"{_app.MEMORY_DATABASE}eval_cases", dict)
 
 
 class EphemeralEvalStore:
     """The in-process `EvalStore`: this process's eval history, gone when it exits.
 
-    A handle, not a container: every instance reads and writes the one module-level history, so
+    A handle, not a container: every instance reads and writes the one history held in
+    `runa._app`, so
     the run `agent.evaluate()` just saved is the baseline the next one compares against.
     """
 
     def save(self, report: Report) -> int:
         """Persist `report` as one run plus one row per case, returning the new run's id."""
-        run_id = len(_runs) + 1  # ids count up from 1, as both SQL backends' sequences do
-        _runs.append(
+        run_id = len(_runs()) + 1  # ids count up from 1, as both SQL backends' sequences do
+        _runs().append(
             {
                 "id": run_id,
                 "agent_name": report.agent_name,
@@ -41,7 +44,7 @@ class EphemeralEvalStore:
                 "pass_rate": report.pass_rate,
             }
         )
-        _cases[run_id] = [
+        _cases()[run_id] = [
             dict(zip(CASES.column_names, case_values(run_id, case), strict=True))
             for case in report.cases
         ]
@@ -49,14 +52,14 @@ class EphemeralEvalStore:
 
     def get(self, run_id: int) -> EvalRun | None:
         """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
-        row = next((run for run in _runs if run["id"] == run_id), None)
+        row = next((run for run in _runs() if run["id"] == run_id), None)
         if row is None:
             return None
-        return to_run(row, sorted(_cases.get(run_id, []), key=lambda case: case["case_index"]))
+        return to_run(row, sorted(_cases().get(run_id, []), key=lambda case: case["case_index"]))
 
     def list(self, *, limit: int = 50) -> list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
-        return [to_run(row, []) for row in reversed(_runs[-limit:])]
+        return [to_run(row, []) for row in reversed(_runs()[-limit:])]
 
     def baseline(self, agent_name: str, *, before: int | None = None) -> dict[str, bool] | None:
         """Map each input of `agent_name`'s latest run to whether it passed.
@@ -65,10 +68,10 @@ class EphemeralEvalStore:
         half of the `baseline_clause` the two SQL adapters bind, so a baseline on a laptop and one
         in CI are the same run.
         """
-        latest = baseline_row(_runs, agent_name, before)
+        latest = baseline_row(_runs(), agent_name, before)
         if latest is None:
             return None
-        return {case["input"]: bool(case["passed"]) for case in _cases.get(latest["id"], [])}
+        return {case["input"]: bool(case["passed"]) for case in _cases().get(latest["id"], [])}
 
 
 def _now() -> str:
@@ -76,4 +79,4 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-__all__ = ["EphemeralEvalStore", "reset"]
+__all__ = ["EphemeralEvalStore"]

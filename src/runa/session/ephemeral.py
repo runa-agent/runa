@@ -5,16 +5,17 @@ conversation history that never leaves the process. A test that wants an agent t
 last turn, or wants to assert what `runa chat --show` prints, sets one environment variable
 instead of reaching for a temporary directory.
 
-`EphemeralSession` and `EphemeralSessionStore` are two views on the same module-level tables,
-exactly as the SQLite pair are two views on one file. That shared state is what makes this a
-backend and not a stub: a run writes through the first and the Sessions page reads it back
-through the second, which is the path the other two backends are also asked to get right.
+`EphemeralSession` and `EphemeralSessionStore` are two views on the same `memory://` tables in
+`runa._app`, exactly as the SQLite pair are two views on one file. That shared state is what
+makes this a backend and not a stub: a run writes through the first and the Sessions page reads
+it back through the second, which is the path the other two backends are also asked to get right.
 """
 
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from runa import _app
 from runa._items import ConversationItem
 from runa.session import Session
 from runa.session.store import (
@@ -35,12 +36,9 @@ class _Row:
     messages: list[tuple[str, str]] = field(default_factory=list)
 
 
-_sessions: dict[str, _Row] = {}
-
-
-def reset() -> None:
-    """Drop every stored session. `runa.db.reset_ephemeral()` is how a test reaches this."""
-    _sessions.clear()
+def _sessions() -> dict[str, _Row]:
+    """Every stored session: this store's table in the `memory://` database `runa._app` holds."""
+    return _app.held(f"{_app.MEMORY_DATABASE}sessions", dict)
 
 
 def _now() -> str:
@@ -50,7 +48,7 @@ def _now() -> str:
 
 def _touch(session_id: str) -> _Row:
     """The row for `session_id`, created on first write, with `updated_at` moved to now."""
-    row = _sessions.setdefault(session_id, _Row(updated_at=_now()))
+    row = _sessions().setdefault(session_id, _Row(updated_at=_now()))
     row.updated_at = _now()
     return row
 
@@ -68,7 +66,7 @@ class EphemeralSession(Session):
 
     async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
         """Return this session's items, oldest first, capped at the latest `limit` if given."""
-        row = _sessions.get(self.session_id)
+        row = _sessions().get(self.session_id)
         if row is None:
             return []
         messages = row.messages if limit is None else row.messages[-limit:]
@@ -88,7 +86,7 @@ class EphemeralSession(Session):
 
     async def pop_item(self) -> ConversationItem | None:
         """Remove and return this session's most recent item, or `None` if it has none."""
-        row = _sessions.get(self.session_id)
+        row = _sessions().get(self.session_id)
         if row is None or not row.messages:
             return None
         _, message_data = row.messages.pop()
@@ -96,7 +94,7 @@ class EphemeralSession(Session):
 
     async def clear_session(self) -> None:
         """Delete this session and all of its items."""
-        _sessions.pop(self.session_id, None)
+        _sessions().pop(self.session_id, None)
 
 
 class EphemeralSessionStore:
@@ -112,17 +110,17 @@ class EphemeralSessionStore:
         return listing_rows(
             (
                 SessionSummary(id=session_id, updated_at=row.updated_at)
-                for session_id, row in _sessions.items()
+                for session_id, row in _sessions().items()
             ),
             agent,
         )
 
     def messages(self, session_id: str) -> list[SessionMessage]:
         """Return `session_id`'s messages, oldest first."""
-        row = _sessions.get(session_id)
+        row = _sessions().get(session_id)
         if row is None:
             raise SessionNotFound(f"no session found with id {session_id!r}")
         return [to_message(created_at, message_data) for created_at, message_data in row.messages]
 
 
-__all__ = ["EphemeralSession", "EphemeralSessionStore", "reset"]
+__all__ = ["EphemeralSession", "EphemeralSessionStore"]

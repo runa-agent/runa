@@ -287,22 +287,16 @@ def cache() -> Cache:
 
 
 def reset_ephemeral() -> None:
-    """Empty every `memory://` store, for a test that wants a clean process.
+    """Empty every `memory://` store, for a test that wants an empty database.
 
-    The ephemeral adapters keep their tables at module level, the way a database keeps them on
-    disk: two `db.traces()` calls have to see each other's writes, so a fresh object per call
+    The ephemeral adapters keep their tables for the whole process, the way a database keeps them
+    on disk: two `db.traces()` calls have to see each other's writes, so a fresh object per call
     would make the whole backend a no-op. That makes emptying them an explicit step, and this is
-    it -- one call, all six concerns, which is the point of resolving them in one place. Memory
-    and knowledge are emptied by the one vector reset, since they share that backend.
+    it. One call covers all six concerns, because every one of them holds its tables in
+    `runa._app` under the same `memory://` prefix. Only the database is emptied: the app this
+    process reads and its tracing policy stay as they were.
     """
-    from runa.cache.memory import reset as reset_cache
-    from runa.db.vectors.ephemeral import reset as reset_vectors
-    from runa.eval.ephemeral import reset as reset_evals
-    from runa.session.ephemeral import reset as reset_sessions
-    from runa.tracing.ephemeral import reset as reset_traces
-
-    for reset in (reset_cache, reset_evals, reset_sessions, reset_traces, reset_vectors):
-        reset()
+    _app.forget(_app.MEMORY_DATABASE)
 
 
 __all__ = [

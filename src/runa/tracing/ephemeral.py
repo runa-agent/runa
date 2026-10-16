@@ -13,6 +13,7 @@ reach into the history behind it.
 
 from typing import Any
 
+from runa import _app
 from runa.tracing.store import (
     SPANS,
     TRACES,
@@ -23,33 +24,35 @@ from runa.tracing.store import (
 )
 from runa.tracing.traces import Trace
 
-_traces: dict[str, dict[str, Any]] = {}
-_spans: dict[str, list[dict[str, Any]]] = {}
+
+def _traces() -> dict[str, dict[str, Any]]:
+    """Every stored trace row, by id: a table in the `memory://` database `runa._app` holds."""
+    return _app.held(f"{_app.MEMORY_DATABASE}traces", dict)
 
 
-def reset() -> None:
-    """Drop every stored trace. `runa.db.reset_ephemeral()` is how a test reaches this."""
-    _traces.clear()
-    _spans.clear()
+def _spans() -> dict[str, list[dict[str, Any]]]:
+    """Every stored trace's span rows, by trace id, in the same database."""
+    return _app.held(f"{_app.MEMORY_DATABASE}spans", dict)
 
 
 class EphemeralTraceStore:
     """The in-process `TraceStore`: this process's trace history, gone when it exits.
 
-    A handle, not a container: every instance reads and writes the one module-level history, so
+    A handle, not a container: every instance reads and writes the one history held in
+    `runa._app`, so
     two `db.traces()` calls see each other's writes the way two connections to one file do.
     """
 
     def save(self, trace: Trace) -> None:
         """Persist `trace` and every span in it, replacing any existing one with the same id."""
-        _traces[trace.id] = dict(zip(TRACES.column_names, trace_values(trace), strict=True))
-        _spans[trace.id] = [
+        _traces()[trace.id] = dict(zip(TRACES.column_names, trace_values(trace), strict=True))
+        _spans()[trace.id] = [
             dict(zip(SPANS.column_names, span_values(span), strict=True)) for span in trace.spans
         ]
 
     def get(self, trace_id: str) -> Trace | None:
         """Look up one trace by id, with every span it has, or `None` if this process has none."""
-        row = _traces.get(trace_id)
+        row = _traces().get(trace_id)
         if row is None:
             return None
         return to_trace(row, self._span_rows(trace_id))
@@ -69,12 +72,12 @@ class EphemeralTraceStore:
         what keeps this listing the same listing the two SQL adapters return.
         """
         rows = listing_rows(
-            _traces.values(), limit=limit, agent=agent, status=status, session_id=session_id
+            _traces().values(), limit=limit, agent=agent, status=status, session_id=session_id
         )
         return [to_trace(row, self._span_rows(row["id"])) for row in rows]
 
     def _span_rows(self, trace_id: str) -> list[dict[str, Any]]:
-        return sorted(_spans.get(trace_id, []), key=lambda span: span["start_time"])
+        return sorted(_spans().get(trace_id, []), key=lambda span: span["start_time"])
 
 
-__all__ = ["EphemeralTraceStore", "reset"]
+__all__ = ["EphemeralTraceStore"]

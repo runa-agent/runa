@@ -263,7 +263,7 @@ def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
     pytest.importorskip("asyncpg")
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    monkeypatch.setattr(config, "_default", config.Policy())  # exporters unresolved, as at import
+    config._set_default(config.Policy())  # exporters unresolved, as at import
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
 
     exporters = config.exporters()

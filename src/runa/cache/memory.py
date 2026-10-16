@@ -8,6 +8,8 @@ durable facts about a user; this is `ActiveSupport::Cache::MemoryStore`'s namesa
 import time
 from typing import Any
 
+from runa import _app
+
 
 class MemoryCache:
     """In-process `Cache`: a plain dict, gone when the process exits."""
@@ -44,26 +46,14 @@ class MemoryCache:
         self._entries.clear()
 
 
-_shared: MemoryCache | None = None
-
-
 def shared() -> MemoryCache:
     """The one process-wide `MemoryCache`, which is what `memory://` resolves `db.cache()` to.
 
     A fresh dict per `db.cache()` call would make that backend a no-op, since a `set` and the
     `get` after it are usually two separate resolutions. The other ephemeral adapters keep their
-    tables at module level for the same reason.
+    tables in `runa._app` for the same reason.
     """
-    global _shared
-    if _shared is None:
-        _shared = MemoryCache()
-    return _shared
+    return _app.held(f"{_app.MEMORY_DATABASE}cache", MemoryCache)
 
 
-def reset() -> None:
-    """Empty the shared cache. `runa.db.reset_ephemeral()` is how a test reaches this."""
-    if _shared is not None:
-        _shared._entries.clear()
-
-
-__all__ = ["MemoryCache", "reset", "shared"]
+__all__ = ["MemoryCache", "shared"]

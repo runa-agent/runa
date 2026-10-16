@@ -329,6 +329,43 @@ def test_reset_ephemeral_empties_every_store(monkeypatch: pytest.MonkeyPatch) ->
     assert asyncio.run(db.cache().get("k")) is None
 
 
+def test_reset_ephemeral_empties_the_database_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An app's own test suite calls it mid-process, so the app and its tracing policy stay put."""
+    from runa.tracing import config, observe
+
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+    use(tmp_path)
+    observe(capture_inputs=False)
+
+    db.reset_ephemeral()
+
+    assert db.project_path("app") == tmp_path / "app"
+    assert config.policy().capture_inputs is False
+
+
+def test_a_process_reset_forgets_every_fact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The app, the tracing policy and the `memory://` tables go together, in one call."""
+    import asyncio
+
+    from runa import _app
+    from runa.tracing import config, observe
+
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+    use(tmp_path)
+    observe(capture_inputs=False)
+    asyncio.run(db.cache().set("k", "v"))
+
+    _app.reset()
+
+    assert db.project_path("app") == Path("app")
+    assert config.policy().capture_inputs is True
+    assert asyncio.run(db.cache().get("k")) is None
+
+
 def test_memory_follows_the_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     """`Memory()` picks up a shared database with no `store=` argument, same as `runa serve`."""
     pytest.importorskip("asyncpg")

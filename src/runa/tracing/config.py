@@ -29,6 +29,7 @@ from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from runa import _app
 from runa._log import logger
 from runa.tracing.store import TraceStore
 from runa.tracing.traces import Trace
@@ -203,8 +204,7 @@ class Policy:
     """
 
 
-_default = Policy()
-"""The process-wide policy: what an `observe(...)` call and `add_exporter` write."""
+_DEFAULT = "tracing.policy"
 
 _scoped: ContextVar[Policy | None] = ContextVar("runa_tracing_policy", default=None)
 """The `observe.scoped(...)` policy for the current task, or `None` to fall back to `_default`."""
@@ -217,7 +217,7 @@ def policy() -> Policy:
     (`policy().max_input_bytes`); there is no per-field accessor to import.
     """
     scoped = _scoped.get()
-    return scoped if scoped is not None else _default
+    return scoped if scoped is not None else _default()
 
 
 def _merge(base: Policy, updates: dict[str, Any]) -> Policy:
@@ -225,10 +225,17 @@ def _merge(base: Policy, updates: dict[str, Any]) -> Policy:
     return replace(base, **updates)
 
 
+def _default() -> Policy:
+    """The process-wide policy, which is what an `observe(...)` call and `add_exporter` write.
+
+    It is a process fact held in `runa._app`, so whatever resets the process also resets this.
+    """
+    return _app.held(_DEFAULT, Policy)
+
+
 def _set_default(default: Policy) -> None:
     """Install `default` as the process-wide policy."""
-    global _default
-    _default = default
+    _app.hold(_DEFAULT, default)
 
 
 def _redact_dict(value: dict[str, Any], redact: list[str]) -> dict[str, Any]:
@@ -272,10 +279,10 @@ def _resolved_default_exporters() -> list[TraceExporter]:
     `observe.scoped(...)` block that overrides something other than `exporter` doesn't re-resolve
     the list -- a second store, a second `LangfuseExporter` -- once per task that opens one.
     """
-    if _default.exporters is not None:
-        return _default.exporters
+    if (installed := _default().exporters) is not None:
+        return installed
     resolved = _default_exporters()
-    _set_default(_merge(_default, {"exporters": resolved}))
+    _set_default(_merge(_default(), {"exporters": resolved}))
     return resolved
 
 
@@ -302,7 +309,7 @@ def add_exporter(exporter: TraceExporter) -> None:
     Writes the process-wide default, like an `observe(...)` call: adding an exporter is
     startup configuration, not something one task does for its own duration.
     """
-    _set_default(_merge(_default, {"exporters": [*_resolved_default_exporters(), exporter]}))
+    _set_default(_merge(_default(), {"exporters": [*_resolved_default_exporters(), exporter]}))
 
 
 _OVERRIDABLE = tuple(f.name for f in fields(Policy) if f.name != "exporters")
@@ -397,7 +404,7 @@ class observe:
         at that line -- pointing at `observe.scoped(...)` -- rather than a block whose policy
         silently outlives it.
         """
-        _set_default(_merge(_default, _updates(locals())))
+        _set_default(_merge(_default(), _updates(locals())))
 
     @staticmethod
     def scoped(

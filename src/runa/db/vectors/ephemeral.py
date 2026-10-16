@@ -5,9 +5,9 @@ are found by brute-force L2 distance over every stored row, which is the right a
 only size this store ever reaches and keeps the backend dependency-free: no `sqlite-vec`, no
 `pgvector`, no server.
 
-Rows live at module level, keyed by `spec.name`, the way a database keeps its tables on disk: two
+Rows live in `runa._app`, keyed by `spec.name`, the way a database keeps its tables on disk: two
 `runa.db.vector_store()` calls have to see each other's writes, so per-instance state would make
-the whole backend a no-op. `runa.db.reset_ephemeral()` is how a test empties them.
+the whole backend a no-op. `runa.db.reset_ephemeral()` empties them.
 
 Payloads are encoded and decoded exactly as the two persistent adapters do, rather than kept as
 live objects. That costs nothing here and is what makes `memory://` a usable stand-in: a value
@@ -19,6 +19,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from runa import _app
 from runa.db.vectors import VectorMatch, VectorSpec
 
 
@@ -31,12 +32,9 @@ class _Table:
     version: str | None = None
 
 
-_tables: dict[str, _Table] = {}
-
-
-def reset() -> None:
-    """Drop every stored row. `runa.db.reset_ephemeral()` is how a test reaches this."""
-    _tables.clear()
+def _tables() -> dict[str, _Table]:
+    """Every store's table, by `spec.name`, in the `memory://` database `runa._app` holds."""
+    return _app.held(f"{_app.MEMORY_DATABASE}vectors", dict)
 
 
 def distance(left: list[float], right: list[float]) -> float:
@@ -54,7 +52,7 @@ class EphemeralVectorStore:
     @property
     def _table(self) -> _Table:
         """This store's rows, created empty on first use the way a `CREATE IF NOT EXISTS` is."""
-        return _tables.setdefault(self.spec.name, _Table())
+        return _tables().setdefault(self.spec.name, _Table())
 
     def _in_scope(self, payload: dict[str, Any], partition: str | None) -> bool:
         """Whether `payload` belongs to `partition`, which `None` is a scope of its own in."""
@@ -113,4 +111,4 @@ class EphemeralVectorStore:
         return self._table.version
 
 
-__all__ = ["EphemeralVectorStore", "distance", "reset"]
+__all__ = ["EphemeralVectorStore", "distance"]
