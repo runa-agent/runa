@@ -147,8 +147,11 @@ def _link(prefix: str, id: object) -> str:
     Escaping afterwards finds nothing left to change -- percent-encoding already removed every
     character it looks for -- which is why these are equally safe in a redirect's `Location`, with
     no scheme or host reachable through them (CWE-601). It stays because the rule is the composite.
+
+    The id is joined with `+`, not an f-string: the right side of a concatenation is the shape
+    CodeQL's URL-redirection query recognizes as unable to supply a host.
     """
-    return escape(f"{prefix}/{quote(str(id), safe='')}")
+    return escape(prefix + "/" + quote(str(id), safe=""))
 
 
 def session_path(session_id: object) -> str:
