@@ -88,7 +88,7 @@ class SQLiteSession(Session):
         file as every other concern's -- including when `RUNA_DATABASE_URL` relocates it. Pass
         one to point at some other file.
 
-        `user_id` scopes this session's automatic memory, if its agent has any; see `Session`.
+        `user_id` scopes the memory of a run on this session, if its agent has any; see `Session`.
         """
         self.session_id = session_id
         self.db_path = Path(db_path) if db_path is not None else sqlite_path()

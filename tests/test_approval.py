@@ -200,10 +200,10 @@ def test_a_claimed_call_id_cannot_be_claimed_twice() -> None:
 
 
 def test_the_ctx_app_code_receives_carries_no_governance() -> None:
-    """A predicate's (or tool's, or hook's) `ctx` is the caller's `context` and usage, nothing more.
+    """A predicate's (or tool's, or hook's) `ctx` is its `context`, user and usage, no more.
 
     The ledger, the paused-delegate stash and the guardrail audit trail are the framework's own
     bookkeeping (`runa._governance`): handing them over would make every rename inside them a
     breaking change for an app that was legitimately given them.
     """
-    assert {field.name for field in fields(RunContext)} == {"context", "usage"}
+    assert {field.name for field in fields(RunContext)} == {"context", "user_id", "usage"}

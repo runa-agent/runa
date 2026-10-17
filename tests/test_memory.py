@@ -231,6 +231,24 @@ def test_as_tool_formats_matches_as_plain_text(tmp_path: Path) -> None:
     assert result == "cats are great pets"
 
 
+def test_as_tool_searches_the_calling_runs_user_scope(tmp_path: Path) -> None:
+    """The model's `search_memory` reads `ctx.user_id`, the scope `memory="auto"` uses too."""
+    mem = _memory(tmp_path)
+    search_tool = mem._as_tool()
+    args = '{"query": "language preference"}'
+
+    async def _run() -> tuple[Any, Any]:
+        await mem.remember("User prefers Japanese.", user_id="u1")
+        own = await search_tool.on_invoke_tool(RunContext(user_id="u1"), args, "call_1")
+        other = await search_tool.on_invoke_tool(RunContext(user_id="u2"), args, "call_2")
+        return own, other
+
+    own, other = asyncio.run(_run())
+
+    assert own == "User prefers Japanese."
+    assert other == "No relevant memory found."
+
+
 def test_as_tool_with_no_matches_says_so(tmp_path: Path) -> None:
     """An empty memory's tool call reports no results instead of an empty string."""
     mem = _memory(tmp_path)

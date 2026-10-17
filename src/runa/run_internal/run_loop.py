@@ -123,12 +123,13 @@ class _Run:
         """Run `agent` as a delegate of this run, and return what this run's model is told.
 
         The nested run is this one, with what is a delegate's own replaced: the agent and a fresh
-        transcript, a `RunContext` over the same `context` (its usage starts at zero and is merged
-        into this run's here), an agent span under the call's `under` span, and the agent's own
-        turn, token and time ceilings. Everything else is shared, and anything a run starts
-        carrying is shared too unless it is named below: the governance (one approval ledger,
-        one guardrail audit trail, one stash of paused delegates), the hooks, the trace, the model
-        provider. This run's own deadline encloses the delegate's, as it does any tool call.
+        transcript, a `RunContext` over the same `context` and `user_id` (its usage starts at zero
+        and is merged into this run's here), an agent span under the call's `under` span, and the
+        agent's own turn, token and time ceilings. Everything else is shared, and anything a run
+        starts carrying is shared too unless it is named below: the governance (one approval
+        ledger, one guardrail audit trail, one stash of paused delegates), the hooks, the trace,
+        the model provider. This run's own deadline encloses the delegate's, as it does any tool
+        call.
 
         Two things are deliberately not shared. A `session`: a delegate is handed fresh input,
         not a conversation. And `emit`: a stream event doesn't say which agent produced it, so a
@@ -145,10 +146,13 @@ class _Run:
             message = parsed_arguments(arguments_json).get("input", "")
             turn_input = [user_message(message)]
             target, transcript = agent, Transcript(original_input=turn_input, items=[*turn_input])
-            run_context = RunContext(context=self.run_context.context)
+            run_context = RunContext(
+                context=self.run_context.context, user_id=self.run_context.user_id
+            )
         else:
             message, target, transcript = None, paused.agent, paused.transcript.copy()
             run_context = paused.run_context
+            run_context.user_id = self.run_context.user_id  # a serialized state doesn't carry it
         agent_span = _Spans(self.trace, under.id).open(target.name, "agent", input=message)
         run_config = replace(
             self.run_config,
@@ -291,7 +295,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
     memory, knowledge = run.start.memory, run.start.knowledge
     if memory is None and knowledge is None:
         return
-    name, spans, session = run.start.name, run.spans, run.session
+    name, spans = run.start.name, run.spans
     memory_matches, knowledge_matches = await asyncio.gather(
         _retrieve(
             memory,
@@ -299,7 +303,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
             label="memory",
             agent_name=name,
             spans=spans,
-            user_id=session.user_id if session is not None else None,
+            user_id=run.run_context.user_id,
         )
         if memory is not None
         else _no_matches(),
@@ -600,7 +604,7 @@ async def _extract_memory(run: _Run, final_output: Any) -> None:
         try:
             stored = await memory.remember_from_conversation(
                 f"User: {query}\nAssistant: {final_output}",
-                user_id=run.session.user_id if run.session is not None else None,
+                user_id=run.run_context.user_id,
                 model=run.start.resolve_model(run.run_config.model_provider),
             )
         except _NOT_A_BACKEND_FAULT:
@@ -717,7 +721,7 @@ async def _run_async(
     if isinstance(input, RunState):
         return await _resume(input, dispatch, run_config, session, emit)
 
-    run_context = RunContext(context=context)
+    run_context = RunContext(context=context, user_id=_user_of(session))
     governance = _Governance()
     trace = Trace(
         id=gen_trace_id(),
@@ -771,6 +775,11 @@ async def _run_async(
     return await _traced(guarded, trace)
 
 
+def _user_of(session: Session | None) -> str | None:
+    """Who a run on `session` is for: its `user_id`, or `None` for a session-less run."""
+    return session.user_id if session is not None else None
+
+
 async def _resume(
     state: RunState,
     dispatch: _Dispatch[Any],
@@ -780,6 +789,7 @@ async def _resume(
 ) -> Run:
     """Continue a paused run once its interruptions are resolved."""
     agent_span = _Spans(state.trace).open(state.agent.name, "agent")
+    state.run_context.user_id = _user_of(session)  # a serialized state doesn't carry it
 
     async def turn() -> Run:
         shape = await AgentShape.of(state.agent)  # inside the boundary: see `_run_async`

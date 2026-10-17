@@ -1688,6 +1688,45 @@ def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:
     assert memory.remembered[0][1] == "u1"
 
 
+def test_a_tool_and_a_delegate_see_the_sessions_user_on_their_run_context(tmp_path: Any) -> None:
+    """`RunContext.user_id` is the session's, for a tool and for a delegate's tools alike."""
+    from runa.agent import Agent
+    from runa.handoff import agent_as_tool
+    from runa.session import SQLiteSession
+
+    seen: list[str | None] = []
+
+    @tool
+    def whoami(ctx: Any) -> str:
+        """Report the run's user."""
+        seen.append(ctx.user_id)
+        return "ok"
+
+    class Helper(Agent):
+        name = "helper"
+        model = _ScriptedModel(
+            [_tool_call_response("whoami", "{}", call_id="call_3"), _text_response("done")]
+        )
+        tools = [whoami]
+
+    agent = _agent(
+        model=_ScriptedModel(
+            [
+                _tool_call_response("whoami", "{}"),
+                _tool_call_response("helper", '{"input": "go"}', call_id="call_2"),
+                _text_response("ok"),
+            ]
+        ),
+        tools=[whoami, agent_as_tool(Helper(), None, None)],
+    )
+    session = SQLiteSession("s1", db_path=tmp_path / "runa.db", user_id="u1")
+
+    result = asyncio.run(_run_async(agent, "hi", session=session, run_config=_run_config()))
+
+    assert result.status == "completed", result.error
+    assert seen == ["u1", "u1"]
+
+
 def test_trace_session_id_is_derived_from_the_session(tmp_path: Any) -> None:
     """A session-backed run's `Trace.session_id` is that session's id, for grouping in the UI."""
     from runa.session import SQLiteSession

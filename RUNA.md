@@ -220,7 +220,7 @@ resolved through `db.session(...)`, so one call persists to a local
 file, a shared Postgres, or nothing at all, according to
 `RUNA_DATABASE_URL` -- a backend is never named at the call site. Pass a
 `Session` instead only when a run needs more than the id:
-`db.session(id, user_id=...)` to scope automatic memory, or
+`db.session(id, user_id=...)` to scope the run's memory, or
 `SQLiteSession(id, "other/runa.db")` to point at one specific file.
 
 With a `session`, only the new message is ever passed to `run`/`run_sync`,

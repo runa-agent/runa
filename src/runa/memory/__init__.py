@@ -17,6 +17,7 @@ from runa import db
 from runa._items import item_text, parsed_json_object, user_message
 from runa._log import logger
 from runa._models import ModelRequest
+from runa._types import RunContext
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.memory.sqlite import SQLiteMemoryStore
 from runa.memory.store import MemoryMatch, MemoryStore
@@ -113,7 +114,7 @@ class Memory:
         await self._store.delete(user_id=user_id, memory_id=memory_id)
 
     def _as_tool(self) -> FunctionTool:
-        """A `@tool` that searches this memory, as plain text.
+        """A `@tool` that searches this memory, as plain text, in the calling run's `user_id` scope.
 
         Internal: `Agent(memory="llm")` wires this in on the model's behalf; not meant to be
         built and attached to `tools=[...]` by hand -- see `Agent.__init__`'s `memory=` modes.
@@ -123,8 +124,8 @@ class Memory:
             name_override="search_memory",
             description_override="Search stored memory for text relevant to a query.",
         )
-        async def search_memory(query: str, k: int = 5) -> str:
-            matches = await self.search(query, k=k)
+        async def search_memory(ctx: RunContext, query: str, k: int = 5) -> str:
+            matches = await self.search(query, user_id=ctx.user_id, k=k)
             if not matches:
                 return "No relevant memory found."
             return "\n\n".join(match.text for match in matches)

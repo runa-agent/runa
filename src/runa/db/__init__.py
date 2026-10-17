@@ -143,7 +143,7 @@ def sqlite_path() -> Path:
 def session(session_id: str, *, user_id: str | None = None) -> Session:
     """This deployment's session store for `session_id`.
 
-    `user_id` scopes the session's automatic memory, if its agent has any; see `Session`.
+    `user_id` scopes the memory of a run on this session, if its agent has any; see `Session`.
     """
     if ephemeral():
         from runa.session.ephemeral import EphemeralSession

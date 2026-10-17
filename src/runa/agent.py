@@ -666,7 +666,7 @@ class Agent:
         A `session` is normally the conversation's id: `session="user-42"` persists to whichever
         backend `RUNA_DATABASE_URL` names, so an app moves to Postgres without naming one here.
         Pass a `Session` instead when the run needs more than the id -- `db.session(id,
-        user_id=...)` to scope automatic memory, or your own store.
+        user_id=...)` to scope the run's memory, or your own store.
 
         Returns a `Run` exposing `.output`, `.status`, `.interruptions`, `.trace`, `.usage` and
         `.error`. A tool call needing approval pauses the run (`status="paused"`). Nothing a run

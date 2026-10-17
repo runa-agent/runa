@@ -119,11 +119,14 @@ class ModelResponse:
 
 @dataclass
 class RunContext[TContext]:
-    """What user code is told about the run calling it: the caller's `context`, and usage so far.
+    """What user code is told about the run calling it: its `context`, its user, and usage so far.
 
     `context` is whatever was passed to `Agent.run()`/`run_sync()`, never sent to the model; it's
     how a tool's `ctx`, an `@approval` predicate's `ctx`, a `Hooks` method, and a single-argument
-    `instructions` callable reach it. `usage` is what this run has spent so far.
+    `instructions` callable reach it. `user_id` is who the run is for, taken from its session's
+    `user_id` (`None` without one) and shared by its delegates; it's the one scope every `Memory`
+    read and write the run makes uses, `"auto"` and `"llm"` alike. The run sets it; user code
+    reads it. `usage` is what this run has spent so far.
 
     That is all of it, deliberately. How the run governs itself -- the approval ledger, the
     paused-delegate stash, the guardrail audit trail -- is `runa._governance`'s, held beside this
@@ -131,6 +134,7 @@ class RunContext[TContext]:
     """
 
     context: TContext = None  # pyright: ignore[reportAssignmentType]
+    user_id: str | None = None
     usage: Usage = field(default_factory=Usage)
 
 

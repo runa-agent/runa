@@ -59,7 +59,7 @@ class EphemeralSession(Session):
     def __init__(self, session_id: str, *, user_id: str | None = None) -> None:
         """Store `session_id`; its history is this module's, not this object's.
 
-        `user_id` scopes this session's automatic memory, if its agent has any; see `Session`.
+        `user_id` scopes the memory of a run on this session, if its agent has any; see `Session`.
         """
         self.session_id = session_id
         self.user_id = user_id

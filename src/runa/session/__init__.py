@@ -22,10 +22,11 @@ class Session(ABC):
     implementation out, so a custom backend writes four methods and gets `Agent(compact=...)`
     without a fifth.
 
-    `user_id` is optional and unrelated to history: `run_internal` reads it (when set) to scope
-    automatic `Agent.memory` retrieval/persistence to one user, so app code doesn't have to
-    thread a `user_id` through `Memory.remember`/`.search` itself. `None` means memory that goes
-    through this session lands in its own user-less scope, not everyone's.
+    `user_id` is optional and unrelated to history: it's who a run on this session is for, handed
+    to that run as `RunContext.user_id`, which scopes all of its `Agent.memory` use -- automatic
+    retrieval and persistence and the model's `search_memory` calls alike -- so app code doesn't
+    have to thread a `user_id` through `Memory.remember`/`.search` itself. `None` means memory
+    that goes through this session lands in its own user-less scope, not everyone's.
     """
 
     session_id: str
