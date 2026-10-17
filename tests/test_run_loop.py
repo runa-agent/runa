@@ -225,9 +225,7 @@ def test_tool_call_then_final_text() -> None:
     result = asyncio.run(_run_async(agent, "what time is it?", run_config=_run_config()))
 
     assert result.output == "it is 2024-01-01"
-    assert result._transcript.tool_calls == [
-        ToolCall(name="now", arguments="{}", output="2024-01-01")
-    ]
+    assert result.tool_calls == (ToolCall(name="now", arguments="{}", output="2024-01-01"),)
     tool_spans = [s for s in result.trace.spans if s.type == "tool"]
     assert len(tool_spans) == 1
     assert tool_spans[0].name == "now"
@@ -340,7 +338,7 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     (nested,) = [s for s in result.trace.spans if s.parent_id == delegate_span.id]
     assert (nested.type, nested.name) == ("agent", "researcher")
     assert not [s for s in result.trace.spans if s.type == "tool"]
-    assert result._transcript.tool_calls == []  # the delegate's own run records its own calls
+    assert result.tool_calls == ()  # the delegate's own run records its own calls
 
 
 def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:

@@ -10,7 +10,7 @@ import pytest
 from helpers import finished_run
 
 from runa.eval.case import Case
-from runa.eval.evaluation.core import Status
+from runa.eval.evaluation.core import EvalStatus
 from runa.eval.evaluation.metrics import DEFAULT_THRESHOLDS, evaluate_semantic
 from runa.eval.evaluation.semantic import (
     grade_answer_correctness,
@@ -173,8 +173,8 @@ def test_evaluate_semantic_skips_answer_correctness_without_an_expected_answer(
     )
 
     by_metric = {r.metric: r for r in results}
-    assert by_metric["answer_correctness"].status == Status.SKIPPED
-    assert by_metric["faithfulness"].status == Status.SKIPPED
+    assert by_metric["answer_correctness"].status == EvalStatus.SKIPPED
+    assert by_metric["faithfulness"].status == EvalStatus.SKIPPED
 
 
 def test_evaluate_semantic_maps_a_raised_exception_to_error_not_a_score(
@@ -195,6 +195,6 @@ def test_evaluate_semantic_maps_a_raised_exception_to_error_not_a_score(
     )
 
     by_metric = {r.metric: r for r in results}
-    assert by_metric["task_completion"].status == Status.ERROR
+    assert by_metric["task_completion"].status == EvalStatus.ERROR
     assert by_metric["task_completion"].score is None
     assert "judge call failed" in by_metric["task_completion"].reason

@@ -14,6 +14,7 @@ is `db/schema.py`'s `reconcile` now, applied by `db/sqlite.py` to every local ad
 the same diff, taken from the declaration rather than written out for one known column.
 """
 
+import builtins
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
@@ -72,7 +73,7 @@ class SQLiteEvalStore:
             ).fetchall()
             return to_run(row, cases)
 
-    def list(self, *, limit: int = 50) -> list[EvalRun]:
+    def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
         with _read_db(self.db_path, RUNS, CASES) as conn:
             if conn is None:

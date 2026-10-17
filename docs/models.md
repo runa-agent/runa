@@ -45,7 +45,7 @@ Runa's own chat-completions backend works, pointed at your `base_url`:
 
 ```python
 import httpx2 as httpx
-from runa._models import OpenAICompatibleModel
+from runa import Agent, OpenAICompatibleModel
 
 
 class SupportAgent(Agent):

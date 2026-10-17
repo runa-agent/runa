@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 
 from runa.eval.case import Case
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.evaluation.semantic import (
     grade_answer_correctness,
     grade_answer_relevance,
@@ -67,7 +67,7 @@ class Metric:
         return self.grade is not None
 
     def result(
-        self, status: Status, reason: str, *, score: float | None = None
+        self, status: EvalStatus, reason: str, *, score: float | None = None
     ) -> EvaluationResult:
         """This metric's verdict on one case: the single place its `name` reaches a result."""
         return EvaluationResult(metric=self.name, status=status, reason=reason, score=score)
@@ -84,12 +84,12 @@ class Metric:
             raise TypeError(f"{self.name!r} is graded by deterministic.py, not by a judge model")
         reason = self.missing(case)
         if reason is not None:
-            return self.result(Status.SKIPPED, reason)
+            return self.result(EvalStatus.SKIPPED, reason)
         try:
             score, reason = await self.grade(judge, case, run)
         except Exception as exc:
-            return self.result(Status.ERROR, str(exc))
-        status = Status.PASS if score >= threshold else Status.FAIL
+            return self.result(EvalStatus.ERROR, str(exc))
+        status = EvalStatus.PASS if score >= threshold else EvalStatus.FAIL
         return self.result(status, reason, score=score)
 
 

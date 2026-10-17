@@ -68,9 +68,17 @@ signature-level reference.
 
 ::: runa.Run
 
+::: runa.RunStatus
+
 ::: runa.RunStream
 
+::: runa.ToolCall
+
 ::: runa.ModelSettings
+
+::: runa.Model
+
+::: runa.OpenAICompatibleModel
 
 ::: runa.Usage
 
@@ -132,7 +140,7 @@ signature-level reference.
 
 ::: runa.Report
 
-::: runa.Status
+::: runa.EvalStatus
 
 ## Tracing
 

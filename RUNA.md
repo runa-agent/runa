@@ -42,7 +42,7 @@ attributes. Passing a setting beats declaring it, and passing `None` means `None
 
 **An agent is run only through its own methods**: `run`, `run_sync` or `run_streamed`, each
 returning (or ending with) a `Run`: `.output`, `.status` (`"completed"`, `"paused"` or
-`"error"`), `.interruptions`, `.trace`, `.usage`, `.error`, and the guardrail audit trail. Errors never raise out of a run;
+`"error"`), `.interruptions`, `.trace`, `.usage`, `.error`, `.tool_calls`, and the guardrail audit trail. Errors never raise out of a run;
 they come back as `status="error"`. The boundary decides that, not the exception's type: a
 tripped guardrail, a model error and a bug in an app's own `Hooks`/`Session`/`Compactor` alike
 (the last wrapped in `UnexpectedError`, its traceback logged), each with the trace around the

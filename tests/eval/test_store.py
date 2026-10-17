@@ -23,7 +23,7 @@ from helpers import finished_run
 from runa import db
 from runa.db.schema import POSTGRES, SQLITE, Dialect
 from runa.eval.case import Case
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 from runa.eval.store import EvalStore, baseline_clause
 from runa.project import use
@@ -81,7 +81,7 @@ def test_adds_trace_id_to_an_older_local_file(tmp_path: Path) -> None:
         index=0,
         case=Case(input="hi"),
         run=finished_run("ok"),
-        results=[EvaluationResult(metric="task_completion", status=Status.PASS, reason="r")],
+        results=[EvaluationResult(metric="task_completion", status=EvalStatus.PASS, reason="r")],
     )
 
     use(tmp_path)

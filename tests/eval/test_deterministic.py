@@ -3,7 +3,7 @@
 from helpers import finished_run
 
 from runa.eval.case import Case
-from runa.eval.evaluation.core import Status
+from runa.eval.evaluation.core import EvalStatus
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.tool import ToolCall
 from runa.tracing import Span, Trace
@@ -14,7 +14,7 @@ def test_check_run_completed_passes_for_a_completed_run() -> None:
     """A run whose `status` is `"completed"` passes, with a score of 1.0."""
     result = check_run_completed(finished_run("ok"))
 
-    assert result.status == Status.PASS
+    assert result.status == EvalStatus.PASS
     assert result.score == 1.0
 
 
@@ -26,7 +26,7 @@ def test_check_run_completed_fails_and_reports_the_error() -> None:
     """
     result = check_run_completed(finished_run(None, status="error", error="boom"))
 
-    assert result.status == Status.FAIL
+    assert result.status == EvalStatus.FAIL
     assert result.reason == "boom"
     assert result.score == 0.0
 
@@ -35,7 +35,7 @@ def test_check_run_completed_fails_a_run_paused_for_approval() -> None:
     """A run that paused never answered, so grading it as an answer would score a `None`."""
     result = check_run_completed(finished_run(None, status="paused"))
 
-    assert result.status == Status.FAIL
+    assert result.status == EvalStatus.FAIL
     assert "paused" in result.reason
 
 
@@ -59,7 +59,7 @@ def test_check_expected_tool_called_passes_when_the_tool_was_called() -> None:
     result = check_expected_tool_called(case, run)
 
     assert result is not None
-    assert result.status == Status.PASS
+    assert result.status == EvalStatus.PASS
 
 
 def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None:
@@ -75,7 +75,7 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
     result = check_expected_tool_called(case, run)
 
     assert result is not None
-    assert result.status == Status.FAIL
+    assert result.status == EvalStatus.FAIL
     assert "cancel_order" in result.reason
     assert "search" in result.reason
 
@@ -109,5 +109,5 @@ def test_check_expected_tool_called_grades_the_runs_own_record_not_its_trace_spa
     result = check_expected_tool_called(case, run)
 
     assert result is not None
-    assert result.status == Status.PASS
+    assert result.status == EvalStatus.PASS
     assert any(span.type == "tool" for span in run.trace.spans)

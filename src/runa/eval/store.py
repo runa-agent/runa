@@ -19,6 +19,7 @@ no SQL to bind it to -- written beside the clause, because a rule stated in two 
 files is a rule nobody reads twice.
 """
 
+import builtins
 import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
@@ -92,7 +93,7 @@ class EvalStore(Protocol):
         """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
         ...
 
-    def list(self, *, limit: int = 50) -> list[EvalRun]:
+    def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
         ...
 

@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from helpers import governance_of
 
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
@@ -296,4 +295,4 @@ def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> N
 
     resumed = asyncio.run(_run_async(agent, restored, run_config=_run_config()))
     assert resumed.output == "all done"
-    assert "call_1" in governance_of(resumed).approval_ledger.executed
+    assert "call_1" in restored._governance.approval_ledger.executed

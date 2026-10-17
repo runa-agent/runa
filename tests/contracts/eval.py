@@ -12,7 +12,7 @@ from collections.abc import Callable
 from helpers import finished_run
 
 from runa.eval.case import Case
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 from runa.eval.store import EvalStore
 from runa.tracing import Trace
@@ -20,7 +20,7 @@ from runa.tracing import Trace
 Check = Callable[[EvalStore, str], None]
 
 
-def _graded(input: str, status: Status, *, index: int = 0, output: str = "ok") -> CaseReport:
+def _graded(input: str, status: EvalStatus, *, index: int = 0, output: str = "ok") -> CaseReport:
     """One graded case, the unit a `Report` is a list of."""
     return CaseReport(
         index=index,
@@ -32,13 +32,15 @@ def _graded(input: str, status: Status, *, index: int = 0, output: str = "ok") -
 
 def report(agent_name: str, *, passed: bool = True) -> Report:
     """One graded run for `agent_name`, for a driver that needs a report of its own."""
-    status = Status.PASS if passed else Status.FAIL
+    status = EvalStatus.PASS if passed else EvalStatus.FAIL
     return Report(agent_name=agent_name, cases=[_graded("hi", status)])
 
 
 def check_save_persists_a_run_and_its_cases(store: EvalStore, tag: str) -> None:
     """`save` records the run's score and every case's input, output and verdict."""
-    run_id = store.save(Report(agent_name=tag, cases=[_graded("hi", Status.PASS, output="hello")]))
+    run_id = store.save(
+        Report(agent_name=tag, cases=[_graded("hi", EvalStatus.PASS, output="hello")])
+    )
 
     run = store.get(run_id)
 
@@ -63,8 +65,8 @@ def check_save_handles_an_empty_dataset(store: EvalStore, tag: str) -> None:
 
 def check_list_returns_runs_newest_first_without_their_cases(store: EvalStore, tag: str) -> None:
     """`list` is a listing: every run, most recent first, and no case rows attached."""
-    first = store.save(Report(agent_name=tag, cases=[_graded("hi", Status.PASS)]))
-    second = store.save(Report(agent_name=tag, cases=[_graded("hi", Status.PASS)]))
+    first = store.save(Report(agent_name=tag, cases=[_graded("hi", EvalStatus.PASS)]))
+    second = store.save(Report(agent_name=tag, cases=[_graded("hi", EvalStatus.PASS)]))
 
     listed = store.list(limit=100)
 
@@ -89,8 +91,8 @@ def check_baseline_maps_the_latest_runs_inputs_to_their_verdicts(
     store: EvalStore, tag: str
 ) -> None:
     """Only the agent's most recent run counts, keyed by input rather than index."""
-    store.save(Report(tag, [_graded("hi", Status.FAIL)]))
-    store.save(Report(tag, [_graded("hi", Status.PASS)]))
+    store.save(Report(tag, [_graded("hi", EvalStatus.FAIL)]))
+    store.save(Report(tag, [_graded("hi", EvalStatus.PASS)]))
 
     assert store.baseline(tag) == {"hi": True}
 
@@ -99,8 +101,8 @@ def check_baseline_before_a_run_is_the_run_it_was_compared_against(
     store: EvalStore, tag: str
 ) -> None:
     """`before=run_id` skips that run and anything newer, for showing a regression in context."""
-    first = store.save(Report(tag, [_graded("hi", Status.PASS)]))
-    second = store.save(Report(tag, [_graded("hi", Status.FAIL)]))
+    first = store.save(Report(tag, [_graded("hi", EvalStatus.PASS)]))
+    second = store.save(Report(tag, [_graded("hi", EvalStatus.FAIL)]))
 
     assert store.baseline(tag, before=second) == {"hi": True}
     assert store.baseline(tag, before=first) is None
@@ -113,9 +115,9 @@ def check_baseline_is_none_for_an_agent_that_has_never_run(store: EvalStore, tag
 
 def check_save_links_each_case_to_its_runs_trace(store: EvalStore, tag: str) -> None:
     """A case's `trace_id` is its run's trace, so a failing case opens straight onto its spans."""
-    traced = _graded("hi", Status.PASS)
+    traced = _graded("hi", EvalStatus.PASS)
     traced.run.trace = Trace(id=f"{tag}-trace", name=tag, start_time=0.0)
-    untraced = _graded("yo", Status.PASS, index=1)
+    untraced = _graded("yo", EvalStatus.PASS, index=1)
 
     run_id = store.save(Report(tag, [traced, untraced]))
 

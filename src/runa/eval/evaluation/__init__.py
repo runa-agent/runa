@@ -1,6 +1,6 @@
 """`runa.eval.evaluation`: deterministic checks, judged metrics, and the table declaring both."""
 
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.eval.evaluation.metrics import (
     DEFAULT_THRESHOLDS,
@@ -15,7 +15,7 @@ __all__ = [
     "METRICS",
     "EvaluationResult",
     "Metric",
-    "Status",
+    "EvalStatus",
     "check_expected_tool_called",
     "check_run_completed",
     "evaluate_semantic",

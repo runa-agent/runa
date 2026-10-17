@@ -13,6 +13,7 @@ shared with the SQLite adapter; what is genuinely this backend's own is the asyn
 `ON CONFLICT` upsert, and the batched span fetch.
 """
 
+import builtins
 from typing import Any
 
 from runa.db.pool import Shared, sync
@@ -88,7 +89,7 @@ class PostgresTraceStore(Shared):
         agent: str | None = None,
         status: str | None = None,
         session_id: str | None = None,
-    ) -> list[Trace]:
+    ) -> builtins.list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered."""
         pool = await self._pool()
         clause, params = listing_clause(

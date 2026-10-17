@@ -22,6 +22,7 @@ reading their filters off one list of columns. What stays each adapter's own is 
 differs -- the upsert, and whether spans are fetched per trace or in one batch.
 """
 
+import builtins
 import json
 from collections.abc import Iterable
 from typing import Any, Protocol
@@ -102,7 +103,7 @@ class TraceStore(Protocol):
         agent: str | None = None,
         status: str | None = None,
         session_id: str | None = None,
-    ) -> list[Trace]:
+    ) -> builtins.list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered.
 
         `agent` matches `Trace.name` (the workflow name `Agent.run` sets to the agent's class

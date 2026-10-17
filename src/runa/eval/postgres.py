@@ -10,6 +10,7 @@ two tables, the row marshalling and the clause selecting a baseline run are `eva
 shared with the SQLite adapter.
 """
 
+import builtins
 from datetime import UTC, datetime
 
 from runa.db.pool import Shared, sync
@@ -60,7 +61,7 @@ class PostgresEvalStore(Shared):
         return to_run(row, list(cases))
 
     @sync
-    async def list(self, *, limit: int = 50) -> list[EvalRun]:
+    async def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
         pool = await self._pool()
         rows = await pool.fetch(f"SELECT * FROM {RUNS.name} ORDER BY id DESC LIMIT $1", limit)

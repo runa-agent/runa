@@ -151,7 +151,7 @@ def tool(
 ) -> FunctionTool | Callable[[Callable[..., Any]], FunctionTool]:
     """Wrap a plain function as a `FunctionTool`, deriving its schema from its signature.
 
-    `guardrails=[...]` (or `{...}`) wires `@guardrail` predicates, bare (wired as both sides)
+    `guardrails=[...]` wires `@guardrail` predicates, bare (wired as both sides)
     or bound via `.input`/`.output`, against the tool call's parsed arguments and its return
     value, respectively.
     """

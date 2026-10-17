@@ -3,7 +3,7 @@
 from helpers import finished_run
 
 from runa.eval.case import Case
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 
 
@@ -26,8 +26,10 @@ def test_case_report_passes_when_every_result_passes_or_is_skipped() -> None:
     report = _case_report(
         0,
         [
-            EvaluationResult(metric="task_completion", status=Status.PASS, reason="ok", score=1.0),
-            EvaluationResult(metric="faithfulness", status=Status.SKIPPED, reason="no context"),
+            EvaluationResult(
+                metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
+            ),
+            EvaluationResult(metric="faithfulness", status=EvalStatus.SKIPPED, reason="no context"),
         ],
     )
 
@@ -40,9 +42,11 @@ def test_case_report_fails_when_any_result_fails() -> None:
     report = _case_report(
         41,
         [
-            EvaluationResult(metric="task_completion", status=Status.PASS, reason="ok", score=1.0),
             EvaluationResult(
-                metric="answer_correctness", status=Status.FAIL, reason="unsupported claim"
+                metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
+            ),
+            EvaluationResult(
+                metric="answer_correctness", status=EvalStatus.FAIL, reason="unsupported claim"
             ),
         ],
     )
@@ -54,7 +58,8 @@ def test_case_report_fails_when_any_result_fails() -> None:
 def test_case_report_fails_on_error_not_just_fail() -> None:
     """An ERROR result also fails the case, distinct from a graded FAIL."""
     report = _case_report(
-        0, [EvaluationResult(metric="answer_relevance", status=Status.ERROR, reason="judge down")]
+        0,
+        [EvaluationResult(metric="answer_relevance", status=EvalStatus.ERROR, reason="judge down")],
     )
 
     assert not report.passed
@@ -64,13 +69,19 @@ def test_report_aggregates_pass_rate_and_score() -> None:
     """`Report.pass_rate`/`score` reflect passed cases and the mean task-completion score."""
     passing = _case_report(
         0,
-        [EvaluationResult(metric="task_completion", status=Status.PASS, reason="ok", score=1.0)],
+        [
+            EvaluationResult(
+                metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
+            )
+        ],
     )
     failing = _case_report(
         1,
         [
-            EvaluationResult(metric="task_completion", status=Status.PASS, reason="ok", score=0.6),
-            EvaluationResult(metric="answer_correctness", status=Status.FAIL, reason="wrong"),
+            EvaluationResult(
+                metric="task_completion", status=EvalStatus.PASS, reason="ok", score=0.6
+            ),
+            EvaluationResult(metric="answer_correctness", status=EvalStatus.FAIL, reason="wrong"),
         ],
     )
     report = Report(agent_name="SupportAgent", cases=[passing, failing])
@@ -97,9 +108,11 @@ def test_report_str_lists_metrics_and_failures() -> None:
     failing = _case_report(
         41,
         [
-            EvaluationResult(metric="task_completion", status=Status.PASS, reason="ok", score=0.9),
             EvaluationResult(
-                metric="answer_correctness", status=Status.FAIL, reason="unsupported claim"
+                metric="task_completion", status=EvalStatus.PASS, reason="ok", score=0.9
+            ),
+            EvaluationResult(
+                metric="answer_correctness", status=EvalStatus.FAIL, reason="unsupported claim"
             ),
         ],
     )
@@ -126,7 +139,7 @@ def test_report_str_shows_every_metric_the_cases_scored() -> None:
                 0,
                 [
                     EvaluationResult(
-                        metric="run_completed", status=Status.FAIL, reason="boom", score=0.0
+                        metric="run_completed", status=EvalStatus.FAIL, reason="boom", score=0.0
                     )
                 ],
             ),
@@ -134,7 +147,7 @@ def test_report_str_shows_every_metric_the_cases_scored() -> None:
                 1,
                 [
                     EvaluationResult(
-                        metric="run_completed", status=Status.PASS, reason="ok", score=1.0
+                        metric="run_completed", status=EvalStatus.PASS, reason="ok", score=1.0
                     )
                 ],
             ),
@@ -157,10 +170,10 @@ def test_report_str_orders_metrics_by_declaration_not_by_result_order() -> None:
                 0,
                 [
                     EvaluationResult(
-                        metric="faithfulness", status=Status.PASS, reason="ok", score=1.0
+                        metric="faithfulness", status=EvalStatus.PASS, reason="ok", score=1.0
                     ),
                     EvaluationResult(
-                        metric="task_completion", status=Status.PASS, reason="ok", score=1.0
+                        metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
                     ),
                 ],
             )
@@ -174,7 +187,7 @@ def test_report_str_orders_metrics_by_declaration_not_by_result_order() -> None:
 
 def test_report_flags_a_failure_that_passed_last_run_as_a_regression() -> None:
     """A failed case whose input passed in `baseline` regressed, a new or still-failing one not."""
-    fail = [EvaluationResult(metric="task_completion", status=Status.FAIL, reason="wrong")]
+    fail = [EvaluationResult(metric="task_completion", status=EvalStatus.FAIL, reason="wrong")]
     regressed, still_failing, new = (_case_report(i, fail) for i in range(3))
     report = Report(
         agent_name="SupportAgent",

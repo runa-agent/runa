@@ -33,6 +33,7 @@ from runa.tool import tool
 if TYPE_CHECKING:
     from runa import db
     from runa._items import ConversationItem
+    from runa._models import Model, OpenAICompatibleModel
     from runa._types import ModelSettings, RunContext, Usage
     from runa.agent import Agent
     from runa.cache import Cache, MemoryCache, SQLiteCache
@@ -41,15 +42,15 @@ if TYPE_CHECKING:
         Case,
         CaseReport,
         Dataset,
+        EvalStatus,
         EvaluationResult,
         Report,
-        Status,
     )
     from runa.knowledge import Knowledge, KnowledgeMatch
     from runa.lifecycle import Hooks, LoggingHooks
     from runa.mcp import MCPServer
     from runa.memory import Memory, MemoryMatch
-    from runa.run import Run, RunStream
+    from runa.run import Run, RunStatus, RunStream
     from runa.run_state import Interruption, RunState
     from runa.session import SQLiteSession
     from runa.stream_events import (
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
         RunItemStreamEvent,
         StreamEvent,
     )
+    from runa.tool import ToolCall
     from runa.tracing import (
         ConsoleExporter,
         Span,
@@ -81,6 +83,7 @@ _EXPORTS = {
     "ConversationItem": "runa._items",
     "DEFAULT_THRESHOLDS": "runa.eval",
     "Dataset": "runa.eval",
+    "EvalStatus": "runa.eval",
     "EvaluationResult": "runa.eval",
     "Hooks": "runa.lifecycle",
     "Interruption": "runa.run_state",
@@ -91,22 +94,25 @@ _EXPORTS = {
     "Memory": "runa.memory",
     "MemoryCache": "runa.cache",
     "MemoryMatch": "runa.memory",
+    "Model": "runa._models",
     "ModelSettings": "runa._types",
+    "OpenAICompatibleModel": "runa._models",
     "RawResponsesStreamEvent": "runa.stream_events",
     "Report": "runa.eval",
     "Run": "runa.run",
     "RunContext": "runa._types",
     "RunItemStreamEvent": "runa.stream_events",
     "RunState": "runa.run_state",
+    "RunStatus": "runa.run",
     "RunStream": "runa.run",
     "SQLiteCache": "runa.cache",
     "SQLiteExporter": "runa.tracing",
     "SQLiteSession": "runa.session",
     "Span": "runa.tracing",
-    "Status": "runa.eval",
     "StoreExporter": "runa.tracing",
     "StreamEvent": "runa.stream_events",
     "Trace": "runa.tracing",
+    "ToolCall": "runa.tool",
     "TraceExporter": "runa.tracing",
     "Usage": "runa._types",
     "add_exporter": "runa.tracing",
@@ -116,9 +122,9 @@ _EXPORTS = {
 
 Four names are missing. `db` is a submodule rather than a name inside one, and `__version__` is
 read off the installed distribution rather than imported at all; `__getattr__` handles both
-itself. `tool`, `guardrail` and `approval` are the eager three, for the reason this module's
-docstring gives -- any new public name that collides with a submodule's belongs up there with
-them.
+itself, along with `Status`, the deprecated spelling of `EvalStatus`. `tool`, `guardrail` and
+`approval` are the eager three, for the reason this module's docstring gives -- any new public
+name that collides with a submodule's belongs up there with them.
 """
 
 __all__ = [
@@ -131,6 +137,7 @@ __all__ = [
     "ConsoleExporter",
     "ConversationItem",
     "Dataset",
+    "EvalStatus",
     "EvaluationResult",
     "Hooks",
     "Interruption",
@@ -141,7 +148,9 @@ __all__ = [
     "Memory",
     "MemoryCache",
     "MemoryMatch",
+    "Model",
     "ModelSettings",
+    "OpenAICompatibleModel",
     "RawResponsesStreamEvent",
     "Report",
     "Run",
@@ -149,16 +158,17 @@ __all__ = [
     "RunStream",
     "RunItemStreamEvent",
     "RunState",
+    "RunStatus",
     "SQLiteCache",
     "SQLiteExporter",
     "SQLiteSession",
     "Span",
-    "Status",
     "StoreExporter",
     "StreamEvent",
+    "ToolCall",
     "Trace",
-    "Usage",
     "TraceExporter",
+    "Usage",
     "__version__",
     "add_exporter",
     "approval",
@@ -183,6 +193,17 @@ def __getattr__(name: str) -> object:
         from importlib.metadata import version
 
         value = version("runa-ai")
+    elif name == "Status":
+        import warnings
+
+        from runa.eval import EvalStatus
+
+        warnings.warn(
+            "runa.Status is deprecated, use runa.EvalStatus (Run.status is a RunStatus)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return EvalStatus
     else:
         try:
             module = _EXPORTS[name]

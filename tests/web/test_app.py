@@ -12,7 +12,7 @@ from runa import db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.eval.case import Case
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 from runa.exceptions import OperatorError
 from runa.project import use
@@ -94,7 +94,7 @@ def project(tmp_path: Path) -> Path:
                     run=finished_run("hi"),
                     results=[
                         EvaluationResult(
-                            metric="task_completion", status=Status.PASS, reason="ok", score=1.0
+                            metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
                         )
                     ],
                 )
@@ -288,7 +288,7 @@ def test_evaluation_detail_links_cases_to_traces_and_flags_regressions(
         index=0,
         case=Case(input="hi"),
         run=finished_run("no", trace=Trace(id="trace_1", name="support_agent", start_time=0.0)),
-        results=[EvaluationResult(metric="task_completion", status=Status.FAIL, reason="bad")],
+        results=[EvaluationResult(metric="task_completion", status=EvalStatus.FAIL, reason="bad")],
     )
     run_id = db.evals().save(Report(agent_name="support_agent", cases=[failing]))
 

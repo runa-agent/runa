@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Awaitable
 from typing import Any
 
-from runa._governance import _Governance
 from runa._types import Usage
 from runa.run import Run
 from runa.tracing import Trace
@@ -22,16 +21,6 @@ def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides:
     return Run(
         output=output, trace=trace if trace is not None else stand_in, usage=Usage(), **overrides
     )
-
-
-def governance_of(result: Run) -> _Governance:
-    """`result._governance`, narrowed, for a test reading what the loop recorded on it.
-
-    Private on `Run` because a caller has the guardrail audit lists already; the loop's own tests
-    read the governance itself to check the call-id replay guard.
-    """
-    assert result._governance is not None
-    return result._governance
 
 
 def run[T](awaitable: Awaitable[T]) -> T:

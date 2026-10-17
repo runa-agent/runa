@@ -30,7 +30,7 @@ from runa import Usage, db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.eval.case import Case
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 from runa.project import use
 from runa.run import Run
@@ -450,7 +450,10 @@ db.evals().save(
                 run=Run(output="your total is $42.00", trace=None, usage=Usage()),
                 results=[
                     EvaluationResult(
-                        metric="task_completion", status=Status.PASS, reason="resolved", score=1.0
+                        metric="task_completion",
+                        status=EvalStatus.PASS,
+                        reason="resolved",
+                        score=1.0,
                     )
                 ],
             ),
@@ -461,7 +464,7 @@ db.evals().save(
                 results=[
                     EvaluationResult(
                         metric="task_completion",
-                        status=Status.FAIL,
+                        status=EvalStatus.FAIL,
                         reason="approved a refund above the auto-approval limit",
                         score=0.0,
                     )

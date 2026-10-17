@@ -11,6 +11,7 @@ SQL adapters would have stored, and a caller that mutates a `Trace` it got from 
 reach into the history behind it.
 """
 
+import builtins
 from typing import Any
 
 from runa import _app
@@ -64,7 +65,7 @@ class EphemeralTraceStore:
         agent: str | None = None,
         status: str | None = None,
         session_id: str | None = None,
-    ) -> list[Trace]:
+    ) -> builtins.list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered.
 
         The one query no SQL fragment can be shared with, so `tracing/store.py` owns a Python one
@@ -76,7 +77,7 @@ class EphemeralTraceStore:
         )
         return [to_trace(row, self._span_rows(row["id"])) for row in rows]
 
-    def _span_rows(self, trace_id: str) -> list[dict[str, Any]]:
+    def _span_rows(self, trace_id: str) -> builtins.list[dict[str, Any]]:
         return sorted(_spans().get(trace_id, []), key=lambda span: span["start_time"])
 
 

@@ -651,7 +651,6 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             status="paused",
             interruptions=outcome.interruptions,
             _state=state,
-            _governance=governance,
             _transcript=transcript,
             guardrail_results=governance.guardrail_results.snapshot(),
         )
@@ -675,7 +674,6 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
         output=outcome.final_output,
         trace=run.trace,
         usage=run_context.usage,
-        _governance=governance,
         _transcript=transcript,
         guardrail_results=governance.guardrail_results.snapshot(),
     )

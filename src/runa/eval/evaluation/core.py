@@ -1,4 +1,4 @@
-"""eval/evaluation/core.py: `Status` and `EvaluationResult`, the shape every check returns.
+"""eval/evaluation/core.py: `EvalStatus` and `EvaluationResult`, the shape every check returns.
 
 Deterministic checks (`eval/evaluation/deterministic.py`) and judge-graded
 semantic metrics (`eval/evaluation/semantic.py`) return unrelated native
@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
-class Status(StrEnum):
+class EvalStatus(StrEnum):
     """A metric's outcome for one case.
 
     `SKIPPED` means the metric didn't apply (e.g. faithfulness with no
@@ -30,11 +30,11 @@ class EvaluationResult:
     """One metric's verdict on one case: deterministic or semantic, same shape either way."""
 
     metric: str
-    status: Status
+    status: EvalStatus
     reason: str
     score: float | None = None
 
     @property
     def passed(self) -> bool:
         """Whether this result counts toward a case passing (`SKIPPED` doesn't count against it)."""
-        return self.status in (Status.PASS, Status.SKIPPED)
+        return self.status in (EvalStatus.PASS, EvalStatus.SKIPPED)

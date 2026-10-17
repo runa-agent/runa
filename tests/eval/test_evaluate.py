@@ -10,7 +10,7 @@ from runa._types import Usage
 from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.evaluate import evaluate_agent
-from runa.eval.evaluation.core import EvaluationResult, Status
+from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.exceptions import UserError
 from runa.run import Run
 from runa.tracing import Trace
@@ -53,7 +53,7 @@ def _patch_run_and_storage(monkeypatch: pytest.MonkeyPatch, outputs: dict[str, A
     monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
 
 
-def _stub_semantic(monkeypatch: pytest.MonkeyPatch, status: Status = Status.PASS) -> None:
+def _stub_semantic(monkeypatch: pytest.MonkeyPatch, status: EvalStatus = EvalStatus.PASS) -> None:
     async def fake_evaluate_semantic(case: Any, run: Any, **kwargs: Any) -> list[EvaluationResult]:
         return [EvaluationResult(metric="task_completion", status=status, reason="stub", score=1.0)]
 
@@ -73,7 +73,9 @@ def test_evaluate_agent_runs_every_case_in_a_mixed_dataset(
 
     async def fake_evaluate_semantic(case: Any, run: Any, **kwargs: Any) -> list[EvaluationResult]:
         return [
-            EvaluationResult(metric="task_completion", status=Status.PASS, reason="ok", score=1.0)
+            EvaluationResult(
+                metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
+            )
         ]
 
     monkeypatch.setattr("runa.eval.evaluate.evaluate_semantic", fake_evaluate_semantic)
@@ -248,10 +250,10 @@ def test_evaluate_agent_grades_against_its_previous_run(monkeypatch: pytest.Monk
     questions to `runa.db`, each able to answer with a different backend.
     """
     _patch_run_and_storage(monkeypatch, {"hi": "hi"})
-    _stub_semantic(monkeypatch, status=Status.FAIL)
+    _stub_semantic(monkeypatch, status=EvalStatus.FAIL)
     asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
 
-    _stub_semantic(monkeypatch, status=Status.PASS)
+    _stub_semantic(monkeypatch, status=EvalStatus.PASS)
     report = asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
 
     assert report.baseline == {"hi": False}

@@ -8,6 +8,7 @@ The tables are `tracing/store.py`'s `TRACES`/`SPANS`, rendered here in SQLite's 
 backends carry the same columns and indexes.
 """
 
+import builtins
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -72,7 +73,7 @@ class SQLiteTraceStore:
         agent: str | None = None,
         status: str | None = None,
         session_id: str | None = None,
-    ) -> list[Trace]:
+    ) -> builtins.list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered."""
         clause, params = listing_clause(
             limit=limit, agent=agent, status=status, session_id=session_id, dialect=SQLITE
@@ -83,7 +84,7 @@ class SQLiteTraceStore:
             rows = conn.execute(f"SELECT * FROM {TRACES.name} {clause}", params).fetchall()
             return [to_trace(row, self._span_rows(conn, row["id"])) for row in rows]
 
-    def _span_rows(self, conn: sqlite3.Connection, trace_id: str) -> list[sqlite3.Row]:
+    def _span_rows(self, conn: sqlite3.Connection, trace_id: str) -> builtins.list[sqlite3.Row]:
         """One trace's span rows, oldest first.
 
         A query per trace, where `tracing/postgres.py` fetches every listed trace's spans in one

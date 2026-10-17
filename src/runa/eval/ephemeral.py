@@ -6,6 +6,7 @@ as `eval/store.py`'s `case_values` produces them and `to_run` reads them back, s
 being handed back as the objects that went in.
 """
 
+import builtins
 from datetime import UTC, datetime
 from typing import Any
 
@@ -57,7 +58,7 @@ class EphemeralEvalStore:
             return None
         return to_run(row, sorted(_cases().get(run_id, []), key=lambda case: case["case_index"]))
 
-    def list(self, *, limit: int = 50) -> list[EvalRun]:
+    def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
         return [to_run(row, []) for row in reversed(_runs()[-limit:])]
 
