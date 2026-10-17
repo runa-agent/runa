@@ -43,6 +43,7 @@ that case: a second `create_app` for a different project is a `UserError` rather
 quietly sharing the last one's imports and database (see `project.use`).
 """
 
+import asyncio
 import json
 import os
 from collections.abc import AsyncIterator, Iterable
@@ -60,6 +61,7 @@ from runa.agent import Agent, declared_name
 from runa.exceptions import OperatorError, UserError
 from runa.run import Run
 from runa.run_state import RunState
+from runa.tracing.config import flush_exports
 
 API_KEY_ENV = "RUNA_API_KEY"
 
@@ -232,9 +234,10 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        """Ingest the agents' knowledge before the first request, on the loop that serves it."""
+        """Ingest knowledge before the first request; write every queued trace after the last."""
         await _ingest_knowledge(agent_classes.values())
         yield
+        await asyncio.to_thread(flush_exports)
 
     app = FastAPI(
         title="runa serve",

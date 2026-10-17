@@ -52,7 +52,7 @@ class trace:
     def __exit__(self, *exc_info: object) -> None:
         """Close and export the `Trace`, regardless of whether the block raised.
 
-        Exported inline, where a finishing run gets off the loop first (`export_trace_off_loop`):
+        Exported inline, where a finishing run queues its export (`export_trace_later`):
         this is a synchronous `with` block, so the thread it blocks is the caller's own, and the
         only work it holds up is the code that opened the block.
         """

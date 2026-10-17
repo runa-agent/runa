@@ -37,6 +37,7 @@ from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import StreamEvent
 from runa.tool import FunctionTool
+from runa.tracing.config import flush_exports
 
 if TYPE_CHECKING:
     from graphviz import Digraph
@@ -717,8 +718,14 @@ class Agent:
         is, before it goes (see `runa._loop.run`): a `runa chat` turn closes every `.stdio` MCP
         server it reached, a subagent's included, instead of leaving a subprocess per turn behind.
         `await agent.run(...)` on an app's own loop keeps them open for the agent's lifetime.
+
+        Its trace is written by the time it returns, so a script or a `runa chat` turn can read it
+        back straight away; `await agent.run(...)` queues its export and returns without waiting.
         """
-        return _loop.run(self.run(message, context, hooks, session))
+        try:
+            return _loop.run(self.run(message, context, hooks, session))
+        finally:
+            flush_exports()
 
     def run_streamed(
         self,

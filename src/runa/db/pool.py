@@ -52,7 +52,7 @@ def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
     This blocks the calling thread, so call it from a thread that has nothing better to do: a CLI
     command, or tracing's own export thread. Calling it from a thread running an event loop
     (`runa serve`'s) does not deadlock -- the work happens on a different loop entirely -- but it
-    stalls every task on that loop for the duration, which is what `export_trace_off_loop` and
+    stalls every task on that loop for the duration, which is what `export_trace_later` and
     `evaluate_agent`'s `asyncio.to_thread` exist to prevent.
     """
     future = asyncio.run_coroutine_threadsafe(coro, _background_loop())

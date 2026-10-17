@@ -58,7 +58,7 @@ from runa.run_internal.tool_execution import (
 from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent, StreamEvent
-from runa.tracing.config import export_trace_off_loop
+from runa.tracing.config import export_trace_later
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
@@ -470,23 +470,23 @@ async def _traced(run: Awaitable[Run], trace: Trace) -> Run:
     or raises one of the two things that boundary lets through: an `OperatorError`, exported
     like any other way out, or a cancellation, which isn't held up by an export.
 
-    Awaited, because exporting is I/O (`tracing/config.py`'s `export_trace_off_loop`): a database
-    write, or an HTTP POST to Langfuse. The run waits for its own, so a `run_sync` that has
-    returned has a trace already written; the loop does not, so the other requests a `runa serve`
-    process is serving are not held up by this one's bookkeeping.
+    Queued, not awaited: exporting is I/O (a database write, an HTTP POST to Langfuse), and
+    neither this run's caller nor the other requests a `runa serve` process is serving should
+    wait on one backend's bookkeeping. `Agent.run_sync` flushes the queue before it returns, so
+    a synchronous caller still finds its trace written.
     """
     try:
         result = await run
     except OperatorError:
-        await _export(trace)
+        _export(trace)
         raise
-    await _export(trace)
+    _export(trace)
     return result
 
 
-async def _export(trace: Trace) -> None:
+def _export(trace: Trace) -> None:
     trace.end_time = time.time()
-    await export_trace_off_loop(trace)
+    export_trace_later(trace)
 
 
 def _errored(

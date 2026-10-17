@@ -99,7 +99,7 @@ async def evaluate_agent(
 
     # One store, resolved once: the baseline this run is graded against and the history it
     # becomes are the same store, which they were not while each function asked separately.
-    # Off the loop, for the reason `tracing/config.py`'s `export_trace_off_loop` explains: an
+    # Off the loop, for the reason `tracing/config.py`'s `export_trace_later` explains: an
     # `EvalStore` is a synchronous interface over a database that may well be a Postgres across
     # the network, and this is `async def` -- callable from a request handler, not just `runa eval`.
     store = db.evals()
