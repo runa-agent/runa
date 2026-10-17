@@ -33,6 +33,10 @@ class Compactor(Protocol):
         Whether `usage_tokens` warrants compacting at all, and by how much, is entirely this
         call's judgment -- Runa imposes no threshold of its own once you supply your own
         `Compactor`. Returning `items` unchanged (or `None`) is always a valid "not yet".
+
+        `items` is a copy, so the return value is the only thing that changes the conversation,
+        and any change counts: rewriting items (truncating long tool output) as much as dropping
+        them.
         """
         ...
 

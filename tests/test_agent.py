@@ -1071,6 +1071,13 @@ def test_string_instructions_pass_through_unchanged() -> None:
     assert Researcher().instructions == "You research topics."
 
 
+def _transcript_of(input: list[Any], *generated: Any) -> Transcript:
+    """A session-less run's transcript: started from `input`, having produced `generated`."""
+    transcript = Transcript.start(input)
+    transcript.record(*generated)
+    return transcript
+
+
 def _loop_run(**overrides: Any) -> Run:
     """The `Run` the turn loop hands back, for a test that fakes the loop out.
 
@@ -1489,9 +1496,8 @@ def test_run_streamed_yields_events_and_updates_history(monkeypatch: pytest.Monk
             "event-1",
             "event-2",
             usage=Usage(input_tokens=3, output_tokens=4),
-            _transcript=Transcript(
-                original_input=[{"role": "user", "content": "hi"}],
-                generated=[{"role": "assistant", "content": "ok"}],
+            _transcript=_transcript_of(
+                [{"role": "user", "content": "hi"}], {"role": "assistant", "content": "ok"}
             ),
         ),
     )
@@ -1522,7 +1528,7 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
         captured["input"] = turn_input
         captured["session"] = session
         emit("event")
-        return _loop_run(_transcript=Transcript(original_input=[{"role": "user", "content": "hi"}]))
+        return _loop_run(_transcript=Transcript.start([{"role": "user", "content": "hi"}]))
 
     monkeypatch.setattr("runa.agent._run_async", fake_run)
     agent = Researcher()
@@ -1568,7 +1574,7 @@ def test_run_streamed_resolves_a_session_id_string_too(monkeypatch: pytest.Monke
     async def fake_run(agent: Any, turn_input: Any, *, session: Any, emit: Any, **kwargs: Any):
         captured["session"] = session
         emit("event")
-        return _loop_run(_transcript=Transcript(original_input=[{"role": "user", "content": "hi"}]))
+        return _loop_run(_transcript=Transcript.start([{"role": "user", "content": "hi"}]))
 
     monkeypatch.setattr("runa.agent._run_async", fake_run)
 

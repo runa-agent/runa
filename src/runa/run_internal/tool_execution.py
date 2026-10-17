@@ -79,7 +79,7 @@ async def _run_tool_call(
         await _run_guardrails(run, Phase.TOOL_OUTPUT, result, tool=tool, spans=inside)
         span.output = result
     if tool.delegate is None:  # a delegate's own run records its own calls, in its own transcript
-        run.transcript.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
+        run.transcript.record_call(ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(run_context, run.current_agent, tool, result)
     return tool_result(call_id, result)
 

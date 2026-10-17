@@ -722,22 +722,18 @@ def test_a_resumed_run_reports_the_calls_that_ran_before_the_pause_too() -> None
     )
 
     result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
-    assert result._transcript.tool_calls == [
-        ToolCall(name="safe", arguments="{}", output="safe done")
-    ]
+    assert result.tool_calls == (ToolCall(name="safe", arguments="{}", output="safe done"),)
 
     state = result.to_state()
     state.approve(result.interruptions[0])
     resumed = asyncio.run(_run_async(agent, state, run_config=_run_config()))
 
-    assert resumed._transcript.tool_calls == [
+    assert resumed.tool_calls == (
         ToolCall(name="safe", arguments="{}", output="safe done"),
         ToolCall(name="gated", arguments="{}", output="gated done"),
-    ]
+    )
     # The resumed run continued from a copy: the paused run still reads as it was paused.
-    assert result._transcript.tool_calls == [
-        ToolCall(name="safe", arguments="{}", output="safe done")
-    ]
+    assert result.tool_calls == (ToolCall(name="safe", arguments="{}", output="safe done"),)
     assert state.paused_message == _safe_and_gated_calls_response().output[0]
 
 
@@ -1530,11 +1526,42 @@ def test_compact_runs_whatever_compactor_the_shape_carries() -> None:
 
     result = asyncio.run(_run_async(agent, history, run_config=_run_config()))
 
-    assert calls == [2, 2]  # consulted twice: mid-run on `items`, again on `original_input`
+    assert calls == [2, 2]  # consulted twice: mid-run on `items`, again on the history
     assert result._transcript.history() == [
         {"role": "assistant", "content": "old answer", "tool_calls": None},
         {"role": "user", "content": "new question"},
         {"role": "assistant", "content": "ok", "tool_calls": None},
+    ]
+
+
+def test_compact_applies_a_rewrite_that_drops_nothing(tmp_path: Any) -> None:
+    """A compactor that only rewrites items (truncating long tool output) still takes effect.
+
+    Mid-run on what the model is sent, and at the end on what the session stores.
+    """
+    from runa.session import SQLiteSession
+
+    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+
+    def truncate(items: list[Any], usage_tokens: int) -> list[Any]:
+        return [{**item, "content": (item.get("content") or "")[:5]} for item in items]
+
+    @tool
+    def lookup() -> str:
+        """Look something up."""
+        return "a very long tool output"
+
+    model = _ScriptedModel([_tool_call_response("lookup", "{}"), _text_response("done")])
+    agent = stand_in_agent(tools=[lookup], model=model, compactor=truncate)
+
+    asyncio.run(_run_async(agent, "hello there", session=session, run_config=_run_config()))
+
+    assert model.calls[1][0] == {"role": "user", "content": "hello"}
+    assert [item["content"] for item in asyncio.run(session.get_items())] == [
+        "hello",
+        "",
+        "a ver",
+        "done",
     ]
 
 

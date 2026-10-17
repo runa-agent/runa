@@ -85,7 +85,7 @@ class Run(GuardrailAudit):
         input and output the tracing privacy policy may withhold or redact: this is the record to
         grade a run's tool use on. A delegate's calls are on the delegate's own run, not here.
         """
-        return tuple(self._transcript.tool_calls)
+        return self._transcript.tool_calls
 
     def to_state(self) -> RunState:
         """The paused run's `RunState`: approve or reject its `interruptions`, then resume."""

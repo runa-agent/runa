@@ -21,7 +21,6 @@ from runa._governance import _Governance
 from runa._items import (
     ConversationItem,
     item_text,
-    latest_user_index,
     latest_user_text,
     parsed_arguments,
     system_message,
@@ -145,8 +144,7 @@ class _Run:
         paused = self.governance.paused_delegates.take(call_id)
         if paused is None:
             message = parsed_arguments(arguments_json).get("input", "")
-            turn_input = [user_message(message)]
-            target, transcript = agent, Transcript(original_input=turn_input, items=[*turn_input])
+            target, transcript = agent, Transcript.start([user_message(message)])
             run_context = RunContext(
                 context=self.run_context.context, user_id=self.run_context.user_id
             )
@@ -313,52 +311,19 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
         if knowledge is not None
         else _no_matches(),
     )
-    # Right before the message they were retrieved for, wherever it sits in `items`.
-    items = run.transcript.items
-    at = latest_user_index(items)
-    assert at is not None  # `query` came from that same message
-    if knowledge_matches:
-        items.insert(at, _knowledge_block(knowledge_matches))
-    if memory_matches:
-        items.insert(at, _memory_block(memory_matches))
+    blocks = [
+        *([_memory_block(memory_matches)] if memory_matches else []),
+        *([_knowledge_block(knowledge_matches)] if knowledge_matches else []),
+    ]
+    if blocks:
+        run.transcript.add_context(*blocks)
 
 
-def _maybe_compact(
-    agent: AgentLike, items: list[ConversationItem], usage_tokens: int, spans: _Spans
-) -> None:
-    """Run the agent's `compactor`, if any, and replace `items` in place if it trims them.
-
-    Called twice: mid-`_run_turns`, on `items`, so a single run's own repeated calls (a long
-    tool-calling loop) don't keep resending an ever-growing prompt; and once more when the run
-    finishes (on `original_input` for a no-session run, or in `_save_to_session` on the session's
-    full history) so the *next* call's history reflects the same cut too.
-    """
-    compactor = agent.compactor
-    if compactor is None:
-        return
-    replacement = compactor(items, usage_tokens)
-    if replacement is None or len(replacement) == len(items):
-        return
-    with spans.span("compact", "custom", input={"tokens": usage_tokens}) as span:
-        span.output = {"dropped": len(items) - len(replacement)}
-        items[:] = replacement
-
-
-async def _save_to_session(
-    agent: AgentLike,
-    session: Session,
-    new_tail: list[ConversationItem],
-    context_tokens: int,
-    spans: _Spans,
-) -> None:
-    """Append `new_tail` to `session`, rewriting its history instead if compaction trimmed it."""
-    history = await session.get_items()
-    full_history = [*history, *new_tail]
-    _maybe_compact(agent, full_history, context_tokens, spans)
-    if len(full_history) == len(history) + len(new_tail):
-        await session.add_items(new_tail)
-    else:
-        await session.set_items(full_history)
+def _note_compaction(spans: _Spans, tokens: int, dropped: int | None) -> None:
+    """Record a compaction that changed the conversation (`dropped` is not `None`) as a span."""
+    if dropped is not None:
+        with spans.span("compact", "custom", input={"tokens": tokens}) as span:
+            span.output = {"dropped": dropped}
 
 
 def _spent(usage: Usage) -> int:
@@ -386,8 +351,7 @@ async def _record_tool_results(
     The loop reaches this twice -- after a resumed message's calls, and after each turn's own --
     and a result recorded one way but not the other is how a resumed run drifts from a fresh one.
     """
-    run.transcript.items.extend(results)
-    run.transcript.generated.extend(results)
+    run.transcript.record(*results)
     for result in results:
         run.notify(RunItemStreamEvent(name="tool_output", item=result))
     if switched is not None:
@@ -402,7 +366,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     With `run.emit` (a streamed run), the model is streamed and every step is emitted as a
     `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
-    items, hooks, run_config = run.transcript.items, run.hooks, run.run_config
+    transcript, hooks, run_config = run.transcript, run.hooks, run.run_config
     run_context = run.run_context
 
     if run.resumed is not None:
@@ -417,7 +381,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         shape = run.shape
         agent = shape.agent
         model = shape.resolve_model(run_config.model_provider)
-        with run.span(str(agent.model), "llm", input=list(items)) as llm_span:
+        items = list(transcript.items)
+        with run.span(str(agent.model), "llm", input=items) as llm_span:
             system_instructions = await _resolve_instructions(agent, run_context)
             await hooks.on_llm_start(run_context, agent, system_instructions, items)
             request = ModelRequest(
@@ -437,13 +402,13 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             _check_token_budget(run_context.usage, run_config.max_tokens)
         await hooks.on_llm_end(run_context, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
-        _maybe_compact(agent, items, context_tokens, run.spans)
+        dropped = transcript.compact(agent.compactor, context_tokens)
+        _note_compaction(run.spans, context_tokens, dropped)
 
         if not response.output:
             raise ModelBehaviorError("model returned no output items")
         message = response.output[0]
-        items.append(message)
-        run.transcript.generated.append(message)
+        transcript.record(message)
         run.notify(RunItemStreamEvent(name="message_output_created", item=message))
 
         calls = tool_calls(message)
@@ -597,7 +562,7 @@ async def _guarded(
 async def _extract_memory(run: _Run, final_output: Any) -> None:
     """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
     memory = run.start.agent.memory
-    query = latest_user_text([*run.transcript.original_input, *run.transcript.session_input])
+    query = run.transcript.latest_user_text()
     if memory is None or query is None:
         return
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
@@ -659,20 +624,15 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             guardrail_results=governance.guardrail_results.snapshot(),
         )
 
-    # The next call's history starts from the same cut compaction made mid-run: the session's
-    # stored history, or `original_input` (what `Agent.history` is written from) without one.
+    # The next call's history starts from the same cut compaction made mid-run.
+    tokens = outcome.context_tokens
+    dropped = transcript.compact_history(run.start.agent.compactor, tokens)
+    _note_compaction(run.spans, tokens, dropped)
     if run.session is not None:
-        await _save_to_session(
-            run.start.agent,
-            run.session,
-            [*transcript.session_input, *transcript.generated],
-            outcome.context_tokens,
-            run.spans,
-        )
-    else:
-        _maybe_compact(
-            run.start.agent, transcript.original_input, outcome.context_tokens, run.spans
-        )
+        if dropped is None:
+            await run.session.add_items(transcript.unsaved())
+        else:
+            await run.session.set_items(transcript.history())
     await _extract_memory(run, outcome.final_output)
 
     await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
@@ -695,8 +655,7 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
     """
     await run.hooks.on_agent_start(run.run_context, run.current_agent)
     if run.resumed is None:
-        transcript = run.transcript
-        query = latest_user_text([*transcript.original_input, *transcript.session_input])
+        query = run.transcript.latest_user_text()
         if query is not None:
             await _inject_retrieved(run, query)
         await _run_guardrails(run, Phase.INPUT, input)
@@ -749,14 +708,10 @@ async def _run_async(
         # ends the run the way every other failure does, with a trace to read, instead of
         # escaping it.
         shape = await AgentShape.of(agent)
-        transcript = (
-            Transcript(session_input=turn_input, items=[*await session.get_items(), *turn_input])
-            if session is not None
-            else Transcript(original_input=list(turn_input), items=list(turn_input))
-        )
+        prior = await session.get_items() if session is not None else []
         run = _Run(
             shape=shape,
-            transcript=transcript,
+            transcript=Transcript.start(turn_input, prior),
             run_context=run_context,
             governance=governance,
             trace=trace,

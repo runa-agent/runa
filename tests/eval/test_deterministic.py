@@ -10,6 +10,14 @@ from runa.tracing import Span, Trace
 from runa.transcript import Transcript
 
 
+def _transcript_of(*calls: ToolCall) -> Transcript:
+    """A transcript of a run that executed `calls`, in order."""
+    transcript = Transcript()
+    for call in calls:
+        transcript.record_call(call)
+    return transcript
+
+
 def test_check_run_completed_passes_for_a_completed_run() -> None:
     """A run whose `status` is `"completed"` passes, with a score of 1.0."""
     result = check_run_completed(finished_run("ok"))
@@ -51,9 +59,7 @@ def test_check_expected_tool_called_passes_when_the_tool_was_called() -> None:
     case = Case(input="cancel order 123", expected_tool="cancel_order")
     run = finished_run(
         "done",
-        _transcript=Transcript(
-            tool_calls=[ToolCall(name="cancel_order", arguments="{}", output="done")]
-        ),
+        _transcript=_transcript_of(ToolCall(name="cancel_order", arguments="{}", output="done")),
     )
 
     result = check_expected_tool_called(case, run)
@@ -67,9 +73,7 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
     case = Case(input="cancel order 123", expected_tool="cancel_order")
     run = finished_run(
         "done",
-        _transcript=Transcript(
-            tool_calls=[ToolCall(name="search", arguments="{}", output="nothing")]
-        ),
+        _transcript=_transcript_of(ToolCall(name="search", arguments="{}", output="nothing")),
     )
 
     result = check_expected_tool_called(case, run)
@@ -103,7 +107,7 @@ def test_check_expected_tool_called_grades_the_runs_own_record_not_its_trace_spa
     run = finished_run(
         "done",
         trace=Trace(id="t1", name="UnderTest", start_time=0.0, end_time=0.0, spans=[redacted]),
-        _transcript=Transcript(tool_calls=[call]),
+        _transcript=_transcript_of(call),
     )
 
     result = check_expected_tool_called(case, run)
