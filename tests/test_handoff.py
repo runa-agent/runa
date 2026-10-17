@@ -1,22 +1,18 @@
-"""Tests for `agent_as_tool` and the shared agent-graph walk.
+"""Tests for `Delegate` and the shared agent-graph walk.
 
 What a delegate's run shares with its caller's (sticky approvals, usage, `context`, hooks, the
-trace), and the walk every module needing "reachable from here" shares
-(`reachable`/`subagent_edges`).
+trace), what the caller's `Run` records of it, and the walk every module needing "reachable from
+here" shares (`reachable`/`subagent_edges`).
 """
 
 from typing import Any
 
-import pytest
-from helpers import run as run_awaitable
-
-from runa import Trace
+from runa import Trace, handoff
 from runa._types import ModelResponse, RunContext, Usage
 from runa.agent import Agent
-from runa.exceptions import UserError
-from runa.handoff import agent_as_tool, reachable, subagent_edges
+from runa.handoff import reachable, subagent_edges
 from runa.lifecycle import Hooks
-from runa.tool import tool
+from runa.tool import ToolCall, tool
 from runa.tracing import observe
 
 
@@ -55,7 +51,7 @@ def _lead(delegate: Agent, script: list[dict[str, Any]], **settings: Any) -> Age
         model = _ScriptedModel(script)
 
     lead = Lead(**settings)
-    lead.tools = [*lead.tools, delegate.as_tool(None, None)]
+    lead.delegates = [*lead.delegates, handoff.Delegate.from_agent(delegate)]
     return lead
 
 
@@ -209,17 +205,53 @@ def test_a_delegates_spans_are_in_its_callers_trace_under_the_call() -> None:
     assert spans["Delegate"].end_time is not None
 
 
-def test_a_delegate_tool_cannot_be_invoked_outside_a_run() -> None:
-    """A delegate is run by its caller's turn loop; calling its tool directly says so."""
+def test_a_delegate_call_is_on_its_callers_tool_calls_with_the_delegates_own_beneath() -> None:
+    """The caller records the delegate call and its output; the delegate's own are its children."""
+
+    @tool
+    def lookup(order: str) -> str:
+        """Look an order up."""
+        return f"{order} shipped"
 
     class Delegate(Agent):
         name = "Delegate"
-        model = _ScriptedModel([])
+        tools = [lookup]
+        model = _ScriptedModel(
+            [_tool_call_message("lookup", '{"order": "4821"}', "d1"), _final_message("shipped")]
+        )
 
-    delegate_tool = agent_as_tool(Delegate(), None, None)
+    lead = _lead(
+        Delegate(),
+        [_tool_call_message("delegate", '{"input": "where is 4821?"}'), _final_message("done")],
+    )
 
-    with pytest.raises(UserError, match="delegate"):
-        run_awaitable(delegate_tool.on_invoke_tool(RunContext(), '{"input": "go"}', "call_1"))
+    run = lead.run_sync("go")
+
+    assert run.status == "completed", run.error
+    (call,) = run.tool_calls
+    assert (call.name, call.arguments, call.output) == (
+        "delegate",
+        '{"input": "where is 4821?"}',
+        "shipped",
+    )
+    assert call.children == (ToolCall("lookup", '{"order": "4821"}', "4821 shipped"),)
+    assert [each.name for each in call.walk()] == ["delegate", "lookup"]
+
+
+def test_a_delegate_called_with_malformed_arguments_answers_an_error_and_runs_nothing() -> None:
+    """Arguments the model got wrong go back to it as the call's result, as for any tool."""
+
+    class Delegate(Agent):
+        name = "Delegate"
+        model = _ScriptedModel([])  # never called: the delegate doesn't start
+
+    lead = _lead(Delegate(), [_tool_call_message("delegate", "not json"), _final_message("ok")])
+
+    run = lead.run_sync("go")
+
+    assert run.status == "completed", run.error
+    assert run.tool_calls == ()
+    assert not [span for span in run.trace.spans if span.type == "delegate"]
 
 
 def test_reachable_names_every_agent_once_even_through_a_cycle() -> None:

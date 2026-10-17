@@ -187,6 +187,7 @@ delegate's calls appear in the caller's `run.interruptions`, and resuming the ca
 delegate where it stopped (also across `to_json`/`from_json`). A delegate's run is part of its
 caller's: the run's [hooks](#11-hooks) fire for it, and its spans are in the caller's trace, under
 the delegate call. A streamed caller shows that call and its output, not the delegate's tokens.
+The call is one of the caller's `run.tool_calls`, the delegate's own calls as its `.children`.
 
 **Subagents are for when the model picks the order.** When your code picks it (always A, then
 B and C together), write a plain `async` function. Don't build a workflow class:

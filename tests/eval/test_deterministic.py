@@ -84,6 +84,19 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
     assert "search" in result.reason
 
 
+def test_check_expected_tool_called_finds_a_delegate_and_the_tools_it_called() -> None:
+    """A delegate call counts as called, and so does any call beneath it, at any depth."""
+    cancel = ToolCall(name="cancel_order", arguments="{}", output="done")
+    billing = ToolCall(name="billing", arguments='{"input": "x"}', output="ok", children=(cancel,))
+    run = finished_run("done", _transcript=_transcript_of(billing))
+
+    for expected in ("billing", "cancel_order"):
+        result = check_expected_tool_called(Case(input="x", expected_tool=expected), run)
+
+        assert result is not None
+        assert result.status == EvalStatus.PASS, expected
+
+
 def test_check_expected_tool_called_grades_the_runs_own_record_not_its_trace_spans() -> None:
     """Graded evidence is the run's own tool calls, which no tracing privacy policy has filtered.
 

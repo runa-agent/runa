@@ -15,6 +15,7 @@ from runa import Agent
 from runa._models import StreamDelta
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
+from runa.handoff import Delegate
 from runa.session import SQLiteSession
 from runa.tool import tool
 
@@ -275,7 +276,7 @@ def test_a_stream_that_is_never_consumed_holds_nothing() -> None:
 
 
 def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
-    """Each delegation runs on a fresh copy, so `agent_as_tool`'s documented contract holds."""
+    """Each delegation starts from a fresh transcript, never the delegate instance's history."""
     seen: list[int] = []
 
     class Worker(Agent):
@@ -306,7 +307,7 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
         )
 
     boss = Boss()
-    boss.tools = [*boss.tools, worker.as_tool(None, None)]
+    boss.delegates = [*boss.delegates, Delegate.from_agent(worker)]
     run = boss.run_sync("go")
 
     assert run.status == "completed"

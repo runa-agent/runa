@@ -22,7 +22,6 @@ from runa._items import (
     ConversationItem,
     item_text,
     latest_user_text,
-    parsed_arguments,
     system_message,
     tool_calls,
     user_message,
@@ -42,6 +41,7 @@ from runa.exceptions import (
     UserError,
 )
 from runa.guardrail import Phase
+from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape
@@ -119,8 +119,8 @@ class _Run:
         if self.emit is not None:
             self.emit(event)
 
-    async def delegate(self, agent: Any, arguments_json: str, call_id: str, *, under: Span) -> Any:
-        """Run `agent` as a delegate of this run, and return what this run's model is told.
+    async def delegate(self, delegate: Delegate, input: str, call_id: str, *, under: Span) -> Run:
+        """Run `delegate`'s agent on `input` as a nested run of this one, and return its `Run`.
 
         The nested run is this one, with what is a delegate's own replaced: the agent and a fresh
         transcript, a `RunContext` over the same `context` and `user_id` (its usage starts at zero
@@ -139,19 +139,16 @@ class _Run:
         A delegate that pauses for approval is stashed under `call_id` and raises
         `DelegatePaused`, so this run pauses on its interruptions; the same call reaching here
         again, on resume, continues it instead of starting it over (`runa.paused_delegates` owns
-        that protocol). One that errors comes back as `"error: ..."`, for the model to respond to.
+        that protocol), and `input` is not read again. The returned `Run` is completed or errored.
         """
+        agent = delegate.agent
+        run_context = RunContext(context=self.run_context.context, user_id=self.run_context.user_id)
         paused = self.governance.paused_delegates.take(call_id)
         if paused is None:
-            message = parsed_arguments(arguments_json).get("input", "")
-            target, transcript = agent, Transcript.start([user_message(message)])
-            run_context = RunContext(
-                context=self.run_context.context, user_id=self.run_context.user_id
-            )
+            message: str | None = input
+            target, transcript = agent, Transcript.start([user_message(input)])
         else:
             message, target, transcript = None, paused.agent, paused.transcript.copy()
-            run_context = paused.run_context
-            run_context.user_id = self.run_context.user_id  # a serialized state doesn't carry it
         agent_span = _Spans(self.trace, under.id).open(target.name, "agent", input=message)
         run_config = replace(
             self.run_config,
@@ -188,7 +185,7 @@ class _Run:
             state.run_context.usage = Usage()  # already merged into this run's
             self.governance.paused_delegates.stash(call_id, state)
             raise DelegatePaused(state.pending)
-        return run.output if run.status == "completed" else f"error: {run.error}"
+        return run
 
 
 async def _resolve_instructions(agent: AgentLike, run_context: RunContext) -> str | None:
@@ -392,6 +389,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
                 tools=shape.tools,
                 output_schema=agent.output_type,
                 handoffs=list(shape.handoffs.values()),
+                delegates=list(shape.delegates.values()),
             )
             if run.emit is None:
                 response = await model.get_response(request)
@@ -748,14 +746,15 @@ async def _resume(
 ) -> Run:
     """Continue a paused run once its interruptions are resolved."""
     agent_span = _Spans(state.trace).open(state.agent.name, "agent")
-    state.run_context.user_id = _user_of(session)  # a serialized state doesn't carry it
+    # The user is the resuming session's, as a fresh run's is: a serialized state doesn't carry it.
+    run_context = replace(state.run_context, user_id=_user_of(session))
 
     async def turn() -> Run:
         shape = await AgentShape.of(state.agent)  # inside the boundary: see `_run_async`
         run = _Run(
             shape=shape,
             transcript=state.transcript.copy(),
-            run_context=state.run_context,
+            run_context=run_context,
             governance=state._governance,
             trace=state.trace,
             agent_span=agent_span,
@@ -771,7 +770,7 @@ async def _resume(
         turn(),
         trace=state.trace,
         agent_span=agent_span,
-        run_context=state.run_context,
+        run_context=run_context,
         governance=state._governance,
         timeout=run_config.timeout,
     )

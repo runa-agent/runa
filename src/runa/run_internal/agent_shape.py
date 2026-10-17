@@ -2,10 +2,10 @@
 
 An agent's settings are read off the agent itself, through `runa.agent_like`'s `AgentLike`. This
 module holds only what a run has to *resolve* from them, asked by more than one module: its tools,
-including the ones its MCP servers list; its handoffs, keyed by the tool name that triggers them;
-and its model. `run_loop`, `tool_execution` and `guardrails` all have to agree on those answers,
-so none of them owns these, and each is worked out once when the agent starts running rather than
-re-derived by whichever module needs it next.
+including the ones its MCP servers list; its handoffs and delegates, keyed by the tool name that
+triggers each; and its model. `run_loop`, `tool_execution` and `guardrails` all have to agree on
+those answers, so none of them owns these, and each is worked out once when the agent starts
+running rather than re-derived by whichever module needs it next.
 
 Only `run_internal` imports this module. A question a public type asks too -- what a `handoffs`
 list may hold, which `RunState` needs to walk a graph of agents -- is answered by the public type
@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from runa._models import Model, ModelProvider
 from runa.agent_like import AgentLike
-from runa.handoff import Handoff
+from runa.handoff import Delegate, Handoff
 from runa.tool import FunctionTool
 
 
@@ -35,14 +35,20 @@ class AgentShape:
     agent: AgentLike
     tools: list[FunctionTool]
     handoffs: dict[str, Handoff]
+    delegates: dict[str, Delegate]
 
     @classmethod
     async def of(cls, agent: AgentLike) -> AgentShape:
-        """`agent`'s shape: its MCP servers' tools fetched, its handoffs keyed by tool name."""
+        """`agent`'s shape: its MCP servers' tools fetched, its subagents keyed by tool name."""
         tools = list(agent.tools)
         for server in agent.mcp_servers:
             tools.extend(await server.list_tools())
-        return cls(agent=agent, tools=tools, handoffs=Handoff.by_tool_name(agent.handoffs))
+        return cls(
+            agent=agent,
+            tools=tools,
+            handoffs=Handoff.by_tool_name(agent.handoffs),
+            delegates={delegate.tool_name: delegate for delegate in agent.delegates},
+        )
 
     def find_tool(self, name: str) -> FunctionTool | None:
         """The `FunctionTool` this agent calls `name`, or `None` if it declares no such tool."""

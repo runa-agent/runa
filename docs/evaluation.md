@@ -30,7 +30,7 @@ Only `input` is required. Everything else is optional evidence that decides whic
 | Field | Enables |
 |---|---|
 | `expected` | Answer-correctness grading |
-| `expected_tool` | A deterministic "was it called" tool-correctness check |
+| `expected_tool` | A deterministic "was it called" tool-correctness check, a delegate's calls included |
 | `context` | Faithfulness grading against retrieval passages |
 | `metadata` | Arbitrary data carried through to the report |
 

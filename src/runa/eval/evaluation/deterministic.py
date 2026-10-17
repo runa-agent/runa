@@ -25,10 +25,13 @@ def check_run_completed(run: Run) -> EvaluationResult:
 
 
 def check_expected_tool_called(case: Case, run: Run) -> EvaluationResult | None:
-    """Assert `case.expected_tool` was called, or `None` if the case declares no expected tool."""
+    """Assert `case.expected_tool` was called, or `None` if the case declares no expected tool.
+
+    Called anywhere in the run: by the agent itself, as one of its delegates, or by a delegate.
+    """
     if case.expected_tool is None:
         return None
-    called = {tool_call.name for tool_call in run.tool_calls}
+    called = {call.name for tool_call in run.tool_calls for call in tool_call.walk()}
     if case.expected_tool in called:
         return TOOL_CORRECTNESS.result(EvalStatus.PASS, f"called {case.expected_tool!r}", score=1.0)
     return TOOL_CORRECTNESS.result(

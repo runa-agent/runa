@@ -9,7 +9,7 @@ themselves" approach the rest of Runa follows, and the one the `pyright` overrid
 import asyncio
 import enum
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
@@ -36,10 +36,6 @@ class FunctionTool:
     """This tool's guardrails by `Phase`, checked against the call's arguments
     (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
     needs_approval: _NeedsApproval = False
-    delegate: Any = None
-    """The sub-`Agent` behind a `.delegate` tool (set by `agent_as_tool`). The turn loop runs it
-    as a nested run of the caller's instead of calling `on_invoke_tool`, traced as a `"delegate"`
-    span rather than a plain `"tool"`; it is also resolvable by name when resuming a paused run."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +54,15 @@ class ToolCall:
     """The call's arguments as JSON, exactly the string the model produced."""
     output: str
     """The tool's return value, exactly the string that went back to the model."""
+    children: tuple[ToolCall, ...] = ()
+    """For a `.delegate` call, every tool call the delegate's own run executed, in order (its
+    delegate calls with their own `children`); empty for any other call."""
+
+    def walk(self) -> Iterator[ToolCall]:
+        """This call, then every call under it, depth-first in the order they finished."""
+        yield self
+        for child in self.children:
+            yield from child.walk()
 
 
 def _json_type(annotation: Any) -> dict[str, Any]:

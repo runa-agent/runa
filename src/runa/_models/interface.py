@@ -18,8 +18,9 @@ from runa._types import ModelResponse, ModelSettings, Usage
 class ModelRequest:
     """One turn's worth of input: everything a backend needs to put a request on the wire.
 
-    `tools`/`handoffs` are read structurally (see the package docstring); `output_schema` is
-    `None` or `str` for plain-text output, or any other type to ask the backend for JSON output.
+    `tools`/`delegates`/`handoffs` are read structurally (see the package docstring);
+    `output_schema` is `None` or `str` for plain-text output, or any other type to ask the backend
+    for JSON output.
     """
 
     input: list[ConversationItem]
@@ -28,6 +29,7 @@ class ModelRequest:
     tools: list[Any] = field(default_factory=list)
     output_schema: type | None = None
     handoffs: list[Any] = field(default_factory=list)
+    delegates: list[Any] = field(default_factory=list)
 
     @property
     def messages(self) -> list[ConversationItem]:
@@ -81,23 +83,25 @@ class ToolSchema:
 
 
 def tool_schemas(request: ModelRequest) -> list[ToolSchema]:
-    """Every tool and handoff on `request`, in the order the model is offered them.
+    """Every tool, delegate and handoff on `request`, in the order the model is offered them.
 
     A handoff takes no structured input from the model: calling it is itself the signal to
     switch agents, so its `parameters` is always an empty object.
     """
+    no_input = {"type": "object", "properties": {}}
     return [
-        ToolSchema(
-            tool.name,
-            tool.description or "",
-            tool.params_json_schema or {"type": "object", "properties": {}},
-        )
-        for tool in request.tools
-    ] + [
-        ToolSchema(
-            handoff.tool_name, handoff.tool_description or "", {"type": "object", "properties": {}}
-        )
-        for handoff in request.handoffs
+        *(
+            ToolSchema(tool.name, tool.description or "", tool.params_json_schema or no_input)
+            for tool in request.tools
+        ),
+        *(
+            ToolSchema(delegate.tool_name, delegate.tool_description, delegate.params_json_schema)
+            for delegate in request.delegates
+        ),
+        *(
+            ToolSchema(handoff.tool_name, handoff.tool_description or "", no_input)
+            for handoff in request.handoffs
+        ),
     ]
 
 

@@ -21,6 +21,7 @@ from runa.agent import _AGENT_FIELDS, Subagent
 from runa.compact import default_compactor
 from runa.exceptions import MaxTurnsExceeded, OperatorError, RunErrorDetails, UserError
 from runa.guardrail import Phase, guardrail
+from runa.handoff import Delegate
 from runa.knowledge import Knowledge
 from runa.lifecycle import Hooks, LoggingHooks
 from runa.mcp import _Connection, _MCPServerBase
@@ -40,6 +41,11 @@ def _handoff_names(agent: Agent) -> list[str]:
 def _tool_names(agent: Agent) -> list[str]:
     """Names of an agent's tools, narrowed away from the raw `Tool` union members."""
     return [t.name for t in agent.tools if isinstance(t, FunctionTool)]
+
+
+def _delegate_names(agent: Agent) -> list[str]:
+    """The tool names an agent's delegates are called by."""
+    return [delegate.tool_name for delegate in agent.delegates]
 
 
 class Researcher(Agent):
@@ -189,7 +195,7 @@ def test_delegate_adds_only_to_tools() -> None:
     agent = Main()
 
     assert agent.handoffs == []
-    assert _tool_names(agent) == [Researcher().as_tool(None, None).name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool_name]
 
 
 def test_h_and_d_are_shorthand_for_handoff_and_delegate() -> None:
@@ -203,7 +209,7 @@ def test_h_and_d_are_shorthand_for_handoff_and_delegate() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _tool_names(agent) == [Translator().as_tool(None, None).name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
 
 
 def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
@@ -223,7 +229,7 @@ def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
 
     triage = Triage()
 
-    (billing,) = [tool.delegate for tool in triage.tools]
+    (billing,) = [delegate.agent for delegate in triage.delegates]
     assert billing is not None
     assert billing.handoffs == [triage]
 
@@ -246,10 +252,10 @@ def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
         instructions = "main"
         subagents = [Left.delegate, Right.delegate]
 
-    left, right = [tool.delegate for tool in Main().tools]
+    left, right = [delegate.agent for delegate in Main().delegates]
 
     assert left is not None and right is not None
-    assert left.tools[0].delegate is right.tools[0].delegate
+    assert left.delegates[0].agent is right.delegates[0].agent
 
 
 def test_delegate_tool_name_and_description_override() -> None:
@@ -262,10 +268,10 @@ def test_delegate_tool_name_and_description_override() -> None:
 
     agent = Main()
 
-    (tool_obj,) = agent.tools
-    assert isinstance(tool_obj, FunctionTool)
-    assert tool_obj.name == "do_research"
-    assert tool_obj.description == "Look into it."
+    (delegate,) = agent.delegates
+    assert delegate.tool_name == "do_research"
+    assert delegate.tool_description == "Look into it."
+    assert agent.tools == []
 
 
 def test_bare_subagent_wires_both_handoff_and_delegate() -> None:
@@ -279,7 +285,7 @@ def test_bare_subagent_wires_both_handoff_and_delegate() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _tool_names(agent) == [Researcher().as_tool(None, None).name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool_name]
 
 
 def test_mixed_modes_wire_independently() -> None:
@@ -293,7 +299,7 @@ def test_mixed_modes_wire_independently() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _tool_names(agent) == [Translator().as_tool(None, None).name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
 
 
 def test_no_subagents_leaves_handoffs_and_tools_empty() -> None:
@@ -883,7 +889,8 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert (agent.name, agent.instructions) == ("Overridden", "overridden")
     assert agent.model == "claude-sonnet-5"
     assert agent.model_settings is model_settings
-    assert _tool_names(agent) == ["ping", Translator().as_tool(None, None).name]
+    assert _tool_names(agent) == ["ping"]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
     assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
     assert len(agent.mcp_servers) == 2, "`mcp` and `mcp_servers` are merged, not one or the other"
     assert agent.output_type is Answer
@@ -1895,7 +1902,7 @@ def _parent_with_paused_delegate(calls: list[float]) -> Agent:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
     )
-    child = next(t.delegate for t in parent.tools if t.delegate is not None)
+    child = parent.delegates[0].agent
     child.tools = [_refund_tool(calls)]
     child.model = _ScriptedModel(
         [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
@@ -1971,14 +1978,14 @@ def _parent_with_a_paused_grandchild(calls: list[float]) -> Agent:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
     )
-    child = next(t.delegate for t in parent.tools if t.delegate is not None)
+    child = parent.delegates[0].agent
     child.model = _ScriptedModel(
         [
             _tool_call_message("grandchild", '{"input": "refund $5"}', "mid_1"),
             _final_message("passed on"),
         ]
     )
-    grandchild = next(t.delegate for t in child.tools if t.delegate is not None)
+    grandchild = child.delegates[0].agent
     grandchild.tools = [_refund_tool(calls)]
     grandchild.model = _ScriptedModel(
         [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
@@ -2155,7 +2162,7 @@ def test_a_delegates_guardrails_show_up_on_its_callers_run() -> None:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "find A1"}', "outer_1"), _final_message("ok")]
     )
-    child = next(t.delegate for t in parent.tools if t.delegate is not None)
+    child = parent.delegates[0].agent
     child.tools = [lookup]
     child.model = _ScriptedModel(
         [_tool_call_message("lookup", '{"order_id": "A1"}', "inner_1"), _final_message("shipped")]

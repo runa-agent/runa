@@ -1,4 +1,4 @@
-"""tool_execution.py: executing one message's tool calls, handoffs, approval gating, guardrails.
+"""tool_execution.py: one message's tool calls, delegates and handoffs, approval gating, guardrails.
 
 The run these steps are passed is the turn loop's, imported for its type only: a delegate call
 reaches back into the loop through the run it is handed, never through an import, so the runtime
@@ -26,6 +26,7 @@ from runa._types import RunContext
 from runa.agent_like import AgentLike
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase
+from runa.handoff import Delegate
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_state import Interruption, RunState
 from runa.tool import FunctionTool, ToolCall
@@ -43,44 +44,68 @@ class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
         self.interruptions = interruptions
 
 
-async def _run_tool_call(
-    run: _Run, tool: FunctionTool, call: dict[str, Any]
-) -> ConversationItem | DelegatePaused:
-    """Run one already-approved tool call end to end: guardrails, invocation, guardrails.
+def _claim(run: _Run, call_id: str, name: str) -> None:
+    """Refuse to execute `call_id` a second time (a resumed or duplicated `RunState`)."""
+    if not run.governance.approval_ledger.claim(call_id):
+        raise DuplicateToolCallError(call_id, name)
 
-    Guards against executing the same `call_id` twice (e.g. a resumed/duplicated `RunState`)
-    before anything else runs. A delegate call is a nested run of this one, under the call's
-    span, rather than an invocation of the tool; one that paused for approval comes back as its
-    `DelegatePaused`, not a result: the call hasn't finished, so resuming may run it again.
-    """
-    run_context, ledger = run.run_context, run.governance.approval_ledger
+
+async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) -> ConversationItem:
+    """Run one already-approved tool call end to end: guardrails, invocation, guardrails."""
+    run_context = run.run_context
     call_id = id_of(call)
-    if not ledger.claim(call_id):
-        raise DuplicateToolCallError(call_id, tool.name)
+    _claim(run, call_id, tool.name)
 
     args_json = call_arguments(call)
-    span_type = "delegate" if tool.delegate is not None else "tool"
-    with run.span(tool.name, span_type, input=args_json) as span:
+    with run.span(tool.name, "tool", input=args_json) as span:
         inside = run.spans.under(span)  # this call's guardrails belong under the call
         await run.hooks.on_tool_start(run_context, run.current_agent, tool)
         await _run_guardrails(run, Phase.TOOL_INPUT, args_json, tool=tool, spans=inside)
         try:
-            if tool.delegate is not None:
-                result = await run.delegate(tool.delegate, args_json, call_id, under=span)
-            else:
-                result = await tool.on_invoke_tool(run_context, args_json, call_id)
-        except DelegatePaused as paused:
-            ledger.release(call_id)
-            span.output = "paused for approval"
-            return paused
+            result = await tool.on_invoke_tool(run_context, args_json, call_id)
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
             result = f"error: {exc}"
             span.error = str(exc)
         await _run_guardrails(run, Phase.TOOL_OUTPUT, result, tool=tool, spans=inside)
         span.output = result
-    if tool.delegate is None:  # a delegate's own run records its own calls, in its own transcript
-        run.transcript.record_call(ToolCall(tool.name, args_json, str(result)))
+    run.transcript.record_call(ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(run_context, run.current_agent, tool, result)
+    return tool_result(call_id, result)
+
+
+async def _run_delegate_call(
+    run: _Run, delegate: Delegate, call: dict[str, Any]
+) -> ConversationItem | DelegatePaused:
+    """Run one delegate call as a nested run of this one, under the call's `"delegate"` span.
+
+    Recorded like a tool call, its `children` the calls the nested run made. Arguments the model
+    got wrong, or a delegate that errored, answer `"error: ..."`, for the model to respond to;
+    one that paused for approval comes back as its `DelegatePaused`, not a result: the call
+    hasn't finished, so resuming may run it again.
+    """
+    call_id = id_of(call)
+    args_json = call_arguments(call)
+    args = _arguments_or_error(args_json)
+    if isinstance(args, str):
+        return tool_result(call_id, args)
+    _claim(run, call_id, delegate.tool_name)
+
+    with run.span(delegate.tool_name, "delegate", input=args_json) as span:
+        try:
+            nested = await run.delegate(delegate, str(args.get("input", "")), call_id, under=span)
+        except DelegatePaused as paused:
+            run.governance.approval_ledger.release(call_id)
+            span.output = "paused for approval"
+            return paused
+        if nested.status == "completed":
+            result = nested.output
+        else:
+            result = f"error: {nested.error}"
+            span.error = nested.error
+        span.output = result
+    run.transcript.record_call(
+        ToolCall(delegate.tool_name, args_json, str(result), children=nested.tool_calls)
+    )
     return tool_result(call_id, result)
 
 
@@ -177,6 +202,11 @@ async def _run_message_tool_calls(
         if call_id in ready:
             slots.append(_Slot(ready[call_id]))
             continue
+        if name in shape.delegates:  # needs no approval of its own: its tools ask for theirs
+            slot = _Slot()  # filled in below, once the approved calls have run
+            slots.append(slot)
+            deferred.append((slot, partial(_run_delegate_call, run, shape.delegates[name], call)))
+            continue
         tool = shape.find_tool(name)
         if tool is None:
             slots.append(_Slot(tool_result(call_id, f"error: unknown tool {name}")))
@@ -231,4 +261,10 @@ async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -
         raise
 
 
-__all__ = ["DelegatePaused", "_TurnOutcome", "_run_message_tool_calls", "_run_tool_call"]
+__all__ = [
+    "DelegatePaused",
+    "_TurnOutcome",
+    "_run_delegate_call",
+    "_run_message_tool_calls",
+    "_run_tool_call",
+]

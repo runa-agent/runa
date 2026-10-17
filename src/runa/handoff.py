@@ -1,34 +1,31 @@
-"""handoff.py: `Handoff` (agent-as-a-switch) and `agent_as_tool` (agent-as-a-tool).
+"""handoff.py: `Handoff` (agent-as-a-switch) and `Delegate` (agent-as-a-tool).
 
 Both wrap a sub-`Agent` as something the model can call, differing in what happens next: calling a
 `Handoff`'s tool switches `run_internal`'s current agent for the rest of the run (`Agent.subagents`'
-`.handoff` mode); calling an `agent_as_tool()` tool runs the sub-agent to completion, as a nested
-run of the caller's, and hands its output back to the *calling* agent, which keeps going
-(`.delegate` mode). See `runa.agent.Subagent` for how a class wires either mode up from its
-`subagents` list.
+`.handoff` mode); calling a `Delegate`'s tool runs the sub-agent to completion, as a nested run of
+the caller's, and hands its output back to the *calling* agent, which keeps going (`.delegate`
+mode). See `runa.agent.Subagent` for how a class wires either mode up from its `subagents` list.
 
 The two modes are the only edges between agents, so this module also names them (`Mode`) and walks
 them: `subagent_edges` is one agent's outgoing edges and `reachable` the whole graph below it. A
 module that needs "everything reachable from this agent" asks here rather than re-reading
-`handoffs` and `tools` itself, which is what keeps a third mode from being a change in five places.
+`handoffs` and `delegates` itself, which is what keeps a third mode from being a change in five
+places.
 
 An agent is read here, never built, so the attributes that walk is made of are `runa.agent_like`'s
 `AgentLike` (which is also why no read below needs a `getattr` default: an agent that has no
 `handoffs` is a type error at `Agent.run`, not an agent with no subagents). The one exception is
-`agent_as_tool`, whose delegate the turn loop *runs* rather than reads, and so is annotated as the
-`Agent` it is only ever called with -- a type-only import, so the runtime dependency still points
-one way.
+`Delegate.agent`, which the turn loop *runs* rather than reads, with its own ceilings, and so is
+annotated as the `Agent` it always is -- a type-only import, so the runtime dependency still
+points one way.
 """
 
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
-from runa._types import RunContext
 from runa.agent_like import AgentLike
-from runa.exceptions import UserError
-from runa.tool import FunctionTool
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -39,12 +36,6 @@ Mode = Literal["handoff", "delegate"]
 Named here, beside both of them, rather than in `runa.agent`: a declaration spells the mode and
 `Subagent` carries it, but what each one *means* is this module's.
 """
-
-_DELEGATE_INPUT_SCHEMA = {
-    "type": "object",
-    "properties": {"input": {"type": "string"}},
-    "required": ["input"],
-}
 
 
 def _slugify(name: str) -> str:
@@ -89,28 +80,36 @@ class Handoff:
         return keyed
 
 
-def agent_as_tool(
-    agent: Agent, tool_name: str | None, tool_description: str | None
-) -> FunctionTool:
-    """Wrap `agent` as a `FunctionTool` the model calls with a generated `input` string.
+@dataclass(frozen=True)
+class Delegate:
+    """A sub-agent registered as a tool: calling it runs `agent` on the `input` the model wrote.
 
-    The tool is a schema and the agent behind it (`FunctionTool.delegate`), nothing more: what a
-    delegate's run shares with its caller's is the turn loop's to decide, because it is the loop
-    that runs it, as a nested run of the caller's. Its `on_invoke_tool` is never reached from a
-    run, and raises `UserError` if called directly.
+    `run_internal` sees a `Delegate` in an agent's `delegates` list and runs a call to `tool_name`
+    as a nested run of the caller's, whose output goes back to the caller as the call's result.
     """
-    resolved_name = tool_name or _slugify(agent.name)
 
-    async def on_invoke_tool(ctx: RunContext, arguments_json: str, call_id: str) -> Any:
-        raise UserError(f"{resolved_name} is a delegate: it runs only as part of its caller's run")
-
-    return FunctionTool(
-        name=resolved_name,
-        description=tool_description or f"Delegate a task to {agent.name}.",
-        params_json_schema=_DELEGATE_INPUT_SCHEMA,
-        on_invoke_tool=on_invoke_tool,
-        delegate=agent,
+    agent: Agent
+    tool_name: str
+    tool_description: str
+    params_json_schema: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"input": {"type": "string"}},
+            "required": ["input"],
+        }
     )
+    """What the model calls it with: the one `input` string the delegate is handed as its turn."""
+
+    @classmethod
+    def from_agent(
+        cls, agent: Agent, tool_name: str | None = None, tool_description: str | None = None
+    ) -> Delegate:
+        """Build a `Delegate` for `agent`, its name/description derived from it unless given."""
+        return cls(
+            agent=agent,
+            tool_name=tool_name or _slugify(agent.name),
+            tool_description=tool_description or f"Delegate a task to {agent.name}.",
+        )
 
 
 def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
@@ -120,16 +119,14 @@ def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
     up as both, so it is yielded twice, once per mode -- which is what it is: two tools the model
     picks between.
 
-    What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), and so
-    is a delegate being a tool carrying the agent behind it (`agent_as_tool` sets it), so reading
-    both lives here and not in each module that needs the graph: `run_state` resolves a paused run's
-    agent by name, `Agent.graph` draws the edges.
+    What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), so
+    reading both lists lives here and not in each module that needs the graph: `run_state`
+    resolves a paused run's agent by name, `Agent.graph` draws the edges.
     """
     for handoff in Handoff.by_tool_name(agent.handoffs).values():
         yield "handoff", handoff.agent
-    for tool in agent.tools:
-        if tool.delegate is not None:
-            yield "delegate", tool.delegate
+    for delegate in agent.delegates:
+        yield "delegate", delegate.agent
 
 
 def reachable(agent: AgentLike) -> Iterator[AgentLike]:
@@ -149,4 +146,4 @@ def reachable(agent: AgentLike) -> Iterator[AgentLike]:
         queue.extend(target for _, target in subagent_edges(candidate))
 
 
-__all__ = ["Handoff", "Mode", "agent_as_tool", "reachable", "subagent_edges"]
+__all__ = ["Delegate", "Handoff", "Mode", "reachable", "subagent_edges"]

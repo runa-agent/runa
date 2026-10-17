@@ -15,12 +15,12 @@ Three names differ from their declaration: `guardrails` and `compact` resolve to
 that a run only ever sees an object or `None`.
 
 `Agent` is the one implementation, and the turn loop reads every setting through this protocol;
-what a run resolves from them (MCP tools, keyed handoffs, the model) is
+what a run resolves from them (MCP tools, keyed handoffs and delegates, the model) is
 `runa.run_internal.agent_shape.AgentShape`'s.
 """
 
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from runa._models import Model
 from runa._types import ModelSettings
@@ -28,6 +28,9 @@ from runa.compact import Compactor
 from runa.guardrail import BoundGuardrail, Phase
 from runa.lifecycle import Hooks
 from runa.tool import FunctionTool
+
+if TYPE_CHECKING:
+    from runa.handoff import Delegate  # which reads agents through this protocol
 
 
 class AgentLike(Protocol):
@@ -55,7 +58,12 @@ class AgentLike(Protocol):
 
     @property
     def tools(self) -> list[FunctionTool]:
-        """The tools it offers the model, its delegates among them (see `runa.handoff`)."""
+        """The functions it offers the model: its `@tool`s, and memory's or knowledge's search."""
+        ...
+
+    @property
+    def delegates(self) -> list[Delegate]:
+        """The subagents it calls like a tool, each run as a nested run (see `runa.handoff`)."""
         ...
 
     @property

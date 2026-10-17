@@ -290,22 +290,21 @@ def test_handoff_switches_current_agent() -> None:
 
 
 def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
-    """A `.delegate`-wrapped agent call traces as `type="delegate"`, unlike a plain tool call.
+    """A `.delegate` call traces as `type="delegate"`, unlike a plain tool call.
 
-    Both run through the exact same tool-call plumbing (`tool_execution.py`), but a delegate call
-    runs a whole nested run -- its own agent span and LLM call, under the delegate span -- so it
-    gets its own span type, the same way a handoff does despite also being a disguised tool call.
+    A delegate call runs a whole nested run -- its own agent span and LLM call, under the
+    delegate span -- so it gets its own span type, the same way a handoff does. It is still
+    recorded as one of the caller's tool calls, with what the delegate answered.
     """
     from runa.agent import Agent
-    from runa.handoff import agent_as_tool
+    from runa.handoff import Delegate
 
     class Researcher(Agent):
         name = "researcher"
         model = _ScriptedModel([_text_response("the policy is 30 days")])
 
-    delegate_tool = agent_as_tool(Researcher(), None, None)
     caller = stand_in_agent(
-        tools=[delegate_tool],
+        delegates=[Delegate.from_agent(Researcher())],
         model=_ScriptedModel(
             [
                 _tool_call_response("researcher", '{"input": "what is the policy?"}'),
@@ -322,7 +321,9 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     (nested,) = [s for s in result.trace.spans if s.parent_id == delegate_span.id]
     assert (nested.type, nested.name) == ("agent", "researcher")
     assert not [s for s in result.trace.spans if s.type == "tool"]
-    assert result.tool_calls == ()  # the delegate's own run records its own calls
+    assert result.tool_calls == (
+        ToolCall("researcher", '{"input": "what is the policy?"}', "the policy is 30 days"),
+    )
 
 
 def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
@@ -1706,7 +1707,7 @@ def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:
 def test_a_tool_and_a_delegate_see_the_sessions_user_on_their_run_context(tmp_path: Any) -> None:
     """`RunContext.user_id` is the session's, for a tool and for a delegate's tools alike."""
     from runa.agent import Agent
-    from runa.handoff import agent_as_tool
+    from runa.handoff import Delegate
     from runa.session import SQLiteSession
 
     seen: list[str | None] = []
@@ -1732,7 +1733,8 @@ def test_a_tool_and_a_delegate_see_the_sessions_user_on_their_run_context(tmp_pa
                 _text_response("ok"),
             ]
         ),
-        tools=[whoami, agent_as_tool(Helper(), None, None)],
+        tools=[whoami],
+        delegates=[Delegate.from_agent(Helper())],
     )
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db", user_id="u1")
 

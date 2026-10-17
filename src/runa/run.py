@@ -83,7 +83,8 @@ class Run(GuardrailAudit):
 
         What the tool was actually given and returned, unlike a `"tool"` span in `trace`, whose
         input and output the tracing privacy policy may withhold or redact: this is the record to
-        grade a run's tool use on. A delegate's calls are on the delegate's own run, not here.
+        grade a run's tool use on. A `.delegate` call is one of them, the calls its own run made
+        as its `children`.
         """
         return self._transcript.tool_calls
 

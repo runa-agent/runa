@@ -54,7 +54,9 @@ delegate where it stopped, even after a `to_json`/`from_json` round trip.
 
 A delegate's run is part of its caller's: the `hooks=` passed to `run` fire for the delegate too,
 and its spans land in the caller's trace, under the delegate call that started it. A streamed run
-shows the delegate call as one tool call and its output, not the delegate's own tokens.
+shows the delegate call as one tool call and its output, not the delegate's own tokens. The
+call is in the caller's `run.tool_calls` too, with the delegate's own calls as its `.children`,
+so an eval's `expected_tool` can name the delegate or any tool it called.
 
 ## Parallel Delegates
 

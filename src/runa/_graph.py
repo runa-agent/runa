@@ -35,8 +35,6 @@ def _add_agent(dot: Digraph, agent: AgentLike, seen: set[int]) -> None:
     dot.node(node_id, agent.name, shape="ellipse", style="filled", fillcolor="lightblue")
 
     for tool in agent.tools:
-        if tool.delegate is not None:
-            continue  # an agent, drawn as one by the subagent loop below, not a tool box
         tool_id = f"tool_{id(tool)}"
         dot.node(tool_id, tool.name, shape="box", style="filled", fillcolor="lightyellow")
         dot.edge(node_id, tool_id)

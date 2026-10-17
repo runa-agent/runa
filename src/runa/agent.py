@@ -26,7 +26,7 @@ from runa._types import MessageContent, ModelSettings, RunContext, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
-from runa.handoff import Mode, agent_as_tool
+from runa.handoff import Delegate, Mode
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks
 from runa.memory import Memory, MemoryLike
@@ -519,6 +519,7 @@ class Agent:
         self.name: str = name
 
         handoffs: list[Any] = []
+        delegates: list[Delegate] = []
         tools = list(setting["tools"] or [])
         with _agent_graph(self) as build:
             for sub in _subagents(setting["subagents"] or []):
@@ -527,11 +528,13 @@ class Agent:
                     if sub.mode == "handoff":
                         handoffs.append(agent)
                     else:
-                        tools.append(agent.as_tool(sub.tool_name, sub.tool_description))
+                        delegates.append(
+                            Delegate.from_agent(agent, sub.tool_name, sub.tool_description)
+                        )
                 else:
                     agent = build(sub)
                     handoffs.append(agent)
-                    tools.append(agent.as_tool(None, None))
+                    delegates.append(Delegate.from_agent(agent))
 
         self.memory = _resolve_retrieval_setting(setting["memory"], Memory, tools)
         self.knowledge = _resolve_retrieval_setting(setting["knowledge"], Knowledge, tools)
@@ -541,6 +544,7 @@ class Agent:
         self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
         self.tools: list[FunctionTool] = tools
         self.handoffs: list[Any] = handoffs
+        self.delegates: list[Delegate] = delegates
         self.mcp_servers: list[Any] = list(setting["mcp"] or [])
         # Not `self.guardrails`: that name belongs to the list a subclass declares, the way
         # `mcp` is declared and `mcp_servers` is what the declaration resolved to.
@@ -560,10 +564,6 @@ class Agent:
         self.usage = Usage()
         self.last_usage = Usage()
         self._in_flight = 0
-
-    def as_tool(self, tool_name: str | None, tool_description: str | None) -> FunctionTool:
-        """Wrap this agent as a tool another agent can call; see `runa.handoff.agent_as_tool`."""
-        return agent_as_tool(self, tool_name, tool_description)
 
     @property
     def graph(self) -> Digraph:
