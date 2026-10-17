@@ -66,9 +66,8 @@ def test_local_factories_return_the_sqlite_adapters(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
     from runa.cache.sqlite import SQLiteCache
+    from runa.db.vectors.sqlite import SQLiteVectorStore
     from runa.eval.sqlite import SQLiteEvalStore
-    from runa.knowledge.sqlite import SQLiteKnowledgeStore
-    from runa.memory.sqlite import SQLiteMemoryStore
     from runa.session.sqlite import SQLiteSession, SQLiteSessionStore
     from runa.tracing.sqlite import SQLiteTraceStore
 
@@ -76,8 +75,8 @@ def test_local_factories_return_the_sqlite_adapters(monkeypatch: pytest.MonkeyPa
     assert isinstance(db.sessions(), SQLiteSessionStore)
     assert isinstance(db.traces(), SQLiteTraceStore)
     assert isinstance(db.evals(), SQLiteEvalStore)
-    assert isinstance(db.memory_store(dimensions=4), SQLiteMemoryStore)
-    assert isinstance(db.knowledge_store(dimensions=4), SQLiteKnowledgeStore)
+    assert isinstance(db.memory_store(dimensions=4)._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
+    assert isinstance(db.knowledge_store(dimensions=4)._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
     assert isinstance(db.cache(), SQLiteCache)
 
 
@@ -92,9 +91,8 @@ def test_shared_factories_return_the_postgres_adapters(monkeypatch: pytest.Monke
     monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
 
     from runa.cache.postgres import PostgresCache
+    from runa.db.vectors.postgres import PostgresVectorStore
     from runa.eval.postgres import PostgresEvalStore
-    from runa.knowledge.postgres import PostgresKnowledgeStore
-    from runa.memory.postgres import PostgresMemoryStore
     from runa.session.postgres import PostgresSession, PostgresSessionStore
     from runa.tracing.postgres import PostgresTraceStore
 
@@ -102,8 +100,8 @@ def test_shared_factories_return_the_postgres_adapters(monkeypatch: pytest.Monke
     assert isinstance(db.sessions(), PostgresSessionStore)
     assert isinstance(db.traces(), PostgresTraceStore)
     assert isinstance(db.evals(), PostgresEvalStore)
-    assert isinstance(db.memory_store(dimensions=4), PostgresMemoryStore)
-    assert isinstance(db.knowledge_store(dimensions=4), PostgresKnowledgeStore)
+    assert isinstance(db.memory_store(dimensions=4)._vectors, PostgresVectorStore)  # type: ignore[attr-defined]
+    assert isinstance(db.knowledge_store(dimensions=4)._vectors, PostgresVectorStore)  # type: ignore[attr-defined]
     assert isinstance(db.cache(), PostgresCache)
 
 
@@ -141,8 +139,8 @@ def test_a_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) ->
     assert db.sessions().db_path == expected  # type: ignore[attr-defined]
     assert db.traces().db_path == expected  # type: ignore[attr-defined]
     assert db.evals().db_path == expected  # type: ignore[attr-defined]
-    assert db.memory_store(dimensions=4).db_path == expected  # type: ignore[attr-defined]
-    assert db.knowledge_store(dimensions=4).db_path == expected  # type: ignore[attr-defined]
+    assert db.memory_store(dimensions=4)._vectors.db_path == expected  # type: ignore[attr-defined]
+    assert db.knowledge_store(dimensions=4)._vectors.db_path == expected  # type: ignore[attr-defined]
     assert db.cache().db_path == expected  # type: ignore[attr-defined]
 
 
@@ -371,10 +369,10 @@ def test_memory_follows_the_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("asyncpg")
     monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
 
+    from runa.db.vectors.postgres import PostgresVectorStore
     from runa.memory import Memory
-    from runa.memory.postgres import PostgresMemoryStore
 
-    assert isinstance(Memory()._store, PostgresMemoryStore)
+    assert isinstance(Memory()._store._vectors, PostgresVectorStore)  # type: ignore[attr-defined]
 
 
 def test_a_local_connection_enforces_foreign_keys(tmp_path: Path) -> None:

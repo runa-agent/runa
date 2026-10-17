@@ -1,8 +1,8 @@
 """memory/store.py: `MemoryStore`, the vectors a `Memory` searches, and the match it returns.
 
-One interface, three backends: `memory/sqlite.py`, `memory/postgres.py`, and the in-process
-pairing `runa.db.memory_store(...)` holds inline. Which one a bare `Memory()` gets is that
-function's decision, asked once, so nothing above it names a backend.
+One interface, implemented once (`memory/vector.py`) over whichever `VectorStore` the deployment
+has. A bare `Memory()` gets `runa.db.memory_store(...)`, so nothing above it names a backend;
+`memory/sqlite.py` and `memory/postgres.py` name one for a `Memory(store=...)` that must.
 
 Here rather than in `runa.memory` for the same reason as `session/store.py`, `tracing/store.py`
 and `eval/store.py`: the adapters need the contract and the match object, and nothing else

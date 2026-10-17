@@ -206,42 +206,21 @@ def evals() -> EvalStore:
 def memory_store(*, dimensions: int) -> MemoryStore:
     """This deployment's `MemoryStore`, for vectors of `dimensions` floats.
 
-    The in-process answer is paired here rather than in a named `memory/ephemeral.py`: nothing
-    reaches it by name, so there is nothing for a module to hold but this one line. The two
-    named adapters below stay, because `Memory(store=...)` is a sanctioned override and their
-    import paths are documented.
+    The memory mapping over `vector_store` below, which makes the backend choice for it.
     """
-    if ephemeral():
-        from runa.db.vectors.ephemeral import EphemeralVectorStore
-        from runa.memory.vector import VectorMemoryStore, spec
+    from runa.memory.vector import VectorMemoryStore, spec
 
-        return VectorMemoryStore(EphemeralVectorStore(spec(dimensions)))
-    if (url := shared_url()) is not None:
-        from runa.memory.postgres import PostgresMemoryStore
-
-        return PostgresMemoryStore(url, dimensions=dimensions)
-    from runa.memory.sqlite import SQLiteMemoryStore
-
-    return SQLiteMemoryStore(sqlite_path(), dimensions=dimensions)
+    return VectorMemoryStore(vector_store(spec(dimensions)))
 
 
 def knowledge_store(*, dimensions: int) -> KnowledgeStore:
     """This deployment's `KnowledgeStore`, for vectors of `dimensions` floats.
 
-    In-process is paired inline for the same reason as `memory_store` above.
+    The knowledge mapping over `vector_store` below, which makes the backend choice for it.
     """
-    if ephemeral():
-        from runa.db.vectors.ephemeral import EphemeralVectorStore
-        from runa.knowledge.vector import VectorKnowledgeStore, spec
+    from runa.knowledge.vector import VectorKnowledgeStore, spec
 
-        return VectorKnowledgeStore(EphemeralVectorStore(spec(dimensions)))
-    if (url := shared_url()) is not None:
-        from runa.knowledge.postgres import PostgresKnowledgeStore
-
-        return PostgresKnowledgeStore(url, dimensions=dimensions)
-    from runa.knowledge.sqlite import SQLiteKnowledgeStore
-
-    return SQLiteKnowledgeStore(sqlite_path(), dimensions=dimensions)
+    return VectorKnowledgeStore(vector_store(spec(dimensions)))
 
 
 def vector_store(spec: VectorSpec) -> VectorStore:

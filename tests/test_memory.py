@@ -17,6 +17,7 @@ from helpers import run as run_awaitable
 from runa import db
 from runa import memory as memory_module
 from runa._types import RunContext
+from runa.db.vectors.sqlite import SQLiteVectorStore
 from runa.memory import Memory, MemoryMatch, MemoryStore, SQLiteMemoryStore
 
 _DIMENSIONS = DIMENSIONS
@@ -80,8 +81,8 @@ def test_default_configuration_needs_no_arguments() -> None:
 
     assert mem.model == "text-embedding-3-small"
     assert mem.dimensions == 1536
-    assert isinstance(mem._store, SQLiteMemoryStore)
-    assert str(mem._store.db_path) == str(Path("db/runa.db"))
+    assert isinstance(mem._store._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
+    assert str(mem._store._vectors.db_path) == str(Path("db/runa.db"))  # type: ignore[attr-defined]
 
 
 def test_unknown_model_without_dimensions_raises() -> None:

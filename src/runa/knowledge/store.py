@@ -3,9 +3,10 @@
 Also where the corpus's version lives, which is the one piece of ingest state this layer owns
 rather than `Knowledge`: see `reset`/`version` below.
 
-One interface, three backends: `knowledge/sqlite.py`, `knowledge/postgres.py`, and the
-in-process pairing `runa.db.knowledge_store(...)` holds inline. Which one a bare `Knowledge()`
-gets is that function's decision, asked once.
+One interface, implemented once (`knowledge/vector.py`) over whichever `VectorStore` the
+deployment has. A bare `Knowledge()` gets `runa.db.knowledge_store(...)`;
+`knowledge/sqlite.py` and `knowledge/postgres.py` name a backend for a `Knowledge(store=...)`
+that must.
 
 `memory/store.py`'s counterpart, and separate from it for the same reason the two concerns are
 separate: these chunks are application-scoped, so nothing here is keyed by `user_id`.

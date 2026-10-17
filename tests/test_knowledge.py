@@ -18,6 +18,7 @@ from helpers import run as run_awaitable
 from runa import db
 from runa import knowledge as knowledge_module
 from runa._types import RunContext
+from runa.db.vectors.sqlite import SQLiteVectorStore
 from runa.knowledge import (
     DEFAULT_KNOWLEDGE_DIR,
     Knowledge,
@@ -96,8 +97,8 @@ def test_default_configuration_needs_no_arguments() -> None:
     assert know.directory == DEFAULT_KNOWLEDGE_DIR
     assert know.model == "text-embedding-3-small"
     assert know.dimensions == 1536
-    assert isinstance(know._store, SQLiteKnowledgeStore)
-    assert str(know._store.db_path) == str(Path("db/runa.db"))
+    assert isinstance(know._store._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
+    assert str(know._store._vectors.db_path) == str(Path("db/runa.db"))  # type: ignore[attr-defined]
 
 
 def test_explicit_directory_overrides_the_default() -> None:
