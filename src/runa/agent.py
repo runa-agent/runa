@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from runa import content
+from runa import _loop, content
 from runa._items import ConversationItem, user_message
 from runa._log import logger
 from runa._models import DEFAULT_MODEL, Model, check_model_name
@@ -713,26 +713,12 @@ class Agent:
     ) -> Run:
         """Synchronous `run`, for callers not already inside an event loop.
 
-        The event loop is this call's own, and an MCP server's session cannot outlive the loop it
-        was opened on (see `runa.mcp`), so each is closed before that loop goes: a `runa chat`
-        turn shuts its `.stdio` servers down instead of leaving a subprocess per turn behind.
+        The event loop is this call's own, and what the turn opened on it that must be shut down
+        is, before it goes (see `runa._loop.run`): a `runa chat` turn closes every `.stdio` MCP
+        server it reached, a subagent's included, instead of leaving a subprocess per turn behind.
         `await agent.run(...)` on an app's own loop keeps them open for the agent's lifetime.
-
-        A shutdown that fails is logged, never raised: the turn is over, its `Run` is the answer
-        this call owes, and one server refusing to go must not take the others' shutdown with it.
         """
-
-        async def turn() -> Run:
-            try:
-                return await self.run(message, context, hooks, session)
-            finally:
-                for server in self.mcp_servers:
-                    try:
-                        await server.close()
-                    except Exception:  # noqa: BLE001 -- see the docstring
-                        logger.warning("closing MCP server %r failed", server, exc_info=True)
-
-        return asyncio.run(turn())
+        return _loop.run(self.run(message, context, hooks, session))
 
     def run_streamed(
         self,

@@ -17,12 +17,21 @@ Nothing here knows what it is holding. `db/pool.py` keys pools by URL, `cache/re
 by URL, `mcp.py` its sessions by the server's address, `ModelProvider` its HTTP clients by provider
 prefix, and `embeddings.py` its one client by base URL; what they share is the lifetime, not the
 resource.
+
+Most of them fall away with their loop. The one that must not is a resource with something
+outside the process on the other end, like an MCP `.stdio` server's subprocess, which would keep
+running until the dropped session happened to be garbage collected. Such a cache is built with a
+`close`, and `run` -- the way to run a coroutine on a loop of its own -- closes every such
+resource on that loop before the loop goes, whoever opened it.
 """
 
 import asyncio
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from typing import Any
+
+from runa._log import logger
 
 
 def current_loop() -> asyncio.AbstractEventLoop | None:
@@ -45,6 +54,13 @@ class _Entries[K, V]:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+# The caches holding something `run` must close, per loop. Held strongly, so a resource whose
+# owner was dropped mid-run is still closed when its loop is.
+_closable: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, list[LoopCache[Any, Any]]] = (
+    weakref.WeakKeyDictionary()
+)
+
+
 class LoopCache[K, V]:
     """One `V` per key per event loop, built on first use and dropped with its loop.
 
@@ -59,8 +75,13 @@ class LoopCache[K, V]:
     lock is bound to the loop that first awaits it.
     """
 
-    def __init__(self) -> None:
-        """Start empty; nothing is built until a caller asks for a key."""
+    def __init__(self, close: Callable[[V], Awaitable[None]] | None = None) -> None:
+        """Start empty; nothing is built until a caller asks for a key.
+
+        `close` shuts one resource down. Given one, `run` calls it for each of this cache's
+        resources on the loop it is about to close; without one, they fall away with the loop.
+        """
+        self._close = close
         self._loops: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _Entries[K, V]] = (
             weakref.WeakKeyDictionary()
         )
@@ -71,7 +92,12 @@ class LoopCache[K, V]:
         loop = current_loop()
         if loop is None:
             return self._detached
-        return self._loops.setdefault(loop, _Entries())
+        entries = self._loops.get(loop)
+        if entries is None:
+            entries = self._loops[loop] = _Entries()
+            if self._close is not None:
+                _closable.setdefault(loop, []).append(self)
+        return entries
 
     def get(self, key: K, factory: Callable[[], V]) -> V:
         """Return `key`'s resource on the current loop, calling `factory` if there is none.
@@ -112,5 +138,37 @@ class LoopCache[K, V]:
         """
         return self._entries().values.pop(key, None)
 
+    async def _close_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Close every resource this cache holds on `loop`, logging any that refuses to go."""
+        entries = self._loops.pop(loop, None)
+        if entries is None or self._close is None:
+            return
+        for value in entries.values.values():
+            try:
+                await self._close(value)
+            except Exception:  # noqa: BLE001 -- one refusal must not leak the rest
+                logger.warning("closing %r failed", value, exc_info=True)
 
-__all__ = ["LoopCache", "current_loop"]
+
+def run[T](main: Coroutine[Any, Any, T]) -> T:
+    """Run `main` on a new event loop, closing that loop's closable resources before it ends.
+
+    For a caller that owns the loop it runs on -- `Agent.run_sync`, `runa eval`, `runa test` --
+    so nothing opened on it outlives it, whether the agent, a handoff target, a delegate or the
+    application's own code opened it. Closing happens whether `main` returns or raises, and a
+    resource that fails to close is logged, never raised: `main`'s outcome is what the caller is
+    owed. Never the way to close an app's own loop's resources; those live as long as it does.
+    """
+
+    async def owned() -> T:
+        try:
+            return await main
+        finally:
+            loop = asyncio.get_running_loop()
+            for cache in _closable.pop(loop, []):
+                await cache._close_loop(loop)
+
+    return asyncio.run(owned())
+
+
+__all__ = ["LoopCache", "current_loop", "run"]

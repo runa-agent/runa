@@ -11,7 +11,6 @@ dependency just so a generated app can run its own tests, matching
 `run_evals()`'s choice not to depend on an external harness either.
 """
 
-import asyncio
 import importlib
 import inspect
 from collections.abc import Awaitable
@@ -19,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from runa import _loop
 from runa.project import NotARunaProject, loaded_app
 
 
@@ -32,10 +32,10 @@ class TestResult:
 
 
 async def _await(awaitable: Awaitable[Any]) -> Any:
-    """Await `awaitable` inside a real coroutine, which is what `asyncio.run` takes.
+    """Await `awaitable` inside a real coroutine, which is what `runa._loop.run` takes.
 
     An `async def` test returns a coroutine, but a test may equally return any awaitable, and
-    `asyncio.run` is typed (and documented) for coroutines alone.
+    `asyncio.run` underneath it is typed (and documented) for coroutines alone.
     """
     return await awaitable
 
@@ -67,7 +67,7 @@ def run_project_tests(root: Path) -> list[TestResult]:
                 try:
                     outcome = attr()
                     if inspect.isawaitable(outcome):
-                        asyncio.run(_await(outcome))
+                        _loop.run(_await(outcome))
                 except AssertionError as exc:
                     results.append(TestResult(name=name, passed=False, error=str(exc)))
                 else:

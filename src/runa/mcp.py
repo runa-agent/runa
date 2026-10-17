@@ -19,9 +19,10 @@ exists to state and which `db/pool.py`'s pools, `cache/redis.py`'s client and `M
 HTTP clients already hold themselves to. A session is the fourth such resource, so it is held the
 same way: per loop, built on first use there. `await agent.run(...)` on an app's own loop gets
 the persistent connection the paragraph above promises; `Agent.run_sync` opens a loop per call,
-so each turn connects again, and a `.stdio` server spawns its subprocess again with it. That cost
-is the reason `run_sync` closes these connections itself (see `Agent.run_sync`) instead of
-leaving a process per turn behind, and the reason a long-lived app should prefer `run`.
+so each turn connects again, and a `.stdio` server spawns its subprocess again with it. The
+cache is built with a `close`, so `runa._loop.run`, which `run_sync` runs each turn on, shuts
+every server connected on that loop down -- a subagent's included -- instead of leaving a
+process per turn behind. That cost is the reason a long-lived app should prefer `run`.
 """
 
 from contextlib import AsyncExitStack
@@ -52,6 +53,10 @@ class _Connection:
     session: ClientSession
     tools: list[FunctionTool]
 
+    async def close(self) -> None:
+        """Shut the session and its transport down: a `.stdio` server's subprocess with it."""
+        await self.stack.aclose()
+
 
 class _MCPServerBase:
     """Shared connect/list/call machinery for one MCP server; `.http`/`.stdio` pick a transport."""
@@ -79,7 +84,7 @@ class _MCPServerBase:
         self._guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
             guardrails or [], tool=True
         )
-        self._connections: LoopCache[str, _Connection] = LoopCache()
+        self._connections: LoopCache[str, _Connection] = LoopCache(close=_Connection.close)
 
     def _transport(self) -> Any:
         raise NotImplementedError
@@ -112,14 +117,13 @@ class _MCPServerBase:
         """Close this loop's connection to the server, if it has one, and forget its tools.
 
         An app that runs on one loop never needs this, same as `db/pool.py`'s `close_pool`: the
-        connection lives as long as the loop does, which is as long as the process. A caller that
-        *owns* a loop it is about to close does, since a `.stdio` server's subprocess would
-        otherwise be left running until the dropped session is garbage collected --
-        `Agent.run_sync` is that caller, once per call.
+        connection lives as long as the loop does, which is as long as the process. Nor does a
+        caller that owns a loop it is about to close, if it ran on `runa._loop.run`, which closes
+        every server's connection on that loop itself.
         """
         connection = self._connections.pop(self._address)
         if connection is not None:
-            await connection.stack.aclose()
+            await connection.close()
 
     async def list_tools(self) -> list[FunctionTool]:
         """Connect if needed, and return this server's tools as `FunctionTool`s (cached)."""

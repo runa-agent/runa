@@ -10,11 +10,11 @@ Reading and writing those files is `runa.eval.corpus`, which `runa ui` drives to
 only runs them.
 """
 
-import asyncio
 import importlib
 from collections.abc import Iterable
 from pathlib import Path
 
+from runa import _loop
 from runa.agent import Agent
 from runa.eval import Case, Dataset, Report
 from runa.eval.corpus import require_evals_dir
@@ -75,4 +75,4 @@ def run_project_evals(root: Path, agent_name: str | None = None) -> list[Report]
         async def _run_all() -> list[Report]:
             return [await agent.evaluate(dataset) for agent, dataset in modules]
 
-        return asyncio.run(_run_all())
+        return _loop.run(_run_all())
