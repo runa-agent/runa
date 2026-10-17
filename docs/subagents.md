@@ -52,6 +52,10 @@ calls. A delegate that pauses on an approval pauses its caller too: the delegate
 appear in the caller's `run.interruptions`, and resuming the caller's `RunState` resumes the
 delegate where it stopped, even after a `to_json`/`from_json` round trip.
 
+A delegate's run is part of its caller's: the `hooks=` passed to `run` fire for the delegate too,
+and its spans land in the caller's trace, under the delegate call that started it. A streamed run
+shows the delegate call as one tool call and its output, not the delegate's own tokens.
+
 ## Parallel Delegates
 
 Delegates are tools, so when the model calls several in one message, they run concurrently.

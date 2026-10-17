@@ -10,7 +10,6 @@ from helpers import run as await_
 from mcp_types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from runa import Agent, guardrail, mcp
-from runa._governance import _Governance
 from runa._types import ModelResponse, RunContext, Usage
 from runa.guardrail import Phase
 from runa.mcp import (
@@ -154,9 +153,7 @@ def test_on_invoke_tool_extracts_text_from_a_successful_call() -> None:
     (function_tool,) = asyncio.run(server.list_tools())
 
     async def call() -> Any:
-        return await function_tool.on_invoke_tool(
-            RunContext(), _Governance(), '{"a": 1, "b": 2}', "call_1"
-        )
+        return await function_tool.on_invoke_tool(RunContext(), '{"a": 1, "b": 2}', "call_1")
 
     output = asyncio.run(call())
 
@@ -174,7 +171,7 @@ def test_on_invoke_tool_surfaces_an_error_result() -> None:
     (function_tool,) = asyncio.run(server.list_tools())
 
     async def call() -> Any:
-        return await function_tool.on_invoke_tool(RunContext(), _Governance(), "{}", "call_1")
+        return await function_tool.on_invoke_tool(RunContext(), "{}", "call_1")
 
     output = asyncio.run(call())
 
@@ -191,7 +188,7 @@ def test_on_invoke_tool_falls_back_to_structured_content() -> None:
     (function_tool,) = asyncio.run(server.list_tools())
 
     async def call() -> Any:
-        return await function_tool.on_invoke_tool(RunContext(), _Governance(), "{}", "call_1")
+        return await function_tool.on_invoke_tool(RunContext(), "{}", "call_1")
 
     output = asyncio.run(call())
 

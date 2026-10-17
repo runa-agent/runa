@@ -1,10 +1,10 @@
 """paused_delegates.py: where a paused delegate waits, and whose decision resolves it.
 
-A `.delegate` subagent runs as a tool (`runa.handoff.agent_as_tool`), so when its nested run
+A `.delegate` subagent runs as a nested run inside one of its caller's tool calls, so when it
 pauses for approval there is nobody to ask halfway down a call stack: the nested `RunState` is
 set aside here, the caller's run pauses on the *delegate's* interruptions, and resuming the
 caller re-enters the delegate where it stopped instead of starting it over. The rules live here,
-in one object, rather than spread across `handoff`, the turn loop and `RunState`:
+in one object, rather than spread across the turn loop and `RunState`:
 
 * a paused delegate waits under the id of the delegate tool call that started it;
 * every interruption it brought up is owned by that delegate's state, recorded as it is stashed;
@@ -18,7 +18,7 @@ every depth lands in the same place), and the innermost run is the first to fini
 also the first to stash: `stash` keeps the earliest claim on a call id, which is the deepest
 one. That's the call stack unwinding, not a convention two modules have to agree on separately.
 
-`runa.handoff` stashes and takes back; `RunState` asks `owner_of` whose decision a resolved
+The turn loop stashes and takes back; `RunState` asks `owner_of` whose decision a resolved
 interruption is, and carries the whole stash through `to_json`/`from_json` via `restore`.
 
 This module imports nothing from `runa` at runtime, on purpose, for the same reason

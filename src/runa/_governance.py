@@ -15,8 +15,8 @@ A `.delegate` subagent's run shares its caller's `_Governance` by reference -- s
 "always" covers the delegate's matching tool, a call id replayed at either depth is refused, and
 every guardrail that ran at any depth lands in one trail -- while getting a `RunContext` of its own
 over the same `context`, so its `usage` starts at zero and is merged back explicitly by the caller.
-That pair is the whole of what "forking" a run means, which is why there is no `fork()` here: the
-shared half is this very object.
+What else a nested run shares with its caller is the turn loop's to decide, which is where one is
+started.
 """
 
 from dataclasses import dataclass, field

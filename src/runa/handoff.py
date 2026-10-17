@@ -2,9 +2,10 @@
 
 Both wrap a sub-`Agent` as something the model can call, differing in what happens next: calling a
 `Handoff`'s tool switches `run_internal`'s current agent for the rest of the run (`Agent.subagents`'
-`.handoff` mode); calling an `agent_as_tool()` tool runs the sub-agent to completion and hands its
-output back to the *calling* agent, which keeps going (`.delegate` mode). See `runa.agent.Subagent`
-for how a class wires either mode up from its `subagents` list.
+`.handoff` mode); calling an `agent_as_tool()` tool runs the sub-agent to completion, as a nested
+run of the caller's, and hands its output back to the *calling* agent, which keeps going
+(`.delegate` mode). See `runa.agent.Subagent` for how a class wires either mode up from its
+`subagents` list.
 
 The two modes are the only edges between agents, so this module also names them (`Mode`) and walks
 them: `subagent_edges` is one agent's outgoing edges and `reachable` the whole graph below it. A
@@ -14,10 +15,9 @@ module that needs "everything reachable from this agent" asks here rather than r
 An agent is read here, never built, so the attributes that walk is made of are `runa.agent_like`'s
 `AgentLike` (which is also why no read below needs a `getattr` default: an agent that has no
 `handoffs` is a type error at `Agent.run`, not an agent with no subagents). The one exception is
-`agent_as_tool`, whose delegate is *run* rather than read, and so is annotated as the `Agent` it
-is only ever called with -- a type-only import, so the runtime dependency still points one way.
-It runs it through the turn loop directly, imported where it's called: the loop reaches back here
-(through `run_state`) for `reachable`, so a module-level import would be a cycle.
+`agent_as_tool`, whose delegate the turn loop *runs* rather than reads, and so is annotated as the
+`Agent` it is only ever called with -- a type-only import, so the runtime dependency still points
+one way.
 """
 
 import re
@@ -25,10 +25,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from runa._governance import _Governance
-from runa._items import parsed_arguments
-from runa._types import RunContext, Usage
+from runa._types import RunContext
 from runa.agent_like import AgentLike
+from runa.exceptions import UserError
 from runa.tool import FunctionTool
 
 if TYPE_CHECKING:
@@ -98,59 +97,21 @@ class Handoff:
 def agent_as_tool(
     agent: Agent, tool_name: str | None, tool_description: str | None
 ) -> FunctionTool:
-    """Wrap `agent` as a `FunctionTool` that runs it on a generated `input` string.
+    """Wrap `agent` as a `FunctionTool` the model calls with a generated `input` string.
 
-    The nested run shares the caller's `context` (so tools/guardrails/`instructions` see the same
-    object) but not its conversation history: the calling agent generates fresh input for it, the
-    same way any other tool call's arguments are generated. It is the turn loop's own entry, not
-    `Agent.run`, so it never reads or writes the shared instance's `history` -- a `Subagent` is
-    built once and reused, and two delegations in a single message (tool calls run concurrently)
-    are two independent runs of it. A nested run that errors surfaces its error message as the
-    tool's return value instead of raising, so the calling agent's turn can still continue and
-    decide how to respond.
-
-    The nested run gets the caller's `governance`, not a fresh one: that shares the
-    `ApprovalLedger` (so the sticky decisions and the call-id replay guard are one ledger, not
-    two) and the guardrail-result audit trail with the delegate and back. Its `RunContext` is its
-    own, over the same `context`, so its usage starts at zero and is merged into the caller's here.
-
-    A delegate run that pauses for approval raises `DelegatePaused`: the caller's run pauses on
-    the same interruptions, and the nested `RunState` waits in `governance.paused_delegates` under
-    this call's id, so resuming the caller resumes the delegate instead of starting it over.
-    Stashing it there is also what makes those interruptions the delegate's to resolve rather than
-    the caller's -- `runa.paused_delegates` owns that whole protocol.
+    The tool is a schema and the agent behind it (`FunctionTool.delegate`), nothing more: what a
+    delegate's run shares with its caller's is the turn loop's to decide, because it is the loop
+    that runs it, as a nested run of the caller's. Its `on_invoke_tool` is never reached from a
+    run, and raises `UserError` if called directly.
     """
     resolved_name = tool_name or _slugify(agent.name)
-    resolved_description = tool_description or f"Delegate a task to {agent.name}."
 
-    async def on_invoke_tool(
-        ctx: RunContext, governance: _Governance, arguments_json: str, call_id: str
-    ) -> Any:
-        from runa.run_internal.run_config import RunConfig
-        from runa.run_internal.run_loop import _run_async
-
-        paused = governance.paused_delegates.take(call_id)
-        if paused is not None:
-            run = await _run_async(agent, paused, run_config=RunConfig.of(agent))
-        else:
-            run = await _run_async(
-                agent,
-                parsed_arguments(arguments_json).get("input", ""),
-                context=ctx.context,
-                run_config=RunConfig.of(agent),
-                governance=governance,
-            )
-        ctx.usage.add(run.usage)
-        if run.status == "paused":
-            state = run.to_state()
-            state.run_context.usage = Usage()  # already merged into the caller's
-            governance.paused_delegates.stash(call_id, state)
-            raise DelegatePaused(state.pending)
-        return run.output if run.status == "completed" else f"error: {run.error}"
+    async def on_invoke_tool(ctx: RunContext, arguments_json: str, call_id: str) -> Any:
+        raise UserError(f"{resolved_name} is a delegate: it runs only as part of its caller's run")
 
     return FunctionTool(
         name=resolved_name,
-        description=resolved_description,
+        description=tool_description or f"Delegate a task to {agent.name}.",
         params_json_schema=_DELEGATE_INPUT_SCHEMA,
         on_invoke_tool=on_invoke_tool,
         delegate=agent,
@@ -195,13 +156,4 @@ def reachable(agent: AgentLike) -> Iterator[AgentLike]:
         queue.extend(target for _, target in subagent_edges(candidate))
 
 
-class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
-    """Raised by a delegate tool whose nested run paused: carries its `interruptions` up."""
-
-    def __init__(self, interruptions: list[Any]) -> None:
-        """Hold the nested run's pending `Interruption`s for the caller's run to surface."""
-        super().__init__(f"delegate paused on {len(interruptions)} approval(s)")
-        self.interruptions = interruptions
-
-
-__all__ = ["DelegatePaused", "Handoff", "Mode", "agent_as_tool", "reachable", "subagent_edges"]
+__all__ = ["Handoff", "Mode", "agent_as_tool", "reachable", "subagent_edges"]

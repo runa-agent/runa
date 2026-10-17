@@ -1,11 +1,16 @@
-"""tool_execution.py: executing one message's tool calls, handoffs, approval gating, guardrails."""
+"""tool_execution.py: executing one message's tool calls, handoffs, approval gating, guardrails.
+
+The run these steps are passed is the turn loop's, imported for its type only: a delegate call
+reaches back into the loop through the run it is handed, never through an import, so the runtime
+dependency still points from the loop to here.
+"""
 
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from runa._items import (
     ConversationItem,
@@ -21,11 +26,21 @@ from runa._types import RunContext
 from runa.agent_like import AgentLike
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase
-from runa.handoff import DelegatePaused
-from runa.run_internal.active_run import _Run
 from runa.run_internal.guardrails import _run_guardrails
 from runa.run_state import Interruption, RunState
 from runa.tool import FunctionTool, ToolCall
+
+if TYPE_CHECKING:
+    from runa.run_internal.run_loop import _Run
+
+
+class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
+    """Raised by a delegate call whose nested run paused: carries its `interruptions` up."""
+
+    def __init__(self, interruptions: list[Interruption]) -> None:
+        """Hold the nested run's pending `Interruption`s for the caller's run to surface."""
+        super().__init__(f"delegate paused on {len(interruptions)} approval(s)")
+        self.interruptions = interruptions
 
 
 async def _run_tool_call(
@@ -34,7 +49,8 @@ async def _run_tool_call(
     """Run one already-approved tool call end to end: guardrails, invocation, guardrails.
 
     Guards against executing the same `call_id` twice (e.g. a resumed/duplicated `RunState`)
-    before anything else runs. A delegate that paused for approval comes back as its
+    before anything else runs. A delegate call is a nested run of this one, under the call's
+    span, rather than an invocation of the tool; one that paused for approval comes back as its
     `DelegatePaused`, not a result: the call hasn't finished, so resuming may run it again.
     """
     run_context, ledger = run.run_context, run.governance.approval_ledger
@@ -49,7 +65,10 @@ async def _run_tool_call(
         await run.hooks.on_tool_start(run_context, run.current_agent, tool)
         await _run_guardrails(run, Phase.TOOL_INPUT, args_json, tool=tool, spans=inside)
         try:
-            result = await tool.on_invoke_tool(run_context, run.governance, args_json, call_id)
+            if tool.delegate is not None:
+                result = await run.delegate(tool.delegate, args_json, call_id, under=span)
+            else:
+                result = await tool.on_invoke_tool(run_context, args_json, call_id)
         except DelegatePaused as paused:
             ledger.release(call_id)
             span.output = "paused for approval"
@@ -59,7 +78,7 @@ async def _run_tool_call(
             span.error = str(exc)
         await _run_guardrails(run, Phase.TOOL_OUTPUT, result, tool=tool, spans=inside)
         span.output = result
-    if tool.delegate is None:  # a delegate's own run records its own calls, under its own trace
+    if tool.delegate is None:  # a delegate's own run records its own calls, in its own transcript
         run.transcript.tool_calls.append(ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(run_context, run.current_agent, tool, result)
     return tool_result(call_id, result)
@@ -212,4 +231,4 @@ async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -
         raise
 
 
-__all__ = ["_TurnOutcome", "_run_message_tool_calls", "_run_tool_call"]
+__all__ = ["DelegatePaused", "_TurnOutcome", "_run_message_tool_calls", "_run_tool_call"]

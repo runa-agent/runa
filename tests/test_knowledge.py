@@ -17,7 +17,6 @@ from helpers import run as run_awaitable
 
 from runa import db
 from runa import knowledge as knowledge_module
-from runa._governance import _Governance
 from runa._types import RunContext
 from runa.knowledge import (
     DEFAULT_KNOWLEDGE_DIR,
@@ -540,7 +539,7 @@ def test_as_tool_formats_matches_as_plain_text(tmp_path: Path) -> None:
     search_tool = know._as_tool()
 
     args = '{"query": "query about pets", "k": 1}'
-    result = run_awaitable(search_tool.on_invoke_tool(RunContext(), _Governance(), args, "call_1"))
+    result = run_awaitable(search_tool.on_invoke_tool(RunContext(), args, "call_1"))
 
     assert result == "cats are great pets"
 
@@ -551,7 +550,7 @@ def test_as_tool_with_no_matches_says_so(tmp_path: Path) -> None:
     search_tool = know._as_tool()
 
     result = run_awaitable(
-        search_tool.on_invoke_tool(RunContext(), _Governance(), '{"query": "anything"}', "call_1")
+        search_tool.on_invoke_tool(RunContext(), '{"query": "anything"}', "call_1")
     )
 
     assert result == "No relevant knowledge found."

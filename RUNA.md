@@ -184,7 +184,9 @@ A `.delegate` call shares the caller's [approval](#4-human-approval) ledger and 
 accounting: a sticky (`always=True`) decision on the caller's side already covers a matching
 tool the delegate calls. A delegate that pauses for approval pauses its caller too: the
 delegate's calls appear in the caller's `run.interruptions`, and resuming the caller resumes the
-delegate where it stopped (also across `to_json`/`from_json`).
+delegate where it stopped (also across `to_json`/`from_json`). A delegate's run is part of its
+caller's: the run's [hooks](#11-hooks) fire for it, and its spans are in the caller's trace, under
+the delegate call. A streamed caller shows that call and its output, not the delegate's tokens.
 
 **Subagents are for when the model picks the order.** When your code picks it (always A, then
 B and C together), write a plain `async` function. Don't build a workflow class:

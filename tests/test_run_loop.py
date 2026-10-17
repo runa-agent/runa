@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 
-from runa._governance import _Governance
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.compact import default_compactor
@@ -49,7 +48,6 @@ class _Stream:
 
     def __init__(self, agent: Any, input: Any, **kwargs: Any) -> None:
         """Prepare the run; nothing starts until the first `__anext__`."""
-        self.governance = input._governance if isinstance(input, RunState) else _Governance()
         self.run: Run | None = None
         self._events = self._stream(agent, input, kwargs)
 
@@ -59,7 +57,6 @@ class _Stream:
             _run_async(
                 agent,
                 input,
-                governance=self.governance,
                 emit=queue.put_nowait,
                 **kwargs,
             )
@@ -314,8 +311,8 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     """A `.delegate`-wrapped agent call traces as `type="delegate"`, unlike a plain tool call.
 
     Both run through the exact same tool-call plumbing (`tool_execution.py`), but a delegate call
-    secretly runs a whole nested `Agent.run()` -- its own LLM call, in its own trace -- so it gets
-    its own span type, the same way a handoff does despite also being a disguised tool call.
+    runs a whole nested run -- its own agent span and LLM call, under the delegate span -- so it
+    gets its own span type, the same way a handoff does despite also being a disguised tool call.
     """
     from runa.agent import Agent
     from runa.handoff import agent_as_tool
@@ -338,8 +335,10 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     result = asyncio.run(_run_async(caller, "what's the policy?", run_config=_run_config()))
 
     assert result.output == "it's 30 days"
-    (delegate_span,) = [s for s in result.trace.spans if s.name == "researcher"]
-    assert delegate_span.type == "delegate"
+    (delegate_span,) = [s for s in result.trace.spans if s.type == "delegate"]
+    assert delegate_span.name == "researcher"
+    (nested,) = [s for s in result.trace.spans if s.parent_id == delegate_span.id]
+    assert (nested.type, nested.name) == ("agent", "researcher")
     assert not [s for s in result.trace.spans if s.type == "tool"]
     assert result._transcript.tool_calls == []  # the delegate's own run records its own calls
 
@@ -1144,7 +1143,7 @@ def test_stream_response_keeps_the_provider_blocks_it_was_handed() -> None:
 
 
 def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
-    """A tool with a sticky `always=True` approval already on the context runs during streaming."""
+    """After an `always=True` approval, a later call to the same tool runs mid-stream unasked."""
     from runa.stream_events import RunItemStreamEvent
 
     @tool(needs_approval=True)
@@ -1152,33 +1151,31 @@ def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
         """Needs approval."""
         return "done"
 
+    def call(call_id: str) -> list[StreamDelta]:
+        return [
+            StreamDelta(tool_call_index=0, tool_call_id=call_id, tool_call_name="dangerous"),
+            StreamDelta(tool_call_index=0, tool_call_arguments="{}"),
+        ]
+
     agent = _agent(
         tools=[dangerous],
         model=_SequentialStreamingModel(
-            [
-                [
-                    StreamDelta(
-                        tool_call_index=0, tool_call_id="call_1", tool_call_name="dangerous"
-                    ),
-                    StreamDelta(tool_call_index=0, tool_call_arguments="{}"),
-                ],
-                [StreamDelta(text="all done")],
-            ]
+            [call("call_1"), call("call_2"), [StreamDelta(text="all done")]]
         ),
     )
 
-    result = _Stream(agent, "do it", run_config=_run_config())
-    result.governance.approval_ledger.record("dangerous", approved=True)
+    paused = _Stream(agent, "do it", run_config=_run_config())
+    _consume(paused)
+    state = paused.to_state()
+    state.approve(paused.interruptions[0], always=True)
+    resumed = _Stream(agent, state, run_config=_run_config())
+    events = _consume(resumed)
 
-    async def collect() -> list[Any]:
-        return [event async for event in result]
-
-    events = asyncio.run(collect())
-
+    assert resumed.output == "all done"
     tool_outputs = [
         e for e in events if isinstance(e, RunItemStreamEvent) and e.name == "tool_output"
     ]
-    assert tool_outputs[0].item["content"] == "done"
+    assert [e.item["content"] for e in tool_outputs] == ["done", "done"]
 
 
 def test_stream_response_feeds_back_malformed_tool_arguments() -> None:
@@ -1926,7 +1923,7 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
     """A tool listed by an `mcp_servers` entry is callable exactly like a `@tool` function."""
     from runa.tool import FunctionTool
 
-    async def on_invoke_tool(ctx: Any, governance: Any, arguments_json: str, call_id: str) -> Any:
+    async def on_invoke_tool(ctx: Any, arguments_json: str, call_id: str) -> Any:
         return "42"
 
     mcp_tool = FunctionTool(

@@ -40,9 +40,8 @@ class RunConfig:
     def of(cls, agent: Agent, session: Session | None = None) -> RunConfig:
         """`agent`'s run, grouped under an enclosing `tracing.trace` block, else its `session`.
 
-        The one place an `Agent` becomes a `RunConfig`: `Agent.run` asks for its own, and a
-        `.delegate` subagent's nested run (`runa.handoff`) for the delegate's, without either
-        reaching into the other.
+        The one place an `Agent` becomes a `RunConfig`, for `Agent.run`. A `.delegate`
+        subagent's nested run is its caller's config with the delegate's own three ceilings.
         """
         outer = current_trace()
         return cls(

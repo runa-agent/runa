@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
-from runa._governance import _Governance
 from runa._items import parsed_arguments
 from runa._types import RunContext
 from runa.approval import _NeedsApproval as _ApprovalPredicate
@@ -31,19 +30,16 @@ class FunctionTool:
     name: str
     description: str
     params_json_schema: dict[str, Any]
-    on_invoke_tool: Callable[[RunContext, _Governance, str, str], Awaitable[Any]]
-    """Called with `(ctx, governance, arguments_json, call_id)`; returns what the tool does.
-
-    `governance` is the framework's, for the one tool that starts a run of its own -- a delegate,
-    which shares it with its caller (see `runa._governance`). A function wrapped by `@tool` never
-    sees it: its `ctx` is the `RunContext` alone."""
+    on_invoke_tool: Callable[[RunContext, str, str], Awaitable[Any]]
+    """Called with `(ctx, arguments_json, call_id)`; returns what the tool does."""
     guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     """This tool's guardrails by `Phase`, checked against the call's arguments
     (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
     needs_approval: _NeedsApproval = False
     delegate: Any = None
-    """The sub-`Agent` behind a `.delegate` tool (set by `agent_as_tool`): traced as a
-    `"delegate"` span, not a plain `"tool"`, and resolvable by name when resuming a paused run."""
+    """The sub-`Agent` behind a `.delegate` tool (set by `agent_as_tool`). The turn loop runs it
+    as a nested run of the caller's instead of calling `on_invoke_tool`, traced as a `"delegate"`
+    span rather than a plain `"tool"`; it is also resolvable by name when resuming a paused run."""
 
 
 @dataclass(frozen=True)
@@ -164,9 +160,7 @@ def tool(
     def decorator(fn: Callable[..., Any]) -> FunctionTool:
         schema, _ = _schema_from_signature(fn)
 
-        async def on_invoke_tool(
-            ctx: RunContext, governance: _Governance, arguments_json: str, call_id: str
-        ) -> Any:
+        async def on_invoke_tool(ctx: RunContext, arguments_json: str, call_id: str) -> Any:
             args = parsed_arguments(arguments_json)
             kwargs = _bind_arguments(fn, args, ctx, call_id)
             if inspect.iscoroutinefunction(fn):

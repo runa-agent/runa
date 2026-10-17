@@ -1,12 +1,14 @@
 """guardrails.py: running one `Phase`'s guardrails, recording each verdict, raising on a trip."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from runa.exceptions import GuardrailTripwireTriggered
 from runa.guardrail import GuardrailResult, Phase
-from runa.run_internal.active_run import _Run
 from runa.run_internal.spans import _Spans
 from runa.tool import FunctionTool
+
+if TYPE_CHECKING:
+    from runa.run_internal.run_loop import _Run
 
 
 async def _run_guardrails(
