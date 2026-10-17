@@ -1,120 +1,48 @@
-"""agent_shape.py: `AgentShape`, what the turn loop reads off an Agent, resolved once per agent.
+"""agent_shape.py: `AgentShape`, what the turn loop works out about an agent once it starts running.
 
-Everything here answers a question about one agent's declared shape -- its tools, including the
-ones its MCP servers list; its handoffs, keyed by the tool name that triggers them; its sampling
-settings; its model; its guardrails -- asked by more than one module. `run_loop`,
-`tool_execution` and `guardrails` all have to agree on the answers, so none of them owns these,
-and each answer is worked out once when the agent starts running rather than re-derived by
-whichever module needs it next.
+An agent's settings are read off the agent itself, through `runa.agent_like`'s `AgentLike`. This
+module holds only what a run has to *resolve* from them, asked by more than one module: its tools,
+including the ones its MCP servers list; its handoffs, keyed by the tool name that triggers them;
+and its model. `run_loop`, `tool_execution` and `guardrails` all have to agree on those answers,
+so none of them owns these, and each is worked out once when the agent starts running rather than
+re-derived by whichever module needs it next.
 
 Only `run_internal` imports this module. A question a public type asks too -- what a `handoffs`
-list may hold, which `RunState` needs to walk a graph of agents -- is answered by the public
-type that owns it (`Handoff.by_tool_name`) and called from here, so the dependency between the
-two layers stays one-way. What an agent *is* is answered the same way, by `runa.agent_like`'s
-`AgentLike`: this module reads an agent, it doesn't get to define one.
-
-A concrete dataclass rather than a `Protocol` to implement, so it can be built directly: every field
-has a default, and a test names only the two or three its behaviour turns on. `agent` is the object
-user code is handed -- a hook's callback, a guardrail function, `RunState.agent` -- and for a shape
-built directly it is the shape itself, which is what lets one stand in for an agent the loop would
-otherwise need built in full.
+list may hold, which `RunState` needs to walk a graph of agents -- is answered by the public type
+that owns it (`Handoff.by_tool_name`) and called from here, so the dependency between the two
+layers stays one-way.
 
 Work that belongs to a single caller lives with that caller instead -- approval gating in
 `tool_execution`, output parsing and instruction resolution in `run_loop`, agent lookup by name in
 `run_state`.
 """
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from runa._models import Model, ModelProvider
-from runa._types import ModelSettings
 from runa.agent_like import AgentLike
-from runa.compact import Compactor
-from runa.guardrail import BoundGuardrail, Phase
 from runa.handoff import Handoff
-from runa.knowledge import KnowledgeLike
-from runa.lifecycle import Hooks
-from runa.memory import MemoryLike
 from runa.tool import FunctionTool
 
 
 @dataclass
 class AgentShape:
-    """One agent's surface as the turn loop needs it, resolved and named in one place.
+    """One agent as a run has resolved it: `agent` as declared, and the facts that needed a run.
 
-    The two loose annotations are the ones `Agent` leaves open past construction: `model` is the
-    declared name or a `Model` built directly; and `agent` is whatever object user code is handed,
-    an `AgentLike` or -- for a shape built directly -- this shape standing in for one, which is
-    the one place `Any` still says something `AgentLike` can't. Everything else arrives already
-    resolved -- a mode string or a bool is `Agent.__init__`'s to turn into an object, not this
-    module's.
-
-    `model` is the one declared attribute that is not, and the reason is where the credentials
-    are: resolving a name builds the provider's client, which is a `UserError` when its API key
-    is unset, so an `Agent` must be constructible without one and resolution waits for the run
-    (`resolve_model` below, which also keeps `RunConfig.model_provider` the run's to override).
-    `Agent.__init__` still rejects a value that is neither a name nor a `Model`, so the union
-    reaching here is only ever those two. The declared name is kept because it names the `llm` span.
+    Every other setting is `agent`'s own, read as `shape.agent.<setting>`.
     """
 
-    name: str = "agent"
-    instructions: str | Callable[..., Any] | None = None
-    model: Any = None
-    model_settings: ModelSettings = field(default_factory=ModelSettings)
-    tools: list[FunctionTool] = field(default_factory=list)
-    handoffs: dict[str, Handoff] = field(default_factory=dict)
-    guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
-    output_type: type | None = None
-    memory: MemoryLike | None = None
-    knowledge: KnowledgeLike | None = None
-    compactor: Compactor | None = None
-    hooks: Hooks[Any] | None = None
-    agent: Any = None
-
-    def __post_init__(self) -> None:
-        """Key `handoffs` by tool name, and default `agent` to the shape itself if none given.
-
-        The field is the keyed map the loop reads, so `of` below hands one over already; this is
-        what lets a shape built directly be given the plain list an agent declares instead.
-        """
-        self.handoffs = Handoff.by_tool_name(self.handoffs)
-        if self.agent is None:
-            self.agent = self
+    agent: AgentLike
+    tools: list[FunctionTool]
+    handoffs: dict[str, Handoff]
 
     @classmethod
-    async def of(cls, agent: AgentLike | AgentShape) -> AgentShape:
-        """`agent`'s shape: its MCP servers' tools fetched, its handoffs normalized.
-
-        Hand it one it already made and it comes straight back, which is the other half of the
-        parameter's type: an agent to resolve, or a shape resolved already (a test's stand-in, or
-        a handoff target the loop resolved on its way in).
-
-        Every field above is fed from one attribute of `AgentLike`, and a new one has to be:
-        because each has a default, a field this copy forgets reads as unconfigured rather than
-        failing.
-        """
-        if isinstance(agent, AgentShape):
-            return agent
+    async def of(cls, agent: AgentLike) -> AgentShape:
+        """`agent`'s shape: its MCP servers' tools fetched, its handoffs keyed by tool name."""
         tools = list(agent.tools)
         for server in agent.mcp_servers:
             tools.extend(await server.list_tools())
-        return cls(
-            name=agent.name,
-            instructions=agent.instructions,
-            model=agent.model,
-            model_settings=agent.model_settings,
-            tools=tools,
-            handoffs=Handoff.by_tool_name(agent.handoffs),
-            guardrails=agent.bound_guardrails,
-            output_type=agent.output_type,
-            memory=agent.memory,
-            knowledge=agent.knowledge,
-            compactor=agent.compactor,
-            hooks=agent.hooks,
-            agent=agent,
-        )
+        return cls(agent=agent, tools=tools, handoffs=Handoff.by_tool_name(agent.handoffs))
 
     def find_tool(self, name: str) -> FunctionTool | None:
         """The `FunctionTool` this agent calls `name`, or `None` if it declares no such tool."""
@@ -124,8 +52,14 @@ class AgentShape:
         return None
 
     def resolve_model(self, provider: ModelProvider) -> Model:
-        """This agent's `model`: a string names one of `provider`'s, anything else is one."""
-        return provider.get_model(self.model) if isinstance(self.model, str) else self.model
+        """This agent's `model`: a string names one of `provider`'s, anything else is one.
+
+        Resolved here rather than at construction because resolving a name builds the provider's
+        client, which is a `UserError` when its API key is unset, and an `Agent` must be
+        constructible without one; it also keeps `RunConfig.model_provider` the run's to override.
+        """
+        model = self.agent.model
+        return provider.get_model(model) if isinstance(model, str) else model
 
 
 __all__ = ["AgentShape"]

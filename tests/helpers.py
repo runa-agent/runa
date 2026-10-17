@@ -5,8 +5,29 @@ from collections.abc import Awaitable
 from typing import Any
 
 from runa._types import Usage
+from runa.agent import Agent
 from runa.run import Run
 from runa.tracing import Trace
+
+
+class _TestAgent(Agent):
+    name = "TestAgent"
+    instructions = "be helpful"
+
+
+def stand_in_agent(**attributes: Any) -> Agent:
+    """A real `Agent` with `attributes` set on it, for a test that drives the turn loop directly.
+
+    The loop reads what `Agent.__init__` resolved, not what a subclass declares, so `attributes`
+    use the resolved names (`bound_guardrails`, `compactor`, `handoffs`, `mcp_servers`) and a test
+    names only the two or three its behaviour turns on. A name the agent has no attribute for is
+    refused rather than set and never read.
+    """
+    agent = _TestAgent()
+    for name, value in attributes.items():
+        assert hasattr(agent, name), f"Agent has no attribute {name!r}"
+        setattr(agent, name, value)
+    return agent
 
 
 def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides: Any) -> Run:

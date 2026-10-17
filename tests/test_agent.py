@@ -732,37 +732,9 @@ def test_a_misspelled_constructor_kwarg_is_rejected_by_the_signature() -> None:
 _PER_RUN_STATE = frozenset({"history", "usage", "last_usage", "_in_flight"})
 """What `Agent._fresh` clears: one run's state rather than configuration, so it goes nowhere."""
 
-_SHAPE_HOMES = {
-    "name": "name",
-    "instructions": "instructions",
-    "model": "model",
-    "model_settings": "model_settings",
-    "tools": "tools",
-    "mcp_servers": "tools",
-    "handoffs": "handoffs",
-    "bound_guardrails": "guardrails",
-    "output_type": "output_type",
-    "memory": "memory",
-    "knowledge": "knowledge",
-    "compactor": "compactor",
-    "hooks": "hooks",
-}
-"""Each attribute `Agent.__init__` resolves that is the agent's own, and the field it is read as.
-
-The three ceilings (`max_turns`/`max_tokens`/`timeout`) are missing because they take the other
-path, as a `RunConfig`. Three entries here are irregular, which is most of the reason the mapping
-is worth writing down: a subclass declares `guardrails` and `compact`, so the resolved forms take
-other names (`bound_guardrails`, `compactor`) and leave the declarations theirs, and an MCP
-server is not a shape field at all -- resolving one is folding its tools into `tools`.
-"""
-
 
 def _every_setting_agent() -> Agent:
-    """An agent with every setting it can hold given a value that is nobody's default.
-
-    Which is what lets "the shape carries it" be asserted by identity: a field `AgentShape.of`
-    forgot to copy is left at the shape's own default, and no setting here is that.
-    """
+    """An agent with every setting it can hold given a value that is nobody's default."""
 
     @tool
     def ping() -> str:
@@ -808,55 +780,37 @@ def _every_setting_agent() -> Agent:
     return Everything()
 
 
-def test_every_resolved_setting_has_a_home_in_a_shape_or_a_run_config() -> None:
-    """`_reject_unknown_settings`, inverted: a setting stored on the agent and read by nobody.
+def test_every_resolved_setting_is_read_through_agent_like_or_a_run_config() -> None:
+    """`_reject_unknown_settings`, inverted: a setting stored on the agent and promised to nobody.
 
-    `AgentShape` defaults every field (so a loop test can name the two or three its behaviour
-    turns on), which means a setting added to `_AGENT_FIELDS` and `__init__` but not to the shape
-    is accepted, validated, stored on the instance -- and then silently ignored by the turn loop.
-    There are two paths into a run and a resolved setting takes one of them: `AgentShape` for what
-    the agent is, `RunConfig` for a ceiling on the call.
+    There are two paths into a run and a resolved setting takes one of them: `AgentLike`, the
+    protocol the turn loop reads an agent through, for what the agent is; `RunConfig` for a ceiling
+    on the call. A setting on neither is accepted, validated, stored on the instance -- and has no
+    way into the loop a type checker would let through. The other direction holds too: every
+    member `AgentLike` promises is one an `Agent` actually resolves.
     """
+    from runa.agent_like import AgentLike
     from runa.run_internal.run_config import RunConfig
 
     resolved = {name for name in vars(_every_setting_agent()) if name not in _PER_RUN_STATE}
-    homed = set(_SHAPE_HOMES) | {f.name for f in fields(RunConfig)}
+    promised = {name for name, value in vars(AgentLike).items() if isinstance(value, property)}
+    homed = promised | {f.name for f in fields(RunConfig)}
 
     assert resolved <= homed, f"resolved but read by no run: {sorted(resolved - homed)}"
+    assert promised <= resolved, f"promised but never resolved: {sorted(promised - resolved)}"
 
 
-def test_agent_shape_carries_every_setting_that_is_the_agents_own() -> None:
-    """`AgentShape.of` copies each field across one by one, so each one is checked that way."""
+def test_agent_shape_resolves_the_mcp_tools_and_handoffs_of_the_agent_it_wraps() -> None:
+    """`AgentShape.of` adds what a run has to resolve, and reads everything else off the agent."""
     from runa.run_internal.agent_shape import AgentShape
 
     agent = _every_setting_agent()
 
     shape = asyncio.run(AgentShape.of(agent))
 
-    assert {f.name for f in fields(AgentShape)} == {*_SHAPE_HOMES.values(), "agent"}
-    for attribute, home in _SHAPE_HOMES.items():
-        if attribute in ("tools", "mcp_servers", "handoffs"):
-            continue  # The three that are resolved rather than copied, asserted below.
-        assert getattr(shape, home) is getattr(agent, attribute), f"{attribute} not carried"
+    assert shape.agent is agent
     assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
     assert set(shape.handoffs) == {"transfer_to_researcher"}
-    assert shape.agent is agent
-
-
-def test_agent_like_names_every_attribute_a_shape_is_built_from() -> None:
-    """The contract's static half: the protocol every layer that reads an agent is annotated with.
-
-    `AgentLike` is the same mapping as `_SHAPE_HOMES`, read from the agent's side, so a type
-    checker catches an attribute an `Agent` stopped having at `Agent.run` rather than here. The
-    declaration is worth having only while it stays the whole list, though -- a setting added to
-    the shape and not to it is a run reading something nothing promised -- and keeping the two in
-    step is what this asserts, the dynamic half being the test above.
-    """
-    from runa.agent_like import AgentLike
-
-    members = {name for name, value in vars(AgentLike).items() if isinstance(value, property)}
-
-    assert members == set(_SHAPE_HOMES)
 
 
 def test_run_config_carries_every_ceiling_on_the_run() -> None:
@@ -1078,12 +1032,10 @@ def _two_arg_instructions(context: RunContext[_Ctx], agent: Any) -> str:
 
 
 async def _prompt_of(agent: Any, label: str) -> str | None:
-    """`agent.instructions` as the loop resolves it: through the agent's `AgentShape`."""
-    from runa.run_internal.agent_shape import AgentShape
+    """`agent.instructions` as the loop resolves it."""
     from runa.run_internal.run_loop import _resolve_instructions
 
-    shape = await AgentShape.of(agent)
-    return await _resolve_instructions(shape, RunContext(context=_Ctx(label=label)))
+    return await _resolve_instructions(agent, RunContext(context=_Ctx(label=label)))
 
 
 def test_single_arg_instructions_resolves_from_run_context() -> None:

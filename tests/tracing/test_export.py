@@ -10,9 +10,10 @@ import asyncio
 import threading
 from typing import Any
 
+from helpers import stand_in_agent
+
 from runa import Agent, Trace, tracing
 from runa._types import ModelResponse, Usage
-from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.tracing import observe
@@ -39,8 +40,8 @@ class _Recording:
 
 
 def _run() -> Any:
-    shape = AgentShape(name="Researcher", instructions="You research topics.", model=_TextModel())
-    return _run_async(shape, "hi", run_config=RunConfig(workflow_name="Researcher"))
+    agent = stand_in_agent(name="Researcher", model=_TextModel())
+    return _run_async(agent, "hi", run_config=RunConfig(workflow_name="Researcher"))
 
 
 def test_a_run_returns_without_waiting_for_a_slow_exporter() -> None:

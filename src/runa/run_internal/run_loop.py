@@ -77,7 +77,8 @@ class _Run:
     `shape` is the agent running now, resolved; `start` is the one the run began with. They are
     the same object until a handoff, and separate names afterwards because the two readings
     differ: who answered, and what the caller asked for. Memory extraction and compaction are
-    the caller's agent's settings, so they read `start`; the turn itself reads `shape`.
+    the caller's agent's settings, so they read `start`; the turn itself reads `shape`. Either
+    one's settings are its `agent`'s, read as `shape.agent.<setting>`.
     """
 
     shape: AgentShape
@@ -101,7 +102,7 @@ class _Run:
         self.start = self.shape
 
     @property
-    def current_agent(self) -> Any:
+    def current_agent(self) -> AgentLike:
         """The agent running now, as user code sees it: a hook's callback, a guardrail, a pause."""
         return self.shape.agent
 
@@ -192,23 +193,23 @@ class _Run:
         return run.output if run.status == "completed" else f"error: {run.error}"
 
 
-async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
+async def _resolve_instructions(agent: AgentLike, run_context: RunContext) -> str | None:
     """Resolve `agent.instructions`: a string passes through, a callable is called and awaited."""
-    instructions = shape.instructions
+    instructions = agent.instructions
     if not callable(instructions):
         return instructions
-    resolved: Any = instructions(run_context, shape.agent)
+    resolved: Any = instructions(run_context, agent)
     return await resolved if inspect.isawaitable(resolved) else resolved
 
 
-def _parse_output(shape: AgentShape, text: str) -> Any:
+def _parse_output(agent: AgentLike, text: str) -> Any:
     """The model's final `text`, validated into `agent.output_type` when it declares one.
 
     Strictly, through the schema the model was asked for, and deliberately not through
     `parsed_json_object`'s tolerance: a declared `output_type` is a contract the provider enforces
     on its side, not prose to mine a JSON object out of.
     """
-    output_type = shape.output_type
+    output_type = agent.output_type
     if output_type is None or output_type is str:
         return text
     try:
@@ -292,10 +293,11 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
     (see `_NOT_A_BACKEND_FAULT`) ends the run with its span closed and its trace exported, like
     any other failure the loop can hit.
     """
-    memory, knowledge = run.start.memory, run.start.knowledge
+    start = run.start.agent
+    memory, knowledge = start.memory, start.knowledge
     if memory is None and knowledge is None:
         return
-    name, spans = run.start.name, run.spans
+    name, spans = start.name, run.spans
     memory_matches, knowledge_matches = await asyncio.gather(
         _retrieve(
             memory,
@@ -322,7 +324,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
 
 
 def _maybe_compact(
-    shape: AgentShape, items: list[ConversationItem], usage_tokens: int, spans: _Spans
+    agent: AgentLike, items: list[ConversationItem], usage_tokens: int, spans: _Spans
 ) -> None:
     """Run the agent's `compactor`, if any, and replace `items` in place if it trims them.
 
@@ -331,7 +333,7 @@ def _maybe_compact(
     finishes (on `original_input` for a no-session run, or in `_save_to_session` on the session's
     full history) so the *next* call's history reflects the same cut too.
     """
-    compactor = shape.compactor
+    compactor = agent.compactor
     if compactor is None:
         return
     replacement = compactor(items, usage_tokens)
@@ -343,7 +345,7 @@ def _maybe_compact(
 
 
 async def _save_to_session(
-    shape: AgentShape,
+    agent: AgentLike,
     session: Session,
     new_tail: list[ConversationItem],
     context_tokens: int,
@@ -352,7 +354,7 @@ async def _save_to_session(
     """Append `new_tail` to `session`, rewriting its history instead if compaction trimmed it."""
     history = await session.get_items()
     full_history = [*history, *new_tail]
-    _maybe_compact(shape, full_history, context_tokens, spans)
+    _maybe_compact(agent, full_history, context_tokens, spans)
     if len(full_history) == len(history) + len(new_tail):
         await session.add_items(new_tail)
     else:
@@ -415,15 +417,15 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         shape = run.shape
         agent = shape.agent
         model = shape.resolve_model(run_config.model_provider)
-        with run.span(str(shape.model), "llm", input=list(items)) as llm_span:
-            system_instructions = await _resolve_instructions(shape, run_context)
+        with run.span(str(agent.model), "llm", input=list(items)) as llm_span:
+            system_instructions = await _resolve_instructions(agent, run_context)
             await hooks.on_llm_start(run_context, agent, system_instructions, items)
             request = ModelRequest(
                 input=items,
                 system_instructions=system_instructions,
-                model_settings=shape.model_settings,
+                model_settings=agent.model_settings,
                 tools=shape.tools,
-                output_schema=shape.output_type,
+                output_schema=agent.output_type,
                 handoffs=list(shape.handoffs.values()),
             )
             if run.emit is None:
@@ -435,7 +437,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             _check_token_budget(run_context.usage, run_config.max_tokens)
         await hooks.on_llm_end(run_context, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
-        _maybe_compact(shape, items, context_tokens, run.spans)
+        _maybe_compact(agent, items, context_tokens, run.spans)
 
         if not response.output:
             raise ModelBehaviorError("model returned no output items")
@@ -448,7 +450,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         if not calls:
             text = item_text(message)
             await _run_guardrails(run, Phase.OUTPUT, text)
-            return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
+            return _TurnOutcome(_parse_output(agent, text), [], [], context_tokens)
 
         for call in calls:
             run.notify(RunItemStreamEvent(name="tool_called", item=call))
@@ -594,7 +596,7 @@ async def _guarded(
 
 async def _extract_memory(run: _Run, final_output: Any) -> None:
     """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
-    memory = run.start.memory
+    memory = run.start.agent.memory
     query = latest_user_text([*run.transcript.original_input, *run.transcript.session_input])
     if memory is None or query is None:
         return
@@ -611,7 +613,9 @@ async def _extract_memory(run: _Run, final_output: Any) -> None:
             raise
         except Exception as exc:
             span.error = str(exc)
-            logger.warning("memory extraction failed for agent %s", run.start.name, exc_info=True)
+            logger.warning(
+                "memory extraction failed for agent %s", run.start.agent.name, exc_info=True
+            )
             return
         span.output = {"stored": len(stored)}
 
@@ -659,14 +663,16 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     # stored history, or `original_input` (what `Agent.history` is written from) without one.
     if run.session is not None:
         await _save_to_session(
-            run.start,
+            run.start.agent,
             run.session,
             [*transcript.session_input, *transcript.generated],
             outcome.context_tokens,
             run.spans,
         )
     else:
-        _maybe_compact(run.start, transcript.original_input, outcome.context_tokens, run.spans)
+        _maybe_compact(
+            run.start.agent, transcript.original_input, outcome.context_tokens, run.spans
+        )
     await _extract_memory(run, outcome.final_output)
 
     await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
@@ -698,7 +704,7 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
 
 
 async def _run_async(
-    agent: AgentLike | AgentShape,
+    agent: AgentLike,
     input: str | list[ConversationItem] | RunState,
     *,
     context: Any = None,

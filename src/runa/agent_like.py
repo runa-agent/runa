@@ -14,8 +14,9 @@ Three names differ from their declaration: `guardrails` and `compact` resolve to
 (`"auto"` becomes the object it built). Those two are typed `Any`; `Agent.__init__` guarantees
 that a run only ever sees an object or `None`.
 
-`Agent` is the one implementation. `runa.run_internal.agent_shape.AgentShape` is the same agent
-*resolved*, with `mcp_servers` folded into `tools`.
+`Agent` is the one implementation, and the turn loop reads every setting through this protocol;
+what a run resolves from them (MCP tools, keyed handoffs, the model) is
+`runa.run_internal.agent_shape.AgentShape`'s.
 """
 
 from collections.abc import Callable

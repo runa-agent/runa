@@ -4,10 +4,10 @@ import asyncio
 from typing import Any
 
 import pytest
+from helpers import stand_in_agent
 
 from runa import db
 from runa._types import ModelResponse, Usage
-from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.tool import ToolCall, tool
@@ -64,9 +64,7 @@ def _agent_with_tool() -> Any:
         """Return a fixed time, ignoring `x`."""
         return "ok"
 
-    return AgentShape(
-        name="TestAgent",
-        instructions="hi",
+    return stand_in_agent(
         model=_ScriptedModel(_tool_call_then_text("now", '{"x": 1}', "done")),
         tools=[now],
     )
@@ -327,9 +325,7 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
         """Return a dict containing an email."""
         return {"email": "a@b.com", "id": 1}
 
-    agent: Any = AgentShape(
-        name="TestAgent",
-        instructions="hi",
+    agent = stand_in_agent(
         model=_ScriptedModel(_tool_call_then_text("lookup", "{}", "done")),
         tools=[lookup],
     )
@@ -352,9 +348,7 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
         return "ok"
 
     long_arg = "x" * 100
-    agent: Any = AgentShape(
-        name="TestAgent",
-        instructions="hi",
+    agent = stand_in_agent(
         model=_ScriptedModel(_tool_call_then_text("now", f'{{"x": "{long_arg}"}}', "done")),
         tools=[now],
     )
@@ -383,9 +377,7 @@ def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> No
         """Return a long result, ignoring `order_id`."""
         return long_result
 
-    agent: Any = AgentShape(
-        name="TestAgent",
-        instructions="hi",
+    agent = stand_in_agent(
         model=_ScriptedModel(_tool_call_then_text("lookup", '{"order_id": "4821"}', "done")),
         tools=[lookup],
     )

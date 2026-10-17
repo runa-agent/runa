@@ -1,18 +1,19 @@
 """Tests for `run_internal.run_loop`: the turn loop behind every `Agent.run`.
 
-These drive `_run_async` directly, over a `SimpleNamespace` stand-in for an agent, which is
-what lets one test isolate one loop behaviour (a handoff, a tripwire, a token budget) without
-standing up a real `Agent` and its wiring. The flip side is that nothing here can catch an
-`Agent` that wires itself wrong -- the stand-in is exactly what replaces that wiring -- so
+These drive `_run_async` directly, over an `Agent` whose resolved attributes a test sets itself
+(`helpers.stand_in_agent`), which is what lets one test isolate one loop behaviour (a handoff, a
+tripwire, a token budget) without spelling out a subclass and its wiring. The flip side is that
+nothing here can catch an `Agent` that wires itself wrong -- setting the attributes is exactly
+what replaces that wiring -- so
 `tests/test_agent.py` owns the real-`Agent` side of the same loop, and that is where a test
 about `Agent.run`'s own behaviour belongs.
 """
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from helpers import stand_in_agent
 
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, Usage
@@ -27,7 +28,6 @@ from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase
 from runa.handoff import Handoff
 from runa.lifecycle import Hooks
 from runa.run import Run
-from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
@@ -41,9 +41,9 @@ class _Stream:
 
     The loop's streaming contract is one callback: hand it an `emit` and it reports every step as
     it happens. Turning that into an async iterator, and holding the finished `Run` afterward, is
-    the Agent's job (see `Agent.run_streamed`). These tests drive the loop under a
-    `SimpleNamespace` agent the real one would never accept, so they need the same handful of
-    lines here rather than a second streaming result shape in `src/`.
+    the Agent's job (see `Agent.run_streamed`). These tests drive the loop directly rather than
+    through `Agent.run_streamed`, so they need the same handful of lines here rather than a
+    second streaming result shape in `src/`.
     """
 
     def __init__(self, agent: Any, input: Any, **kwargs: Any) -> None:
@@ -87,24 +87,6 @@ class _Stream:
         """The paused run's `RunState`, once the stream is fully consumed."""
         assert self.run is not None, "to_state() needs a fully consumed stream"
         return self.run.to_state()
-
-
-def _agent(**overrides: Any) -> Any:
-    """A stand-in agent for the loop: an `AgentShape` with everything else defaulted."""
-    return AgentShape(**{"name": "TestAgent", "instructions": "be helpful", **overrides})
-
-
-def _unresolved(*, mcp_servers: list[Any], **overrides: Any) -> Any:
-    """What `AgentShape.of` resolves, for the one test about it resolving MCP servers.
-
-    `_agent` hands back an already-resolved shape, and the one thing such a shape cannot carry is
-    `mcp_servers`: folding those servers' tools into `tools` is what resolving an agent does.
-    An `Agent` spells the resolved guardrails `bound_guardrails`, keeping `guardrails` for the
-    list a subclass declares; the shape, which only ever holds the resolved form, doesn't.
-    """
-    fields = vars(_agent(**overrides))
-    fields["bound_guardrails"] = fields.pop("guardrails")
-    return SimpleNamespace(**fields, mcp_servers=mcp_servers)
 
 
 def _text_response(text: str, usage: Usage | None = None) -> ModelResponse:
@@ -189,7 +171,7 @@ def _run_config() -> RunConfig:
 
 def test_plain_text_turn_returns_final_output() -> None:
     """A model reply with no tool calls becomes the run's final output directly."""
-    agent = _agent(model=_ScriptedModel([_text_response("hello there")]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("hello there")]))
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -200,7 +182,7 @@ def test_plain_text_turn_returns_final_output() -> None:
 
 def test_run_sync_matches_run() -> None:
     """`run_sync` is a synchronous wrapper with identical behavior to `run`."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]))
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -215,7 +197,7 @@ def test_tool_call_then_final_text() -> None:
         """Return a fixed time."""
         return "2024-01-01"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[now],
         model=_ScriptedModel(
             [_tool_call_response("now", "{}"), _text_response("it is 2024-01-01")]
@@ -242,7 +224,7 @@ def test_tool_error_is_fed_back_and_run_continues() -> None:
         """Raise unconditionally."""
         raise ValueError("boom")
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[boom],
         model=_ScriptedModel([_tool_call_response("boom", "{}"), _text_response("handled it")]),
     )
@@ -264,7 +246,7 @@ def test_malformed_tool_arguments_are_fed_back_and_run_continues() -> None:
         return city
 
     model = _ScriptedModel([_tool_call_response("lookup", "{not json"), _text_response("sorry")])
-    agent = _agent(tools=[lookup], model=model)
+    agent = stand_in_agent(tools=[lookup], model=model)
 
     result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
@@ -281,7 +263,7 @@ def test_non_object_tool_arguments_are_fed_back_as_an_error() -> None:
         return city
 
     model = _ScriptedModel([_tool_call_response("lookup", "[1]"), _text_response("sorry")])
-    agent = _agent(tools=[lookup], model=model)
+    agent = stand_in_agent(tools=[lookup], model=model)
 
     asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
@@ -290,9 +272,11 @@ def test_non_object_tool_arguments_are_fed_back_as_an_error() -> None:
 
 def test_handoff_switches_current_agent() -> None:
     """Calling a handoff's tool switches to the target agent for the rest of the run."""
-    target = _agent(name="Target", model=_ScriptedModel([_text_response("handled by target")]))
+    target = stand_in_agent(
+        name="Target", model=_ScriptedModel([_text_response("handled by target")])
+    )
     handoff = Handoff.from_agent(target)
-    main = _agent(
+    main = stand_in_agent(
         name="Main",
         handoffs=[handoff],
         model=_ScriptedModel([_tool_call_response(handoff.tool_name, "{}")]),
@@ -320,7 +304,7 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
         model = _ScriptedModel([_text_response("the policy is 30 days")])
 
     delegate_tool = agent_as_tool(Researcher(), None, None)
-    caller = _agent(
+    caller = stand_in_agent(
         tools=[delegate_tool],
         model=_ScriptedModel(
             [
@@ -347,9 +331,11 @@ def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
     `Agent.__init__` stores bare `Agent`s in `.handoffs` (see `agent.py`), but `tool_schemas`
     (`_models/interface.py`) needs `.tool_name`/`.tool_description`, which a bare `Agent` lacks.
     """
-    target = _agent(name="Target", model=_ScriptedModel([_text_response("handled by target")]))
+    target = stand_in_agent(
+        name="Target", model=_ScriptedModel([_text_response("handled by target")])
+    )
     model = _ScriptedModel([_text_response("hi")])
-    main = _agent(name="Main", handoffs=[target], model=model)
+    main = stand_in_agent(name="Main", handoffs=[target], model=model)
 
     asyncio.run(_run_async(main, "hello", run_config=_run_config()))
 
@@ -365,8 +351,8 @@ def test_input_guardrail_tripwire_halts_the_run() -> None:
     async def _trip(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="blocked", tripped=True)
 
-    agent = _agent(
-        guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},
+    agent = stand_in_agent(
+        bound_guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},
         model=_ScriptedModel([_text_response("should not be reached")]),
     )
 
@@ -382,8 +368,8 @@ def test_output_guardrail_tripwire_halts_the_run() -> None:
     async def _trip(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="too long", tripped=len(value) > 3)
 
-    agent = _agent(
-        guardrails={Phase.OUTPUT: [BoundGuardrail(_trip, Phase.OUTPUT, "block_long")]},
+    agent = stand_in_agent(
+        bound_guardrails={Phase.OUTPUT: [BoundGuardrail(_trip, Phase.OUTPUT, "block_long")]},
         model=_ScriptedModel([_text_response("way too long")]),
     )
 
@@ -408,7 +394,7 @@ def test_tool_input_guardrail_tripwire_halts_the_run() -> None:
         """Search for something."""
         return "results"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[search],
         model=_ScriptedModel([_tool_call_response("search", '{"query": "x"}')]),
     )
@@ -428,7 +414,7 @@ def test_max_turns_exceeded() -> None:
         return "again"
 
     responses = [_tool_call_response("loop_tool", "{}", call_id=f"call_{i}") for i in range(5)]
-    agent = _agent(tools=[loop_tool], model=_ScriptedModel(responses))
+    agent = stand_in_agent(tools=[loop_tool], model=_ScriptedModel(responses))
 
     result = asyncio.run(
         _run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=3))
@@ -451,7 +437,7 @@ def test_a_failed_run_comes_back_as_an_error_run_with_its_trace() -> None:
         return "again"
 
     responses = [_tool_call_response("loop_tool", "{}", call_id=f"call_{i}") for i in range(2)]
-    agent = _agent(tools=[loop_tool], model=_ScriptedModel(responses))
+    agent = stand_in_agent(tools=[loop_tool], model=_ScriptedModel(responses))
 
     result = asyncio.run(
         _run_async(agent, "go", run_config=RunConfig(workflow_name="x", max_turns=2))
@@ -473,7 +459,9 @@ def test_a_provider_error_closes_the_llm_span_with_the_error() -> None:
         async def get_response(self, request):  # noqa: ANN001, ARG002
             raise ConnectionError("provider is down")
 
-    result = asyncio.run(_run_async(_agent(model=_Down([])), "hi", run_config=_run_config()))
+    result = asyncio.run(
+        _run_async(stand_in_agent(model=_Down([])), "hi", run_config=_run_config())
+    )
 
     assert result.status == "error"
     (llm_span,) = [s for s in result.trace.spans if s.type == "llm"]
@@ -485,7 +473,7 @@ def test_a_provider_error_closes_the_llm_span_with_the_error() -> None:
 def test_an_exceeded_token_budget_closes_the_llm_span_with_its_usage() -> None:
     """The call that went over budget still says what it spent, and that it ended the run."""
     usage = Usage(input_tokens=5, output_tokens=5, total_tokens=10, requests=1)
-    agent = _agent(model=_ScriptedModel([_text_response("hi", usage)]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("hi", usage)]))
 
     result = asyncio.run(
         _run_async(agent, "hi", run_config=RunConfig(workflow_name="x", max_tokens=3))
@@ -505,8 +493,8 @@ def test_a_guardrail_that_raises_closes_its_span_with_the_error() -> None:
     async def _broken(value: Any) -> GuardrailVerdict:
         raise ValueError("bad predicate")
 
-    agent = _agent(
-        guardrails={Phase.INPUT: [BoundGuardrail(_broken, Phase.INPUT, "broken")]},
+    agent = stand_in_agent(
+        bound_guardrails={Phase.INPUT: [BoundGuardrail(_broken, Phase.INPUT, "broken")]},
         model=_ScriptedModel([_text_response("should not be reached")]),
     )
 
@@ -526,7 +514,7 @@ def test_needs_approval_pauses_then_resumes_on_approve() -> None:
         """Do something that needs a human's OK."""
         return "done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
@@ -553,7 +541,7 @@ def test_needs_approval_rejected_feeds_back_and_continues() -> None:
         """Do something that needs a human's OK."""
         return "should not run"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel(
             [_tool_call_response("dangerous", "{}"), _text_response("okay, skipped it")]
@@ -576,7 +564,7 @@ def test_needs_approval_always_approve_skips_future_prompts_for_the_same_tool() 
         """Do something that needs a human's OK."""
         return "done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel(
             [
@@ -605,7 +593,7 @@ def test_reject_with_a_custom_rejection_message_feeds_the_custom_text_back() -> 
         """Do something that needs a human's OK."""
         return "should not run"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel(
             [_tool_call_response("dangerous", "{}"), _text_response("okay, skipped it")]
@@ -631,7 +619,7 @@ def test_needs_approval_always_reject_feeds_back_the_sticky_message_for_later_ca
         """Do something that needs a human's OK."""
         return "should not run"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel(
             [
@@ -700,7 +688,7 @@ def test_resume_runs_the_approved_call_and_reuses_the_ready_result_from_the_same
     """A message mixing an ungated and a gated call resumes with both results, each run once."""
     ran: list[str] = []
     model = _ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")])
-    agent = _agent(tools=_safe_and_gated_tools(ran), model=model)
+    agent = stand_in_agent(tools=_safe_and_gated_tools(ran), model=model)
 
     result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
     state = result.to_state()
@@ -728,7 +716,7 @@ def test_a_resumed_run_reports_the_calls_that_ran_before_the_pause_too() -> None
     operator was deciding about in the first place.
     """
     ran: list[str] = []
-    agent = _agent(
+    agent = stand_in_agent(
         tools=_safe_and_gated_tools(ran),
         model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
     )
@@ -759,7 +747,7 @@ def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
 
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
     ran: list[str] = []
-    agent = _agent(
+    agent = stand_in_agent(
         tools=_safe_and_gated_tools(ran),
         model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
     )
@@ -787,7 +775,7 @@ def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
 
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
     ran: list[str] = []
-    agent = _agent(
+    agent = stand_in_agent(
         tools=_safe_and_gated_tools(ran),
         model=_ScriptedModel([_safe_and_gated_calls_response(), _text_response("all done")]),
     )
@@ -849,7 +837,7 @@ def test_tool_calls_in_one_message_run_concurrently_and_keep_call_order() -> Non
         return "pong done"
 
     model = _ScriptedModel([_two_calls_response("ping", "pong"), _text_response("both done")])
-    agent = _agent(tools=[ping, pong], model=model)
+    agent = stand_in_agent(tools=[ping, pong], model=model)
 
     result = asyncio.run(_run_async(agent, "go", run_config=_run_config()))
 
@@ -877,7 +865,7 @@ def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
         await asyncio.sleep(10)
         return "unreachable"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[blocked, slow],
         model=_ScriptedModel([_two_calls_response("slow", "blocked")]),
     )
@@ -917,7 +905,7 @@ def test_parallel_tool_calls_false_runs_calls_one_at_a_time() -> None:
         log.append("second start")
         return "second done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[first, second],
         model=_ScriptedModel([_two_calls_response("first", "second"), _text_response("done")]),
         model_settings=ModelSettings(parallel_tool_calls=False),
@@ -936,7 +924,7 @@ def test_resuming_the_same_state_twice_reports_a_duplicate_call_id() -> None:
         """Do something that needs a human's OK."""
         return "done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
@@ -959,8 +947,8 @@ def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> 
     async def _pass(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="ok", tripped=False)
 
-    agent = _agent(
-        guardrails={Phase.INPUT: [BoundGuardrail(_pass, Phase.INPUT, "check")]},
+    agent = stand_in_agent(
+        bound_guardrails={Phase.INPUT: [BoundGuardrail(_pass, Phase.INPUT, "check")]},
         model=_ScriptedModel([_text_response("hi")]),
     )
 
@@ -979,8 +967,8 @@ def test_a_tripped_input_guardrail_still_records_the_guardrails_that_passed_befo
     async def _trip(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="blocked", tripped=True)
 
-    agent = _agent(
-        guardrails={
+    agent = stand_in_agent(
+        bound_guardrails={
             Phase.INPUT: [
                 BoundGuardrail(_pass, Phase.INPUT, "first"),
                 BoundGuardrail(_trip, Phase.INPUT, "second"),
@@ -1010,7 +998,7 @@ def test_tool_input_guardrail_results_are_recorded_even_when_they_pass() -> None
         """Search for something."""
         return "results"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[search],
         model=_ScriptedModel(
             [_tool_call_response("search", '{"query": "x"}'), _text_response("ok")]
@@ -1041,7 +1029,7 @@ def test_a_tool_guardrail_is_handed_the_calls_arguments_then_its_return_value() 
         Phase.TOOL_OUTPUT: [BoundGuardrail(_record, Phase.TOOL_OUTPUT)],
     }
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[search],
         model=_ScriptedModel(
             [_tool_call_response("search", '{"query": "x"}'), _text_response("ok")]
@@ -1068,7 +1056,7 @@ def test_a_paused_run_states_guardrail_results_reflect_what_ran_before_the_pause
         """Needs approval."""
         return "done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel(
             [_tool_call_response("dangerous", '{"query": "x"}'), _text_response("done")]
@@ -1092,7 +1080,7 @@ def test_stream_response_yields_text_and_final_message() -> None:
     """Streaming a plain-text reply yields raw deltas, then a `message_output_created` item."""
     from runa.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
-    agent = _agent(
+    agent = stand_in_agent(
         model=_ScriptedStreamingModel([StreamDelta(text="Hi"), StreamDelta(text=" there")])
     )
 
@@ -1116,7 +1104,7 @@ def test_stream_response_keeps_the_provider_blocks_it_was_handed() -> None:
     from runa.stream_events import RunItemStreamEvent
 
     block = {"type": "thinking", "thinking": "let me see", "signature": "sig-1"}
-    agent = _agent(
+    agent = stand_in_agent(
         model=_ScriptedStreamingModel(
             [StreamDelta(provider_blocks=[block]), StreamDelta(text="Hi")]
         )
@@ -1155,7 +1143,7 @@ def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
             StreamDelta(tool_call_index=0, tool_call_arguments="{}"),
         ]
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_SequentialStreamingModel(
             [call("call_1"), call("call_2"), [StreamDelta(text="all done")]]
@@ -1185,7 +1173,7 @@ def test_stream_response_feeds_back_malformed_tool_arguments() -> None:
         """Look up a city."""
         return city
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[lookup],
         model=_SequentialStreamingModel(
             [
@@ -1223,7 +1211,7 @@ def test_stream_pauses_for_approval_and_resumes_streaming() -> None:
         ran.append("dangerous")
         return "done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_SequentialStreamingModel(
             [
@@ -1268,7 +1256,9 @@ def test_stream_response_raises_duplicate_call_id_error_on_a_replayed_call_id() 
         StreamDelta(tool_call_index=0, tool_call_id="call_1", tool_call_name="now"),
         StreamDelta(tool_call_index=0, tool_call_arguments="{}"),
     ]
-    agent = _agent(tools=[now], model=_SequentialStreamingModel([same_call, list(same_call)]))
+    agent = stand_in_agent(
+        tools=[now], model=_SequentialStreamingModel([same_call, list(same_call)])
+    )
 
     async def collect() -> list[Any]:
         return [
@@ -1292,8 +1282,8 @@ def test_stream_runs_input_guardrails() -> None:
     async def _trip(value: Any) -> GuardrailVerdict:
         return GuardrailVerdict(output_info="blocked", tripped=True)
 
-    agent = _agent(
-        guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},
+    agent = stand_in_agent(
+        bound_guardrails={Phase.INPUT: [BoundGuardrail(_trip, Phase.INPUT, "block_all")]},
         model=_ScriptedStreamingModel([StreamDelta(text="should not be reached")]),
     )
 
@@ -1303,7 +1293,7 @@ def test_stream_runs_input_guardrails() -> None:
 
 def test_stream_exposes_the_finished_result_with_a_trace() -> None:
     """Once consumed, a stream carries its `Run`: the output, the full history, a trace."""
-    agent = _agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
+    agent = stand_in_agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
 
     streamed = _Stream(agent, "hello", run_config=_run_config())
     _consume(streamed)
@@ -1323,7 +1313,7 @@ def test_stream_persists_the_turn_to_the_session(tmp_path: Any) -> None:
     from runa.session import SQLiteSession
 
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
-    agent = _agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
+    agent = stand_in_agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
 
     _consume(_Stream(agent, "hello", session=session, run_config=_run_config()))
 
@@ -1347,7 +1337,7 @@ def test_stopping_a_stream_early_cancels_the_run() -> None:
                 raise
             yield StreamDelta(text="never")
 
-    agent = _agent(model=_SlowModel())
+    agent = stand_in_agent(model=_SlowModel())
 
     async def first_event_then_stop() -> None:
         stream = _Stream(agent, "hi", run_config=_run_config())
@@ -1371,7 +1361,7 @@ def test_to_input_list_does_not_duplicate_generated_items() -> None:
     `original_input` aliased that same list (as it used to), `to_input_list` would return the
     turn's output twice -- once folded into `original_input`, once from `generated`.
     """
-    agent = _agent(model=_ScriptedModel([_text_response("hi there")]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("hi there")]))
 
     result = asyncio.run(
         _run_async(agent, [{"role": "user", "content": "hi"}], run_config=_run_config())
@@ -1389,7 +1379,7 @@ def _huge_usage() -> Usage:
 
 def test_compact_drops_history_before_the_latest_user_message_once_over_budget() -> None:
     """`default_compactor` (what `compact=True` resolves to) trims older turns past 200k tokens."""
-    agent = _agent(
+    agent = stand_in_agent(
         model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]),
         compactor=default_compactor,
     )
@@ -1455,7 +1445,7 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
     usage = Usage(input_tokens=150_000, output_tokens=1, total_tokens=150_001, requests=1)
     call = _tool_call_response("step", "{}")
     call.usage = usage
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[step],
         model=_ScriptedModel([call, _text_response("done", usage=usage)]),
         compactor=default_compactor,
@@ -1475,7 +1465,7 @@ def test_compact_follows_context_size_not_cumulative_run_usage() -> None:
 
 def test_compact_defaults_to_off() -> None:
     """With no `compactor`, history is left alone no matter how large usage gets."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]))
     history = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer", "tool_calls": None},
@@ -1504,7 +1494,7 @@ def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
             ]
         )
     )
-    agent = _agent(
+    agent = stand_in_agent(
         model=_ScriptedModel([_text_response("ok", usage=_huge_usage())]),
         compactor=default_compactor,
     )
@@ -1531,7 +1521,7 @@ def test_compact_runs_whatever_compactor_the_shape_carries() -> None:
         calls.append(usage_tokens)
         return items[1:] if len(items) > 1 else None
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), compactor=drop_oldest_item)
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]), compactor=drop_oldest_item)
     history = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer", "tool_calls": None},
@@ -1578,7 +1568,7 @@ def test_memory_is_searched_before_the_turn_and_injected_as_a_labeled_block() ->
     """`agent.memory.search` runs with the user's message, and its matches reach the model."""
     memory = _FakeMemory(matches=[_MemoryMatchStub("User prefers Japanese.")])
     model = _ScriptedModel([_text_response("ok")])
-    agent = _agent(model=model, memory=memory)
+    agent = stand_in_agent(model=model, memory=memory)
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1604,7 +1594,7 @@ def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
         return "done"
 
     memory = _FakeMemory()
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         memory=memory,
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
@@ -1626,7 +1616,7 @@ def test_retrieved_blocks_go_right_before_the_message_they_were_retrieved_for() 
     """With an input list that doesn't end on the user's message, blocks still precede it."""
     memory = _FakeMemory(matches=[_MemoryMatchStub("User prefers Japanese.")])
     model = _ScriptedModel([_text_response("ok")])
-    agent = _agent(model=model, memory=memory)
+    agent = stand_in_agent(model=model, memory=memory)
     note = {"role": "system", "content": "Answer briefly."}
 
     asyncio.run(
@@ -1644,7 +1634,7 @@ def test_memory_with_no_matches_injects_nothing() -> None:
     """An empty `search` result leaves the model's input exactly as it would be without memory."""
     memory = _FakeMemory(matches=[])
     model = _ScriptedModel([_text_response("ok")])
-    agent = _agent(model=model, memory=memory)
+    agent = stand_in_agent(model=model, memory=memory)
 
     asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1655,7 +1645,7 @@ def test_memory_extraction_runs_after_the_turn_with_the_exchange_and_resolved_mo
     """After a run, the runner hands memory the turn's exchange and the agent's own model."""
     memory = _FakeMemory()
     model = _ScriptedModel([_text_response("sure, noted")])
-    agent = _agent(model=model, memory=memory)
+    agent = stand_in_agent(model=model, memory=memory)
 
     result = asyncio.run(_run_async(agent, "I prefer Japanese", run_config=_run_config()))
 
@@ -1678,7 +1668,7 @@ def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:
 
     memory = _FakeMemory()
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db", user_id="u1")
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=memory)
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]), memory=memory)
 
     asyncio.run(_run_async(agent, "hi", session=session, run_config=_run_config()))
 
@@ -1707,7 +1697,7 @@ def test_a_tool_and_a_delegate_see_the_sessions_user_on_their_run_context(tmp_pa
         )
         tools = [whoami]
 
-    agent = _agent(
+    agent = stand_in_agent(
         model=_ScriptedModel(
             [
                 _tool_call_response("whoami", "{}"),
@@ -1730,7 +1720,7 @@ def test_trace_session_id_is_derived_from_the_session(tmp_path: Any) -> None:
     from runa.session import SQLiteSession
 
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]))
 
     result = asyncio.run(_run_async(agent, "hi", session=session, run_config=_run_config()))
 
@@ -1739,7 +1729,7 @@ def test_trace_session_id_is_derived_from_the_session(tmp_path: Any) -> None:
 
 def test_trace_session_id_is_none_without_a_session() -> None:
     """A one-off run with no `session=` leaves `Trace.session_id` unset."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]))
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1756,7 +1746,7 @@ def test_memory_retrieval_failure_degrades_gracefully() -> None:
         async def remember_from_conversation(self, *args: Any, **kwargs: Any) -> list[str]:
             return []
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1777,7 +1767,7 @@ def test_memory_extraction_failure_degrades_gracefully() -> None:
         async def remember_from_conversation(self, *args: Any, **kwargs: Any) -> list[str]:
             raise ConnectionError("boom")
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]), memory=_BoomMemory())
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1801,7 +1791,9 @@ def test_retrieval_does_not_swallow_a_framework_bug() -> None:
         async def search(self, query: str, *, k: int = 5) -> list[Any]:
             raise AttributeError("'NoneType' object has no attribute 'embed'")
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BuggyKnowledge())
+    agent = stand_in_agent(
+        model=_ScriptedModel([_text_response("ok")]), knowledge=_BuggyKnowledge()
+    )
 
     with pytest.raises(UnexpectedError, match="AttributeError: .*no attribute 'embed'") as caught:
         asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
@@ -1822,7 +1814,9 @@ def test_retrieval_fails_open_on_a_loop_lifetime_fault() -> None:
         async def search(self, query: str, *, k: int = 5) -> list[Any]:
             raise RuntimeError("Event loop is closed")
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_StaleKnowledge())
+    agent = stand_in_agent(
+        model=_ScriptedModel([_text_response("ok")]), knowledge=_StaleKnowledge()
+    )
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1844,7 +1838,9 @@ def test_retrieval_misconfiguration_ends_the_run_with_its_trace() -> None:
         async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
             raise UserError("OPENAI_API_KEY is not set.")
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=_UnconfiguredMemory())
+    agent = stand_in_agent(
+        model=_ScriptedModel([_text_response("ok")]), memory=_UnconfiguredMemory()
+    )
 
     with pytest.raises(UserError) as caught:
         asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
@@ -1879,7 +1875,7 @@ def test_knowledge_is_searched_before_the_turn_and_injected_as_a_labeled_block()
     """`agent.knowledge.search` runs with the user's message, and its matches reach the model."""
     knowledge = _FakeKnowledge(matches=[_KnowledgeMatchStub("Refunds take 5 business days.")])
     model = _ScriptedModel([_text_response("ok")])
-    agent = _agent(model=model, knowledge=knowledge)
+    agent = stand_in_agent(model=model, knowledge=knowledge)
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1898,7 +1894,7 @@ def test_knowledge_with_no_matches_injects_nothing() -> None:
     """An empty `search` result leaves the model's input exactly as it would be without it."""
     knowledge = _FakeKnowledge(matches=[])
     model = _ScriptedModel([_text_response("ok")])
-    agent = _agent(model=model, knowledge=knowledge)
+    agent = stand_in_agent(model=model, knowledge=knowledge)
 
     asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1910,7 +1906,7 @@ def test_knowledge_and_memory_can_both_inject_blocks_before_the_final_message() 
     memory = _FakeMemory(matches=[_MemoryMatchStub("User prefers Japanese.")])
     knowledge = _FakeKnowledge(matches=[_KnowledgeMatchStub("Refunds take 5 business days.")])
     model = _ScriptedModel([_text_response("ok")])
-    agent = _agent(model=model, memory=memory, knowledge=knowledge)
+    agent = stand_in_agent(model=model, memory=memory, knowledge=knowledge)
 
     asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1929,7 +1925,7 @@ def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
         async def search(self, query: str, *, k: int = 5) -> list[Any]:
             raise ConnectionError("boom")
 
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BoomKnowledge())
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]), knowledge=_BoomKnowledge())
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1938,7 +1934,7 @@ def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
 
 def test_knowledge_none_behaves_exactly_as_before() -> None:
     """`knowledge=None` runs unaffected: no lookup, no injection, no retrieval span."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), knowledge=None)
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]), knowledge=None)
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1948,7 +1944,7 @@ def test_knowledge_none_behaves_exactly_as_before() -> None:
 
 def test_memory_none_behaves_exactly_as_before() -> None:
     """`memory=None` runs unaffected: no lookup, no injection, no retrieval span."""
-    agent = _agent(model=_ScriptedModel([_text_response("ok")]), memory=None)
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("ok")]), memory=None)
 
     result = asyncio.run(_run_async(agent, "hi", run_config=_run_config()))
 
@@ -1974,7 +1970,7 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
         async def list_tools(self) -> list[FunctionTool]:
             return [mcp_tool]
 
-    agent = _unresolved(
+    agent = stand_in_agent(
         mcp_servers=[_FakeMCPServer()],
         model=_ScriptedModel([_tool_call_response("answer", "{}"), _text_response("it's 42")]),
     )
@@ -2023,7 +2019,7 @@ class _RecordingHooks(Hooks[Any]):
 def test_every_lifecycle_event_reaches_both_hook_scopes() -> None:
     """Each event fires on the run's hooks first, then on the agent's own `hooks`."""
     log: list[str] = []
-    agent = _agent(
+    agent = stand_in_agent(
         hooks=_RecordingHooks(log, "own"),
         model=_ScriptedModel([_text_response("hi there")]),
     )
@@ -2053,7 +2049,7 @@ def test_tool_events_reach_both_hook_scopes() -> None:
         """Look something up."""
         return "found"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[lookup],
         hooks=_RecordingHooks(log, "own"),
         model=_ScriptedModel([_tool_call_response("lookup", "{}"), _text_response("done")]),
@@ -2074,13 +2070,13 @@ def test_tool_events_reach_both_hook_scopes() -> None:
 def test_agent_scoped_hooks_fire_only_for_their_own_agent_across_a_handoff() -> None:
     """Each agent's `hooks` see only that agent; the target's `on_handoff` names its source."""
     log: list[str] = []
-    target = _agent(
+    target = stand_in_agent(
         name="Target",
         hooks=_RecordingHooks(log, "target"),
         model=_ScriptedModel([_text_response("handled by target")]),
     )
     handoff = Handoff.from_agent(target)
-    main = _agent(
+    main = stand_in_agent(
         name="Main",
         handoffs=[handoff],
         hooks=_RecordingHooks(log, "main"),
@@ -2119,7 +2115,7 @@ def test_a_resumed_run_pairs_agent_start_with_agent_end() -> None:
         """Do something that needs a human's OK."""
         return "done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         hooks=_RecordingHooks(log, "own"),
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
@@ -2146,7 +2142,7 @@ def test_a_resumed_run_pairs_agent_start_with_agent_end() -> None:
 def test_an_agent_without_hooks_still_runs() -> None:
     """An agent's own `hooks` is opt-in: unset, only the run-scoped instance fires."""
     log: list[str] = []
-    agent = _agent(model=_ScriptedModel([_text_response("fine")]))
+    agent = stand_in_agent(model=_ScriptedModel([_text_response("fine")]))
 
     result = asyncio.run(
         _run_async(agent, "hi", hooks=_RecordingHooks(log, "run"), run_config=_run_config())

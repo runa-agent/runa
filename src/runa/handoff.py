@@ -74,19 +74,14 @@ class Handoff:
         )
 
     @classmethod
-    def by_tool_name(cls, handoffs: Any) -> dict[str, Handoff]:
+    def by_tool_name(cls, handoffs: list[Any]) -> dict[str, Handoff]:
         """`handoffs` keyed by the tool name that triggers each, wrapping any bare `Agent` given.
 
         What a `handoffs` list may hold is this class's own knowledge, so turning one into the
         map the run loop reads lives here rather than in whichever caller needs it next -- both
         `run_internal.agent_shape` (once per agent, when it starts running) and `subagent_edges`
-        below (walking a graph of agents, where a node may be an `Agent` or an `AgentShape`
-        standing in for one) ask for it. An already-keyed `dict` --
-        an `AgentShape`'s `handoffs` -- is what that map is, so it passes straight through and
-        neither caller has to know which of the two it is looking at.
+        below (walking a graph of agents) ask for it.
         """
-        if isinstance(handoffs, dict):
-            return handoffs
         keyed: dict[str, Handoff] = {}
         for entry in handoffs:
             handoff = entry if isinstance(entry, cls) else cls.from_agent(entry)
@@ -128,9 +123,7 @@ def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
     What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), and so
     is a delegate being a tool carrying the agent behind it (`agent_as_tool` sets it), so reading
     both lives here and not in each module that needs the graph: `run_state` resolves a paused run's
-    agent by name, `Agent.graph` draws the edges. An `AgentShape` standing in for an agent walks the
-    same way, the two being one shape from here (`Handoff.by_tool_name` absorbs the one field where
-    they differ).
+    agent by name, `Agent.graph` draws the edges.
     """
     for handoff in Handoff.by_tool_name(agent.handoffs).values():
         yield "handoff", handoff.agent

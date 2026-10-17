@@ -11,20 +11,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from helpers import stand_in_agent
 
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
 from runa.handoff import Handoff
-from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState, _RunStateSchema
 from runa.tool import tool
-
-
-def _agent(**overrides: Any) -> Any:
-    """A stand-in agent for the loop: an `AgentShape` with everything else defaulted."""
-    return AgentShape(**{"name": "TestAgent", "instructions": "be helpful", **overrides})
 
 
 def _text_response(text: str) -> ModelResponse:
@@ -78,7 +73,7 @@ def _paused_result_and_agent() -> tuple[Any, Any]:
         """Do something that needs a human's OK."""
         return "done"
 
-    agent = _agent(
+    agent = stand_in_agent(
         tools=[dangerous],
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("all done")]),
     )
@@ -93,8 +88,8 @@ def _fresh_agent_like(agent: Any) -> Any:
     the same `model` config; `from_json` re-resolving `.agent` by name is the behavior under
     test, not needing to independently reconstruct the model too.
     """
-    return _agent(
-        name=agent.name, tools=list(agent.tools), handoffs=dict(agent.handoffs), model=agent.model
+    return stand_in_agent(
+        name=agent.name, tools=list(agent.tools), handoffs=list(agent.handoffs), model=agent.model
     )
 
 
@@ -218,13 +213,13 @@ def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_p
         """Do something that needs a human's OK."""
         return "done"
 
-    target = _agent(
+    target = stand_in_agent(
         name="Target",
         tools=[dangerous],
         model=_ScriptedModel([_tool_call_response("dangerous", "{}"), _text_response("done")]),
     )
     handoff = Handoff.from_agent(target)
-    main = _agent(
+    main = stand_in_agent(
         name="Main",
         handoffs=[handoff],
         model=_ScriptedModel([_tool_call_response(handoff.tool_name, "{}")]),
@@ -237,7 +232,7 @@ def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_p
     blob = state.to_json()
     assert blob["agent_name"] == "Target"
 
-    fresh_main = _agent(name="Main", handoffs=[Handoff.from_agent(target)])
+    fresh_main = stand_in_agent(name="Main", handoffs=[Handoff.from_agent(target)])
     restored = RunState.from_json(fresh_main, blob)
     assert restored.agent.name == "Target"
 
@@ -273,7 +268,7 @@ def test_from_json_never_lists_an_agents_mcp_server_tools() -> None:
     result, agent = _paused_result_and_agent()
     blob = result.to_state().to_json()
     fresh_agent: Any = SimpleNamespace(
-        name=agent.name, tools=[], handoffs={}, mcp_servers=[_ExplodingServer()]
+        name=agent.name, tools=[], handoffs=[], mcp_servers=[_ExplodingServer()]
     )
 
     restored = RunState.from_json(fresh_agent, blob)

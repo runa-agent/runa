@@ -3,9 +3,10 @@
 import asyncio
 from typing import Any
 
+from helpers import stand_in_agent
+
 from runa import Trace
 from runa._types import ModelResponse, Usage
-from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.tracing import observe
@@ -28,7 +29,7 @@ class _TextModel:
 
 
 def _agent() -> Any:
-    return AgentShape(name="Researcher", instructions="You research topics.", model=_TextModel())
+    return stand_in_agent(name="Researcher", model=_TextModel())
 
 
 def test_agent_run_sync_completes_even_when_the_exporter_fails() -> None:

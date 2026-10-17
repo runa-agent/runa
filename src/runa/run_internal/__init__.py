@@ -13,5 +13,5 @@ the top level: `Run`/ `RunStream`, `RunState`, `Interruption`, and the stream-ev
 `run_loop` (the turn loop itself, and the one value it passes down), `guardrails`,
 `tool_execution`, `streaming`, `run_config` (`RunConfig`, what `Agent` settles before the loop
 starts -- no public signature takes one, so it belongs here and not beside `RunState`),
-`agent_shape` (what more than one of them reads off an Agent), and `spans` (tracing span helpers).
+`agent_shape` (what a run resolves from an Agent), and `spans` (tracing span helpers).
 """

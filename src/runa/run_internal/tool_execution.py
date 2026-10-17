@@ -207,7 +207,7 @@ async def _run_message_tool_calls(
         slots.append(slot)
         deferred.append((slot, partial(_run_tool_call, run, tool, call)))
 
-    parallel = shape.model_settings.parallel_tool_calls is not False
+    parallel = agent.model_settings.parallel_tool_calls is not False
     outcomes = await _execute([thunk for _, thunk in deferred], parallel)
     for (slot, _), outcome in zip(deferred, outcomes, strict=True):
         if isinstance(outcome, DelegatePaused):

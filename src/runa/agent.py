@@ -273,7 +273,7 @@ def _checked_model(model: Any) -> Any:
     construction (see `_resolve_compactor`), but a model name cannot, because resolving it builds
     the provider's client and that is a `UserError` when the matching API key is unset -- which an
     agent that `runa generate` just wrote, or `graph` renders, or no one ever runs has no business
-    needing. Resolution therefore waits for the run (`AgentShape.resolve_model`).
+    needing. Resolution therefore waits for the run.
 
     Checking the name needs no client, though, so both ways of getting it wrong are a `UserError`
     naming the attribute here rather than a failure from inside the turn loop with an `llm` span
@@ -829,9 +829,9 @@ would have let through).
 
 A new setting also has to reach a run, by exactly one of two paths chosen by what the setting
 is: a ceiling on the run (`max_turns`, `max_tokens`, `timeout`) belongs to `RunConfig`, which
-configures the call rather than the agent; everything the agent *is* belongs to `AgentShape`,
-which is what `run_internal` reads instead of this class. A shape field left at its default is a
-setting the turn loop silently ignores.
+configures the call rather than the agent; everything the agent *is* is read off the agent itself,
+through a property of `runa.agent_like.AgentLike`, so a loop reading a setting that protocol
+doesn't name is a type error rather than a default.
 """
 
 
