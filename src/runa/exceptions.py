@@ -1,18 +1,14 @@
 """exceptions.py: Runa's two exception roots.
 
 `RunaError` is the base every run-ending failure raises: a tripped guardrail, `MaxTurnsExceeded`, a
-model behaving unexpectedly, or a `UserError` in how the framework itself was used. A run reports
-every one of them as `Run(status="error", ...)` instead of raising -- but it is the boundary that
-decides that, not this hierarchy: these are raised freely inside a run and caught there, and
-anything else a run touches raises (an app's own hook, `Session` or `Compactor`) is wrapped in
-`UnexpectedError` at that same boundary, so the promise holds for failures no subclass here
-anticipated. None of them cross out of a run, which is why nothing here carries a payload for the
-layer above: by the time a caller is looking, the failure is a `Run`.
+model behaving unexpectedly, or a `UserError` in how the framework itself was used. They are
+raised freely inside a run and caught at its boundary, which reports each as
+`Run(status="error", ...)`; anything else a run touches raises (an app's own hook, `Session` or
+`Compactor`) is wrapped in `UnexpectedError` there. None of them carry a payload for the caller.
 
-`OperatorError` is the other half: the person running a Runa app typed something wrong. A sibling
-of `RunaError` rather than a subclass, because a mistyped session id is not a run failure -- these
-come from the surfaces around a run (the CLI, the dashboard), mostly before one has started. It is
-the one exception a run deliberately lets through, which is what being a sibling buys.
+`OperatorError` is the other root: the person running a Runa app typed something wrong, mostly
+on a surface around a run (the CLI, the dashboard). It is not a `RunaError`, and it is the one
+exception a run lets through.
 """
 
 from typing import TYPE_CHECKING

@@ -1,13 +1,8 @@
 """web/_html.py: the page shell, shared CSS, and small render helpers every `web/*.py` page uses.
 
-Hand-rolled strings, not a templating engine -- four small pages don't earn a Jinja dependency,
-and it keeps every page a plain, testable function (the same spirit as `Trace.__str__`). No
-JavaScript: `<details>` covers every collapsible bit a trace/session/eval page needs.
-
-Hand-rolled is why the one-line `*_path` helpers are here too, and why they are the only way a
-page addresses another: interpolating an id into an `href` takes two steps in one order, and a
-page that has to remember them is a page that can get them wrong. `escape` is still every other
-site's own call -- it is one step, and a value is either untrusted text or it isn't.
+Hand-rolled strings, no templating engine and no JavaScript: `<details>` covers every
+collapsible bit. A page addresses another only through the `*_path` helpers, which escape the id
+they interpolate; every other value is the page's own `escape` call.
 """
 
 import html

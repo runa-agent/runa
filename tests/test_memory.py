@@ -16,6 +16,7 @@ from runa import memory as memory_module
 from runa._types import RunContext
 from runa.db.vectors import VectorMatch, VectorStore
 from runa.db.vectors.sqlite import SQLiteVectorStore
+from runa.exceptions import UserError
 from runa.memory import Memory
 
 _DIMENSIONS = 4
@@ -62,7 +63,7 @@ def test_default_configuration_needs_no_arguments() -> None:
 
 def test_unknown_model_without_dimensions_raises() -> None:
     """A model Runa doesn't know the size of needs an explicit `dimensions=`."""
-    with pytest.raises(ValueError, match="dimensions"):
+    with pytest.raises(UserError, match="dimensions"):
         Memory(model="some-custom-model")
 
 

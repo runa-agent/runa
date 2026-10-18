@@ -62,12 +62,9 @@ def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
 def sync[**P, T](method: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
     """Expose an `async def` store method as the synchronous method its callers actually call.
 
-    The other half of `run_sync`, and the reason it's here rather than written out per method: a
-    `TraceStore`/`EvalStore`/`SessionStore` is a synchronous interface (`runa traces`, `runa ui`
-    and `TraceExporter.export` reach it from a thread with no loop on it) while `asyncpg` is not,
-    so every read and write across those three adapters needs the same pairing. Decorating the
-    async body states it once; the alternative was nine one-line twins, each of which had to
-    remember that `asyncio.run` is the wrong half.
+    A `TraceStore`/`EvalStore`/`SessionStore` is a synchronous interface (`runa traces`,
+    `runa ui` and `TraceExporter.export` reach it from a thread with no loop on it) while
+    `asyncpg` is not; this pairs each async body with `run_sync`.
     """
 
     @functools.wraps(method)

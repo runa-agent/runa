@@ -17,6 +17,7 @@ from runa import knowledge as knowledge_module
 from runa._types import RunContext
 from runa.db.vectors import VectorMatch, VersionedVectorStore
 from runa.db.vectors.sqlite import SQLiteVectorStore
+from runa.exceptions import UserError
 from runa.knowledge import DEFAULT_KNOWLEDGE_DIR, Knowledge, KnowledgeMatch
 from runa.project import use
 
@@ -112,7 +113,7 @@ def test_an_absolute_directory_ignores_the_project(tmp_path: Path) -> None:
 
 def test_unknown_model_without_dimensions_raises() -> None:
     """A model Runa doesn't know the size of needs an explicit `dimensions=`."""
-    with pytest.raises(ValueError, match="dimensions"):
+    with pytest.raises(UserError, match="dimensions"):
         Knowledge(model="some-custom-model")
 
 

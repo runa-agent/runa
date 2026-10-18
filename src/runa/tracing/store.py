@@ -182,10 +182,9 @@ def listing_rows(
 ) -> list[dict[str, Any]]:
     """`listing_clause` said in Python, for the adapter whose rows never reach a database.
 
-    The same sentence -- same filters, same order, same cap, down to breaking ties on the trace
-    id -- over the marshalled rows `tracing/ephemeral.py` keeps, which are the rows the two SQL
-    adapters would have stored. Two renderings because two languages need them; one file, because
-    a listing that differs by backend is one `runa ui` would show differently per deployment.
+    Same filters, same order, same cap, down to breaking ties on the trace id, over the
+    marshalled rows `tracing/ephemeral.py` keeps. Change one rendering and the other with it:
+    `runa ui` must list traces the same way on every backend.
     """
     filters = _filters(agent, status, session_id)
     matching = [

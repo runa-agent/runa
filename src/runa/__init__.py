@@ -122,11 +122,10 @@ _EXPORTS = {
 }
 """The lazily resolved public names, mapped to the module that defines each one.
 
-Four names are missing. `db` is a submodule rather than a name inside one, and `__version__` is
-read off the installed distribution rather than imported at all; `__getattr__` handles both
-itself, along with `Status`, the deprecated spelling of `EvalStatus`. `tool`, `guardrail` and
-`approval` are the eager three, for the reason this module's docstring gives -- any new public
-name that collides with a submodule's belongs up there with them.
+Four names are missing. `db` is a submodule and `__version__` is read off the installed
+distribution; `__getattr__` handles both, along with `Status`, the deprecated spelling of
+`EvalStatus`. `tool`, `guardrail` and `approval` are imported eagerly (see this module's
+docstring), as must be any new public name that collides with a submodule's.
 """
 
 __all__ = [

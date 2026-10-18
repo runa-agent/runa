@@ -1,24 +1,14 @@
 """db/sqlite.py: shared connect-and-create-if-missing plumbing for the local `db/runa.db`.
 
-`db/pool.py`'s counterpart for the local side of `runa.db`'s one decision. Every SQLite adapter
-(`session/sqlite.py`, `cache/sqlite.py`, `tracing/sqlite.py`, `eval/sqlite.py`, and the two
-vector stores through `db/vectors/sqlite.py`) owns a different set of tables in the same file; this
-only opens the connection and brings each caller's tables up to their declaration, so the file
-(and its parent `db/`, which `sqlite3.connect` won't create on its own) gets created lazily
-regardless of which module writes to it first.
+Every SQLite adapter (`session/sqlite.py`, `cache/sqlite.py`, `tracing/sqlite.py`,
+`eval/sqlite.py`, and the two vector stores through `db/vectors/sqlite.py`) owns a different set
+of tables in the same file. This opens the connection, creating the file and its parent `db/`
+lazily, and brings each caller's `Table`s up to their declaration with `db/schema.py`'s `ddl` and
+`reconcile`: a local file can be older than the release opening it. That happens once per file
+per process (`_pending`), however many connections the adapters open.
 
-A local file is the side of that decision that outlives releases: a shared Postgres is created by
-whichever replica connects first, where `db/runa.db` can be older than the release now opening it.
-Which is why what this applies is `db/schema.py`'s two halves, `ddl` and `reconcile`, and why an
-adapter hands over its `Table`s rather than a rendered script. Once per file per process, like
-`db/pool.py`'s once per database per process, and for the same reason: whether a file predates a
-column is a question about the release that created it, so a connection per call (which is what
-every adapter here opens) is not a reason to ask it again. `_pending` is that bookkeeping, and
-`read` below is the one caller that stays outside it, for a reason of its own.
-
-`read` is the other half of the same decision, for the queries that only read: creating a file to
-answer "no history yet" is a side effect no listing should have, and which tables a database has
-is one question with one answer, not four adapters each guessing from a failed query.
+`read` serves queries that only read: it never creates the file or a table, so a listing over a
+database that doesn't exist yet is empty rather than a side effect.
 
 Where that file lives is `runa.db.sqlite_path`'s answer, not this module's.
 """

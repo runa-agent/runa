@@ -1,24 +1,11 @@
 """embeddings.py: text -> vector, for `runa.memory` and `runa.knowledge`.
 
-OpenAI is the default: it's the one provider among Runa's chat backends that also exposes an
-embeddings endpoint, and `OPENAI_API_KEY` is already the convention every scaffolded project has
-(see `cli/new.py`'s `.env` template). Where that endpoint lives and which variable holds its key
-aren't restated here: they're read from `_models.OPENAI`, the same record `ModelProvider` routes
-`gpt-*` with, so OpenAI's address is written in exactly one place in Runa. Talks to it directly
-over `httpx2`, same as `OpenAICompatibleModel`, rather than pulling in the `openai` SDK for one
-endpoint.
+Embeddings go to OpenAI, at the address and key variable `ModelProvider` routes `gpt-*` with,
+over `httpx2`. An agent's `model` doesn't pick it: `claude-sonnet-5` with `memory = "auto"`
+still needs `OPENAI_API_KEY`. `RUNA_EMBEDDINGS_BASE_URL` points it elsewhere (Azure, a gateway,
+something self-hosted), with `RUNA_EMBEDDINGS_API_KEY` when that endpoint's token differs.
 
-An agent's `model` doesn't pick it. Embeddings are the one place Runa needs a vendor no setting
-named: `claude-sonnet-5` with `memory = "auto"` still needs `OPENAI_API_KEY`. A deployment that
-can't send text there -- Azure, a corporate gateway, a self-hosted model -- sets
-`RUNA_EMBEDDINGS_BASE_URL`, and `RUNA_EMBEDDINGS_API_KEY` when that endpoint's token isn't the one
-`OPENAI_API_KEY` holds. It's an environment variable rather than an argument for the reason
-`RUNA_DATABASE_URL` is: `memory = "auto"` names no instance to pass one to, and where a
-deployment's embeddings come from is not a call site's decision.
-
-Its client is held per event loop, like every other long-lived client in Runa (see `runa._loop`):
-`Agent.run_sync` opens a loop per call, and a client carried over from a closed one fails the next
-retrieval with "Event loop is closed".
+Its client is held per event loop (see `runa._loop`): `Agent.run_sync` opens a loop per call.
 """
 
 import os
@@ -50,7 +37,7 @@ def resolve_dimensions(model: str, dimensions: int | None) -> int:
     """
     resolved = dimensions or EMBEDDING_DIMENSIONS.get(model)
     if resolved is None:
-        raise ValueError(f"unknown embedding size for {model!r}; pass dimensions= explicitly")
+        raise UserError(f"unknown embedding size for {model!r}; pass dimensions= explicitly")
     return resolved
 
 
@@ -62,8 +49,8 @@ def _base_url() -> str:
 def _api_key() -> str:
     """The token for `_base_url()`: `RUNA_EMBEDDINGS_API_KEY`, else `OPENAI_API_KEY`'s.
 
-    Raises `UserError` when neither is set, which is why the client is built lazily: an app that
-    declares neither `memory` nor `knowledge` should not need an embeddings key at all.
+    Raises `UserError` when neither is set; the client is built lazily, so an app that declares
+    neither `memory` nor `knowledge` needs no embeddings key.
     """
     api_key = os.environ.get(_API_KEY_ENV) or os.environ.get(OPENAI.api_key_env)
     if api_key is None:

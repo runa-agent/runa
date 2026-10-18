@@ -1,19 +1,11 @@
-"""agent_shape.py: `AgentShape`, what the turn loop works out about an agent once it starts running.
+"""agent_shape.py: `AgentShape`, what a run resolves about an agent once it starts running.
 
-An agent's settings are read off the agent itself, through `runa.agent_like`'s `AgentLike`. This
-module holds only what a run has to *resolve* from them, asked by more than one module: its tools,
-including the ones its MCP servers list; its handoffs and delegates, keyed by the tool name that
-triggers each; the schema of every callable the model is offered; and its model. `run_loop`,
-`tool_execution` and `guardrails` all have to agree on those answers, so none of them owns these,
-and each is worked out once when the agent starts running rather than re-derived by whichever
-module needs it next. A model name resolves through the one process-wide `ModelProvider`, which
-caches each provider's client.
+Its tools, including the ones its MCP servers list; its handoffs and delegates, keyed by the tool
+name that triggers each; the schema of every callable the model is offered; and its model, through
+the one process-wide `ModelProvider`. Each is worked out once per agent per run and shared by the
+whole turn loop. The agent's declared settings themselves are read through `AgentLike`.
 
 Only `run_internal` imports this module.
-
-Work that belongs to a single caller lives with that caller instead -- approval gating in
-`tool_execution`, output parsing and instruction resolution in `run_loop`, agent lookup by name in
-`run_state`.
 """
 
 from dataclasses import dataclass

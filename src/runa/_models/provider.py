@@ -86,8 +86,8 @@ def _prefix_hint(name: str) -> str:
 def _client_for(endpoint: Endpoint) -> httpx.AsyncClient:
     """An HTTP client pointed at `endpoint`, carrying the key its env var holds.
 
-    Raises `UserError` when that variable is unset, which is why the client is built lazily: an
-    app that never asks for a `gemini-*` model should not need `GEMINI_API_KEY`.
+    Raises `UserError` when that variable is unset; the client is built lazily, so an app that
+    never names a `gemini-*` model needs no `GEMINI_API_KEY`.
     """
     api_key = os.environ.get(endpoint.api_key_env)
     if api_key is None:
@@ -109,23 +109,15 @@ class ModelProvider:
     `OpenAICompatibleModel` against that provider's own chat-completions endpoint. A name
     matching none of them is a `UserError`, not a default (see `check_model_name`).
 
-    Each backend is imported inside the branch that routes to it, the way `runa.db` imports an
-    adapter inside the function that needs it. The Anthropic SDK is most of a three-second
-    import, and `check_model_name`, `DEFAULT_MODEL` and the `Model` protocol -- which `runa.agent`
-    reads at module scope, and through it every entry point -- need no backend at all. So
-    `runa generate tool`, `runa --version` and an app that only ever names a `gpt-*` model pay
-    for a vendor SDK they can't use. A provider-specific client has no business being a
-    load-time dependency of a framework whose providers are chosen per agent by a string.
+    Each backend is imported inside the branch that routes to it, so importing `runa` loads no
+    vendor SDK.
     """
 
     def __init__(self) -> None:
         """Start with no clients; each is created lazily, on first use, and then reused.
 
-        A client's connections are bound to the event loop running when it first makes a request,
-        so each is held per loop by a `LoopCache`: `Agent.run_sync` opens a fresh loop per call,
-        and a client left over from a closed one would crash the next call trying to reuse it.
-        `get_model` does no I/O and is called at `Agent` construction time, with no loop running
-        at all, which `LoopCache` treats as a client the first loop to use it adopts.
+        A client's connections are bound to the event loop that first uses it, so each is held per
+        loop by a `LoopCache`.
         """
         self._http_clients: LoopCache[str, httpx.AsyncClient] = LoopCache()
         self._anthropic_clients: LoopCache[str, AsyncAnthropic] = LoopCache()

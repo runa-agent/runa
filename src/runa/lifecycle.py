@@ -111,10 +111,8 @@ class _Dispatch[TContext]:
     """Fires one lifecycle event at both scopes: the run's hooks, then the agent's own.
 
     `runa.run_internal` holds one of these for a whole run and calls it exactly where it would
-    call `Hooks`, so the points that fire an event stay ignorant of there being two scopes.
-    One `Hooks` class for both scopes is what keeps this a forwarder over `Hooks`' own method
-    names instead of a second copy of them: an event added to `Hooks` dispatches with no edit
-    here, and an event this doesn't know raises `AttributeError` rather than firing nowhere.
+    call `Hooks`. It forwards by `Hooks`' own method names, so an event added to `Hooks`
+    dispatches with no edit here, and an unknown one raises `AttributeError`.
 
     The one thing it knows per event is which agent's own `hooks` to fire, read out of that
     call's arguments: the agent acting, except for a handoff, which notifies the target.

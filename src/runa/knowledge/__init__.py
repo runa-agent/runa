@@ -6,19 +6,13 @@ beside its embedding. Which store a bare `Knowledge()` gets is `runa.db`'s decis
 
 Unlike `Memory`, `Knowledge` is application-scoped rather than `user_id`-scoped, and its source
 of truth is a directory of files on disk (`app/knowledge/` by default), not calls to `remember`.
-Kept deliberately separate: `Memory` is durable facts about a user, learned from conversations;
-`Knowledge` is the domain documents whoever built the app put there.
 
-Whether the corpus has been ingested is the store's answer, not a flag on the `Knowledge` object:
-`Agent(knowledge="auto")` builds a fresh `Knowledge` per agent and `runa.serve` builds an agent
-per request, so instance state would have every request re-embed the whole directory into the one
-shared store. The store's `reset`/`stamp`/`version` is where that decision lives instead.
-Which also makes `ingest` idempotent, and therefore the only ingest verb: `search` calls it, and
-so does `serve.create_app` at startup, so the first request after a deploy doesn't pay for the
-whole corpus.
-The two pieces of process-local state here answer different questions: `_digests` answers "what
-would I write", a pure function of the files on disk, so an empty cache costs a re-read and never
-a re-embed; `_ingest_locks` keeps one process from embedding one corpus twice at once.
+Whether the corpus has been ingested is the store's answer (`reset`/`stamp`/`version`), never
+state on the `Knowledge` object: a fresh one is built per agent, and `runa serve` builds an agent
+per request. `ingest` is idempotent; `search` calls it, and so does `serve.create_app` at startup.
+Two pieces of process-local state remain: `_digests`, a cache of what the files on disk would
+write (an empty one costs a re-read, never a re-embed), and `_ingest_locks`, which keeps one
+process from embedding one corpus twice at once.
 
 A run consults an agent's `knowledge` through `context` before its first turn, so retrieval is
 automatic. `KnowledgeLike` is the contract a wholesale custom

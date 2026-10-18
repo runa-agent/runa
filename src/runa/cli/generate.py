@@ -73,10 +73,8 @@ class AmbiguousComponent(OperatorError):
 class Generated:
     """What a `generate_*` wrote, and how application code reaches it.
 
-    Where a generated file goes and what it's imported as are one decision, so a caller is
-    handed the import line instead of assembling it out of `file` -- move `app/tools/` and
-    every surface that prints an import follows, rather than printing a line that no longer
-    resolves while the file itself is still written correctly.
+    A caller prints `import_line` rather than assembling one from `file`, so the two can't
+    disagree.
 
     `symbol`/`import_line` are `None` for a file that isn't Python: a prompt, an eval dataset.
     """

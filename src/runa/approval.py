@@ -126,8 +126,7 @@ class ApprovalLedger:
     def claim(self, call_id: str) -> bool:
         """Claim `call_id` for execution; `False` if it already ran and must not run again.
 
-        The caller turns that into a `DuplicateToolCallError` -- the ledger owns the rule, the
-        runtime owns its vocabulary of errors (see this module's docstring for why).
+        The caller turns that into a `DuplicateToolCallError`.
         """
         if call_id in self.executed:
             return False

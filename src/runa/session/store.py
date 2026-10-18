@@ -144,11 +144,9 @@ def listing_rows(
 ) -> list[SessionSummary]:
     """`listing_clause` said in Python, for the adapter that keeps its sessions in memory.
 
-    The same sentence, down to the tie-break: a `SessionSummary` is exactly the row that clause
-    selects, so `session/ephemeral.py` hands its own in and gets back the listing the two SQL
-    adapters would have returned. Two renderings because two languages need them; one file,
-    because a filter added to one of them and not the other is a backend-shaped difference in
-    what `runa chat --list` shows.
+    Same filters and order, down to the tie-break, over the `SessionSummary` rows
+    `session/ephemeral.py` keeps. Change one rendering and the other with it: `runa chat --list`
+    must list sessions the same way on every backend.
     """
     matching = [
         summary

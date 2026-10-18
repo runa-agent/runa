@@ -66,9 +66,8 @@ class _Frame:
     """What a run is known by before its agent is resolved, and all a failed run can report.
 
     The starting agent, the trace and agent span, the `RunContext` and the governance, and the
-    session, hooks and `emit` of this call. Entry points differ only in how they build one
-    (`_run_async`, `_resume`, `_Run.delegate`); everything after is `_within`'s. Built before the
-    agent is resolved, since resolving it can fail and the failed run still reports from here.
+    session, hooks and `emit` of this call. Every entry point builds one, then hands it to
+    `_within`. It exists before the agent is resolved, so a run that fails resolving still reports.
     """
 
     agent: AgentLike
@@ -98,9 +97,7 @@ class _Run:
     transcript: Transcript
     resumed: RunState | None = None
     """The paused state this run is continuing, if it is one: the unfinished tool-call message,
-    the decisions that unblock its calls, and the results already computed for the rest of them.
-    The loop reads those off the state itself rather than off a shape built from it -- a resumed
-    turn needs no fact the state it came from doesn't already carry."""
+    the decisions that unblock its calls, and the results already computed for the rest of them."""
     start: AgentShape = field(init=False)
 
     def __post_init__(self) -> None:

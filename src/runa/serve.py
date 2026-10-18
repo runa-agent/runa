@@ -1,46 +1,25 @@
 """serve.py: `runa serve`, this app's agents over HTTP.
 
-The missing half of a deployment. Runa could always *build* an agent, but putting one in front of
-users meant writing the web layer yourself, and every app wrote the same one: resolve the agent,
-build it per request, pass a session, stream or don't, hand a paused run's state back once a
-human has decided, turn a `Run` into JSON. That is convention, not application code, so it lives
-here.
-
-Four decisions this makes for you, each the one a production deployment wants:
+What a deployment gets:
 
 * **An `Agent` is built per request, from a class resolved once at startup.** An instance carries
-  the conversation it is running (see `Agent.run`), so a module-level agent shared across requests
-  would interleave users' histories. Constructing one is cheap; the alternative is a data leak.
-  The *class* is the other half of that choice: importing the app is what is not cheap, and doing
-  it per request would re-run `main.py` and re-initialize whatever the app keeps at module level --
-  a client, a pool, a cache -- underneath runs already holding the old one. So `create_app`
-  imports the app once, and a server picks up an edit to `app/agents/` by restarting (which is
-  what `uvicorn asgi:app --reload` already does, properly, from the outside). Whatever else those
-  agents need before they can answer is startup's too: `_ingest_knowledge` embeds their
-  `knowledge=` corpus here, so a deploy's cost is paid by the deploy and not by its first user.
+  the conversation it is running, so one is never shared across requests. The app is imported
+  once, by `create_app`; picking up an edit to `app/agents/` takes a restart. Every declared
+  agent's `knowledge=` corpus is ingested at startup too.
 * **Conversation state is a `session`, never `self.history`.** A `session_id` in the request body
-  is the whole continuity mechanism, and `runa.db` decides where that history lives: the local
-  `db/runa.db` by default, the shared Postgres once `RUNA_DATABASE_URL` is set, which is what
-  makes more than one replica possible. Serving behind replicas is therefore one variable, not a
-  code change, and nothing here names a backend.
+  is the whole continuity mechanism, and `runa.db` decides where that history lives
+  (`RUNA_DATABASE_URL`), so more than one replica needs no code change.
 * **Authentication is on unless you turn it off.** A bearer token from `RUNA_API_KEY`, checked on
-  every route but `/health`. An agent endpoint spends money per call, so open-by-default is the
-  wrong default, and `--no-auth` is one flag away for local use.
-* **A paused run resumes through the route it paused on.** `Agent.run` takes a `RunState` in
-  place of a message, so the request body does literally that: `state` plus the `decisions` a
-  human made, instead of `message`. Reporting a pause without accepting one back would leave
-  every app to re-derive the five steps `RunState.from_json` exists for; a second pair of
-  `/resume` endpoints would leave a streaming client unable to resume streaming. The blob a
-  client sends back is a capability -- it carries the run's context and its approval ledger, and
-  nothing here records that one was already spent -- which is the other reason `RUNA_API_KEY` is
-  a server-to-server credential rather than something to hand a browser.
+  every route but `/health`; `--no-auth` turns it off for local use.
+* **A paused run resumes through the route it paused on.** The request body carries `state` plus
+  the `decisions` a human made, in place of `message`. That blob carries the run's context and
+  its approval ledger, and nothing here records that one was already spent, so `RUNA_API_KEY` is
+  a server-to-server credential, not something to hand a browser.
 
-`runa serve` is the short way to run this app, and `cli/serve.py` imports this module lazily so a
-plain install still runs every other command; only serving needs the `serve` extra. The app object
-itself is public, though: `runa new` scaffolds an `asgi.py` that builds it, for the deployment that
-brings its own server or mounts these routes inside a larger one. One Runa app per process, in
-that case: a second `create_app` for a different project is a `UserError` rather than two apps
-quietly sharing the last one's imports and database (see `project.use`).
+Only serving needs the `serve` extra; `cli/serve.py` imports this module lazily. `create_app` is
+public, for an `asgi.py` that brings its own server or mounts these routes inside a larger one.
+One Runa app per process: a second `create_app` for a different project is a `UserError` (see
+`project.use`).
 """
 
 import asyncio

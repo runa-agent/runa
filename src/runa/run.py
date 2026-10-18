@@ -1,8 +1,7 @@
 """`Run`: the result of `Agent.run()`/`run_sync()`, and `RunStream`, of `Agent.run_streamed()`.
 
-One result shape, built once by the turn loop and handed back unchanged. What the loop needs and a
-caller doesn't -- the run's `Transcript` -- is here too, underscore-prefixed: a private field on
-the one result, rather than a second result shape to convert from.
+One result shape, built once by the turn loop and handed back unchanged. The run's `Transcript`,
+which the loop needs and a caller doesn't, is an underscore-prefixed field on it.
 """
 
 from collections.abc import AsyncIterator
