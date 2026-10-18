@@ -74,22 +74,10 @@ class _InterruptionSchema(BaseModel):
 class _RunStateSchema(BaseModel):
     """The JSON envelope a `RunState` actually serializes through.
 
-    **Every field is required, deliberately.** `_to_schema` is the only writer, so a field it
-    forgets to pass is a type error at that one call site instead of a key silently defaulted on
-    the way out -- which is the whole guard against this mapping drifting from the dataclass it
-    mirrors. A blob missing a key is then a `UserError` from `from_json`, not a half-read state;
-    every blob this version writes carries all of them, and an older one is refused by
-    `schema_version` anyway.
-
-    The guardrail audit trail (see `GuardrailResults`) is the one field with no counterpart here
-    at all: every guardrail that ran is already a span in the trace `trace_id` names. The
-    transcript serializes itself (see `Transcript`), all but its tool calls. A dataclass `context`
-    does travel, but loses its original type on the way back out (see `RunState.from_json`'s
-    docstring).
-
-    `delegates` and `delegate_owners` are the paused-delegate stash's two halves, straight off
-    `PausedDelegates` and handed back to it by `from_json` -- which run owns a pending call is
-    recorded here rather than left to be inferred from the shape of what came back.
+    Every field is required, so a field `_to_schema` forgets is a type error there, and a blob
+    missing a key is a `UserError` from `from_json`. The guardrail audit trail isn't serialized:
+    each result is already a span in the trace `trace_id` names. `delegates` and
+    `delegate_owners` are `PausedDelegates`' two halves.
     """
 
     schema_version: Literal[3]

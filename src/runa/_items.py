@@ -3,45 +3,23 @@
 A `ConversationItem` is one turn of conversation as Runa's runtime passes it around: a plain
 dict in OpenAI's chat-completions wire format (`tool_calls` on an assistant message,
 `function.arguments` as a JSON string, `{"role": "tool", "tool_call_id": ...}` for a result).
-That is a deliberate choice, not a neutral interchange format. There is no neutral format, and
-adopting the one two of the three major APIs already speak costs one translating backend
-(`runa._models.anthropic`, the only module that ever converts away from this shape) where
-inventing a third would cost every backend one. The whole argument, and the typed-item
-alternative it rejects.
+`runa._models.anthropic` is the only module that converts away from this shape.
 
-The item stays a plain dict on purpose: `agent.history`, `session.add_items`, a `Compactor` and
-a serialized `RunState` all carry items, so one has to survive a JSON round trip and be readable
-by application code without importing a type. What plainness costs is that reading an item is
-guesswork -- `content` is a string on one turn and a list of parts on the next, a tool call
-carries no text at all -- so every reader in Runa goes through this module rather than guessing
-locally. Adding a content kind (reasoning blocks, citations, audio) is then a change to
-`content_text` here, not to a parser in each of six modules. The tool-call envelope is read here
-for the same reason: `tool_calls`/`call_id`/`call_name`/`call_arguments`/`answered_call_id` are
-the only statement of a convention no type enforces, so normalizing a provider's call ids, or
-answering a call with something other than a `tool_call_id` row, stays one edit.
+The item stays a plain dict so it survives a JSON round trip through `agent.history`,
+`session.add_items`, a `Compactor` and a serialized `RunState`, and application code can read it
+without importing a type. Because `content` is a string on one turn and a list of parts on the
+next, every reader in Runa goes through this module: `content_text` for words, and
+`tool_calls`/`call_id`/`call_name`/`call_arguments`/`answered_call_id` for the tool-call envelope.
 
-What the shape can't express, it keeps anyway. A provider content kind that is neither words nor
-a tool call -- Claude's signed thinking blocks -- has one slot to go in (`provider_blocks`),
-written and read only by the backend that produced it and taken back off by `wire_items` on the
-way out to anyone else, so a boundary's options are never just "translate it or drop it". The
-wire format then stays a bet about what two of three providers already speak, rather than a
-ceiling on what the third is allowed to say.
+A provider content kind that is neither words nor a tool call (Claude's signed thinking blocks)
+rides in `provider_blocks`, read only by the backend that wrote it and stripped by `wire_items`
+on the way to any other.
 
-Reading JSON a model wrote is the same guesswork a layer down, and lives here for the same
-reason: `parsed_arguments` for a tool call's arguments, `parsed_json_object` for a reply we asked
-to be JSON and which arrives wrapped in prose. Both raise `ValueError` and neither decides what
-that means -- how tolerant Runa is of a model's JSON is settled once, and the policy about a
-reply it can't read belongs to the caller that asked for it.
-
-Writing one is the same bet pointed the other way. Every item Runa puts into history is built
-here: the user message a turn arrives as, the system block that carries instructions or
-retrieved context, the result a tool call comes back as, and the assistant message a backend
-assembles a provider's response into, with the tool-call envelopes it carries. So giving any of
-them a field (structured content, an `is_error` flag on a failed call) is a change to one
-function rather than to every site that wrote the dict out by hand -- and the rule about when an
-absent field is `None` is stated once rather than copied per backend. A backend owns translating
-its provider's shape into these arguments, which is genuinely its own; it does not own the
-envelope, which is this module's.
+`parsed_arguments` and `parsed_json_object` read JSON a model wrote; both raise `ValueError` and
+leave the policy for an unreadable reply to the caller. Every item Runa puts into history is
+built here too (the user message, the system block, a tool result, the assistant message a
+backend assembles), so a backend translates its provider's response into these arguments but
+never writes the envelope itself.
 """
 
 import json

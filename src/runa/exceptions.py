@@ -41,11 +41,9 @@ class RunaError(Exception):
     """Base class for every exception a Runa agent run can end with.
 
     One message, carried as both the exception's args and its `.message`, and nothing else: what a
-    failed run accumulated is reported on the `Run` the turn loop returns in its place
-    (`run_internal/run_loop._errored`), not hung off the exception on its way up. Every subclass is
-    that plus its docstring: the ones built from structured fields (`GuardrailTripwireTriggered`,
-    `DuplicateToolCallError`) keep their own `__init__` to compose the message, then hand it here
-    like any other.
+    failed run accumulated is reported on the `"error"` `Run` returned in its place. Subclasses
+    built from structured fields (`GuardrailTripwireTriggered`, `DuplicateToolCallError`) compose
+    the message in their own `__init__` and hand it here.
     """
 
     def __init__(self, message: str) -> None:

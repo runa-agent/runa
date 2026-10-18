@@ -87,10 +87,7 @@ def read(db_path: Path, *tables: Table) -> Iterator[sqlite3.Connection | None]:
     Every caller turns it into whatever its own empty result is.
 
     Absence is the one condition answered that way, and it is tested rather than inferred from a
-    failed query. `sqlite3.OperationalError` around the `SELECT` would say the same thing about a
-    locked database, a corrupt file, a renamed column and a malformed statement, which is how
-    `runa chat --list` once reported no sessions while `--show` printed one of their transcripts.
-    Those all still raise.
+    failed query: a locked database, a corrupt file or a malformed statement still raises.
 
     A database that does exist is brought up to its declaration like any other connection: a read
     selects the columns the current release declares, so `reconcile`'s additive `ALTER TABLE`s

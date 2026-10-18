@@ -224,19 +224,12 @@ class Knowledge:
         return _ingest_locks.get((self.directory, self._header), asyncio.Lock)
 
     async def _fingerprint(self) -> str:
-        """A hash of all the chunks would be built from, as `_ingest_if_stale` compares it.
+        """A hash of everything the chunks would be built from, compared by `ingest`.
 
-        Internal: the public surface stays `search`/`ingest`, and a version is the store's
-        vocabulary, not an application's.
-
-        The model, its dimensions and the chunk shape are in the hash alongside the files' bytes:
-        chunks embedded by another model aren't comparable to this one's query vectors, so
-        changing `model=` has to invalidate the corpus exactly the way editing a file does.
-
-        Off the event loop, like a sync `@tool` or `@guardrail`: walking and reading the corpus
-        is blocking I/O whose cost grows with it, and `search` runs this before every turn of
-        every knowledge-backed run. `_digest` caches it per process, so the usual answer costs
-        one `stat` per file rather than a full read.
+        The model, its dimensions and the chunk shape are hashed alongside the files' bytes, so
+        changing `model=` invalidates the corpus the way editing a file does. Computed off the
+        event loop, since `search` runs this before every turn; `_digest` caches it per process,
+        so the usual answer costs one `stat` per file.
         """
         return await asyncio.to_thread(_digest, self.directory, self._header)
 
@@ -244,29 +237,14 @@ class Knowledge:
         """Bring the store up to date with `self.directory`, returning how many chunks it wrote.
 
         Zero means there was nothing to write: the store already held this corpus, or the corpus
-        is empty. Idempotent on purpose, because every caller wants the same thing -- the store
-        holding what the directory says -- and no caller knows whether the last request, the last
-        process or another replica got there first. So this is the one ingest verb: what `search`
-        calls before a query, and what `runa.serve` calls at startup to keep the cold-start cost
-        off a user's first turn. A cheap "if it's stale" path beside an expensive "rebuild now"
-        one would be two ways to ask one question, and the expensive one is the answer a
-        deployment would reach for by name and then pay for on every replica's every restart.
+        is empty. Idempotent: the question is "does the store hold what I would write", answered
+        by the store, so another process or replica that already ingested is never repeated.
+        `search` calls this before a query and `runa serve` at startup.
 
-        When a rebuild *is* called for it is a full one: discovers supported files, extracts their
-        text, chunks it, embeds every chunk, empties whatever was stored before, and stores the
-        fresh set under this corpus's fingerprint, so editing or removing a source file never
-        leaves stale chunks behind, with no file-tracking table to keep in sync. Safe to call when
-        `self.directory` doesn't exist or has no supported files: stores nothing rather than
-        raising, and an empty corpus is still a fingerprinted one.
-
-        The question asked is "does the store hold what I would write", not "have I ingested
-        yet": the answer is the store's, so the second `Knowledge` over an already-ingested
-        corpus searches it instead of rebuilding it -- which is what a per-request `Agent`
-        (`runa.serve`) and every replica after the first are. The version is read twice, once
-        before taking the lock and once under it. The first read is the common case, where the
-        corpus is current and a caller pays only for that one question; the second is what keeps
-        a queue of concurrent turns against a cold store from each rebuilding what the turn ahead
-        of it just finished.
+        A rebuild is a full one: every chunk is re-embedded and the previous set replaced, so an
+        edited or removed file never leaves stale chunks behind. A missing or empty directory
+        stores an empty, fingerprinted corpus rather than raising. The version is checked again
+        under the lock, so concurrent turns against a cold store rebuild it once.
         """
         fingerprint = await self._fingerprint()
         if await self._store.version() == fingerprint:

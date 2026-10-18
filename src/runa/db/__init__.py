@@ -1,39 +1,22 @@
 """`runa.db`: where state lives, decided once, by the environment.
 
-Everything Runa persists -- sessions, memory, knowledge, the cache, traces, eval history -- has to
-answer one question before it can read or write: is this deployment sharing a database, keeping
-its own file, or keeping nothing at all? This module is the only place that answers it, and
-`RUNA_DATABASE_URL` is the only thing it asks.
+Everything Runa persists -- sessions, memory, knowledge, the cache, traces, eval history -- is
+local, shared or ephemeral, and this module is the only place that decides which, from
+`RUNA_DATABASE_URL` alone. Unset means one `db/runa.db` SQLite file, created on first write. A
+`postgresql://` URL moves every concern to that database, which is what running more than one
+replica needs. `memory://` persists nothing: the stores live and die with the process, as a test
+suite wants. Every concern follows the variable together.
 
-Unset means local: one `db/runa.db` SQLite file, created on first write, no setup. A
-`postgresql://` URL means shared: every concern moves to that database, and more than one replica
-becomes possible. SQLite is per-process by design, so three pods on the default settings keep
-three disjoint histories and a dashboard that can only ever show one of them. `memory://` means
-nothing is persisted at all -- the whole store set lives in this process and dies with it, which
-is what a test suite wants and what no deployment does.
+The factories below are how every call site asks, one per concern, each returning a store
+object, so nothing above this module names a backend, a URL or a path. Each factory branches on
+the closed set of three backends itself; a new concern is one function here.
 
-The factories below are how every call site asks, one per concern. Each returns a store object,
-so nothing above this module names a backend, a URL or a path: `runa ui` holds a `TraceStore`, not
-a file, and moving a deployment to Postgres stays one environment variable rather than an edit.
-Every concern follows the variable together; a deployment where traces moved but sessions didn't
-would be worse than one where neither did.
+`runa.project.use(root)` points the process at an app's directory (the cwd by default), and every
+factory resolves against it: the local SQLite file, and files an app keeps as state rather than
+rows (`Knowledge`'s source directory, via `project_path`). A shared database ignores the root.
 
-Which project is being read is the one other thing every factory needs, and it is held once too,
-rather than threaded as a `root=` per factory (`Memory` and `Knowledge` are built inside
-`Agent.__init__`, which has no notion of a project root): `runa.project.use(root)` points the
-process at an app's directory, and every factory resolves against it. The process's cwd is the
-default, which is what a bare `python main.py` wants. A function handed someone else's project
-`root` says so through `use`, so that taking a `root` and reading that project's state are never
-two different things. For the database that moves the *local* file only; a shared deployment has
-one database, so `sqlite_path` goes unread. State an app keeps as files rather than rows --
-`Knowledge`'s source directory -- moves either way, and asks `project_path` instead.
-
-Every adapter import is deferred into the function that needs it: an app without the `postgres`
-extra has to be able to ask the question and get the SQLite answer.
-
-Each factory repeats the same three-way branch rather than delegating to one resolved backend
-object. That is deliberate: backends are a closed set of three, concerns are the axis that
-grows, and inline branching keeps a new concern at one function in one file.
+Every adapter import is deferred into the function that needs it, so an app without the
+`postgres` extra still gets the SQLite answer.
 """
 
 import os

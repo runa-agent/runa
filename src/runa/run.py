@@ -97,10 +97,8 @@ class Run(GuardrailAudit):
     def to_payload(self) -> dict[str, Any]:
         """This run as plain JSON-compatible data: what a `Run` looks like over the wire.
 
-        A transport (`runa serve`'s routes, `runa.web`, whatever ships next) renders a run by
-        calling this, not by re-listing the fields itself. The shape is a fact about `Run`, so it
-        belongs where `Run` is defined: the alternative is each transport re-deriving it, which is
-        how `serve` came to report a `tool_name` that `Interruption` never had.
+        Every transport (`runa serve`'s routes, `runa.web`) renders a run by calling this rather
+        than listing the fields itself.
 
         `status` is the `Run`'s own, so a caller distinguishes "the agent answered" from "it needs
         an approval" from "it failed" without parsing prose. `trace_id` is the handle for

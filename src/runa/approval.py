@@ -1,26 +1,16 @@
 """approval.py: the approval protocol -- `@approval`, and the ledger that decides each call.
 
-Approval is the most intricate thing the runtime does: a per-call decision, a sticky per-tool one
-that outlives it, a custom rejection message, a replay guard so an executed call never runs twice,
-and all of it durable across a process restart. The rules live here, in one object, rather than
-spread across the turn loop and `RunState`:
+`ApprovalLedger` holds every rule about deciding a call, durable across a process restart:
 
 * sticky beats the tool's own `needs_approval` predicate, which beats the per-call decision;
 * a rejection with no message of its own gets `ApprovalLedger.DEFAULT_REJECTION`;
 * a call id is claimed before it runs, and a claimed id never runs again.
 
-A run's governance (`runa._governance`) holds one `ApprovalLedger`, shared by reference with
-every delegate the run starts, which is what makes a caller's "always" answer cover the
-delegate's matching tool. It is never on the `RunContext` an `@approval` predicate is handed:
-the ledger is the framework's bookkeeping, not the app's. `run_internal.tool_execution` asks it
-`decide`/`claim`; `RunState` tells it `record` when an operator answers "always". Where a *paused
-delegate* is stashed, which of a run's interruptions are really its, and how both survive a
-restart belong to `runa.paused_delegates.PausedDelegates`, held beside this one.
+A run's governance (`runa._governance`) holds one ledger, shared by reference with every delegate
+the run starts, so a caller's "always" covers the delegate's matching tool. Which run resolves a
+paused delegate's call is `runa.paused_delegates`'.
 
-This module imports nothing from `runa` at runtime, on purpose: `runa.tool` and `_governance`
-both import it, and it has no business pulling either back in. `runa.paused_delegates` is the
-other half of pausing a run, kept out of here: a delegate's pause is about which *run* resolves
-a call, not which decision applies to it.
+Imports nothing from `runa` at runtime: `runa.tool` and `runa._governance` both import it.
 """
 
 import inspect

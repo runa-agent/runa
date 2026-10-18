@@ -4,11 +4,10 @@ import asyncio
 from typing import Any
 
 import pytest
-from helpers import stand_in_agent
+from helpers import ScriptedModel, scripted_agent
 
 from runa import db
 from runa._types import ModelResponse, Usage
-from runa.run_internal.run_loop import _run_async
 from runa.tool import ToolCall, tool
 from runa.tracing import ConsoleExporter, Trace, config, observe
 
@@ -49,22 +48,14 @@ def _tool_call_then_text(name: str, arguments: str, text: str) -> list[ModelResp
     ]
 
 
-class _ScriptedModel:
-    def __init__(self, responses: list[ModelResponse]) -> None:
-        self._responses = list(responses)
-
-    async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
-        return self._responses.pop(0)
-
-
 def _agent_with_tool() -> Any:
     @tool
     def now(x: int) -> str:
         """Return a fixed time, ignoring `x`."""
         return "ok"
 
-    return stand_in_agent(
-        model=_ScriptedModel(_tool_call_then_text("now", '{"x": 1}', "done")),
+    return scripted_agent(
+        model=ScriptedModel(_tool_call_then_text("now", '{"x": 1}', "done")),
         tools=[now],
     )
 
@@ -308,7 +299,7 @@ def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:
     """`capture_inputs=False` means a captured tool span's `input` stays `None`."""
     agent = _agent_with_tool()
     with observe.scoped(capture_inputs=False):
-        result = asyncio.run(_run_async(agent, "hi"))
+        result = agent.run_sync("hi")
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
@@ -324,13 +315,13 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
         """Return a dict containing an email."""
         return {"email": "a@b.com", "id": 1}
 
-    agent = stand_in_agent(
-        model=_ScriptedModel(_tool_call_then_text("lookup", "{}", "done")),
+    agent = scripted_agent(
+        model=ScriptedModel(_tool_call_then_text("lookup", "{}", "done")),
         tools=[lookup],
     )
 
     with observe.scoped(redact=["email"]):
-        result = asyncio.run(_run_async(agent, "hi"))
+        result = agent.run_sync("hi")
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
@@ -347,13 +338,13 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
         return "ok"
 
     long_arg = "x" * 100
-    agent = stand_in_agent(
-        model=_ScriptedModel(_tool_call_then_text("now", f'{{"x": "{long_arg}"}}', "done")),
+    agent = scripted_agent(
+        model=ScriptedModel(_tool_call_then_text("now", f'{{"x": "{long_arg}"}}', "done")),
         tools=[now],
     )
 
     with observe.scoped(max_input_bytes=10):
-        result = asyncio.run(_run_async(agent, "hi"))
+        result = agent.run_sync("hi")
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
@@ -376,13 +367,13 @@ def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> No
         """Return a long result, ignoring `order_id`."""
         return long_result
 
-    agent = stand_in_agent(
-        model=_ScriptedModel(_tool_call_then_text("lookup", '{"order_id": "4821"}', "done")),
+    agent = scripted_agent(
+        model=ScriptedModel(_tool_call_then_text("lookup", '{"order_id": "4821"}', "done")),
         tools=[lookup],
     )
 
     with observe.scoped(capture_inputs=False, max_tool_result_bytes=10):
-        result = asyncio.run(_run_async(agent, "hi"))
+        result = agent.run_sync("hi")
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")

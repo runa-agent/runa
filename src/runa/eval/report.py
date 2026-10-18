@@ -89,8 +89,7 @@ class Report:
         """Render the report roughly as `report.score`/`report.metrics`/`report.failures` show.
 
         Every metric the cases scored is shown, labeled and ordered by its declaration in
-        `eval/evaluation/metrics.py`: there is no list here to forget a metric from, which is how
-        a metric could decide whether cases passed while never appearing above their failures.
+        `eval/evaluation/metrics.py`, so a metric that decides whether cases pass is always shown.
         """
         rule = "─" * 32
         lines = [f"{self.agent_name} Evaluation", rule, ""]

@@ -1,51 +1,20 @@
 """db/schema.py: a table declared once, rendered in whichever dialect the adapter speaks.
 
 Four concerns keep rows in `runa.db`'s database -- sessions, traces, eval history and the cache --
-and each has two SQL adapters, one per answer `runa.db` can give. Both adapters need the same
-tables with the same columns and the same indexes, and until this module they each wrote their
-own `CREATE TABLE` string, with a docstring asking the next person to keep the two in step. They
-did not stay in step: the Postgres trace store carried indexes the SQLite one lacked, and the
-SQLite eval store carried none at all, which nobody noticed because nothing but prose said they
-had to match.
+and each has a SQLite and a Postgres adapter. A concern declares its `Table`s once, beside the
+code that turns a row into an object, and `ddl(dialect, *tables)` renders them, so a column added
+to a declaration appears in both backends or in neither. The whole difference between the
+dialects is the substitutions in `SQLITE` and `POSTGRES`.
 
-The whole difference between the two dialects is the handful of substitutions in `SQLITE` and
-`POSTGRES` below -- `REAL` against `DOUBLE PRECISION`, `AUTOINCREMENT` against `BIGSERIAL`, and
-two more. Everything else an adapter was repeating was the same text twice. So a concern declares
-its `Table`s once, beside the code that turns a row into an object, and `ddl(dialect, *tables)`
-renders them; a column added in the declaration appears in both backends or in neither.
+This is not a query builder: adapters write their own SQL, where they genuinely differ. The only
+query fragments here are `Dialect.placeholder` and `Table.placeholders` (`?` against `$1`). A
+predicate both adapters must phrase identically lives beside its concern's tables as a function
+of the values and the `Dialect` (`listing_clause`, `baseline_clause`), with a Python twin over
+rows for the ephemeral store in the same file.
 
-What this is not is a query builder. Adapters still write their own SQL, because that is where
-they genuinely differ (`INSERT OR REPLACE` against `ON CONFLICT ... EXCLUDED`, a batched
-`ANY($1::text[])`), and a builder general enough to express those would be a shallower module than
-the eight adapters it replaced. The only query fragments here are `Dialect.placeholder` and
-`Table.placeholders`, which are dialect, not query: `?` against `$1`.
-
-A concern whose adapters must phrase one predicate identically keeps that fragment beside its own
-tables, as a function of the values and the `Dialect` returning the clause and what it binds.
-There are three: `session/store.py`'s `listing_clause`, `tracing/store.py`'s `listing_clause` and
-`eval/store.py`'s `baseline_clause`. Each returns the whole fragment rather than a piece of one --
-the session one because an escaped `LIKE` pattern is meaningless without the `ESCAPE` clause naming
-the escape character, the other two because a numbered placeholder depends on how many values came
-before it, so a caller handed half a clause has to re-derive the count. Those are predicates a
-concern owns, not a query builder growing here: each states one sentence of policy ("the latest run
-for this agent, older than this one"), and the two adapters that must agree on it read it from one
-place instead of phrasing it twice.
-
-Three adapters, though, not two: the third is the ephemeral store, which answers the same question
-in Python over rows it keeps in the shape these tables declare. So each of those three clauses has
-a twin in the same file -- `listing_rows`, `listing_rows`, `baseline_row` -- taking the rows rather
-than a `Dialect` and returning the ones the clause would have selected. The policy is still stated
-twice, because SQL and Python genuinely are two languages, but both statements are on one screen,
-where changing one and not the other is visible. What would close that last gap is a query builder,
-and a builder able to express these would be the shallower module described above.
-
-Declaring a table is only half of owning it: `db/runa.db` outlives installs by design (that is the
-whole point of `--continue`, of trace history, of eval baselines), so a column added to a
-declaration below has to reach databases that already exist. `CREATE TABLE IF NOT EXISTS` does not
-do that -- on an existing table it is a no-op, and the next query fails with `no such column`.
-`reconcile` is the other half: it diffs what the declaration says against what the database has
-and emits the `ALTER TABLE ... ADD COLUMN` the difference needs, so the two halves answer from the
-same declaration.
+`db/runa.db` outlives installs, so a column added to a declaration has to reach databases that
+already exist, which `CREATE TABLE IF NOT EXISTS` doesn't do. `reconcile` diffs the declaration
+against the database and emits the `ALTER TABLE ... ADD COLUMN` the difference needs.
 """
 
 from collections.abc import Iterable

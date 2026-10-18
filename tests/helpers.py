@@ -4,10 +4,61 @@ import asyncio
 from collections.abc import Awaitable
 from typing import Any
 
-from runa._types import Usage
+from runa._types import ModelResponse, Usage
 from runa.agent import Agent
 from runa.run import Run
 from runa.tracing import Trace
+
+
+def text_response(text: str, usage: Usage | None = None) -> ModelResponse:
+    """A model reply that answers with `text` and calls no tools."""
+    return ModelResponse(
+        output=[{"role": "assistant", "content": text, "tool_calls": None}],
+        usage=usage or Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
+    )
+
+
+def tool_call_response(name: str, arguments: str, call_id: str = "call_1") -> ModelResponse:
+    """A model reply that calls the tool `name` with the JSON `arguments`, and says nothing."""
+    return ModelResponse(
+        output=[
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": arguments},
+                    }
+                ],
+            }
+        ],
+        usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
+    )
+
+
+class ScriptedModel:
+    """A `Model` that answers each call with the next of `responses`, recording what it was sent.
+
+    `calls` holds each request's input items, and `received_handoffs` the last request's handoffs.
+    """
+
+    def __init__(self, responses: list[ModelResponse]) -> None:
+        """Answer with `responses`, in order, one per call."""
+        self._responses = list(responses)
+        self.calls: list[list[Any]] = []
+        self.received_handoffs: list[Any] = []
+
+    async def get_response(self, request: Any) -> ModelResponse:
+        """Record `request`, then return the next scripted response."""
+        self.calls.append(list(request.input))
+        self.received_handoffs = request.handoffs
+        return self._responses.pop(0)
+
+    async def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Scripted models answer unstreamed only."""
+        raise NotImplementedError
 
 
 class _TestAgent(Agent):
@@ -15,13 +66,35 @@ class _TestAgent(Agent):
     instructions = "be helpful"
 
 
+def scripted_agent(model: Any, **settings: Any) -> Agent:
+    """A real `Agent`, answering with `model` and configured by `settings`, for `agent.run`.
+
+    `settings` are `Agent`'s own constructor keywords (`tools`, `guardrails`, `subagents`,
+    `hooks`, `compact`, ...), resolved the way an application's are, so a test through it also
+    covers the wiring between a declaration and the turn loop. The agent is named `TestAgent`
+    unless `name=` says otherwise.
+    """
+    return _TestAgent(model=model, **settings)
+
+
+def agent_class(name: str, model: Any, **settings: Any) -> type[Agent]:
+    """An `Agent` subclass named `name` declaring `model` and `settings`, for a `subagents` entry.
+
+    `subagents` lists classes, which `Agent.__init__` builds itself, so a handoff or delegate
+    target is declared rather than constructed.
+    """
+    return type(
+        name, (Agent,), {"name": name, "instructions": "be helpful", "model": model, **settings}
+    )
+
+
 def stand_in_agent(**attributes: Any) -> Agent:
     """A real `Agent` with `attributes` set on it, for a test that drives the turn loop directly.
 
-    The loop reads what `Agent.__init__` resolved, not what a subclass declares, so `attributes`
-    use the resolved names (`bound_guardrails`, `compactor`, `handoffs`, `mcp_servers`) and a test
-    names only the two or three its behaviour turns on. A name the agent has no attribute for is
-    refused rather than set and never read.
+    Only for what `Agent.run` cannot reach, such as an input list that doesn't end on the user's
+    message; everything else goes through `scripted_agent` and `agent.run`. `attributes` use the
+    resolved names (`bound_guardrails`, `compactor`, `handoffs`, `mcp_servers`). A name the agent
+    has no attribute for is refused rather than set and never read.
     """
     agent = _TestAgent()
     for name, value in attributes.items():

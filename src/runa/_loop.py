@@ -1,28 +1,15 @@
 """_loop.py: one resource per event loop, for the clients and pools that cannot outlive theirs.
 
 An `asyncpg.Pool`, a `redis.asyncio.Redis`, an `httpx.AsyncClient` and an MCP `ClientSession` all
-open their connections on the event loop that was running when they first used them, and none of
-them survives that loop being closed. A second `asyncio.run()` in the same process is enough to
-hit it -- `Agent.run_sync` makes one per call -- and the symptom is a hang acquiring a connection
-tied to a dead loop, or "Event loop is closed" on the next request.
+open their connections on the event loop running when they are first used, and none survives
+that loop closing. `Agent.run_sync` opens a loop per call, so a resource held across calls hangs
+or raises "Event loop is closed" unless it is held against its loop and rebuilt on another one.
+Every long-lived client that holds a connection is loop-scoped through `LoopCache`.
 
-The rule is the same for all four: hold the resource against the loop it belongs to, and build a
-new one when the current loop is not that one. It was written three times, in three slightly
-different ways, and the oldest of them keyed by `id(loop)`, which both kept an entry per
-closed loop forever and could in principle hand a resource to an unrelated loop that happened to
-reuse the address. This is that rule, once. A new long-lived client belongs here too: if it holds
-a connection, it is loop-scoped, and the exception is the one that has to be argued for.
-
-Nothing here knows what it is holding. `db/pool.py` keys pools by URL, `cache/redis.py` its client
-by URL, `mcp.py` its sessions by the server's address, `ModelProvider` its HTTP clients by provider
-prefix, and `embeddings.py` its one client by base URL; what they share is the lifetime, not the
-resource.
-
-Most of them fall away with their loop. The one that must not is a resource with something
-outside the process on the other end, like an MCP `.stdio` server's subprocess, which would keep
-running until the dropped session happened to be garbage collected. Such a cache is built with a
-`close`, and `run` -- the way to run a coroutine on a loop of its own -- closes every such
-resource on that loop before the loop goes, whoever opened it.
+Nothing here knows what it is holding; callers key their resource (a URL, a server address, a
+provider prefix) and share only the lifetime. A resource with something outside the process on
+the other end, like an MCP `.stdio` server's subprocess, is cached with a `close`, and `run`
+closes every such resource on its loop before the loop goes, whoever opened it.
 """
 
 import asyncio

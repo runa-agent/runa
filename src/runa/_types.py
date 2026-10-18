@@ -128,9 +128,8 @@ class RunContext[TContext]:
     read and write the run makes uses, `"auto"` and `"llm"` alike. The run sets it; user code
     reads it. `usage` is what this run has spent so far.
 
-    That is all of it, deliberately. How the run governs itself -- the approval ledger, the
-    paused-delegate stash, the guardrail audit trail -- is `runa._governance`'s, held beside this
-    by the loop rather than on it, so nothing an app is handed can reach into those protocols.
+    Nothing else: how the run governs itself (`runa._governance`) is held beside this, out of an
+    app's reach.
     """
 
     context: TContext = None  # pyright: ignore[reportAssignmentType]

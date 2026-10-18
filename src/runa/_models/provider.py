@@ -61,19 +61,10 @@ _PREFIXES: tuple[str, ...] = (_ANTHROPIC_PREFIX, *(p for e in _ENDPOINTS for p i
 def check_model_name(name: str) -> None:
     """Raise `UserError` unless `name`'s prefix is one Runa routes to a provider.
 
-    The set is closed, and that is the point. A model name is the only thing that picks the
-    vendor, the price, the capability and the credential, so a prefix that matches nothing can't
-    be answered with a default: `"claud-sonnet-5"` would send an app's prompts to a different
-    company than its author believes, under a different key, and report the resulting 404 as
-    model misbehaviour mid-run. Runa already refuses to let a misspelled *setting* name
-    (`modell = ...`) configure nothing silently; the typo one field over, on the value that
-    selects the provider, gets the same answer.
-
-    `Agent.__init__` calls this at construction, so the common case
-    fails before a run and names the attribute. `get_model` calls it too, being the seam a
-    provider can be reached through without an `Agent`. For an endpoint Runa
-    doesn't name -- a gateway, a proxy, something self-hosted -- the sanctioned shape is a `Model`
-    instance rather than a bare name, which `_checked_model` passes through untouched.
+    The set is closed: a model name picks the vendor and the credential, so a prefix that
+    matches nothing has no safe default (`"claud-sonnet-5"` must not reach another vendor under
+    another key). `Agent.__init__` and `get_model` both call this. An endpoint Runa doesn't name
+    is reached by passing a `Model` instance instead of a name.
     """
     if name.lower().startswith(_PREFIXES):
         return

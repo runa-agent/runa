@@ -1,10 +1,7 @@
 """run_loop.py: the turn loop (`_run_turns`), the `_Run` it works on, and run/resume orchestration.
 
-`Agent.run`/`run_streamed` are the only public way in: this is the Agent's implementation, not a
-seam of its own, which is why everything here is underscore-prefixed. `_finish` and `_errored`
-return the same `Run` the caller gets -- completed, paused, or failed -- so there is one result
-shape from the loop's last line to the caller's hands, built here on every path and nothing in
-between translating one into another.
+The implementation behind `Agent.run`/`run_streamed`, not a seam of its own. Every path out
+(`_finish` for completed and paused, `_errored` for failed) builds the `Run` the caller gets.
 """
 
 import asyncio
@@ -68,16 +65,10 @@ from runa.transcript import Transcript
 class _Frame:
     """What a run is known by before its agent is resolved, and all a failed run can report.
 
-    The agent it starts with, whose turn, token and time ceilings bound it; the trace and the
-    agent span everything hangs under; the `RunContext` user code is handed and the governance it
-    isn't; and the session, hooks and `emit` this particular call was made with. A run's entry
-    points differ only in how they build one (see `_run_async`, `_resume`, `_Run.delegate`), and
-    everything after that is `_within`'s, so something a run starts carrying is a field here and
-    nowhere else.
-
-    It exists before the run's boundary does because resolving the agent is inside that boundary:
-    listing an MCP server's tools starts a subprocess, which can fail, and a run that fails there
-    still closes this span and reports what this context spent.
+    The starting agent, the trace and agent span, the `RunContext` and the governance, and the
+    session, hooks and `emit` of this call. Entry points differ only in how they build one
+    (`_run_async`, `_resume`, `_Run.delegate`); everything after is `_within`'s. Built before the
+    agent is resolved, since resolving it can fail and the failed run still reports from here.
     """
 
     agent: AgentLike
@@ -94,17 +85,12 @@ class _Frame:
 class _Run:
     """One run, from the moment the loop starts it to the moment it becomes the caller's `Run`.
 
-    Its `frame`, and what needed the agent resolved: the `shape`, the `Transcript`, and the paused
-    state it's continuing, if any. The turn loop and the steps it calls take this, not a
-    re-listing of its fields, so something a run starts carrying doesn't ripple through a dozen
-    signatures.
+    Its `frame`, plus what needed the agent resolved: the `shape`, the `Transcript`, and the
+    paused state it continues, if any.
 
-    `shape` is the agent running now, resolved; `start` is the one the run began with. They are
-    the same object until a handoff, and separate names afterwards because the two readings
-    differ: who answered, and what the caller asked for. Memory extraction, compaction and the
-    run's turn and token ceilings are the caller's agent's settings, so they read `start`; the
-    turn itself reads `shape`. Either one's settings are its `agent`'s, read as
-    `shape.agent.<setting>`.
+    `shape` is the agent running now; `start` is the one the run began with, the same object
+    until a handoff. Memory extraction, compaction and the turn and token ceilings read `start`;
+    the turn itself reads `shape`.
     """
 
     frame: _Frame
@@ -131,7 +117,7 @@ class _Run:
         return _Spans(self.frame.trace, self.frame.agent_span.id)
 
     def span(self, name: str, span_type: Any, *, input: Any = None) -> AbstractContextManager[Span]:
-        """A span under this run's agent span, for a `with` block (see `_Spans.span`)."""
+        """A span under this run's agent span, for a `with` block."""
         return self.spans.span(name, span_type, input=input)
 
     def notify(self, event: StreamEvent) -> None:
@@ -142,18 +128,14 @@ class _Run:
     async def delegate(self, delegate: Delegate, input: str, call_id: str, *, under: Span) -> Run:
         """Run `delegate`'s agent on `input` as a nested run of this one, and return its `Run`.
 
-        The nested run's frame is this one's, with what is a delegate's own replaced: the agent,
-        whose turn, token and time ceilings it runs under, a `RunContext` over the same `context`
-        and `user_id` (its usage starts at zero and is merged into this run's here), and an agent
-        span under the call's `under` span. Everything else is shared, and anything a frame
-        starts carrying is shared too unless it is named below: the governance (one approval
-        ledger, one guardrail audit trail, one stash of paused delegates), the hooks, the trace.
-        This run's own deadline encloses the delegate's, as it does any tool call.
+        The nested frame is this one's with the delegate's own agent (and its ceilings), a
+        `RunContext` over the same `context` and `user_id` whose usage is merged back here, and
+        an agent span under `under`. The governance, hooks and trace are shared, as is anything
+        a frame starts carrying unless named below. This run's deadline encloses the delegate's.
 
-        Two things are deliberately not shared. A `session`: a delegate is handed fresh input,
-        not a conversation. And `emit`: a stream event doesn't say which agent produced it, so a
-        consumer would read a delegate's tokens as this run's answer; the stream sees the
-        delegate call itself, as a tool call and its output.
+        Not shared: the `session` (a delegate is handed fresh input, not a conversation) and
+        `emit` (a stream event doesn't say which agent produced it, so the stream sees the
+        delegate call and its output, not the delegate's tokens).
 
         A delegate that pauses for approval is stashed under `call_id` and raises
         `DelegatePaused`, so this run pauses on its interruptions; the same call reaching here
@@ -230,25 +212,11 @@ async def _no_matches() -> list[Any]:
     return []
 
 
-# What fail-open deliberately does *not* cover. Memory and knowledge degrade to no matches when
-# the backend doesn't answer -- an embeddings endpoint timing out, a vector store refusing a
-# connection -- because a run is still worth finishing without them. These shapes are not that:
-# they are Runa's own code being wrong, or the app's configuration being incomplete. Retrieval is
-# the one step whose failure leaves no mark on the output (an empty block reads exactly like a
-# corpus with nothing relevant in it), so a bug swallowed here is a bug nobody ever reports.
-#
-# Two groups, and nothing else: `UserError`, which the layer below raises when the app hasn't
-# configured what retrieval needs (no embeddings key), and the three exceptions Python raises when
-# an object isn't shaped the way the calling code assumed -- which at this seam is a custom
-# `MemoryLike`/`KnowledgeLike` whose `search` doesn't match the contract, and which would
-# otherwise read as a memory that simply never has anything to say.
-#
-# `RuntimeError` is deliberately not a third group, because it's the one failure the rest of
-# Runa works hardest to handle: it's what async plumbing raises for lifetime faults --
-# httpx's "client has been closed", asyncio's "Event loop is closed", a pool reached from a loop
-# that didn't open it. That is the backend not answering, in its most literal form. `runa._loop`
-# exists for those faults precisely because `run_sync` opens a loop per call; a custom store
-# holding its own client has none of that protection, and shouldn't end a run by hitting them.
+# Memory and knowledge degrade to no matches when the backend doesn't answer, because a run is
+# still worth finishing without them. These are not that: missing configuration (`UserError`, no
+# embeddings key) and a custom `MemoryLike`/`KnowledgeLike` not shaped as the contract says. An
+# empty retrieval reads like a corpus with nothing relevant, so these raise instead. A
+# `RuntimeError` ("Event loop is closed", a closed client) is a backend not answering, and degrades.
 _NOT_A_BACKEND_FAULT = (UserError, AttributeError, NameError, TypeError)
 
 
@@ -283,9 +251,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
     """Search `agent.memory`/`agent.knowledge` for `query` and fold the matches into the run.
 
     Both are searched concurrently, and each block goes right before the message it was retrieved
-    for. Called from inside `_guarded`, so a retrieval failure that isn't the backend's fault
-    (see `_NOT_A_BACKEND_FAULT`) ends the run with its span closed and its trace exported, like
-    any other failure the loop can hit.
+    for. A failure in `_NOT_A_BACKEND_FAULT` ends the run like any other.
     """
     start = run.start.agent
     memory, knowledge = start.memory, start.knowledge
@@ -344,8 +310,7 @@ async def _record_tool_results(
 ) -> None:
     """Fold one message's tool results into the run, following a handoff if there was one.
 
-    The loop reaches this twice -- after a resumed message's calls, and after each turn's own --
-    and a result recorded one way but not the other is how a resumed run drifts from a fresh one.
+    The one way tool results enter a run, resumed or fresh.
     """
     run.transcript.record(*results)
     for result in results:
@@ -428,17 +393,9 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
 async def _traced(run: Awaitable[Run], trace: Trace) -> Run:
     """Await a run that owns `trace`, then stamp it finished and export it, however it came out.
 
-    Once per trace, which is why only a run that started one comes through here and a delegate,
-    whose spans are in its caller's trace, does not: a trace exported by the step that produced it
-    and again by the run around it is two traces to whoever reads them, and one exported by
-    neither is a run nobody can explain. `run` is a `_guarded` one, so it comes back as a `Run`
-    or raises one of the two things that boundary lets through: an `OperatorError`, exported
-    like any other way out, or a cancellation, which isn't held up by an export.
-
-    Queued, not awaited: exporting is I/O (a database write, an HTTP POST to Langfuse), and
-    neither this run's caller nor the other requests a `runa serve` process is serving should
-    wait on one backend's bookkeeping. `Agent.run_sync` flushes the queue before it returns, so
-    a synchronous caller still finds its trace written.
+    Only a run that started its trace comes through here, never a delegate, so each trace is
+    exported exactly once. An `OperatorError` is exported too; a cancellation isn't held up by
+    one. The export is queued, not awaited; `Agent.run_sync` flushes the queue before returning.
     """
     try:
         result = await run
@@ -457,14 +414,8 @@ def _export(trace: Trace) -> None:
 def _errored(failure: RunaError, frame: _Frame) -> Run:
     """Close the run's agent span around `failure` and return the `Run` the caller was promised.
 
-    The third way out of the loop, beside `_finish`'s completed and paused `Run`s, and built here
-    for the same reason those are built there: one result shape, produced by the loop on every
-    path, rather than a payload bolted onto the exception for the layer above to rebuild one from.
-
-    What a failed run can say is exactly what its frame already holds -- the spans around the
-    failure, what it spent, which guardrails ran -- so this needs nothing the run hadn't put
-    somewhere a caller can read. The items it generated before failing are not among them: an
-    unfinished turn is not history, so the `Run` carries an empty `Transcript`.
+    Reports what the frame holds: the spans, the usage, the guardrails that ran. An unfinished
+    turn is not history, so the `Run` carries an empty `Transcript`.
     """
     _close_span(frame.agent_span, error=str(failure))
     return Run(
@@ -480,32 +431,13 @@ def _errored(failure: RunaError, frame: _Frame) -> Run:
 async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
     """Await the whole run and return its `Run`, the `"error"` one included.
 
-    This is the boundary the "errors never raise out of a run" promise is kept at, which is why
-    it encloses everything a run does -- resolving the agent's shape, loading a `session`,
-    dispatching hooks, the turn loop, and `_finish`'s saving and memory extraction -- and why it
-    catches `Exception` rather than Runa's own root. Half of what a run calls is application code
-    reached through a sanctioned extension point (a `Hooks` method, a custom `Session`, a
-    `Compactor`), and a contract that held for `MaxTurnsExceeded` but not for a locked SQLite file
-    would be no contract at all: `Agent.run` would hand the caller a traceback where
-    `Run(status="error")` was documented, and the failure would skip the close-out below, leaving
-    the one run worth inspecting with its agent span open. So anything unrecognized becomes
-    `UnexpectedError`, logged with its traceback on the way past, and the `Run` says what happened.
+    The boundary where "errors never raise out of a run" is kept: it encloses everything a run
+    does, application code included (a `Hooks` method, a `Session`, a `Compactor`), and catches
+    `Exception`. Anything not a `RunaError` becomes `UnexpectedError`, its traceback logged.
+    The frame agent's `timeout` bounds it, as `RunTimeout`. The frame's span is closed on every
+    way out; exporting the trace is `_traced`'s.
 
-    It takes the run's `_Frame` rather than the `_Run` the loop works on, because resolving the
-    agent's shape is itself inside here (see `_within`), so every way out of a run ends with the
-    frame's span closed. Exporting the trace is not this boundary's: a delegate is guarded the
-    same way inside its caller's trace, which `_traced` exports once, around the run that started
-    it.
-
-    The frame agent's `timeout` bounds the whole thing in wall-clock seconds. Exceeding it is
-    translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
-    span and comes back as `Run(status="error")` rather than leaving a half-finished trace behind.
-
-    Two kinds of exception deliberately pass through instead. `asyncio.CancelledError` and the
-    rest of `BaseException` are not caught at all: a caller that cancels a run (a dropped HTTP
-    connection, a shutting-down worker) wants it to stop, not to be turned into an error result.
-    And an `OperatorError` is a sibling of `RunaError` precisely so a run never reports one as its
-    own failure (see `runa.exceptions`); the span is still closed around it.
+    `BaseException` (cancellation) and `OperatorError` pass through, the span still closed.
     """
     timeout = frame.agent.timeout
     try:
@@ -538,12 +470,9 @@ async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
 async def _within(frame: _Frame, input: str | list[ConversationItem] | RunState) -> Run:
     """Run `frame.agent` on `input`, or continue the paused `RunState` it is, inside the boundary.
 
-    Every entry point ends here once its frame is built. Resolving the agent's shape, reading the
-    session's prior turns and building the `_Run` are all inside `_guarded`, beside the hooks and
-    the turn loop: each reaches something that can refuse -- `AgentShape.of` lists an MCP
-    server's tools, which starts its subprocess; a `Session` is the application's to implement,
-    and a locked SQLite file under `runa serve` is its most ordinary failure -- and inside the
-    boundary each ends the run the way every other failure does, with a trace to read.
+    Every entry point ends here once its frame is built. Resolving the agent's shape (which may
+    start an MCP subprocess) and reading the session are inside `_guarded` too, so their
+    failures end the run like any other.
     """
 
     async def turn() -> Run:
@@ -594,13 +523,8 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     A session-backed run persists nothing while paused: the whole turn is saved once it
     completes, whether that's straight away or after one or more resumes.
 
-    `usage` is the `RunContext`'s, which is where every turn (and every delegate's) has been
-    accumulating it all along; `Agent.run` records that same value to `last_usage` rather than
-    recomputing it.
-
-    Closing the agent span is this function's, ending and exporting the trace is not: that is
-    `_traced`'s, on the way out, so one run is one exported trace whether it completed, paused
-    or failed here -- saving to a session is as able to fail as any other step.
+    `usage` is the `RunContext`'s, every turn and delegate included. Closes the agent span;
+    exporting the trace is `_traced`'s.
     """
     frame, transcript = run.frame, run.transcript
     run_context, governance = frame.run_context, frame.governance
@@ -654,8 +578,7 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
 
     A fresh run first consults memory/knowledge for its latest user message and checks `input`
     against the agent's input guardrails; a resumed one (`input=None`) did both before it paused.
-    A resumed agent still gets its own `on_agent_start`: `_finish` always fires `on_agent_end`,
-    and a resumed run that skipped the start would emit an unpaired end.
+    A resumed agent still gets `on_agent_start`, pairing the `on_agent_end` `_finish` fires.
     """
     await run.frame.hooks.on_agent_start(run.frame.run_context, run.current_agent)
     if run.resumed is None:
@@ -677,10 +600,9 @@ async def _run_async(
 ) -> Run:
     """Run `agent` on `input`, or resume the paused `RunState` it is, and return its `Run`.
 
-    `Agent.run` is the public door; this is the room behind it. A run that comes in here owns its
-    trace and starts with a `_Governance` of its own; a `.delegate` subagent's never does, being a
-    nested run of its caller's (`_Run.delegate`). Its trace is named for `agent`'s class and
-    grouped under an enclosing `tracing.trace` block, else under `session`.
+    The run behind `Agent.run`: it owns its trace and its governance, which a delegate's nested
+    run shares with its caller instead (`_Run.delegate`). The trace is named for `agent`'s class
+    and grouped under an enclosing `tracing.trace` block, else under `session`.
     """
     dispatch = _Dispatch(hooks or LoggingHooks())
 

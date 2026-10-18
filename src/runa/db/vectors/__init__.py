@@ -32,11 +32,8 @@ from typing import Any, Protocol
 class Column:
     """One payload column: whether its value is JSON, and whether a row must have one.
 
-    `json=True` is the declaration that made the three adapters disagree before they shared this
-    module: a `dict` has to be encoded to be stored, and an adapter that skipped the encoding
-    (the in-process one did) round-tripped values the other two could not. Each adapter now
-    encodes a JSON column in whatever way its storage wants, and every adapter returns the
-    decoded value.
+    A `json=True` column is stored encoded (see `VectorSpec.encode`) by every adapter, and comes
+    back decoded.
     """
 
     json: bool = False
@@ -126,21 +123,15 @@ class VersionedVectorStore(VectorStore, Protocol):
     async def reset(self) -> None:
         """Delete every row and embedding, and clear the version along with them.
 
-        Emptying and unversioning are one operation because the two have to agree: a version that
-        outlived the rows it describes would claim a corpus the store no longer has, and
-        `Knowledge.search` would then return nothing, forever, instead of re-ingesting. So an
-        emptied store is always an unversioned one, and a caller that is about to refill it says
-        what it put there afterwards, with `stamp`.
+        An emptied store is always an unversioned one, so it is never mistaken for a current
+        corpus; a caller refilling it records what it put there afterwards, with `stamp`.
         """
         ...
 
     async def stamp(self, version: str) -> None:
         """Record `version` as what the store now holds, leaving the rows alone.
 
-        Separate from `reset`, and called after the last `add` rather than by the `reset` that
-        emptied the store, because a version is a claim about rows that are already there.
-        Stamped up front it would be a lie for as long as the writes behind it take, and every
-        other reader of this storage would believe it.
+        Called after the last `add`, never before: a version claims rows that are already there.
         """
         ...
 

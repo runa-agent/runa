@@ -152,8 +152,8 @@ class _Slot:
 class _TurnOutcome:
     """How the turn loop came out: an answer, or interruptions waiting on a human.
 
-    Only what the loop couldn't put on its `_Run` as it went. Everything it did record there --
-    the generated items, which agent ended up answering -- is read off the run.
+    Only what the loop couldn't record on the run as it went; the generated items and which
+    agent ended up answering are read off the run itself.
     """
 
     final_output: Any

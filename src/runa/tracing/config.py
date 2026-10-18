@@ -1,22 +1,12 @@
 """tracing/config.py: the privacy policy every captured span/trace goes through, plus `observe()`.
 
-Also the one place that knows how a finished trace reaches the exporters: `export_trace` for a
-synchronous caller, `export_trace_later` for a run that has a loop to protect, and
-`flush_exports` for whoever needs those finished. Which thread an exporter runs on is this
-module's decision to make -- see `TraceExporter`.
+Also how a finished trace reaches the exporters: `export_trace` on the calling thread,
+`export_trace_later` queued off a run's loop, and `flush_exports` to wait for the queue.
 
-One small policy, not a policy engine. `capture_inputs`/`capture_outputs` gate whether
-input/output are kept at all; `redact`/`redactor` scrub what's kept; the `max_*_bytes`
-limits truncate what's left. `run_internal/spans.py` applies it as each span opens and closes,
-and `lifecycle.py` applies the same policy to its DEBUG log lines, so one setting covers both.
-Both reach it through `policy()`, the module's one read accessor, which hands over the whole
-`Policy` rather than spelling one function per field.
-
-The policy lives in two places because its two call sites mean two different things by it: a
-process-wide default an application sets once at startup (`observe(...)`), and a per-task
-override that one `with observe.scoped(...)` block installs for its own duration. The override is
-a `ContextVar`, the way `tracing/manual.py` already holds the current trace, so a block opened
-while serving one request can't change what tracing captures for every other request in flight.
+`capture_inputs`/`capture_outputs` gate whether input/output are kept at all; `redact`/`redactor`
+scrub what's kept; the `max_*_bytes` limits truncate what's left. Spans and `lifecycle.py`'s DEBUG
+log lines both read it through `policy()`. It has a process-wide default (`observe(...)`) and a
+per-task override (`with observe.scoped(...)`), held in a `ContextVar`.
 """
 
 import contextvars
@@ -40,15 +30,8 @@ _REDACTED = "[REDACTED]"
 class TraceExporter(Protocol):
     """Exports a finished `Trace` somewhere: SQLite, the console, or a caller's own backend.
 
-    `export` is synchronous, and blocking in it is expected: an exporter is plain code doing
-    plain I/O -- a file write, an HTTP POST, `db/pool.run_sync` over an async driver as
-    `PostgresTraceStore` does -- and which thread it runs on is this module's decision rather
-    than the exporter's. A finishing run queues its trace with `export_trace_later`, so the write
-    happens on tracing's own thread while the run returns and the loop goes on serving every
-    other request; a caller that is
-    synchronous all the way down (a `tracing.trace` block, `runa traces`, `runa ui`) calls
-    `export_trace` inline on the thread it already has. `TraceStore` is synchronous for the same
-    reason.
+    `export` is synchronous and may block: a finishing run's trace is exported on tracing's own
+    thread, and a synchronous caller (a `tracing.trace` block, `runa ui`) exports inline.
     """
 
     def export(self, trace: Trace) -> None:
@@ -59,23 +42,16 @@ class TraceExporter(Protocol):
 _exporting = ThreadPoolExecutor(max_workers=1, thread_name_prefix="runa-export")
 """The thread every queued export runs on, created on the first one.
 
-One worker, deliberately. An exporter is usually a user's own class, so "your `export` is never
-called from two threads at once" is a promise worth more than exporting two traces in parallel,
-and it keeps traces exported in the order runs finished. It is also why this is not
-`asyncio.to_thread`: that pool is shared with the sync `@tool` and `@guardrail` offloads, where a
-burst of slow trace writes would sit in the slots a tool call needs.
-
-Its queue is drained before the interpreter exits, as every `ThreadPoolExecutor`'s is, so a
-script that ends right after `await agent.run(...)` still has its trace written.
+One worker, so an exporter's `export` is never called from two threads at once and traces are
+exported in the order runs finished. Its own pool, so slow exports never take the slots sync
+`@tool`/`@guardrail` calls run in. Drained before the interpreter exits.
 """
 
 
 def export_trace(trace: Trace) -> None:
     """Hand `trace` to every exporter active here, in order, on the calling thread.
 
-    Fail-open is the whole shape of this function: an exporter that raises is logged and the next
-    one still runs, because losing a trace is a worse outcome than losing one backend's copy of
-    it, and failing the run that produced it is worse than both.
+    An exporter that raises is logged and the next one still runs; nothing raises to the caller.
     """
     for exporter in exporters():
         try:
@@ -87,16 +63,9 @@ def export_trace(trace: Trace) -> None:
 def export_trace_later(trace: Trace) -> None:
     """Queue `export_trace(trace)` on `_exporting` and return without waiting for it.
 
-    The caller is a finishing run, which under `runa serve` shares one loop with every other
-    request in flight. A blocking exporter -- a Langfuse OTLP POST with retries behind it, a
-    `PostgresTraceStore.save` that waits up to 30s on a struggling database -- must hold up
-    neither that loop nor the run's own caller: one slow backend would otherwise be added to every
-    response, each queued behind the slowest export ahead of it.
-
-    So a `Run` can reach its caller a moment before its trace reaches the store. Whoever needs the
-    two to agree calls `flush_exports`, as `Agent.run_sync` does. The context is copied across
-    because `exporters()` reads `observe.scoped(...)`'s `ContextVar`, which the worker thread
-    would otherwise not see.
+    So a slow exporter never holds up a run's loop, a `Run` can reach its caller before its trace
+    reaches the store; `flush_exports` waits for it. The task's context is copied across, so the
+    worker sees `observe.scoped(...)` overrides.
     """
     _exporting.submit(contextvars.copy_context().run, export_trace, trace)
 
@@ -114,11 +83,8 @@ def flush_exports() -> None:
 class StoreExporter:
     """A `TraceExporter` that writes every finished trace to a `TraceStore`.
 
-    The whole implementation, for every persistent exporter: which store it holds is decided once,
-    when the exporter is built, instead of per write. `SQLiteExporter` and `PostgresExporter` are
-    this class with a store already chosen, and `_local_exporter` builds one over whatever
-    `runa.db.traces()` resolved. The exporter a deployment installed and the store its traces land
-    in are therefore one answer, not two.
+    Every persistent exporter: `SQLiteExporter` and `PostgresExporter` are this class with a store
+    already chosen, and `_local_exporter` builds one over `runa.db.traces()`.
     """
 
     def __init__(self, store: TraceStore) -> None:
@@ -151,12 +117,8 @@ class ConsoleExporter:
 def _default_exporters() -> list[TraceExporter]:
     """This deployment's store, plus `LangfuseExporter` if its credentials are already in the env.
 
-    Checking `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` here (rather than requiring an explicit
-    `add_exporter(LangfuseExporter())` call) is what lets a Langfuse project just work the moment
-    its keys are set, no code change needed -- the same "no separate setup step" property the
-    rest of tracing already has. The `runa[langfuse]` extra not being installed is the normal
-    case for most apps even with those env vars unset; silently skipping it here, rather than
-    raising, keeps that normal.
+    Langfuse is on whenever `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are set, with no code
+    change; without the `runa[langfuse]` extra it is silently skipped.
     """
     exporters: list[TraceExporter] = [_local_exporter()]
     if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
@@ -172,9 +134,7 @@ def _default_exporters() -> list[TraceExporter]:
 def _local_exporter() -> TraceExporter:
     """An exporter over whatever store `runa.db` resolved: one decision, asked once.
 
-    No fallback if the `postgres` extra is missing. Quietly writing traces to SQLite while
-    sessions and eval history go to Postgres splits one deployment's story across two stores to
-    avoid an error message, and the next session call would raise the same `ImportError` anyway.
+    No fallback to SQLite if the `postgres` extra is missing: traces follow the other concerns.
     """
     from runa import db
 
@@ -185,13 +145,8 @@ def _local_exporter() -> TraceExporter:
 class Policy:
     """The settings in force for one captured span: what `policy()` hands a caller.
 
-    Handed over whole rather than one field at a time. A caller that keeps a value and the limit
-    that applies to it (`run_internal/spans.py`, `lifecycle.py`) wants two fields of one policy,
-    not two functions that each read a different global, and a new setting here costs its readers
-    nothing. Frozen for that reason: the object outlives the call that asked for it, so a caller
-    holding one must not be able to write the policy every other caller is reading. `observe(...)`
-    and `observe.scoped(...)` replace it instead (`_merge`), which is also what makes a
-    `ContextVar` override safe to share.
+    Frozen: a caller holding one can't change the policy others read. `observe(...)` and
+    `observe.scoped(...)` replace it instead.
     """
 
     capture_inputs: bool = True
@@ -287,9 +242,7 @@ def apply_policy(value: Any, *, max_bytes: int) -> Any:
 def _resolved_default_exporters() -> list[TraceExporter]:
     """The process-wide exporter list, resolving `_default_exporters()` on first use.
 
-    Memoized on `_default` rather than on whatever `policy()` returned, so an
-    `observe.scoped(...)` block that overrides something other than `exporter` doesn't re-resolve
-    the list -- a second store, a second `LangfuseExporter` -- once per task that opens one.
+    Memoized on `_default`, so a scoped override of another field never re-resolves it.
     """
     if (installed := _default().exporters) is not None:
         return installed
@@ -311,15 +264,8 @@ def exporters() -> list[TraceExporter]:
 def add_exporter(exporter: TraceExporter) -> None:
     """Add `exporter` alongside whatever's already installed, instead of replacing it.
 
-    `observe(exporter=...)` is a full override, since it's also how an `observe.scoped(...)`
-    block temporarily swaps exporters for its duration. That makes it the wrong tool for adding one
-    more exporter (e.g. a second `LangfuseExporter`, pointed at a different project, or a
-    `ConsoleExporter` for local debugging) without disabling the default store exporter and
-    losing trace history. `LangfuseExporter` itself doesn't need this: `_default_exporters`
-    already adds one automatically once `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are set.
-
-    Writes the process-wide default, like an `observe(...)` call: adding an exporter is
-    startup configuration, not something one task does for its own duration.
+    `observe(exporter=...)` replaces the list; this keeps the default store exporter. Writes the
+    process-wide default, as startup configuration.
     """
     _set_default(_merge(_default(), {"exporters": [*_resolved_default_exporters(), exporter]}))
 
@@ -327,23 +273,15 @@ def add_exporter(exporter: TraceExporter) -> None:
 _OVERRIDABLE = tuple(f.name for f in fields(Policy) if f.name != "exporters")
 """Every `Policy` field an `observe(...)` call overrides under the field's own name.
 
-Read off `Policy` rather than written out again, so a ninth setting is a field plus the two
-public signatures that are its API -- not a third and fourth copy of the same list. `exporters`
-is the one field left out: it is set through `exporter=`, singular, which also takes a bare
-exporter rather than a one-item list.
+`exporters` is left out: it is set through `exporter=`, which also takes a bare exporter.
 """
 
 
 def _updates(named: dict[str, Any]) -> dict[str, Any]:
     """The overrides that were actually named, as the `Policy` field names `_merge` takes.
 
-    `named` is the calling signature's own `locals()`, which holds exactly one entry per
-    parameter. Both call sites spell their options out as keyword-only parameters, so a
-    misspelled one is a `TypeError` where it was written; this is only the shared translation of
-    what they collected, reading the names off `_OVERRIDABLE` rather than forwarding them one by
-    one (five of the eight options share a type with a neighbour, so a swapped pair would
-    type-check). A parameter renamed out of step with its field raises here on the first call
-    rather than overriding nothing. Anything else `named` carries (`self`) is never read.
+    `named` is the calling signature's `locals()`. A parameter renamed out of step with its
+    field raises here rather than overriding nothing.
     """
     updates: dict[str, Any] = {n: named[n] for n in _OVERRIDABLE if named[n] is not None}
     if (exporter := named["exporter"]) is not None:
@@ -354,10 +292,7 @@ def _updates(named: dict[str, Any]) -> dict[str, Any]:
 class _ScopedPolicy:
     """What `observe.scoped(...)` returns: its overrides, installed on the current task only.
 
-    It holds the overrides and nothing else -- no snapshot of the policy it will replace -- so it
-    is reusable and order-independent: a module-level constant, entered from two tasks at once or
-    nested inside itself, each entry reading the policy in force where it is entered and restoring
-    exactly that on exit. The tokens are a stack for that reason, one per live entry.
+    Reusable and reentrant: each entry restores the policy in force where it was entered.
     """
 
     def __init__(self, updates: dict[str, Any]) -> None:
@@ -383,18 +318,9 @@ class observe:
     `with observe.scoped(capture_inputs=False):` applies it to the current task only, and restores
     whatever that task saw before on exit.
 
-    The two scopes are two call sites rather than one name that infers which was meant from
-    whether a `with` follows it, the way `Guardrail.input`/`.output` and `Agent.handoff`/
-    `.delegate` name the choice they make. The inference needed a constructor that wrote the
-    process-wide default for `__enter__` to then undo, which made the object single-use (it
-    captured the default it would restore) and the write itself invisible to anyone reading the
-    call site. Naming the scope instead means nothing is captured and nothing is undone.
-
-    The scopes differ in reach, deliberately. A block that changed the policy process-wide would
-    mean one of `runa.serve`'s concurrent requests deciding what every other in-flight request
-    captures, so `.scoped` is a `ContextVar`. That costs the opposite: a task does not see an
-    override installed by a task that started after it, so the plain call -- not a block held open
-    around the whole application -- is what configures a whole deployment.
+    `.scoped` is a `ContextVar`, so one of `runa serve`'s concurrent requests never decides what
+    another captures. A task doesn't see an override installed by a task started after it, so
+    the plain call, not a block held open around the application, configures a deployment.
     """
 
     def __init__(
@@ -411,10 +337,7 @@ class observe:
     ) -> None:
         """Apply the given overrides to the process-wide tracing policy, permanently.
 
-        There is nothing to hold on to afterwards: the call *is* the configuration. An instance
-        is not a context manager, so a `with observe(...)` written out of habit is a `TypeError`
-        at that line -- pointing at `observe.scoped(...)` -- rather than a block whose policy
-        silently outlives it.
+        Not a context manager: `with observe(...)` is a `TypeError`; use `observe.scoped(...)`.
         """
         _set_default(_merge(_default(), _updates(locals())))
 
