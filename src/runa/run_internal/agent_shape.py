@@ -3,10 +3,11 @@
 An agent's settings are read off the agent itself, through `runa.agent_like`'s `AgentLike`. This
 module holds only what a run has to *resolve* from them, asked by more than one module: its tools,
 including the ones its MCP servers list; its handoffs and delegates, keyed by the tool name that
-triggers each; and its model. `run_loop`, `tool_execution` and `guardrails` all have to agree on
-those answers, so none of them owns these, and each is worked out once when the agent starts
-running rather than re-derived by whichever module needs it next. A model name resolves through
-the one process-wide `ModelProvider`, which caches each provider's client.
+triggers each; the schema of every callable the model is offered; and its model. `run_loop`,
+`tool_execution` and `guardrails` all have to agree on those answers, so none of them owns these,
+and each is worked out once when the agent starts running rather than re-derived by whichever
+module needs it next. A model name resolves through the one process-wide `ModelProvider`, which
+caches each provider's client.
 
 Only `run_internal` imports this module.
 
@@ -17,7 +18,7 @@ Work that belongs to a single caller lives with that caller instead -- approval 
 
 from dataclasses import dataclass
 
-from runa._models import Model, ModelProvider
+from runa._models import Model, ModelProvider, ToolSchema
 from runa.agent_like import AgentLike
 from runa.handoff import Delegate, Handoff
 from runa.tool import FunctionTool
@@ -36,18 +37,42 @@ class AgentShape:
     tools: list[FunctionTool]
     handoffs: dict[str, Handoff]
     delegates: dict[str, Delegate]
+    offered: list[ToolSchema]
+    """Every tool, delegate and handoff, in the order the model is offered them."""
 
     @classmethod
     async def of(cls, agent: AgentLike) -> AgentShape:
-        """`agent`'s shape: its MCP servers' tools fetched, its subagents keyed by tool name."""
+        """`agent`'s shape: its MCP servers' tools fetched, its subagents keyed by tool name.
+
+        A handoff takes no structured input from the model: calling it is itself the signal to
+        switch agents, so its schema's `parameters` is always an empty object.
+        """
         tools = list(agent.tools)
         for server in agent.mcp_servers:
             tools.extend(await server.list_tools())
+        no_input = {"type": "object", "properties": {}}
+        offered = [
+            *(
+                ToolSchema(tool.name, tool.description or "", tool.params_json_schema or no_input)
+                for tool in tools
+            ),
+            *(
+                ToolSchema(
+                    delegate.tool_name, delegate.tool_description, delegate.params_json_schema
+                )
+                for delegate in agent.delegates
+            ),
+            *(
+                ToolSchema(handoff.tool_name, handoff.tool_description or "", no_input)
+                for handoff in agent.handoffs
+            ),
+        ]
         return cls(
             agent=agent,
             tools=tools,
             handoffs={handoff.tool_name: handoff for handoff in agent.handoffs},
             delegates={delegate.tool_name: delegate for delegate in agent.delegates},
+            offered=offered,
         )
 
     def find_tool(self, name: str) -> FunctionTool | None:

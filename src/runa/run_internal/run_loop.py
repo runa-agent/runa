@@ -319,10 +319,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
                 input=items,
                 system_instructions=system_instructions,
                 model_settings=agent.model_settings,
-                tools=shape.tools,
+                tools=shape.offered,
                 output_schema=agent.output_type,
-                handoffs=list(shape.handoffs.values()),
-                delegates=list(shape.delegates.values()),
             )
             if run.frame.emit is None:
                 response = await model.get_response(request)

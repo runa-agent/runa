@@ -11,11 +11,10 @@ unnamed provider's model quietly resolved against OpenAI's endpoint.
 
 Conversation items are plain chat-completions-shaped message dicts everywhere in Runa (see
 `runa._items`, which owns that shape and every reader of it); `AnthropicModel` is the only place
-that ever converts away from it. Tools/delegates/handoffs are read structurally here
-(`.name`/`.description`/`.params_json_schema` for a tool, `.tool_name`/`.tool_description` for a
-handoff, and both of those plus `.params_json_schema` for a delegate) rather than importing their
-concrete types, so this package has no dependency on `runa.tool`/`runa.handoff`; all three arrive
-at a backend as a `ToolSchema`, which belongs to neither provider's wire format.
+that ever converts away from it. Every callable the model is offered arrives as a `ToolSchema`
+(a name, a description, a JSON schema for its arguments), which belongs to neither provider's wire
+format; whether a run treats a call as a tool, a delegate or a handoff is not this package's
+concern.
 
 A turn is one `ModelRequest`, so adding something a request carries doesn't re-thread a parameter
 through every backend. Split by concern: `interface` (the `Model` protocol, `ModelRequest`,
@@ -33,7 +32,7 @@ routes to; nothing else needs either.
 
 from typing import TYPE_CHECKING
 
-from runa._models.interface import Model, ModelRequest, StreamDelta
+from runa._models.interface import Model, ModelRequest, StreamDelta, ToolSchema
 from runa._models.provider import DEFAULT_MODEL, OPENAI, ModelProvider, check_model_name
 
 if TYPE_CHECKING:
@@ -59,6 +58,7 @@ __all__ = [
     "ModelRequest",
     "OpenAICompatibleModel",
     "StreamDelta",
+    "ToolSchema",
     "check_model_name",
 ]
 

@@ -41,19 +41,19 @@ def tool_call_response(name: str, arguments: str, call_id: str = "call_1") -> Mo
 class ScriptedModel:
     """A `Model` that answers each call with the next of `responses`, recording what it was sent.
 
-    `calls` holds each request's input items, and `received_handoffs` the last request's handoffs.
+    `calls` holds each request's input items, and `received_tools` the last request's tools.
     """
 
     def __init__(self, responses: list[ModelResponse]) -> None:
         """Answer with `responses`, in order, one per call."""
         self._responses = list(responses)
         self.calls: list[list[Any]] = []
-        self.received_handoffs: list[Any] = []
+        self.received_tools: list[Any] = []
 
     async def get_response(self, request: Any) -> ModelResponse:
         """Record `request`, then return the next scripted response."""
         self.calls.append(list(request.input))
-        self.received_handoffs = request.handoffs
+        self.received_tools = request.tools
         return self._responses.pop(0)
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003

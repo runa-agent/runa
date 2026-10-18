@@ -25,7 +25,6 @@ from runa._types import ModelResponse, ModelSettings, Usage
 from runa.compact import default_compactor
 from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase, guardrail
-from runa.handoff import Handoff
 from runa.lifecycle import Hooks
 from runa.run import Run
 from runa.run_internal.run_loop import _run_async
@@ -220,9 +219,9 @@ def test_a_handoff_reaches_the_model_under_the_tool_name_it_was_given() -> None:
 
     main.run_sync("hello")
 
-    (received,) = model.received_handoffs
-    assert isinstance(received, Handoff)
-    assert (received.tool_name, received.tool_description) == ("escalate", "Escalate to a human.")
+    (received,) = model.received_tools
+    assert (received.name, received.description) == ("escalate", "Escalate to a human.")
+    assert received.parameters == {"type": "object", "properties": {}}
 
 
 def test_input_guardrail_tripwire_halts_the_run() -> None:

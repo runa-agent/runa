@@ -14,7 +14,13 @@ from pydantic import BaseModel
 
 from runa import content
 from runa._items import assistant_message, provider_blocks, tool_call, tool_result
-from runa._models import AnthropicModel, ModelProvider, ModelRequest, OpenAICompatibleModel
+from runa._models import (
+    AnthropicModel,
+    ModelProvider,
+    ModelRequest,
+    OpenAICompatibleModel,
+    ToolSchema,
+)
 from runa._types import ModelSettings
 from runa.exceptions import UserError
 
@@ -142,11 +148,10 @@ def test_reuses_one_client_per_provider(monkeypatch: pytest.MonkeyPatch) -> None
     assert first._client is second._client
 
 
-class _Tool:
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.description = "Get the weather."
-        self.params_json_schema = {"type": "object", "properties": {"city": {"type": "string"}}}
+def _tool(name: str) -> ToolSchema:
+    return ToolSchema(
+        name, "Get the weather.", {"type": "object", "properties": {"city": {"type": "string"}}}
+    )
 
 
 def _mock_client(handler: Any) -> httpx.AsyncClient:
@@ -189,7 +194,7 @@ def test_openai_compatible_get_response_parses_text_and_tool_calls() -> None:
 
     async def call() -> Any:
         return await model.get_response(
-            ModelRequest(input=[{"role": "user", "content": "hi"}], tools=[_Tool("weather")])
+            ModelRequest(input=[{"role": "user", "content": "hi"}], tools=[_tool("weather")])
         )
 
     response = asyncio.run(call())
@@ -815,7 +820,7 @@ def test_anthropic_drops_a_turn_with_no_content() -> None:
 
 def test_anthropic_translates_a_tools_function_schema() -> None:
     """A Runa tool reaches Anthropic in its own `input_schema` shape, not OpenAI's `parameters`."""
-    request = _anthropic_request([{"role": "user", "content": "hi"}], tools=[_Tool("weather")])
+    request = _anthropic_request([{"role": "user", "content": "hi"}], tools=[_tool("weather")])
 
     assert request["tools"] == [
         {
@@ -841,7 +846,7 @@ def test_anthropic_tool_choice(tool_choice: Any, expected: dict[str, Any] | None
     request = _anthropic_request(
         [{"role": "user", "content": "hi"}],
         ModelSettings(tool_choice=tool_choice),
-        tools=[_Tool("weather")],
+        tools=[_tool("weather")],
     )
 
     assert request.get("tool_choice") == expected
@@ -864,7 +869,7 @@ def test_anthropic_parallel_tool_calls_false_disables_parallel_tool_use(
     request = _anthropic_request(
         [{"role": "user", "content": "hi"}],
         ModelSettings(tool_choice=tool_choice, parallel_tool_calls=False),
-        tools=[_Tool("weather")],
+        tools=[_tool("weather")],
     )
 
     assert request["tool_choice"] == expected
@@ -919,7 +924,7 @@ def _body(backend: Any, **settings: Any) -> dict[str, Any]:
         ModelRequest(
             input=[{"role": "user", "content": "hi"}],
             model_settings=ModelSettings(**settings),
-            tools=[_Tool("weather")],
+            tools=[_tool("weather")],
         )
     )
 

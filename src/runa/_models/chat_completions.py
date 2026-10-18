@@ -16,7 +16,6 @@ from runa._models.interface import (
     StreamDelta,
     ToolSchema,
     output_json_schema,
-    tool_schemas,
 )
 from runa._types import (
     InputTokensDetails,
@@ -153,7 +152,7 @@ class OpenAICompatibleModel:
         """The JSON body one `request` puts on the wire."""
         settings = request.model_settings
         body: dict[str, Any] = {"model": self.model, "messages": wire_items(request.messages)}
-        tools = [_wire_tool(schema) for schema in tool_schemas(request)]
+        tools = [_wire_tool(schema) for schema in request.tools]
         if tools:
             body["tools"] = tools
         if settings.tool_choice is not None:

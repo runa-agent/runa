@@ -27,7 +27,6 @@ from runa._models.interface import (
     StreamDelta,
     ToolSchema,
     output_json_schema,
-    tool_schemas,
 )
 from runa._types import (
     InputTokensDetails,
@@ -216,7 +215,7 @@ class AnthropicModel:
         """The Messages API body one `request` puts on the wire."""
         settings = request.model_settings
         system, turns = _to_anthropic_messages(request.messages)
-        tools = [_to_anthropic_tool(schema) for schema in tool_schemas(request)]
+        tools = [_to_anthropic_tool(schema) for schema in request.tools]
 
         body: dict[str, Any] = {
             "model": self.model,

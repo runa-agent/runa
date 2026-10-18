@@ -15,21 +15,27 @@ from runa._types import ModelResponse, ModelSettings, Usage
 
 
 @dataclass(frozen=True)
+class ToolSchema:
+    """One callable the model is offered, in neither provider's wire shape."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class ModelRequest:
     """One turn's worth of input: everything a backend needs to put a request on the wire.
 
-    `tools`/`delegates`/`handoffs` are read structurally (see the package docstring);
-    `output_schema` is `None` or `str` for plain-text output, or any other type to ask the backend
-    for JSON output.
+    `tools` is every callable the model is offered, in order; `output_schema` is `None` or `str`
+    for plain-text output, or any other type to ask the backend for JSON output.
     """
 
     input: list[ConversationItem]
     system_instructions: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings)
-    tools: list[Any] = field(default_factory=list)
+    tools: list[ToolSchema] = field(default_factory=list)
     output_schema: type | None = None
-    handoffs: list[Any] = field(default_factory=list)
-    delegates: list[Any] = field(default_factory=list)
 
     @property
     def messages(self) -> list[ConversationItem]:
@@ -73,38 +79,6 @@ class StreamDelta:
     provider_blocks: list[Any] | None = None
 
 
-@dataclass(frozen=True)
-class ToolSchema:
-    """One callable the model is offered, in neither provider's wire shape."""
-
-    name: str
-    description: str
-    parameters: dict[str, Any]
-
-
-def tool_schemas(request: ModelRequest) -> list[ToolSchema]:
-    """Every tool, delegate and handoff on `request`, in the order the model is offered them.
-
-    A handoff takes no structured input from the model: calling it is itself the signal to
-    switch agents, so its `parameters` is always an empty object.
-    """
-    no_input = {"type": "object", "properties": {}}
-    return [
-        *(
-            ToolSchema(tool.name, tool.description or "", tool.params_json_schema or no_input)
-            for tool in request.tools
-        ),
-        *(
-            ToolSchema(delegate.tool_name, delegate.tool_description, delegate.params_json_schema)
-            for delegate in request.delegates
-        ),
-        *(
-            ToolSchema(handoff.tool_name, handoff.tool_description or "", no_input)
-            for handoff in request.handoffs
-        ),
-    ]
-
-
 def output_json_schema(request: ModelRequest) -> dict[str, Any] | None:
     """The JSON schema `request.output_schema` asks for; `None` for plain-text output."""
     output_schema = request.output_schema
@@ -132,5 +106,4 @@ __all__ = [
     "StreamDelta",
     "ToolSchema",
     "output_json_schema",
-    "tool_schemas",
 ]
