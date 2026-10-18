@@ -8,10 +8,7 @@ those answers, so none of them owns these, and each is worked out once when the 
 running rather than re-derived by whichever module needs it next. A model name resolves through
 the one process-wide `ModelProvider`, which caches each provider's client.
 
-Only `run_internal` imports this module. A question a public type asks too -- what a `handoffs`
-list may hold, which `RunState` needs to walk a graph of agents -- is answered by the public type
-that owns it (`Handoff.by_tool_name`) and called from here, so the dependency between the two
-layers stays one-way.
+Only `run_internal` imports this module.
 
 Work that belongs to a single caller lives with that caller instead -- approval gating in
 `tool_execution`, output parsing and instruction resolution in `run_loop`, agent lookup by name in
@@ -49,7 +46,7 @@ class AgentShape:
         return cls(
             agent=agent,
             tools=tools,
-            handoffs=Handoff.by_tool_name(agent.handoffs),
+            handoffs={handoff.tool_name: handoff for handoff in agent.handoffs},
             delegates={delegate.tool_name: delegate for delegate in agent.delegates},
         )
 

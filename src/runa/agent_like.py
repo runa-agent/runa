@@ -29,7 +29,7 @@ from runa.lifecycle import Hooks
 from runa.tool import FunctionTool
 
 if TYPE_CHECKING:
-    from runa.handoff import Delegate  # which reads agents through this protocol
+    from runa.handoff import Delegate, Handoff  # which read agents through this protocol
     from runa.knowledge import KnowledgeLike
     from runa.memory import MemoryLike
 
@@ -73,8 +73,8 @@ class AgentLike(Protocol):
         ...
 
     @property
-    def handoffs(self) -> list[Any]:
-        """Its handoff targets, as `Handoff.by_tool_name` reads them (`runa.handoff`)."""
+    def handoffs(self) -> list[Handoff]:
+        """The subagents it hands the run over to, each a switch tool (see `runa.handoff`)."""
         ...
 
     @property

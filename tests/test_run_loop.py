@@ -211,22 +211,18 @@ def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     )
 
 
-def test_bare_agent_handoff_is_normalized_before_reaching_the_model() -> None:
-    """A `.handoff` subagent reaches the model wrapped as a `Handoff`, not as the bare `Agent`.
-
-    `Agent` keeps the built subagent itself in `.handoffs`, but a model is handed tool schemas,
-    which need `.tool_name`/`.tool_description` a bare `Agent` lacks.
-    """
+def test_a_handoff_reaches_the_model_under_the_tool_name_it_was_given() -> None:
+    """`.handoff(tool_name=..., tool_description=...)` is what the model is offered."""
     target = agent_class("Target", ScriptedModel([text_response("handled by target")]))
     model = ScriptedModel([text_response("hi")])
-    main = scripted_agent(name="Main", subagents=[target.handoff], model=model)
+    escalate = target.handoff(tool_name="escalate", tool_description="Escalate to a human.")
+    main = scripted_agent(name="Main", subagents=[escalate], model=model)
 
     main.run_sync("hello")
 
-    assert len(model.received_handoffs) == 1
     (received,) = model.received_handoffs
     assert isinstance(received, Handoff)
-    assert received.tool_name == "transfer_to_target"
+    assert (received.tool_name, received.tool_description) == ("escalate", "Escalate to a human.")
 
 
 def test_input_guardrail_tripwire_halts_the_run() -> None:

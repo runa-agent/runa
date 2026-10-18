@@ -26,7 +26,7 @@ from runa._types import MessageContent, ModelSettings, RunContext, Usage
 from runa.compact import Compactor, default_compactor
 from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
-from runa.handoff import Delegate, Mode
+from runa.handoff import Delegate, Handoff, Mode
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks
 from runa.memory import Memory, MemoryLike
@@ -433,7 +433,7 @@ class Agent:
         # Before the subagents: one that lists this agent back wraps it as a tool named after it.
         self.name: str = name
 
-        handoffs: list[Any] = []
+        handoffs: list[Handoff] = []
         delegates: list[Delegate] = []
         tools = list(setting["tools"] or [])
         with _agent_graph(self) as build:
@@ -441,14 +441,16 @@ class Agent:
                 if isinstance(sub, Subagent):
                     agent = build(sub.agent)
                     if sub.mode == "handoff":
-                        handoffs.append(agent)
+                        handoffs.append(
+                            Handoff.from_agent(agent, sub.tool_name, sub.tool_description)
+                        )
                     else:
                         delegates.append(
                             Delegate.from_agent(agent, sub.tool_name, sub.tool_description)
                         )
                 else:
                     agent = build(sub)
-                    handoffs.append(agent)
+                    handoffs.append(Handoff.from_agent(agent))
                     delegates.append(Delegate.from_agent(agent))
 
         # Unannotated: a subclass declares these as the setting, `"auto"` say, not as the source.
@@ -461,7 +463,7 @@ class Agent:
         self.model: str | Any = _checked_model(setting["model"])
         self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
         self.tools: list[FunctionTool] = [*tools, *memory_tools, *knowledge_tools]
-        self.handoffs: list[Any] = handoffs
+        self.handoffs: list[Handoff] = handoffs
         self.delegates: list[Delegate] = delegates
         self.mcp_servers: list[Any] = list(setting["mcp"] or [])
         # Not `self.guardrails`, the name a subclass declares the list under.

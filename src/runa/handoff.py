@@ -56,28 +56,15 @@ class Handoff:
     tool_description: str
 
     @classmethod
-    def from_agent(cls, agent: AgentLike) -> Handoff:
-        """Build a `Handoff` for `agent` with a name/description derived from it."""
+    def from_agent(
+        cls, agent: AgentLike, tool_name: str | None = None, tool_description: str | None = None
+    ) -> Handoff:
+        """Build a `Handoff` for `agent`, its name/description derived from it unless given."""
         return cls(
             agent=agent,
-            tool_name=f"transfer_to_{_slugify(agent.name)}",
-            tool_description=f"Transfer the conversation to {agent.name}.",
+            tool_name=tool_name or f"transfer_to_{_slugify(agent.name)}",
+            tool_description=tool_description or f"Transfer the conversation to {agent.name}.",
         )
-
-    @classmethod
-    def by_tool_name(cls, handoffs: list[Any]) -> dict[str, Handoff]:
-        """`handoffs` keyed by the tool name that triggers each, wrapping any bare `Agent` given.
-
-        What a `handoffs` list may hold is this class's own knowledge, so turning one into the
-        map the run loop reads lives here rather than in whichever caller needs it next -- both
-        `run_internal.agent_shape` (once per agent, when it starts running) and `subagent_edges`
-        below (walking a graph of agents) ask for it.
-        """
-        keyed: dict[str, Handoff] = {}
-        for entry in handoffs:
-            handoff = entry if isinstance(entry, cls) else cls.from_agent(entry)
-            keyed[handoff.tool_name] = handoff
-        return keyed
 
 
 @dataclass(frozen=True)
@@ -119,11 +106,10 @@ def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
     up as both, so it is yielded twice, once per mode -- which is what it is: two tools the model
     picks between.
 
-    What a `handoffs` list may hold is this module's knowledge (see `Handoff.by_tool_name`), so
-    reading both lists lives here and not in each module that needs the graph: `run_state`
+    Reading both lists lives here and not in each module that needs the graph: `run_state`
     resolves a paused run's agent by name, `Agent.graph` draws the edges.
     """
-    for handoff in Handoff.by_tool_name(agent.handoffs).values():
+    for handoff in agent.handoffs:
         yield "handoff", handoff.agent
     for delegate in agent.delegates:
         yield "delegate", delegate.agent

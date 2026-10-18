@@ -34,8 +34,8 @@ from runa.transcript import Transcript
 
 
 def _handoff_names(agent: Agent) -> list[str]:
-    """Names of an agent's handoffs, narrowed away from the raw `Handoff` union member."""
-    return [h.name for h in agent.handoffs if isinstance(h, Agent)]
+    """Names of the agents an agent hands off to."""
+    return [handoff.agent.name for handoff in agent.handoffs]
 
 
 def _tool_names(agent: Agent) -> list[str]:
@@ -231,7 +231,7 @@ def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
 
     (billing,) = [delegate.agent for delegate in triage.delegates]
     assert billing is not None
-    assert billing.handoffs == [triage]
+    assert [handoff.agent for handoff in billing.handoffs] == [triage]
 
 
 def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
