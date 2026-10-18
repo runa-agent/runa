@@ -1,10 +1,10 @@
-"""The session, memory, knowledge and cache contracts, run against the Postgres adapters.
+"""The session, vector and cache contracts, run against the Postgres adapters.
 
 The checks are `tests/contracts/`, the same ones `tests/test_session_store.py`,
-`tests/test_memory.py`, `tests/test_knowledge.py` and `tests/test_cache.py` drive over the local
-backends. That is the whole point of running them here: a deployment that sets
-`RUNA_DATABASE_URL=postgresql://...` is relying on these four adapters behaving like the file it
-had before, and the lazy expiry, the upserts and the scoping only ever execute on this side.
+`tests/test_vectors.py` and `tests/test_cache.py` drive over the local backends. That is the
+whole point of running them here: a deployment that sets `RUNA_DATABASE_URL=postgresql://...` is
+relying on these adapters behaving like the file it had before, and the lazy expiry, the upserts
+and the scoping only ever execute on this side.
 
 Needs a live Postgres with the `pgvector` extension reachable at `RUNA_TEST_POSTGRES_DSN`
 (defaults to a local one); the whole module is skipped if it isn't reachable, since CI provisions
@@ -29,8 +29,6 @@ from typing import Any
 import asyncpg
 import pytest
 from contracts import cache as cache_contract
-from contracts import knowledge as knowledge_contract
-from contracts import memory as memory_contract
 from contracts import session as session_contract
 from contracts import vector as vector_contract
 
@@ -38,8 +36,6 @@ import runa.db.pool as pool_module
 from runa.cache.postgres import PostgresCache
 from runa.db.vectors import VectorSpec
 from runa.db.vectors.postgres import PostgresVectorStore
-from runa.knowledge.postgres import PostgresKnowledgeStore
-from runa.memory.postgres import PostgresMemoryStore
 from runa.session.postgres import PostgresSession, PostgresSessionStore
 
 _DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", "postgresql://runa:runa@localhost:5432/runa")
@@ -110,22 +106,6 @@ def test_vector_store_contract(unique_id: str, check: vector_contract.Check) -> 
         return PostgresVectorStore(spec, _DSN)
 
     run(check(build, unique_id))
-
-
-@pytest.mark.parametrize("check", memory_contract.CONTRACT, ids=lambda check: check.__name__)
-def test_memory_store_contract(unique_id: str, check: memory_contract.Check) -> None:
-    """`PostgresMemoryStore` answers the same `MemoryStore` contract the local backends do."""
-    store = PostgresMemoryStore(_DSN, dimensions=memory_contract.DIMENSIONS)
-
-    run(check(store, unique_id))
-
-
-@pytest.mark.parametrize("check", knowledge_contract.CONTRACT, ids=lambda check: check.__name__)
-def test_knowledge_store_contract(unique_id: str, check: knowledge_contract.Check) -> None:
-    """`PostgresKnowledgeStore` answers the same `KnowledgeStore` contract the local ones do."""
-    store = PostgresKnowledgeStore(_DSN, dimensions=knowledge_contract.DIMENSIONS)
-
-    run(check(store, unique_id))
 
 
 @pytest.mark.parametrize("check", cache_contract.CONTRACT, ids=lambda check: check.__name__)

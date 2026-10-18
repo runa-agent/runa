@@ -3,19 +3,18 @@
 `Memory` keeps a user's facts and the metadata they came with. `Knowledge` keeps an application's
 document chunks and the file each was read from. They keep them the same way: an embedding, a
 payload row beside it, and a nearest-neighbor search that returns the closest payloads with their
-distances. Only the payload differs, which is why the three backends below are shared and the two
-concerns map onto them in `memory/vector.py` and `knowledge/vector.py`.
+distances. Only the payload differs, so each concern holds one of these stores directly and maps
+its own payload onto it.
 
 Three adapters, one per answer `runa.db` gives about where state lives: `sqlite.py` (a `vec0`
 virtual table), `postgres.py` (a `pgvector` column) and `ephemeral.py` (brute force, in process).
 `runa.db.vector_store` is how a caller picks one, so nothing above it names a backend.
 
-This seam is plumbing, not a primitive. An application never holds a `VectorStore`: it holds a
-`Memory` or a `Knowledge`, and `Memory(store=...)` still takes a `MemoryStore`. A fourth backend
-implements the six methods below and is held to `tests/contracts/vector.py`, the same contract
-the three in-tree adapters answer.
+A backend Runa doesn't ship is one more of these, handed to `Memory(store=...)` or
+`Knowledge(store=...)`: `VectorStore`'s three methods for `Memory`, `VersionedVectorStore`'s six
+for `Knowledge`, held to `tests/contracts/vector.py` like the three in-tree adapters.
 
-`reset`/`stamp`/`version` is the one trio only `Knowledge` uses, and it lives at this layer rather
+`reset`/`stamp`/`version` is the trio only `Knowledge` uses, and it lives at this layer rather
 than above it because a version has to be stored wherever the rows are, durably and atomically,
 which only an adapter can do. `Memory` never resets and keeps no version.
 
@@ -89,10 +88,10 @@ class VectorMatch:
 
 
 class VectorStore(Protocol):
-    """Storage for embeddings and the payload beside each one.
+    """Storage for embeddings and the payload beside each one: all a `Memory` needs.
 
-    Every adapter is built from a `VectorSpec` and holds exactly one concern's rows. Ids are
-    unique for the life of the store, including after a delete, so a caller can hold one.
+    Every in-tree adapter is built from a `VectorSpec` and holds exactly one concern's rows. Ids
+    are unique for the life of the store, including after a delete, so a caller can hold one.
     """
 
     async def add(self, *, payload: dict[str, Any], embedding: list[float]) -> int:
@@ -119,6 +118,10 @@ class VectorStore(Protocol):
         A no-op when it does not, including when the row belongs to another partition.
         """
         ...
+
+
+class VersionedVectorStore(VectorStore, Protocol):
+    """A `VectorStore` that also records which corpus it holds: all a `Knowledge` needs."""
 
     async def reset(self) -> None:
         """Delete every row and embedding, and clear the version along with them.
@@ -151,4 +154,4 @@ class VectorStore(Protocol):
         ...
 
 
-__all__ = ["Column", "VectorMatch", "VectorSpec", "VectorStore"]
+__all__ = ["Column", "VectorMatch", "VectorSpec", "VectorStore", "VersionedVectorStore"]

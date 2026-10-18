@@ -11,6 +11,8 @@ import pytest
 
 from runa import db
 from runa.exceptions import UserError
+from runa.knowledge import Knowledge
+from runa.memory import Memory
 from runa.project import use
 
 _URL = "postgresql://runa:runa@localhost:5432/runa"
@@ -75,8 +77,8 @@ def test_local_factories_return_the_sqlite_adapters(monkeypatch: pytest.MonkeyPa
     assert isinstance(db.sessions(), SQLiteSessionStore)
     assert isinstance(db.traces(), SQLiteTraceStore)
     assert isinstance(db.evals(), SQLiteEvalStore)
-    assert isinstance(db.memory_store(dimensions=4)._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
-    assert isinstance(db.knowledge_store(dimensions=4)._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
+    assert isinstance(Memory(dimensions=4)._store, SQLiteVectorStore)
+    assert isinstance(Knowledge(dimensions=4)._store, SQLiteVectorStore)
     assert isinstance(db.cache(), SQLiteCache)
 
 
@@ -100,8 +102,8 @@ def test_shared_factories_return_the_postgres_adapters(monkeypatch: pytest.Monke
     assert isinstance(db.sessions(), PostgresSessionStore)
     assert isinstance(db.traces(), PostgresTraceStore)
     assert isinstance(db.evals(), PostgresEvalStore)
-    assert isinstance(db.memory_store(dimensions=4)._vectors, PostgresVectorStore)  # type: ignore[attr-defined]
-    assert isinstance(db.knowledge_store(dimensions=4)._vectors, PostgresVectorStore)  # type: ignore[attr-defined]
+    assert isinstance(Memory(dimensions=4)._store, PostgresVectorStore)
+    assert isinstance(Knowledge(dimensions=4)._store, PostgresVectorStore)
     assert isinstance(db.cache(), PostgresCache)
 
 
@@ -139,8 +141,8 @@ def test_a_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) ->
     assert db.sessions().db_path == expected  # type: ignore[attr-defined]
     assert db.traces().db_path == expected  # type: ignore[attr-defined]
     assert db.evals().db_path == expected  # type: ignore[attr-defined]
-    assert db.memory_store(dimensions=4)._vectors.db_path == expected  # type: ignore[attr-defined]
-    assert db.knowledge_store(dimensions=4)._vectors.db_path == expected  # type: ignore[attr-defined]
+    assert Memory(dimensions=4)._store.db_path == expected  # type: ignore[attr-defined]
+    assert Knowledge(dimensions=4)._store.db_path == expected  # type: ignore[attr-defined]
     assert db.cache().db_path == expected  # type: ignore[attr-defined]
 
 
@@ -240,8 +242,6 @@ def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.Monk
 
     from runa.cache.sqlite import SQLiteCache
     from runa.eval.sqlite import SQLiteEvalStore
-    from runa.knowledge.sqlite import SQLiteKnowledgeStore
-    from runa.memory.sqlite import SQLiteMemoryStore
     from runa.session.sqlite import SQLiteSession, SQLiteSessionStore
     from runa.tracing.sqlite import SQLiteTraceStore
 
@@ -251,8 +251,8 @@ def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.Monk
     assert SQLiteTraceStore().db_path == expected
     assert SQLiteEvalStore().db_path == expected
     assert SQLiteCache().db_path == expected
-    assert SQLiteMemoryStore(dimensions=3).db_path == expected
-    assert SQLiteKnowledgeStore(dimensions=3).db_path == expected
+    assert Memory(dimensions=3)._store.db_path == expected  # type: ignore[attr-defined]
+    assert Knowledge(dimensions=3)._store.db_path == expected  # type: ignore[attr-defined]
 
 
 def test_an_explicit_db_path_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,8 +275,6 @@ def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.Monkey
     from runa.cache.memory import MemoryCache
     from runa.db.vectors.ephemeral import EphemeralVectorStore
     from runa.eval.ephemeral import EphemeralEvalStore
-    from runa.knowledge.vector import VectorKnowledgeStore
-    from runa.memory.vector import VectorMemoryStore
     from runa.session.ephemeral import EphemeralSession, EphemeralSessionStore
     from runa.tracing.ephemeral import EphemeralTraceStore
 
@@ -288,14 +286,8 @@ def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.Monkey
     assert isinstance(db.evals(), EphemeralEvalStore)
     assert isinstance(db.cache(), MemoryCache)
 
-    # The two vector concerns have no named in-process adapter to name here: what makes them
-    # ephemeral is the `VectorStore` underneath the mapping `runa.db` pairs them with.
-    memory = db.memory_store(dimensions=4)
-    knowledge = db.knowledge_store(dimensions=4)
-    assert isinstance(memory, VectorMemoryStore)
-    assert isinstance(knowledge, VectorKnowledgeStore)
-    assert isinstance(memory._vectors, EphemeralVectorStore)
-    assert isinstance(knowledge._vectors, EphemeralVectorStore)
+    assert isinstance(Memory(dimensions=4)._store, EphemeralVectorStore)
+    assert isinstance(Knowledge(dimensions=4)._store, EphemeralVectorStore)
 
 
 def test_the_ephemeral_cache_is_one_cache_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -370,9 +362,8 @@ def test_memory_follows_the_variable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
 
     from runa.db.vectors.postgres import PostgresVectorStore
-    from runa.memory import Memory
 
-    assert isinstance(Memory()._store._vectors, PostgresVectorStore)  # type: ignore[attr-defined]
+    assert isinstance(Memory()._store, PostgresVectorStore)
 
 
 def test_a_local_connection_enforces_foreign_keys(tmp_path: Path) -> None:

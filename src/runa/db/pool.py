@@ -1,8 +1,8 @@
 """db/pool.py: connect-and-create-if-missing plumbing for a shared Postgres.
 
 `db/sqlite.py`'s counterpart for the other side of `runa.db`'s one decision. Every Postgres
-adapter (`session/postgres.py`, `memory/postgres.py`, `knowledge/postgres.py`,
-`cache/postgres.py`, `tracing/postgres.py`, `eval/postgres.py`) owns a different set of tables in
+adapter (`session/postgres.py`, `db/vectors/postgres.py`, `cache/postgres.py`,
+`tracing/postgres.py`, `eval/postgres.py`) owns a different set of tables in
 the same database; this only hands out the pool and applies each caller's tables.
 
 One pool per URL, cached at module level and shared by every adapter built from it, so a session,

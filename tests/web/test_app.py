@@ -15,6 +15,7 @@ from runa.eval.case import Case
 from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 from runa.exceptions import OperatorError
+from runa.memory import Memory
 from runa.project import use
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -124,7 +125,7 @@ def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
     TestClient(create_app(project))
 
     assert db.sqlite_path() == project / "db" / "runa.db"
-    assert db.memory_store(dimensions=4)._vectors.db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
+    assert Memory(dimensions=4)._store.db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
 
 
 def test_index_redirects_to_agents(client: TestClient) -> None:

@@ -45,10 +45,8 @@ from runa.exceptions import OperatorError
 
 if TYPE_CHECKING:
     from runa.cache import Cache
-    from runa.db.vectors import VectorSpec, VectorStore
+    from runa.db.vectors import VectorSpec, VersionedVectorStore
     from runa.eval.store import EvalStore
-    from runa.knowledge import KnowledgeStore
-    from runa.memory import MemoryStore
     from runa.session import Session
     from runa.session.store import SessionStore
     from runa.tracing.store import TraceStore
@@ -203,32 +201,11 @@ def evals() -> EvalStore:
     return SQLiteEvalStore(sqlite_path())
 
 
-def memory_store(*, dimensions: int) -> MemoryStore:
-    """This deployment's `MemoryStore`, for vectors of `dimensions` floats.
+def vector_store(spec: VectorSpec) -> VersionedVectorStore:
+    """This deployment's vector storage for `spec`: what a bare `Memory()` or `Knowledge()` holds.
 
-    The memory mapping over `vector_store` below, which makes the backend choice for it.
-    """
-    from runa.memory.vector import VectorMemoryStore, spec
-
-    return VectorMemoryStore(vector_store(spec(dimensions)))
-
-
-def knowledge_store(*, dimensions: int) -> KnowledgeStore:
-    """This deployment's `KnowledgeStore`, for vectors of `dimensions` floats.
-
-    The knowledge mapping over `vector_store` below, which makes the backend choice for it.
-    """
-    from runa.knowledge.vector import VectorKnowledgeStore, spec
-
-    return VectorKnowledgeStore(vector_store(spec(dimensions)))
-
-
-def vector_store(spec: VectorSpec) -> VectorStore:
-    """This deployment's `VectorStore` for `spec`: the storage `Memory` and `Knowledge` share.
-
-    Plumbing rather than a concern, which is why there is no `Agent` attribute that reaches it:
-    `memory_store()` and `knowledge_store()` above are the two callers, and each wraps what this
-    returns in the typed store its own concern promises.
+    Each of the two passes its own spec, so one call serves both concerns and each gets its own
+    tables.
     """
     if ephemeral():
         from runa.db.vectors.ephemeral import EphemeralVectorStore
@@ -284,8 +261,6 @@ __all__ = [
     "cache",
     "ephemeral",
     "evals",
-    "knowledge_store",
-    "memory_store",
     "project_path",
     "reset_ephemeral",
     "session",

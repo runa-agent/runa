@@ -1,9 +1,8 @@
-"""Tests for `runa.knowledge.Knowledge`, over the `KnowledgeStore` contract every backend answers.
+"""Tests for `runa.knowledge.Knowledge`, everything above the `VersionedVectorStore` it holds.
 
-The store contract lives in `tests/contracts/knowledge.py` and is driven here over the backends
-`runa.db` can resolve without a live Postgres; `tests/test_postgres.py` drives the same checks
-against `PostgresKnowledgeStore`. Everything below that is `Knowledge`'s own: discovery, chunking,
-PDF extraction, lazy ingest, and the search tool it hands a model.
+Discovery, chunking, PDF extraction, the payload it stores, lazy ingest, and the search tool it
+hands a model. The storage itself is held to `tests/contracts/vector.py`, driven in
+`test_vectors.py` and `test_postgres.py`.
 """
 
 import asyncio
@@ -12,41 +11,21 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from contracts.knowledge import CONTRACT, DIMENSIONS, Check
 from helpers import run as run_awaitable
 
-from runa import db
 from runa import knowledge as knowledge_module
 from runa._types import RunContext
+from runa.db.vectors import VectorMatch, VersionedVectorStore
 from runa.db.vectors.sqlite import SQLiteVectorStore
-from runa.knowledge import (
-    DEFAULT_KNOWLEDGE_DIR,
-    Knowledge,
-    KnowledgeMatch,
-    KnowledgeStore,
-    SQLiteKnowledgeStore,
-)
+from runa.knowledge import DEFAULT_KNOWLEDGE_DIR, Knowledge, KnowledgeMatch
 from runa.project import use
 
-_DIMENSIONS = DIMENSIONS
+_DIMENSIONS = 4
 
 
-@pytest.fixture(params=["sqlite", "ephemeral"])
-def store(
-    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> KnowledgeStore:
-    """A `KnowledgeStore`, resolved by `runa.db` the way a bare `Knowledge()` gets one."""
-    if request.param == "ephemeral":
-        monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
-    else:
-        monkeypatch.setenv(db.DATABASE_URL_ENV, f"sqlite:///{tmp_path / 'runa.db'}")
-    return db.knowledge_store(dimensions=DIMENSIONS)
-
-
-@pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
-def test_knowledge_store_contract(store: KnowledgeStore, check: Check) -> None:
-    """Every local backend answers the `KnowledgeStore` contract the same way."""
-    asyncio.run(check(store, "doc"))
+def _sqlite_store(tmp_path: Path) -> SQLiteVectorStore:
+    """The local store a bare `Knowledge()` would get, kept in this test's own `tmp_path`."""
+    return SQLiteVectorStore(knowledge_module._spec(_DIMENSIONS), tmp_path / "runa.db")
 
 
 _embedded: list[str] = []
@@ -86,7 +65,7 @@ def _knowledge(tmp_path: Path, directory: Path | None = None) -> Knowledge:
     return Knowledge(
         directory if directory is not None else tmp_path / "knowledge",
         dimensions=_DIMENSIONS,
-        store=SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS),
+        store=_sqlite_store(tmp_path),
     )
 
 
@@ -97,8 +76,8 @@ def test_default_configuration_needs_no_arguments() -> None:
     assert know.directory == DEFAULT_KNOWLEDGE_DIR
     assert know.model == "text-embedding-3-small"
     assert know.dimensions == 1536
-    assert isinstance(know._store._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
-    assert str(know._store._vectors.db_path) == str(Path("db/runa.db"))  # type: ignore[attr-defined]
+    assert isinstance(know._store, SQLiteVectorStore)
+    assert str(know._store.db_path) == str(Path("db/runa.db"))
 
 
 def test_explicit_directory_overrides_the_default() -> None:
@@ -266,13 +245,13 @@ def test_a_second_instance_searches_what_the_first_ingested(tmp_path: Path) -> N
 
 
 class _WatchedStore:
-    """A `KnowledgeStore` wrapper that records what an ingest did, and in what order.
+    """A `VersionedVectorStore` wrapper that records what an ingest did, and in what order.
 
     Wraps a real store rather than faking one, so the `version()` each step sees is the one a
     reader in another process would get from the same storage.
     """
 
-    def __init__(self, inner: KnowledgeStore) -> None:
+    def __init__(self, inner: VersionedVectorStore) -> None:
         self._inner = inner
         #: One entry per call, each the operation's name and the version visible as it ran.
         self.steps: list[tuple[str, str | None]] = []
@@ -280,13 +259,18 @@ class _WatchedStore:
     async def _note(self, operation: str) -> None:
         self.steps.append((operation, await self._inner.version()))
 
-    async def add(self, *, text: str, source: str, embedding: list[float]) -> int:
+    async def add(self, *, payload: dict[str, Any], embedding: list[float]) -> int:
         await self._note("add")
-        return await self._inner.add(text=text, source=source, embedding=embedding)
+        return await self._inner.add(payload=payload, embedding=embedding)
 
-    async def search(self, *, embedding: list[float], k: int) -> list[KnowledgeMatch]:
-        await self._note("search")
-        return await self._inner.search(embedding=embedding, k=k)
+    async def nearest(
+        self, *, embedding: list[float], k: int, partition: str | None = None
+    ) -> list[VectorMatch]:
+        await self._note("nearest")
+        return await self._inner.nearest(embedding=embedding, k=k, partition=partition)
+
+    async def delete(self, *, item_id: int, partition: str | None = None) -> None:
+        await self._inner.delete(item_id=item_id, partition=partition)
 
     async def reset(self) -> None:
         await self._inner.reset()
@@ -301,7 +285,7 @@ class _WatchedStore:
 
 
 def _watched(tmp_path: Path, source_dir: Path) -> tuple[Knowledge, _WatchedStore]:
-    store = _WatchedStore(SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS))
+    store = _WatchedStore(_sqlite_store(tmp_path))
     know = Knowledge(source_dir, dimensions=_DIMENSIONS, store=store)
     return know, store
 
@@ -347,11 +331,11 @@ def test_an_ingest_that_dies_midway_leaves_nothing_claiming_the_corpus(tmp_path:
     source_dir = tmp_path / "knowledge"
     source_dir.mkdir()
     (source_dir / "pets.md").write_text("cats are great pets")
-    store = SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS)
+    store = _sqlite_store(tmp_path)
     know = Knowledge(source_dir, dimensions=_DIMENSIONS, store=store)
 
     async def _die_after_reset() -> None:
-        async def boom(*, text: str, source: str, embedding: list[float]) -> int:
+        async def boom(*, payload: dict[str, Any], embedding: list[float]) -> int:
             raise RuntimeError("process died mid-ingest")
 
         original = store.add
@@ -417,7 +401,7 @@ def test_search_reingests_after_the_embedding_model_changes(tmp_path: Path) -> N
     source_dir = tmp_path / "knowledge"
     source_dir.mkdir()
     (source_dir / "pets.md").write_text("cats are great pets")
-    store = SQLiteKnowledgeStore(tmp_path / "runa.db", dimensions=_DIMENSIONS)
+    store = _sqlite_store(tmp_path)
     asyncio.run(
         Knowledge(source_dir, dimensions=_DIMENSIONS, store=store).search("query about pets", k=1)
     )
@@ -558,22 +542,27 @@ def test_as_tool_with_no_matches_says_so(tmp_path: Path) -> None:
 
 
 def test_custom_store_can_be_injected() -> None:
-    """`Knowledge(store=...)` uses the given `KnowledgeStore` instead of the default SQLite one."""
+    """`Knowledge(store=...)` uses the given `VersionedVectorStore`, no inheritance required."""
 
     class _FakeStore:
         def __init__(self) -> None:
             self.added: list[dict[str, Any]] = []
             self.recorded: str | None = None
 
-        async def add(self, *, text: str, source: str, embedding: list[float]) -> int:
-            self.added.append({"text": text, "source": source})
+        async def add(self, *, payload: dict[str, Any], embedding: list[float]) -> int:
+            self.added.append(payload)
             return len(self.added)
 
-        async def search(self, *, embedding: list[float], k: int) -> list[KnowledgeMatch]:
+        async def nearest(
+            self, *, embedding: list[float], k: int, partition: str | None = None
+        ) -> list[VectorMatch]:
             return [
-                KnowledgeMatch(id=idx, text=item["text"], source=item["source"], distance=0.0)
+                VectorMatch(id=idx, payload=item, distance=0.0)
                 for idx, item in enumerate(self.added, start=1)
             ]
+
+        async def delete(self, *, item_id: int, partition: str | None = None) -> None:
+            del self.added[item_id - 1]
 
         async def reset(self) -> None:
             self.added = []
@@ -591,7 +580,9 @@ def test_custom_store_can_be_injected() -> None:
     async def _run() -> list[KnowledgeMatch]:
         # Stamping the store with this corpus's fingerprint is what tells `search` not to
         # rebuild, the same way an earlier process's `ingest()` would have.
-        await store.add(text="cats are great pets", source="manual", embedding=[0.0])
+        await store.add(
+            payload={"text": "cats are great pets", "source": "manual"}, embedding=[0.0]
+        )
         await store.stamp(await know._fingerprint())
         return await know.search("anything")
 

@@ -77,7 +77,7 @@ def test_every_postgres_adapter_brings_its_own_tables() -> None:
     from runa.db.schema import POSTGRES, ddl
     from runa.db.vectors.postgres import PostgresVectorStore
     from runa.eval.postgres import PostgresEvalStore
-    from runa.memory.vector import spec
+    from runa.memory import _spec as spec
     from runa.session.postgres import PostgresSession, PostgresSessionStore
     from runa.tracing.postgres import PostgresTraceStore
 

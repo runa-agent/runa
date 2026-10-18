@@ -1,9 +1,8 @@
-"""Tests for `runa.memory.Memory`, over the `MemoryStore` contract every backend answers.
+"""Tests for `runa.memory.Memory`, everything above the `VectorStore` it holds.
 
-The store contract lives in `tests/contracts/memory.py` and is driven here over the backends
-`runa.db` can resolve without a live Postgres; `tests/test_postgres.py` drives the same checks
-against `PostgresMemoryStore`. Everything below that is `Memory`'s own: embedding, near-duplicate
-detection, the search tool it hands a model, and extraction from a conversation.
+Embedding, the payload it stores, user scoping, near-duplicate detection, the search tool it
+hands a model, and extraction from a conversation. The storage itself is held to
+`tests/contracts/vector.py`, driven in `test_vectors.py` and `test_postgres.py`.
 """
 
 import asyncio
@@ -11,39 +10,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from contracts.memory import CONTRACT, DIMENSIONS, Check
 from helpers import run as run_awaitable
 
-from runa import db
 from runa import memory as memory_module
 from runa._types import RunContext
+from runa.db.vectors import VectorMatch, VectorStore
 from runa.db.vectors.sqlite import SQLiteVectorStore
-from runa.memory import Memory, MemoryMatch, MemoryStore, SQLiteMemoryStore
+from runa.memory import Memory
 
-_DIMENSIONS = DIMENSIONS
-
-
-@pytest.fixture(params=["sqlite", "ephemeral"])
-def store(
-    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> MemoryStore:
-    """A `MemoryStore`, resolved by `runa.db` the way a bare `Memory()` gets one.
-
-    Through the environment variable rather than by naming an adapter, since that is the only
-    thing that decides: `sqlite://` with four slashes is an absolute path, which is how a test
-    keeps the local backend's file in its own `tmp_path`.
-    """
-    if request.param == "ephemeral":
-        monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
-    else:
-        monkeypatch.setenv(db.DATABASE_URL_ENV, f"sqlite:///{tmp_path / 'runa.db'}")
-    return db.memory_store(dimensions=DIMENSIONS)
-
-
-@pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
-def test_memory_store_contract(store: MemoryStore, check: Check) -> None:
-    """Every local backend answers the `MemoryStore` contract the same way."""
-    asyncio.run(check(store, "user-1"))
+_DIMENSIONS = 4
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +46,7 @@ def _fake_embed(monkeypatch: pytest.MonkeyPatch) -> None:
 def _memory(tmp_path: Path) -> Memory:
     return Memory(
         dimensions=_DIMENSIONS,
-        store=SQLiteMemoryStore(tmp_path / "runa.db", dimensions=_DIMENSIONS),
+        store=SQLiteVectorStore(memory_module._spec(_DIMENSIONS), tmp_path / "runa.db"),
     )
 
 
@@ -81,8 +56,8 @@ def test_default_configuration_needs_no_arguments() -> None:
 
     assert mem.model == "text-embedding-3-small"
     assert mem.dimensions == 1536
-    assert isinstance(mem._store._vectors, SQLiteVectorStore)  # type: ignore[attr-defined]
-    assert str(mem._store._vectors.db_path) == str(Path("db/runa.db"))  # type: ignore[attr-defined]
+    assert isinstance(mem._store, SQLiteVectorStore)
+    assert str(mem._store.db_path) == str(Path("db/runa.db"))
 
 
 def test_unknown_model_without_dimensions_raises() -> None:
@@ -341,35 +316,29 @@ def test_remember_from_conversation_tolerates_a_trailing_comma(tmp_path: Path) -
 
 
 def test_custom_store_can_be_injected() -> None:
-    """`Memory(store=...)` uses the given `MemoryStore` instead of the default SQLite one."""
+    """`Memory(store=...)` uses the given `VectorStore`: three methods, no inheritance."""
 
     class _FakeStore:
         def __init__(self) -> None:
             self.added: list[dict[str, Any]] = []
 
-        async def add(
-            self,
-            *,
-            user_id: str | None,
-            text: str,
-            embedding: list[float],
-            metadata: dict[str, Any] | None,
-        ) -> int:
-            self.added.append({"user_id": user_id, "text": text, "metadata": metadata})
+        async def add(self, *, payload: dict[str, Any], embedding: list[float]) -> int:
+            self.added.append(payload)
             return len(self.added)
 
-        async def search(
-            self, *, user_id: str | None, embedding: list[float], k: int
-        ) -> list[MemoryMatch]:
+        async def nearest(
+            self, *, embedding: list[float], k: int, partition: str | None = None
+        ) -> list[VectorMatch]:
             return [
-                MemoryMatch(id=idx, text=item["text"], metadata=item["metadata"], distance=0.0)
+                VectorMatch(id=idx, payload=item, distance=1.0)
                 for idx, item in enumerate(self.added, start=1)
+                if item["user_id"] == partition
             ]
 
-        async def delete(self, *, user_id: str | None, memory_id: int) -> None:
-            del self.added[memory_id - 1]
+        async def delete(self, *, item_id: int, partition: str | None = None) -> None:
+            del self.added[item_id - 1]
 
-    store: MemoryStore = _FakeStore()
+    store: VectorStore = _FakeStore()
     mem = Memory(store=store)
 
     async def _run():

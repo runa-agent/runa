@@ -1,9 +1,8 @@
 """`runa.knowledge`: `Knowledge`, the application's own documents, retrieved by meaning.
 
-Layered like `runa.memory`: `Knowledge` (discovers/chunks/embeds text, hides vectors) over a
-`KnowledgeStore` (persists/searches vectors, in `knowledge/store.py` and re-exported here). Which
-store a bare `Knowledge()` gets is `runa.db`'s decision: `knowledge/sqlite.py` locally,
-`knowledge/postgres.py` when `RUNA_DATABASE_URL` points at a shared database.
+Built like `runa.memory`: `Knowledge` discovers, chunks and embeds text, and holds one
+`VersionedVectorStore` (`runa.db.vectors`) directly, a chunk being a row of `text` and `source`
+beside its embedding. Which store a bare `Knowledge()` gets is `runa.db`'s decision.
 
 Unlike `Memory`, `Knowledge` is application-scoped rather than `user_id`-scoped, and its source
 of truth is a directory of files on disk (`app/knowledge/` by default), not calls to `remember`.
@@ -13,7 +12,7 @@ Kept deliberately separate: `Memory` is durable facts about a user, learned from
 Whether the corpus has been ingested is the store's answer, not a flag on the `Knowledge` object:
 `Agent(knowledge="auto")` builds a fresh `Knowledge` per agent and `runa.serve` builds an agent
 per request, so instance state would have every request re-embed the whole directory into the one
-shared store. `KnowledgeStore.reset`/`.stamp`/`.version` is where that decision lives instead.
+shared store. The store's `reset`/`stamp`/`version` is where that decision lives instead.
 Which also makes `ingest` idempotent, and therefore the only ingest verb: `search` calls it, and
 so does `serve.create_app` at startup, so the first request after a deploy doesn't pay for the
 whole corpus.
@@ -29,15 +28,15 @@ swapping just the storage backend.
 
 import asyncio
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from runa import db
 from runa._log import logger
 from runa._loop import LoopCache
+from runa.db.vectors import Column, VectorMatch, VectorSpec, VersionedVectorStore
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
-from runa.knowledge.sqlite import SQLiteKnowledgeStore
-from runa.knowledge.store import KnowledgeMatch, KnowledgeStore
 from runa.tool import FunctionTool, tool
 
 DEFAULT_KNOWLEDGE_DIR = Path("app/knowledge")
@@ -47,6 +46,31 @@ _CHUNK_SIZE = 1000
 _CHUNK_OVERLAP = 200
 
 _Stats = tuple[tuple[str, int, int], ...]
+
+# `text` first so the generated table keeps the column order it already had on disk.
+_COLUMNS = {"text": Column(required=True), "source": Column(required=True)}
+
+
+def _spec(dimensions: int) -> VectorSpec:
+    """The `knowledge_items`/`knowledge_vectors` spec: unpartitioned, being application-scoped."""
+    return VectorSpec(name="knowledge", dimensions=dimensions, columns=_COLUMNS)
+
+
+@dataclass
+class KnowledgeMatch:
+    """One `Knowledge.search` result: its id, stored text, source file, and distance."""
+
+    id: int
+    text: str
+    source: str
+    distance: float
+
+
+def _match(row: VectorMatch) -> KnowledgeMatch:
+    """One stored row as the `KnowledgeMatch` a `Knowledge` hands back."""
+    return KnowledgeMatch(
+        id=row.id, text=row.payload["text"], source=row.payload["source"], distance=row.distance
+    )
 
 
 class KnowledgeLike(Protocol):
@@ -158,6 +182,9 @@ class Knowledge:
     internal, so callers only ever see a source directory in and `KnowledgeMatch`es out. Attach
     an instance to `Agent(knowledge=...)` and `run`/`run_sync` search it automatically before
     every turn; no `tools=[...]` wiring needed.
+
+    `store=` swaps the storage for a custom `VersionedVectorStore`, which is handed unpartitioned
+    payloads of `text` and `source`.
     """
 
     def __init__(
@@ -166,7 +193,7 @@ class Knowledge:
         *,
         model: str = DEFAULT_EMBEDDING_MODEL,
         dimensions: int | None = None,
-        store: KnowledgeStore | None = None,
+        store: VersionedVectorStore | None = None,
     ) -> None:
         """Configure the source directory, embedding model, and, unless `store` is given, storage.
 
@@ -180,7 +207,7 @@ class Knowledge:
         self.directory = db.project_path(directory)
         self.model = model
         self.dimensions: int = resolve_dimensions(model, dimensions)
-        self._store: KnowledgeStore = store or db.knowledge_store(dimensions=self.dimensions)
+        self._store: VersionedVectorStore = store or db.vector_store(_spec(self.dimensions))
 
     @property
     def _header(self) -> str:
@@ -283,7 +310,7 @@ class Knowledge:
         if chunks:
             vectors = await embed([text for text, _ in chunks], model=self.model)
             for (text, source), vector in zip(chunks, vectors, strict=True):
-                await self._store.add(text=text, source=source, embedding=vector)
+                await self._store.add(payload={"text": text, "source": source}, embedding=vector)
         else:
             logger.warning(
                 "knowledge base is empty: no %s files under %s",
@@ -305,7 +332,7 @@ class Knowledge:
         """
         await self.ingest()
         (vector,) = await embed([query], model=self.model)
-        return await self._store.search(embedding=vector, k=k)
+        return [_match(row) for row in await self._store.nearest(embedding=vector, k=k)]
 
     def _as_tool(self) -> FunctionTool:
         """A `@tool` that searches this knowledge base, as plain text.
@@ -327,13 +354,4 @@ class Knowledge:
         return search_knowledge
 
 
-# `SQLiteKnowledgeStore` is re-exported because the local adapter is always importable, where
-# `PostgresKnowledgeStore` needs the `postgres` extra.
-__all__ = [
-    "DEFAULT_KNOWLEDGE_DIR",
-    "Knowledge",
-    "KnowledgeLike",
-    "KnowledgeMatch",
-    "KnowledgeStore",
-    "SQLiteKnowledgeStore",
-]
+__all__ = ["DEFAULT_KNOWLEDGE_DIR", "Knowledge", "KnowledgeLike", "KnowledgeMatch"]

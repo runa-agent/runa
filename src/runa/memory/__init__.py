@@ -1,9 +1,8 @@
 """`runa.memory`: `Memory`, durable semantic facts, scoped by `user_id`.
 
-Layered as `Memory` (embeds text, hides vectors) over `MemoryStore` (persists/searches vectors).
-The store contract and its `MemoryMatch` live in `memory/store.py`, re-exported here; which store
-a bare `Memory()` gets is `runa.db`'s decision, not this module's: `memory/sqlite.py` locally,
-`memory/postgres.py` when `RUNA_DATABASE_URL` points at a shared database.
+`Memory` embeds text and holds one `VectorStore` (`runa.db.vectors`) directly: a fact is a row of
+`user_id`, `text` and `metadata` beside its embedding, partitioned by `user_id`. Which store a
+bare `Memory()` gets is `runa.db`'s decision, not this module's.
 
 `remember_from_conversation` is what a run calls once it finishes, to turn
 the turn's exchange into zero or more remembered facts; `MemoryLike` is the contract (it and
@@ -11,6 +10,7 @@ the turn's exchange into zero or more remembered facts; `MemoryLike` is the cont
 narrower escape hatch of swapping just the storage backend.
 """
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from runa import db
@@ -18,14 +18,44 @@ from runa._items import item_text, parsed_json_object, user_message
 from runa._log import logger
 from runa._models import ModelRequest
 from runa._types import RunContext
+from runa.db.vectors import Column, VectorMatch, VectorSpec, VectorStore
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
-from runa.memory.sqlite import SQLiteMemoryStore
-from runa.memory.store import MemoryMatch, MemoryStore
 from runa.tool import FunctionTool, tool
 
 # L2 distance over the ~unit-norm vectors OpenAI's embedding models return: only a near-verbatim
 # restatement falls under this, not a merely related fact -- see `Memory.remember`.
 _DUPLICATE_DISTANCE = 0.1
+
+# `user_id` first so the generated tables keep the column order they already had on disk.
+_COLUMNS = {
+    "user_id": Column(),
+    "text": Column(required=True),
+    "metadata": Column(json=True),
+}
+
+
+def _spec(dimensions: int) -> VectorSpec:
+    """The `memory_items`/`memory_vectors` spec, for vectors of `dimensions` floats."""
+    return VectorSpec(
+        name="memory", dimensions=dimensions, columns=_COLUMNS, partition_by="user_id"
+    )
+
+
+@dataclass
+class MemoryMatch:
+    """One `Memory.search` result: its id, stored text, metadata, and distance to the query."""
+
+    id: int
+    text: str
+    metadata: dict[str, Any] | None
+    distance: float
+
+
+def _match(row: VectorMatch) -> MemoryMatch:
+    """One stored row as the `MemoryMatch` a `Memory` hands back."""
+    return MemoryMatch(
+        id=row.id, text=row.payload["text"], metadata=row.payload["metadata"], distance=row.distance
+    )
 
 
 class MemoryLike(Protocol):
@@ -67,7 +97,9 @@ class Memory:
 
     `Memory()` means OpenAI's `text-embedding-3-small` over whichever database `runa.db` resolves:
     embeddings and vector storage are entirely internal, so callers only ever see text in and
-    `MemoryMatch`es out. `store=` swaps that for a custom `MemoryStore`, unrelated to embeddings.
+    `MemoryMatch`es out. `store=` swaps the storage for a custom `VectorStore`, which is handed
+    payloads of `user_id`, `text` and `metadata` (a JSON-able dict or `None`), partitioned by
+    `user_id`.
     """
 
     def __init__(
@@ -75,7 +107,7 @@ class Memory:
         *,
         model: str = DEFAULT_EMBEDDING_MODEL,
         dimensions: int | None = None,
-        store: MemoryStore | None = None,
+        store: VectorStore | None = None,
     ) -> None:
         """Configure the embedding model and, unless `store` is given, this deployment's store.
 
@@ -83,7 +115,7 @@ class Memory:
         """
         self.model = model
         self.dimensions: int = resolve_dimensions(model, dimensions)
-        self._store: MemoryStore = store or db.memory_store(dimensions=self.dimensions)
+        self._store: VectorStore = store or db.vector_store(_spec(self.dimensions))
 
     async def remember(
         self, text: str, *, user_id: str | None = None, metadata: dict[str, Any] | None = None
@@ -95,23 +127,28 @@ class Memory:
         conversations doesn't pile up duplicates. `metadata` is dropped, not merged, on a skip.
         """
         (vector,) = await embed([text], model=self.model)
-        existing = await self._store.search(user_id=user_id, embedding=vector, k=1)
+        existing = await self._store.nearest(embedding=vector, k=1, partition=user_id)
         if existing and existing[0].distance <= _DUPLICATE_DISTANCE:
             return existing[0].id
         return await self._store.add(
-            user_id=user_id, text=text, embedding=vector, metadata=metadata
+            payload={"user_id": user_id, "text": text, "metadata": metadata}, embedding=vector
         )
 
     async def search(
         self, query: str, *, user_id: str | None = None, k: int = 5
     ) -> list[MemoryMatch]:
-        """Return `user_id`'s `k` memories closest in meaning to `query`, nearest first."""
+        """Return `user_id`'s `k` memories closest in meaning to `query`, nearest first.
+
+        Scoped strictly: a memory stored with `user_id=None` is its own scope, not one every user
+        can see.
+        """
         (vector,) = await embed([query], model=self.model)
-        return await self._store.search(user_id=user_id, embedding=vector, k=k)
+        found = await self._store.nearest(embedding=vector, k=k, partition=user_id)
+        return [_match(row) for row in found]
 
     async def forget(self, memory_id: int, *, user_id: str | None = None) -> None:
-        """Delete `user_id`'s memory `memory_id`, if it exists."""
-        await self._store.delete(user_id=user_id, memory_id=memory_id)
+        """Delete `user_id`'s memory `memory_id`, if it exists; a no-op under any other user."""
+        await self._store.delete(item_id=memory_id, partition=user_id)
 
     def _as_tool(self) -> FunctionTool:
         """A `@tool` that searches this memory, as plain text, in the calling run's `user_id` scope.
@@ -164,6 +201,4 @@ class Memory:
         return stored
 
 
-# `SQLiteMemoryStore` is re-exported because the local adapter is always importable, where
-# `PostgresMemoryStore` needs the `postgres` extra.
-__all__ = ["Memory", "MemoryLike", "MemoryMatch", "MemoryStore", "SQLiteMemoryStore"]
+__all__ = ["Memory", "MemoryLike", "MemoryMatch"]

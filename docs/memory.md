@@ -65,13 +65,26 @@ A bare `Memory()` stores wherever `runa.db` resolves: the local `db/runa.db`, or
 Postgres once `RUNA_DATABASE_URL` is set. Going multi-replica needs no code change.
 
 `store=` is for a backend Runa does not ship, and swaps storage without touching how embeddings
-work. Note `dimensions`, which must match your embedding model:
+work. It takes a `VectorStore`: three async methods, no inheritance. Each payload is a dict of
+`user_id`, `text` and `metadata`, and `partition` is the `user_id` a search or delete is scoped
+to:
 
 ```python
 from runa import Memory
-from runa.memory.postgres import PostgresMemoryStore
+from runa.db.vectors import VectorMatch
 
-memory = Memory(store=PostgresMemoryStore("postgresql://...", dimensions=1536))
+
+class HostedVectors:
+    async def add(self, *, payload: dict, embedding: list[float]) -> int: ...
+
+    async def nearest(
+        self, *, embedding: list[float], k: int, partition: str | None = None
+    ) -> list[VectorMatch]: ...
+
+    async def delete(self, *, item_id: int, partition: str | None = None) -> None: ...
+
+
+memory = Memory(store=HostedVectors())
 ```
 
 ## Memory vs. Session vs. Knowledge

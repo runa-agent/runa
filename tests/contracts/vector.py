@@ -14,11 +14,11 @@ honest against a live Postgres, where the table outlives the test.
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from runa.db.vectors import Column, VectorSpec, VectorStore
+from runa.db.vectors import Column, VectorSpec, VersionedVectorStore
 
 DIMENSIONS = 4
 
-Build = Callable[[VectorSpec], VectorStore]
+Build = Callable[[VectorSpec], VersionedVectorStore]
 Check = Callable[[Build, str], Coroutine[Any, Any, None]]
 
 _NEAR = [1.0, 0.0, 0.0, 0.0]

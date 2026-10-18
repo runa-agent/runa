@@ -256,7 +256,7 @@ class SupportAgent(Agent):
 * `None`: the agent behaves exactly as if `runa.memory` didn't exist.
 
 `"llm"` always uses a default `Memory()`; pass your own instance for
-`"auto"` mode if you need a non-default `db_path`/`model`/`store`.
+`"auto"` mode if you need a non-default `model`/`store`.
 `Memory` is durable, semantic, `user_id`-scoped facts backed by the same
 `db/runa.db` (`sqlite-vec`) `SQLiteSession` uses: `remember`/`search`/
 `forget`, nothing lower. This is long-term memory *across* conversations;
@@ -292,7 +292,7 @@ class SupportAgent(Agent):
 * `None`: the agent behaves exactly as if `runa.knowledge` didn't exist.
 
 `"llm"` always uses a default `Knowledge()`; pass your own instance for `"auto"` mode if you need
-a non-default `directory`/`db_path`/`model`/`store`. `Knowledge()` means `app/knowledge/`,
+a non-default `directory`/`model`/`store`. `Knowledge()` means `app/knowledge/`,
 `db/runa.db` (`sqlite-vec`), OpenAI's `text-embedding-3-small` -- discovery, chunking, embeddings,
 and vector storage are entirely internal; put Markdown/PDF/text/CSV files under `app/knowledge/`
 and no manual `.ingest()` call is needed either: `.search` ingests whenever the store doesn't

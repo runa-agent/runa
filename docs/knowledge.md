@@ -79,16 +79,34 @@ or deleted file never leaves stale chunks behind.
 A bare `Knowledge()` stores wherever `runa.db` resolves: the local `db/runa.db`, or the shared
 Postgres once `RUNA_DATABASE_URL` is set. Going multi-replica needs no code change.
 
-`store=` is for a backend Runa does not ship: four async methods, `add`/`search`/`reset`/`version`,
-no inheritance. `reset` records the fingerprint its chunks were built from and `version` reports
-it back, which is what lets a second process tell an ingested corpus from one it has to build.
-Note `dimensions`, which must match your embedding model:
+`store=` is for a backend Runa does not ship. It takes a `VersionedVectorStore`: `Memory`'s three
+`VectorStore` methods plus `reset`/`stamp`/`version`, no inheritance. Each payload is a dict of
+`text` and `source`, unpartitioned. `stamp` records the fingerprint the chunks were built from,
+`version` reports it back, and `reset` clears both the chunks and the version. That is what lets a
+second process tell an ingested corpus from one it still has to build:
 
 ```python
 from runa import Knowledge
-from runa.knowledge.postgres import PostgresKnowledgeStore
+from runa.db.vectors import VectorMatch
 
-knowledge = Knowledge(store=PostgresKnowledgeStore("postgresql://...", dimensions=1536))
+
+class HostedVectors:
+    async def add(self, *, payload: dict, embedding: list[float]) -> int: ...
+
+    async def nearest(
+        self, *, embedding: list[float], k: int, partition: str | None = None
+    ) -> list[VectorMatch]: ...
+
+    async def delete(self, *, item_id: int, partition: str | None = None) -> None: ...
+
+    async def reset(self) -> None: ...
+
+    async def stamp(self, version: str) -> None: ...
+
+    async def version(self) -> str | None: ...
+
+
+knowledge = Knowledge(store=HostedVectors())
 ```
 
 ## Example
