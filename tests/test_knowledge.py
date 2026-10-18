@@ -529,6 +529,29 @@ def test_as_tool_formats_matches_as_plain_text(tmp_path: Path) -> None:
     assert result == "cats are great pets"
 
 
+def test_context_is_a_labeled_block_of_matching_chunks(tmp_path: Path) -> None:
+    """`context` searches the corpus and labels what it found, or answers `None` for nothing."""
+    source_dir = tmp_path / "knowledge"
+    source_dir.mkdir()
+    (source_dir / "pets.md").write_text("cats are great pets")
+    know = _knowledge(tmp_path, source_dir)
+    (tmp_path / "empty").mkdir()
+    empty = _knowledge(tmp_path / "empty", tmp_path / "does-not-exist")
+
+    block = asyncio.run(know.context("query about pets", RunContext()))
+
+    assert block == {"role": "system", "content": "Relevant knowledge:\n- cats are great pets"}
+    assert asyncio.run(empty.context("query about pets", RunContext())) is None
+
+
+def test_after_turn_keeps_nothing(tmp_path: Path) -> None:
+    """A run's exchange never becomes knowledge: the corpus is the directory."""
+    know = _knowledge(tmp_path, tmp_path / "does-not-exist")
+    model: Any = None  # never called
+
+    assert asyncio.run(know.after_turn("hi", "hello", RunContext(), model)) == []
+
+
 def test_as_tool_with_no_matches_says_so(tmp_path: Path) -> None:
     """An empty knowledge base's tool call reports no results instead of an empty string."""
     know = _knowledge(tmp_path, tmp_path / "does-not-exist")

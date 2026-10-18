@@ -1416,41 +1416,35 @@ def test_compact_applies_a_rewrite_that_drops_nothing(tmp_path: Any) -> None:
     ]
 
 
-class _MemoryMatchStub:
-    """Just enough of `MemoryMatch` for `_memory_block` to format it -- no `runa.memory` import."""
+class _FakeSource:
+    """A duck-typed `agent.memory`/`agent.knowledge`: hands back `block`, records what it's told."""
 
-    def __init__(self, text: str) -> None:
-        self.text = text
+    def __init__(self, block: str | None = None) -> None:
+        self.block = block
+        self.consulted: list[tuple[str, str | None]] = []
+        self.told: list[tuple[str, Any, str | None, Any]] = []
 
+    async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
+        self.consulted.append((query, run_context.user_id))
+        return None if self.block is None else {"role": "system", "content": self.block}
 
-class _FakeMemory:
-    """A duck-typed `agent.memory` stand-in: records what the runner calls it with."""
-
-    def __init__(self, matches: list[Any] | None = None) -> None:
-        self.matches = matches or []
-        self.search_calls: list[tuple[str, str | None]] = []
-        self.remembered: list[tuple[str, str | None, Any]] = []
-
-    async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
-        self.search_calls.append((query, user_id))
-        return self.matches
-
-    async def remember_from_conversation(
-        self, conversation: str, *, user_id: str | None, model: Any
-    ) -> list[str]:
-        self.remembered.append((conversation, user_id, model))
+    async def after_turn(self, query: str, output: Any, run_context: Any, model: Any) -> list[str]:
+        self.told.append((query, output, run_context.user_id, model))
         return []
 
+    async def ingest(self) -> int:
+        return 0
 
-def test_memory_is_searched_before_the_turn_and_injected_as_a_labeled_block() -> None:
-    """`agent.memory.search` runs with the user's message, and its matches reach the model."""
-    memory = _FakeMemory(matches=[_MemoryMatchStub("User prefers Japanese.")])
+
+def test_memory_is_consulted_before_the_turn_and_its_block_reaches_the_model() -> None:
+    """`agent.memory.context` runs with the user's message, and its block reaches the model."""
+    memory = _FakeSource("Relevant memories:\n- User prefers Japanese.")
     model = ScriptedModel([text_response("ok")])
     agent = scripted_agent(model=model, memory=memory)
 
     result = agent.run_sync("hi")
 
-    assert memory.search_calls == [("hi", None)]
+    assert memory.consulted == [("hi", None)]
     sent = [(item.get("role"), item.get("content")) for item in model.calls[0]]
     assert ("system", "Relevant memories:\n- User prefers Japanese.") in sent
     assert result.output == "ok"
@@ -1460,7 +1454,10 @@ def test_memory_is_searched_before_the_turn_and_injected_as_a_labeled_block() ->
     assert retrieval_span.name == "memory"
     assert retrieval_span.parent_id == agent_span.id
     assert retrieval_span.status == "ok"
-    assert retrieval_span.output == {"count": 1}
+    assert retrieval_span.output == {
+        "role": "system",
+        "content": "Relevant memories:\n- User prefers Japanese.",
+    }
 
 
 def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
@@ -1471,7 +1468,7 @@ def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
         """Needs approval."""
         return "done"
 
-    memory = _FakeMemory()
+    memory = _FakeSource()
     agent = scripted_agent(
         tools=[dangerous],
         memory=memory,
@@ -1479,15 +1476,13 @@ def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
     )
 
     result = agent.run_sync("do it")
-    assert memory.remembered == []
+    assert memory.told == []
 
     state = result.to_state()
     state.approve(result.interruptions[0])
     agent.run_sync(state)
 
-    assert [conversation for conversation, _, _ in memory.remembered] == [
-        "User: do it\nAssistant: all done"
-    ]
+    assert [(query, output) for query, output, _, _ in memory.told] == [("do it", "all done")]
 
 
 def test_retrieved_blocks_go_right_before_the_message_they_were_retrieved_for() -> None:
@@ -1495,7 +1490,7 @@ def test_retrieved_blocks_go_right_before_the_message_they_were_retrieved_for() 
 
     `Agent.run` always ends its input on the user's message, so this drives `_run_async` itself.
     """
-    memory = _FakeMemory(matches=[_MemoryMatchStub("User prefers Japanese.")])
+    memory = _FakeSource("Relevant memories:\n- User prefers Japanese.")
     model = ScriptedModel([text_response("ok")])
     agent = stand_in_agent(model=model, memory=memory)
     note = {"role": "system", "content": "Answer briefly."}
@@ -1509,9 +1504,9 @@ def test_retrieved_blocks_go_right_before_the_message_they_were_retrieved_for() 
     ]
 
 
-def test_memory_with_no_matches_injects_nothing() -> None:
-    """An empty `search` result leaves the model's input exactly as it would be without memory."""
-    memory = _FakeMemory(matches=[])
+def test_memory_with_no_block_injects_nothing() -> None:
+    """A `None` block leaves the model's input exactly as it would be without memory."""
+    memory = _FakeSource()
     model = ScriptedModel([text_response("ok")])
     agent = scripted_agent(model=model, memory=memory)
 
@@ -1520,20 +1515,15 @@ def test_memory_with_no_matches_injects_nothing() -> None:
     assert model.calls[0] == [{"role": "user", "content": "hi"}]
 
 
-def test_memory_extraction_runs_after_the_turn_with_the_exchange_and_resolved_model() -> None:
+def test_memory_is_told_the_exchange_after_the_turn_with_the_resolved_model() -> None:
     """After a run, the runner hands memory the turn's exchange and the agent's own model."""
-    memory = _FakeMemory()
+    memory = _FakeSource()
     model = ScriptedModel([text_response("sure, noted")])
     agent = scripted_agent(model=model, memory=memory)
 
     result = agent.run_sync("I prefer Japanese")
 
-    assert len(memory.remembered) == 1
-    conversation, user_id, resolved_model = memory.remembered[0]
-    assert "I prefer Japanese" in conversation
-    assert "sure, noted" in conversation
-    assert user_id is None
-    assert resolved_model is model
+    assert memory.told == [("I prefer Japanese", "sure, noted", None, model)]
 
     (extraction_span,) = [s for s in result.trace.spans if s.type == "custom"]
     assert extraction_span.name == "memory"
@@ -1545,14 +1535,14 @@ def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:
     """`Session(user_id=...)` scopes both the retrieval and the extraction call."""
     from runa.session import SQLiteSession
 
-    memory = _FakeMemory()
+    memory = _FakeSource()
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db", user_id="u1")
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=memory)
 
     agent.run_sync("hi", session=session)
 
-    assert memory.search_calls == [("hi", "u1")]
-    assert memory.remembered[0][1] == "u1"
+    assert memory.consulted == [("hi", "u1")]
+    assert memory.told[0][2] == "u1"
 
 
 def test_a_tool_and_a_delegate_see_the_sessions_user_on_their_run_context(tmp_path: Any) -> None:
@@ -1618,12 +1608,9 @@ def test_trace_session_id_is_none_without_a_session() -> None:
 def test_memory_retrieval_failure_degrades_gracefully() -> None:
     """A backend that doesn't answer doesn't fail the run; the turn proceeds without memory."""
 
-    class _BoomMemory:
-        async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
+    class _BoomMemory(_FakeSource):
+        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise ConnectionError("boom")
-
-        async def remember_from_conversation(self, *args: Any, **kwargs: Any) -> list[str]:
-            return []
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_BoomMemory())
 
@@ -1639,11 +1626,8 @@ def test_memory_retrieval_failure_degrades_gracefully() -> None:
 def test_memory_extraction_failure_degrades_gracefully() -> None:
     """A backend that doesn't answer doesn't fail the run; the final output is unaffected."""
 
-    class _BoomMemory:
-        async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
-            return []
-
-        async def remember_from_conversation(self, *args: Any, **kwargs: Any) -> list[str]:
+    class _BoomMemory(_FakeSource):
+        async def after_turn(self, *args: Any) -> list[str]:
             raise ConnectionError("boom")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_BoomMemory())
@@ -1666,8 +1650,8 @@ def test_retrieval_does_not_swallow_a_framework_bug() -> None:
     unclassified failure does, naming the exception it came from.
     """
 
-    class _BuggyKnowledge:
-        async def search(self, query: str, *, k: int = 5) -> list[Any]:
+    class _BuggyKnowledge(_FakeSource):
+        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise AttributeError("'NoneType' object has no attribute 'embed'")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), knowledge=_BuggyKnowledge())
@@ -1687,8 +1671,8 @@ def test_retrieval_fails_open_on_a_loop_lifetime_fault() -> None:
     run that is still worth finishing without knowledge.
     """
 
-    class _StaleKnowledge:
-        async def search(self, query: str, *, k: int = 5) -> list[Any]:
+    class _StaleKnowledge(_FakeSource):
+        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise RuntimeError("Event loop is closed")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), knowledge=_StaleKnowledge())
@@ -1708,8 +1692,8 @@ def test_retrieval_misconfiguration_ends_the_run_with_its_trace() -> None:
     What the run owes it is the trace around the failure, retrieval's span included.
     """
 
-    class _UnconfiguredMemory:
-        async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
+    class _UnconfiguredMemory(_FakeSource):
+        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise UserError("OPENAI_API_KEY is not set.")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_UnconfiguredMemory())
@@ -1723,34 +1707,15 @@ def test_retrieval_misconfiguration_ends_the_run_with_its_trace() -> None:
     assert "OPENAI_API_KEY" in (retrieval_span.error or "")
 
 
-class _KnowledgeMatchStub:
-    """Just enough of `KnowledgeMatch` for `_knowledge_block` to format -- no `runa.knowledge`."""
-
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-
-class _FakeKnowledge:
-    """A duck-typed `agent.knowledge` stand-in: records what the runner calls it with."""
-
-    def __init__(self, matches: list[Any] | None = None) -> None:
-        self.matches = matches or []
-        self.search_calls: list[str] = []
-
-    async def search(self, query: str, *, k: int = 5) -> list[Any]:
-        self.search_calls.append(query)
-        return self.matches
-
-
-def test_knowledge_is_searched_before_the_turn_and_injected_as_a_labeled_block() -> None:
-    """`agent.knowledge.search` runs with the user's message, and its matches reach the model."""
-    knowledge = _FakeKnowledge(matches=[_KnowledgeMatchStub("Refunds take 5 business days.")])
+def test_knowledge_is_consulted_before_the_turn_and_its_block_reaches_the_model() -> None:
+    """`agent.knowledge.context` runs with the user's message, and its block reaches the model."""
+    knowledge = _FakeSource("Relevant knowledge:\n- Refunds take 5 business days.")
     model = ScriptedModel([text_response("ok")])
     agent = scripted_agent(model=model, knowledge=knowledge)
 
     result = agent.run_sync("hi")
 
-    assert knowledge.search_calls == ["hi"]
+    assert knowledge.consulted == [("hi", None)]
     sent = [(item.get("role"), item.get("content")) for item in model.calls[0]]
     assert ("system", "Relevant knowledge:\n- Refunds take 5 business days.") in sent
     assert result.output == "ok"
@@ -1758,12 +1723,11 @@ def test_knowledge_is_searched_before_the_turn_and_injected_as_a_labeled_block()
     (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
     assert retrieval_span.name == "knowledge"
     assert retrieval_span.status == "ok"
-    assert retrieval_span.output == {"count": 1}
 
 
-def test_knowledge_with_no_matches_injects_nothing() -> None:
-    """An empty `search` result leaves the model's input exactly as it would be without it."""
-    knowledge = _FakeKnowledge(matches=[])
+def test_knowledge_with_no_block_injects_nothing() -> None:
+    """A `None` block leaves the model's input exactly as it would be without knowledge."""
+    knowledge = _FakeSource()
     model = ScriptedModel([text_response("ok")])
     agent = scripted_agent(model=model, knowledge=knowledge)
 
@@ -1774,8 +1738,8 @@ def test_knowledge_with_no_matches_injects_nothing() -> None:
 
 def test_knowledge_and_memory_can_both_inject_blocks_before_the_final_message() -> None:
     """Memory and knowledge blocks are both injected, in order, right before the user's message."""
-    memory = _FakeMemory(matches=[_MemoryMatchStub("User prefers Japanese.")])
-    knowledge = _FakeKnowledge(matches=[_KnowledgeMatchStub("Refunds take 5 business days.")])
+    memory = _FakeSource("Relevant memories:\n- User prefers Japanese.")
+    knowledge = _FakeSource("Relevant knowledge:\n- Refunds take 5 business days.")
     model = ScriptedModel([text_response("ok")])
     agent = scripted_agent(model=model, memory=memory, knowledge=knowledge)
 
@@ -1792,8 +1756,8 @@ def test_knowledge_and_memory_can_both_inject_blocks_before_the_final_message() 
 def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
     """A backend that doesn't answer doesn't fail the run; the turn proceeds without knowledge."""
 
-    class _BoomKnowledge:
-        async def search(self, query: str, *, k: int = 5) -> list[Any]:
+    class _BoomKnowledge(_FakeSource):
+        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise ConnectionError("boom")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), knowledge=_BoomKnowledge())

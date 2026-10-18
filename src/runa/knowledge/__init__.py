@@ -20,8 +20,8 @@ The two pieces of process-local state here answer different questions: `_digests
 would I write", a pure function of the files on disk, so an empty cache costs a re-read and never
 a re-embed; `_ingest_locks` keeps one process from embedding one corpus twice at once.
 
-A run searches an agent's `knowledge` before every turn, so retrieval is automatic.
-`KnowledgeLike` is the contract a wholesale custom
+A run consults an agent's `knowledge` through `context` before its first turn, so retrieval is
+automatic. `KnowledgeLike` is the contract a wholesale custom
 `knowledge=` object needs, as opposed to `Knowledge(store=...)`'s narrower escape hatch of
 swapping just the storage backend.
 """
@@ -33,8 +33,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from runa import db
+from runa._items import ConversationItem, system_message
 from runa._log import logger
 from runa._loop import LoopCache
+from runa._models import Model
+from runa._types import RunContext
+from runa.context_source import ContextSource
 from runa.db.vectors import Column, VectorMatch, VectorSpec, VersionedVectorStore
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.tool import FunctionTool, tool
@@ -73,17 +77,22 @@ def _match(row: VectorMatch) -> KnowledgeMatch:
     )
 
 
-class KnowledgeLike(Protocol):
+class KnowledgeLike(ContextSource, Protocol):
     """What `Agent(knowledge=...)` needs from a custom object, beyond `"auto"`/`"llm"`/`None`.
 
     `Knowledge` satisfies this already. Implement it yourself to replace Runa's own
     discover-chunk-embed pipeline entirely (a hosted retrieval service, a differently-indexed
     document store, whatever) rather than just swapping `Knowledge(store=...)`'s storage
-    backend. No inheritance required.
+    backend: `context` retrieves and labels what it found, `after_turn` is usually a no-op, and
+    `ingest` prepares the corpus. No inheritance required.
     """
 
-    async def search(self, query: str, *, k: int = 5) -> list[Any]:
-        """Return up to `k` items relevant to `query`, most relevant first."""
+    async def ingest(self) -> int:
+        """Prepare the corpus before a request needs it, returning how many chunks were written.
+
+        `runa serve` calls it at startup. Idempotent; one with nothing to prepare (a service
+        that indexes elsewhere) returns 0.
+        """
         ...
 
 
@@ -311,6 +320,24 @@ class Knowledge:
         await self.ingest()
         (vector,) = await embed([query], model=self.model)
         return [_match(row) for row in await self._store.nearest(embedding=vector, k=k)]
+
+    async def context(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
+        """The chunks relevant to `query`, as a labeled block, or `None` if none are.
+
+        Called by the run before its first turn when `agent.knowledge` is set; see
+        `KnowledgeLike`. Application-scoped, so `run_context` doesn't narrow it.
+        """
+        matches = await self.search(query)
+        if not matches:
+            return None
+        lines = "\n".join(f"- {match.text}" for match in matches)
+        return system_message(f"Relevant knowledge:\n{lines}")
+
+    async def after_turn(
+        self, query: str, output: Any, run_context: RunContext[Any], model: Model
+    ) -> list[str]:
+        """Keep nothing: the corpus is the files under `directory`, not what a run said."""
+        return []
 
     def _as_tool(self) -> FunctionTool:
         """A `@tool` that searches this knowledge base, as plain text.

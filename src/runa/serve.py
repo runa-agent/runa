@@ -343,17 +343,12 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
     one pays a `stat` per file and a version read. An agent in `knowledge="llm"` mode keeps its
     `Knowledge` inside the search tool it hands the model and so isn't warmed here -- that cost
     lands on a tool call the model chose, not on every turn.
-
-    `KnowledgeLike` only promises `search`, so a wholesale custom `knowledge=` object is ingested
-    only if it offers an `ingest` of its own; one backed by a service that indexes elsewhere has
-    nothing to do at startup.
     """
     for agent_cls in agent_classes:
         knowledge = agent_cls().knowledge
-        ingest = getattr(knowledge, "ingest", None)
-        if ingest is None:
+        if knowledge is None:
             continue
-        chunks = await ingest()
+        chunks = await knowledge.ingest()
         if chunks:
             # Only when it actually wrote: zero is the usual answer (a corpus the store already
             # held), and a line per agent per boot saying nothing happened is noise.

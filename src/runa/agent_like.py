@@ -11,8 +11,7 @@ the resolved attributes a run reads, not a second way to configure an agent.
 
 Three names differ from their declaration: `guardrails` and `compact` resolve to
 `bound_guardrails` and `compactor`, and `memory`/`knowledge` keep their names while changing kind
-(`"auto"` becomes the object it built). Those two are typed `Any`; `Agent.__init__` guarantees
-that a run only ever sees an object or `None`.
+(`"auto"` becomes the object it built, `"llm"` a search tool and `None`).
 
 `Agent` is the one implementation, and the turn loop reads every setting through this protocol;
 what a run resolves from them (MCP tools, keyed handoffs and delegates, the model) is
@@ -31,6 +30,8 @@ from runa.tool import FunctionTool
 
 if TYPE_CHECKING:
     from runa.handoff import Delegate  # which reads agents through this protocol
+    from runa.knowledge import KnowledgeLike
+    from runa.memory import MemoryLike
 
 
 class AgentLike(Protocol):
@@ -87,13 +88,13 @@ class AgentLike(Protocol):
         ...
 
     @property
-    def memory(self) -> Any:
-        """Its long-term memory: a `MemoryLike` or `None` once resolved (see this module)."""
+    def memory(self) -> MemoryLike | None:
+        """Its long-term memory, or `None`: the resolved form of `memory`."""
         ...
 
     @property
-    def knowledge(self) -> Any:
-        """Its document knowledge: a `KnowledgeLike` or `None` once resolved."""
+    def knowledge(self) -> KnowledgeLike | None:
+        """Its document knowledge, or `None`: the resolved form of `knowledge`."""
         ...
 
     @property

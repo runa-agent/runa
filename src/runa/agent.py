@@ -297,22 +297,21 @@ def _settings(cls: type[Agent], passed: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_retrieval_setting(
-    setting: Any, cls: type[Memory] | type[Knowledge], tools: list[FunctionTool]
-) -> Any:
-    """Resolve a `memory=`/`knowledge=` setting to the instance (or `None`) `Agent` should store.
+    setting: Any, cls: type[Memory] | type[Knowledge]
+) -> tuple[Any, list[FunctionTool]]:
+    """Resolve a `memory=`/`knowledge=` setting to the source a run consults and the model's tools.
 
-    `"auto"` builds a default instance, `"llm"` appends a search tool and resolves to `None`, and
-    any non-string (`None`, or a `MemoryLike`/`KnowledgeLike` object) passes through. Any other
-    string is a `UserError`.
+    `"auto"` builds a default instance, `"llm"` is no source but a search tool for the model, and
+    any non-string (`None`, or a `MemoryLike`/`KnowledgeLike` object) is the source itself. Any
+    other string is a `UserError`.
     """
     name = cls.__name__.lower()
     if setting is None or not isinstance(setting, str):
-        return setting
+        return setting, []
     if setting == "auto":
-        return cls()
+        return cls(), []
     if setting == "llm":
-        tools.append(cls()._as_tool())
-        return None
+        return None, [cls()._as_tool()]
     raise UserError(
         f"{name} must be 'auto', 'llm', a {cls.__name__}(...)-shaped object, or None, "
         f"got {setting!r}"
@@ -452,13 +451,16 @@ class Agent:
                     handoffs.append(agent)
                     delegates.append(Delegate.from_agent(agent))
 
-        self.memory = _resolve_retrieval_setting(setting["memory"], Memory, tools)
-        self.knowledge = _resolve_retrieval_setting(setting["knowledge"], Knowledge, tools)
+        # Unannotated: a subclass declares these as the setting, `"auto"` say, not as the source.
+        self.memory, memory_tools = _resolve_retrieval_setting(setting["memory"], Memory)
+        self.knowledge, knowledge_tools = _resolve_retrieval_setting(
+            setting["knowledge"], Knowledge
+        )
 
         self.instructions = _adapt_instructions(instructions)
         self.model: str | Any = _checked_model(setting["model"])
         self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
-        self.tools: list[FunctionTool] = tools
+        self.tools: list[FunctionTool] = [*tools, *memory_tools, *knowledge_tools]
         self.handoffs: list[Any] = handoffs
         self.delegates: list[Delegate] = delegates
         self.mcp_servers: list[Any] = list(setting["mcp"] or [])

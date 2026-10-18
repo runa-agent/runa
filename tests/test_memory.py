@@ -251,15 +251,13 @@ class _FakeModel:
         return SimpleNamespace(output=[{"role": "assistant", "content": self.content}])
 
 
-def test_remember_from_conversation_stores_extracted_candidates(tmp_path: Path) -> None:
-    """The internal extraction hook stores whatever the model's JSON reply lists."""
+def test_after_turn_stores_extracted_candidates(tmp_path: Path) -> None:
+    """`after_turn` stores, for the run's user, whatever the model's JSON reply lists."""
     mem = _memory(tmp_path)
-    model = _FakeModel('{"memories": ["User prefers Japanese."]}')
+    model: Any = _FakeModel('{"memories": ["User prefers Japanese."]}')
 
     async def _run():
-        stored = await mem.remember_from_conversation(
-            "User: hi\nAssistant: hello", user_id="u1", model=model
-        )
+        stored = await mem.after_turn("hi", "hello", RunContext(user_id="u1"), model)
         matches = await mem.search("language preference", user_id="u1")
         return stored, matches
 
@@ -269,32 +267,28 @@ def test_remember_from_conversation_stores_extracted_candidates(tmp_path: Path) 
     assert [m.text for m in matches] == ["User prefers Japanese."]
 
 
-def test_remember_from_conversation_stores_nothing_when_the_model_finds_nothing(
+def test_after_turn_stores_nothing_when_the_model_finds_nothing(
     tmp_path: Path,
 ) -> None:
     """An empty `memories` list stores nothing, rather than an empty-string memory."""
     mem = _memory(tmp_path)
-    model = _FakeModel('{"memories": []}')
+    model: Any = _FakeModel('{"memories": []}')
 
     async def _run():
-        return await mem.remember_from_conversation(
-            "User: hi\nAssistant: hello", user_id="u1", model=model
-        )
+        return await mem.after_turn("hi", "hello", RunContext(user_id="u1"), model)
 
     assert asyncio.run(_run()) == []
 
 
-def test_remember_from_conversation_logs_a_reply_it_cannot_read(
+def test_after_turn_logs_a_reply_it_cannot_read(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A reply with no JSON object in it stores nothing *and* says so: no silent empty list."""
     mem = _memory(tmp_path)
-    model = _FakeModel("I could not find anything worth remembering.")
+    model: Any = _FakeModel("I could not find anything worth remembering.")
 
     async def _run():
-        return await mem.remember_from_conversation(
-            "User: hi\nAssistant: hello", user_id="u1", model=model
-        )
+        return await mem.after_turn("hi", "hello", RunContext(user_id="u1"), model)
 
     with caplog.at_level("WARNING", logger="runa"):
         assert asyncio.run(_run()) == []
@@ -302,17 +296,42 @@ def test_remember_from_conversation_logs_a_reply_it_cannot_read(
     assert "memory extraction" in caplog.text
 
 
-def test_remember_from_conversation_tolerates_a_trailing_comma(tmp_path: Path) -> None:
+def test_after_turn_tolerates_a_trailing_comma(tmp_path: Path) -> None:
     """Extraction gets the same tolerance a judge's reply does, both reading one helper."""
     mem = _memory(tmp_path)
-    model = _FakeModel('```json\n{"memories": ["User prefers Japanese.",]}\n```')
+    model: Any = _FakeModel('```json\n{"memories": ["User prefers Japanese.",]}\n```')
 
     async def _run():
-        return await mem.remember_from_conversation(
-            "User: hi\nAssistant: hello", user_id="u1", model=model
-        )
+        return await mem.after_turn("hi", "hello", RunContext(user_id="u1"), model)
 
     assert asyncio.run(_run()) == ["User prefers Japanese."]
+
+
+def test_after_turn_asks_the_model_about_the_exchange(tmp_path: Path) -> None:
+    """The extraction prompt carries the user's message and the run's output, labeled."""
+    mem = _memory(tmp_path)
+    model: Any = _FakeModel('{"memories": []}')
+
+    asyncio.run(mem.after_turn("I prefer Japanese", "sure, noted", RunContext(), model))
+
+    ((request,),) = model.calls
+    assert "User: I prefer Japanese\nAssistant: sure, noted" in request.input[0]["content"]
+
+
+def test_context_is_a_labeled_block_of_the_run_users_memories(tmp_path: Path) -> None:
+    """`context` searches in the run's `user_id` scope and labels what it found."""
+    mem = _memory(tmp_path)
+
+    async def _run():
+        await mem.remember("User prefers Japanese.", user_id="u1")
+        mine = await mem.context("language preference", RunContext(user_id="u1"))
+        theirs = await mem.context("language preference", RunContext(user_id="u2"))
+        return mine, theirs
+
+    mine, theirs = asyncio.run(_run())
+
+    assert mine == {"role": "system", "content": "Relevant memories:\n- User prefers Japanese."}
+    assert theirs is None
 
 
 def test_custom_store_can_be_injected() -> None:

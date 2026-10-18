@@ -428,11 +428,11 @@ def test_memory_accepts_a_wholesale_custom_object_not_just_a_memory_instance() -
     """A non-`Memory` object shaped like `MemoryLike` is accepted as-is: the escape hatch."""
 
     class CustomMemory:
-        async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
-            return []
+        async def context(self, query: str, run_context: Any) -> Any:
+            return None
 
-        async def remember_from_conversation(
-            self, conversation: str, *, user_id: str | None, model: Any
+        async def after_turn(
+            self, query: str, output: Any, run_context: Any, model: Any
         ) -> list[str]:
             return []
 
@@ -536,8 +536,16 @@ def test_knowledge_accepts_a_wholesale_custom_object_not_just_a_knowledge_instan
     """A non-`Knowledge` object shaped like `KnowledgeLike` is accepted as-is: the escape hatch."""
 
     class CustomKnowledge:
-        async def search(self, query: str, *, k: int = 5) -> list[Any]:
+        async def context(self, query: str, run_context: Any) -> Any:
+            return None
+
+        async def after_turn(
+            self, query: str, output: Any, run_context: Any, model: Any
+        ) -> list[str]:
             return []
+
+        async def ingest(self) -> int:
+            return 0
 
     custom = CustomKnowledge()
 

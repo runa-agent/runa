@@ -7,8 +7,8 @@ The implementation behind `Agent.run`/`run_streamed`, not a seam of its own. Eve
 import asyncio
 import inspect
 import time
-from collections.abc import Awaitable
-from contextlib import AbstractContextManager
+from collections.abc import Awaitable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -19,7 +19,6 @@ from runa._items import (
     ConversationItem,
     item_text,
     latest_user_text,
-    system_message,
     tool_calls,
     user_message,
 )
@@ -27,6 +26,7 @@ from runa._log import logger
 from runa._models import ModelRequest
 from runa._types import RunContext, Usage
 from runa.agent_like import AgentLike
+from runa.context_source import ContextSource
 from runa.exceptions import (
     MaxTokensExceeded,
     MaxTurnsExceeded,
@@ -89,7 +89,7 @@ class _Run:
     paused state it continues, if any.
 
     `shape` is the agent running now; `start` is the one the run began with, the same object
-    until a handoff. Memory extraction, compaction and the turn and token ceilings read `start`;
+    until a handoff. Its context sources, compaction and the turn and token ceilings read `start`;
     the turn itself reads `shape`.
     """
 
@@ -196,89 +196,57 @@ def _parse_output(agent: AgentLike, text: str) -> Any:
         ) from exc
 
 
-def _memory_block(matches: list[Any]) -> ConversationItem:
-    """A small, clearly labeled system message carrying retrieved `MemoryMatch`es."""
-    lines = "\n".join(f"- {match.text}" for match in matches)
-    return system_message(f"Relevant memories:\n{lines}")
+def _context_sources(agent: AgentLike) -> list[tuple[str, ContextSource]]:
+    """`agent`'s memory and knowledge, those it has, each with the name its spans go by."""
+    sources = [("memory", agent.memory), ("knowledge", agent.knowledge)]
+    return [(name, source) for name, source in sources if source is not None]
 
 
-def _knowledge_block(matches: list[Any]) -> ConversationItem:
-    """A small, clearly labeled system message carrying retrieved `KnowledgeMatch`es."""
-    lines = "\n".join(f"- {match.text}" for match in matches)
-    return system_message(f"Relevant knowledge:\n{lines}")
-
-
-async def _no_matches() -> list[Any]:
-    return []
-
-
-# Memory and knowledge degrade to no matches when the backend doesn't answer, because a run is
-# still worth finishing without them. These are not that: missing configuration (`UserError`, no
-# embeddings key) and a custom `MemoryLike`/`KnowledgeLike` not shaped as the contract says. An
-# empty retrieval reads like a corpus with nothing relevant, so these raise instead. A
-# `RuntimeError` ("Event loop is closed", a closed client) is a backend not answering, and degrades.
+# A context source degrades to nothing when its backend doesn't answer, because a run is still
+# worth finishing without it. These are not that: missing configuration (`UserError`, no
+# embeddings key) and a custom source not shaped as `ContextSource` says. An empty block reads
+# like a corpus with nothing relevant, so these raise instead. A `RuntimeError` ("Event loop is
+# closed", a closed client) is a backend not answering, and degrades.
 _NOT_A_BACKEND_FAULT = (UserError, AttributeError, NameError, TypeError)
 
 
-async def _retrieve(
-    source: Any,
-    query: str,
-    *,
-    label: str,
-    agent_name: str,
-    spans: _Spans,
-    **search_kwargs: Any,
-) -> list[Any]:
-    """Search `source` for `query`, degrading to no matches (and a logged warning) if it raises.
+@contextmanager
+def _fails_open(span: Span, step: str, agent_name: str) -> Iterator[None]:
+    """Let the block's backend fault go, recorded on `span` and logged; raise anything else."""
+    try:
+        yield
+    except _NOT_A_BACKEND_FAULT:
+        raise
+    except Exception as exc:
+        span.error = str(exc)
+        logger.warning("%s failed for agent %s", step, agent_name, exc_info=True)
 
-    Wrapped in a `"retrieval"` span so a trace shows whether memory/knowledge were consulted, what
-    came back, and any failure -- not just the `llm`/`agent` spans around it.
-    """
-    with spans.span(label, "retrieval", input=query) as span:
-        try:
-            matches = await source.search(query, **search_kwargs)
-        except _NOT_A_BACKEND_FAULT:
-            raise
-        except Exception as exc:
-            span.error = str(exc)
-            logger.warning("%s retrieval failed for agent %s", label, agent_name, exc_info=True)
-            return []
-        span.output = {"count": len(matches)}
-        return matches
+
+async def _consult(
+    run: _Run, name: str, source: ContextSource, query: str
+) -> ConversationItem | None:
+    """`source`'s block for `query`, or `None`, in a `"retrieval"` span showing what came back."""
+    block = None
+    with (
+        run.span(name, "retrieval", input=query) as span,
+        _fails_open(span, f"{name} retrieval", run.start.agent.name),
+    ):
+        block = await source.context(query, run.frame.run_context)
+        span.output = block
+    return block
 
 
 async def _inject_retrieved(run: _Run, query: str) -> None:
-    """Search `agent.memory`/`agent.knowledge` for `query` and fold the matches into the run.
+    """Consult the starting agent's context sources for `query` and fold their blocks into the run.
 
-    Both are searched concurrently, and each block goes right before the message it was retrieved
-    for. A failure in `_NOT_A_BACKEND_FAULT` ends the run like any other.
+    The sources are consulted concurrently, and each block goes right before the message it was
+    retrieved for, memory's before knowledge's.
     """
-    start = run.start.agent
-    memory, knowledge = start.memory, start.knowledge
-    if memory is None and knowledge is None:
-        return
-    name, spans = start.name, run.spans
-    memory_matches, knowledge_matches = await asyncio.gather(
-        _retrieve(
-            memory,
-            query,
-            label="memory",
-            agent_name=name,
-            spans=spans,
-            user_id=run.frame.run_context.user_id,
-        )
-        if memory is not None
-        else _no_matches(),
-        _retrieve(knowledge, query, label="knowledge", agent_name=name, spans=spans)
-        if knowledge is not None
-        else _no_matches(),
-    )
-    blocks = [
-        *([_memory_block(memory_matches)] if memory_matches else []),
-        *([_knowledge_block(knowledge_matches)] if knowledge_matches else []),
-    ]
-    if blocks:
-        run.transcript.add_context(*blocks)
+    sources = _context_sources(run.start.agent)
+    blocks = await asyncio.gather(*(_consult(run, name, source, query) for name, source in sources))
+    found = [block for block in blocks if block is not None]
+    if found:
+        run.transcript.add_context(*found)
 
 
 def _note_compaction(spans: _Spans, tokens: int, dropped: int | None) -> None:
@@ -491,30 +459,22 @@ def _turn_items(input: str | list[ConversationItem]) -> list[ConversationItem]:
     return [user_message(input)] if isinstance(input, str) else list(input)
 
 
-async def _extract_memory(run: _Run, final_output: Any) -> None:
-    """Store what's worth remembering from this turn in `agent.memory`, if it has one."""
-    memory = run.start.agent.memory
+async def _after_turn(run: _Run, final_output: Any) -> None:
+    """Hand the completed exchange to each of the starting agent's context sources, in turn."""
+    sources = _context_sources(run.start.agent)
     query = run.transcript.latest_user_text()
-    if memory is None or query is None:
+    if not sources or query is None:
         return
+    model = run.start.resolve_model()
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
     beside = _Spans(run.frame.trace, run.frame.agent_span.parent_id)
-    with beside.span("memory", "custom", input=query) as span:
-        try:
-            stored = await memory.remember_from_conversation(
-                f"User: {query}\nAssistant: {final_output}",
-                user_id=run.frame.run_context.user_id,
-                model=run.start.resolve_model(),
-            )
-        except _NOT_A_BACKEND_FAULT:
-            raise
-        except Exception as exc:
-            span.error = str(exc)
-            logger.warning(
-                "memory extraction failed for agent %s", run.start.agent.name, exc_info=True
-            )
-            return
-        span.output = {"stored": len(stored)}
+    for name, source in sources:
+        with (
+            beside.span(name, "custom", input=query) as span,
+            _fails_open(span, f"{name} after_turn", run.start.agent.name),
+        ):
+            kept = await source.after_turn(query, final_output, run.frame.run_context, model)
+            span.output = {"stored": len(kept)}
 
 
 async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
@@ -561,7 +521,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             await frame.session.add_items(transcript.unsaved())
         else:
             await frame.session.set_items(transcript.history())
-    await _extract_memory(run, outcome.final_output)
+    await _after_turn(run, outcome.final_output)
 
     await frame.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
     return Run(

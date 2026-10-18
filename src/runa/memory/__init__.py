@@ -4,20 +4,27 @@
 `user_id`, `text` and `metadata` beside its embedding, partitioned by `user_id`. Which store a
 bare `Memory()` gets is `runa.db`'s decision, not this module's.
 
-`remember_from_conversation` is what a run calls once it finishes, to turn
-the turn's exchange into zero or more remembered facts; `MemoryLike` is the contract (it and
-`search`) a wholesale custom `memory=` object needs, as opposed to `Memory(store=...)`'s
-narrower escape hatch of swapping just the storage backend.
+A run consults its agent's memory through `context`, before its first turn, and `after_turn`, to
+turn the exchange into zero or more remembered facts; `MemoryLike` is that contract, the one a
+wholesale custom `memory=` object needs, as opposed to `Memory(store=...)`'s narrower escape
+hatch of swapping just the storage backend.
 """
 
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from runa import db
-from runa._items import item_text, parsed_json_object, user_message
+from runa._items import (
+    ConversationItem,
+    item_text,
+    parsed_json_object,
+    system_message,
+    user_message,
+)
 from runa._log import logger
-from runa._models import ModelRequest
+from runa._models import Model, ModelRequest
 from runa._types import RunContext
+from runa.context_source import ContextSource
 from runa.db.vectors import Column, VectorMatch, VectorSpec, VectorStore
 from runa.embeddings import DEFAULT_EMBEDDING_MODEL, embed, resolve_dimensions
 from runa.tool import FunctionTool, tool
@@ -58,28 +65,15 @@ def _match(row: VectorMatch) -> MemoryMatch:
     )
 
 
-class MemoryLike(Protocol):
+class MemoryLike(ContextSource, Protocol):
     """What `Agent(memory=...)` needs from a custom memory object, beyond `"auto"`/`"llm"`/`None`.
 
     `Memory` satisfies this already. Implement it yourself to replace Runa's embeddings-based
-    retrieval entirely -- a different scoring method, a hosted memory service, keyword search,
-    whatever -- rather than just swapping `Memory(store=...)`'s storage backend. No inheritance
-    required; `Agent.__init__` accepts any object shaped like this.
+    memory entirely -- a different scoring method, a hosted memory service, keyword search,
+    whatever -- rather than just swapping `Memory(store=...)`'s storage backend: `context`
+    retrieves for the run's `user_id` and labels what it found, `after_turn` learns from the
+    exchange. No inheritance required; `Agent.__init__` accepts any object shaped like this.
     """
-
-    async def search(self, query: str, *, user_id: str | None = None, k: int = 5) -> list[Any]:
-        """Return up to `k` items relevant to `query`, most relevant first."""
-        ...
-
-    async def remember_from_conversation(
-        self, conversation: str, *, user_id: str | None, model: Any
-    ) -> list[str]:
-        """Extract and store whatever from `conversation` is durably worth remembering.
-
-        Returns the texts stored, empty if none were worth it. `model` is the agent's own
-        resolved `Model`, handed back in case extraction wants an LLM call of its own.
-        """
-        ...
 
 
 _EXTRACTION_PROMPT = """Below is one exchange between a user and an AI assistant. List any \
@@ -169,22 +163,31 @@ class Memory:
 
         return search_memory
 
-    async def remember_from_conversation(
-        self, conversation: str, *, user_id: str | None, model: Any
-    ) -> list[str]:
-        """Ask `model` what's durably worth remembering from `conversation`, and store it.
+    async def context(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
+        """The run's user's memories relevant to `query`, as a labeled block, or `None` if none.
 
-        Called by the run itself once it finishes when `agent.memory` is set, not
-        meant to be called directly by app code, but part of `MemoryLike`, the contract a custom
-        `memory=` object must implement alongside `search`. Returns the texts it stored, empty if
-        none were worth it.
+        Called by the run before its first turn when `agent.memory` is set; see `MemoryLike`.
+        """
+        matches = await self.search(query, user_id=run_context.user_id)
+        if not matches:
+            return None
+        lines = "\n".join(f"- {match.text}" for match in matches)
+        return system_message(f"Relevant memories:\n{lines}")
+
+    async def after_turn(
+        self, query: str, output: Any, run_context: RunContext[Any], model: Model
+    ) -> list[str]:
+        """Ask `model` what's durably worth remembering from the exchange, and store it.
+
+        Called by the run once it completes when `agent.memory` is set; see `MemoryLike`.
+        Stored for the run's `user_id`. Returns the texts it stored, empty if none were worth it.
 
         A reply this can't read JSON out of stores nothing and logs a warning, the way a failed
         retrieval degrades: "nothing worth remembering" and "the model
         answered with prose" are the same empty list to a caller, and an agent on `memory="auto"`
         that has quietly stopped learning is a failure nobody would otherwise report.
         """
-        prompt = _EXTRACTION_PROMPT.format(conversation=conversation)
+        prompt = _EXTRACTION_PROMPT.format(conversation=f"User: {query}\nAssistant: {output}")
         response = await model.get_response(ModelRequest(input=[user_message(prompt)]))
         reply = item_text(response.output[0])
         try:
@@ -196,7 +199,7 @@ class Memory:
         for candidate in candidates:
             if isinstance(candidate, str) and candidate.strip():
                 text = candidate.strip()
-                await self.remember(text, user_id=user_id)
+                await self.remember(text, user_id=run_context.user_id)
                 stored.append(text)
         return stored
 
