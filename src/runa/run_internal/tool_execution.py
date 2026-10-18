@@ -46,20 +46,20 @@ class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
 
 def _claim(run: _Run, call_id: str, name: str) -> None:
     """Refuse to execute `call_id` a second time (a resumed or duplicated `RunState`)."""
-    if not run.governance.approval_ledger.claim(call_id):
+    if not run.frame.governance.approval_ledger.claim(call_id):
         raise DuplicateToolCallError(call_id, name)
 
 
 async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) -> ConversationItem:
     """Run one already-approved tool call end to end: guardrails, invocation, guardrails."""
-    run_context = run.run_context
+    run_context = run.frame.run_context
     call_id = id_of(call)
     _claim(run, call_id, tool.name)
 
     args_json = call_arguments(call)
     with run.span(tool.name, "tool", input=args_json) as span:
         inside = run.spans.under(span)  # this call's guardrails belong under the call
-        await run.hooks.on_tool_start(run_context, run.current_agent, tool)
+        await run.frame.hooks.on_tool_start(run_context, run.current_agent, tool)
         await _run_guardrails(run, Phase.TOOL_INPUT, args_json, tool=tool, spans=inside)
         try:
             result = await tool.on_invoke_tool(run_context, args_json, call_id)
@@ -69,7 +69,7 @@ async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) ->
         await _run_guardrails(run, Phase.TOOL_OUTPUT, result, tool=tool, spans=inside)
         span.output = result
     run.transcript.record_call(ToolCall(tool.name, args_json, str(result)))
-    await run.hooks.on_tool_end(run_context, run.current_agent, tool, result)
+    await run.frame.hooks.on_tool_end(run_context, run.current_agent, tool, result)
     return tool_result(call_id, result)
 
 
@@ -94,7 +94,7 @@ async def _run_delegate_call(
         try:
             nested = await run.delegate(delegate, str(args.get("input", "")), call_id, under=span)
         except DelegatePaused as paused:
-            run.governance.approval_ledger.release(call_id)
+            run.frame.governance.approval_ledger.release(call_id)
             span.output = "paused for approval"
             return paused
         if nested.status == "completed":
@@ -175,7 +175,7 @@ async def _run_message_tool_calls(
     """
     shape = run.shape
     agent = shape.agent
-    run_context = run.run_context
+    run_context = run.frame.run_context
     handoff_map = shape.handoffs
     slots: list[_Slot] = []
     deferred: list[tuple[_Slot, _Thunk]] = []
@@ -195,7 +195,7 @@ async def _run_message_tool_calls(
             handoff = handoff_map[name]
             switched_agent = handoff.agent
             with run.span(handoff.tool_name, "handoff"):
-                await run.hooks.on_handoff(run_context, agent, switched_agent)
+                await run.frame.hooks.on_handoff(run_context, agent, switched_agent)
             slots.append(_Slot(tool_result(call_id, f"Transferred to {switched_agent.name}.")))
             continue
 
@@ -217,7 +217,7 @@ async def _run_message_tool_calls(
         if isinstance(args, str):
             slots.append(_Slot(tool_result(call_id, args)))
             continue
-        gate = await run.governance.approval_ledger.decide(
+        gate = await run.frame.governance.approval_ledger.decide(
             tool.name,
             call_id,
             needs_approval=partial(_needs_approval, tool, run_context, args, call_id),

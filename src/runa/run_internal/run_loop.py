@@ -65,13 +65,39 @@ from runa.transcript import Transcript
 
 
 @dataclass
+class _Frame:
+    """What a run is known by before its agent is resolved, and all a failed run can report.
+
+    The agent it starts with, whose turn, token and time ceilings bound it; the trace and the
+    agent span everything hangs under; the `RunContext` user code is handed and the governance it
+    isn't; and the session, hooks and `emit` this particular call was made with. A run's entry
+    points differ only in how they build one (see `_run_async`, `_resume`, `_Run.delegate`), and
+    everything after that is `_within`'s, so something a run starts carrying is a field here and
+    nowhere else.
+
+    It exists before the run's boundary does because resolving the agent is inside that boundary:
+    listing an MCP server's tools starts a subprocess, which can fail, and a run that fails there
+    still closes this span and reports what this context spent.
+    """
+
+    agent: AgentLike
+    trace: Trace
+    agent_span: Span
+    run_context: RunContext
+    governance: _Governance
+    session: Session | None
+    hooks: _Dispatch[Any]
+    emit: Emit | None = None
+
+
+@dataclass
 class _Run:
     """One run, from the moment the loop starts it to the moment it becomes the caller's `Run`.
 
-    The agent, its `Transcript`, the `RunContext` user code is handed and the governance it isn't,
-    the span everything hangs under, and the hooks and `emit` this particular call was made with.
-    The turn loop and the steps it calls take this, not a re-listing of its fields, so something a
-    run starts carrying doesn't ripple through a dozen signatures.
+    Its `frame`, and what needed the agent resolved: the `shape`, the `Transcript`, and the paused
+    state it's continuing, if any. The turn loop and the steps it calls take this, not a
+    re-listing of its fields, so something a run starts carrying doesn't ripple through a dozen
+    signatures.
 
     `shape` is the agent running now, resolved; `start` is the one the run began with. They are
     the same object until a handoff, and separate names afterwards because the two readings
@@ -81,15 +107,9 @@ class _Run:
     `shape.agent.<setting>`.
     """
 
+    frame: _Frame
     shape: AgentShape
     transcript: Transcript
-    run_context: RunContext
-    governance: _Governance
-    trace: Trace
-    agent_span: Span
-    session: Session | None
-    hooks: _Dispatch[Any]
-    emit: Emit | None = None
     resumed: RunState | None = None
     """The paused state this run is continuing, if it is one: the unfinished tool-call message,
     the decisions that unblock its calls, and the results already computed for the rest of them.
@@ -108,7 +128,7 @@ class _Run:
     @property
     def spans(self) -> _Spans:
         """Where this run's steps put their spans: children of its one agent span."""
-        return _Spans(self.trace, self.agent_span.id)
+        return _Spans(self.frame.trace, self.frame.agent_span.id)
 
     def span(self, name: str, span_type: Any, *, input: Any = None) -> AbstractContextManager[Span]:
         """A span under this run's agent span, for a `with` block (see `_Spans.span`)."""
@@ -116,20 +136,19 @@ class _Run:
 
     def notify(self, event: StreamEvent) -> None:
         """Hand `event` to a streamed run's consumer; a non-streamed run has nowhere to put it."""
-        if self.emit is not None:
-            self.emit(event)
+        if self.frame.emit is not None:
+            self.frame.emit(event)
 
     async def delegate(self, delegate: Delegate, input: str, call_id: str, *, under: Span) -> Run:
         """Run `delegate`'s agent on `input` as a nested run of this one, and return its `Run`.
 
-        The nested run is this one, with what is a delegate's own replaced: the agent and a fresh
-        transcript, a `RunContext` over the same `context` and `user_id` (its usage starts at zero
-        and is merged into this run's here), an agent span under the call's `under` span, and the
-        agent's own turn, token and time ceilings. Everything else is shared, and anything a run
+        The nested run's frame is this one's, with what is a delegate's own replaced: the agent,
+        whose turn, token and time ceilings it runs under, a `RunContext` over the same `context`
+        and `user_id` (its usage starts at zero and is merged into this run's here), and an agent
+        span under the call's `under` span. Everything else is shared, and anything a frame
         starts carrying is shared too unless it is named below: the governance (one approval
         ledger, one guardrail audit trail, one stash of paused delegates), the hooks, the trace.
-        This run's own deadline encloses the delegate's, as it does any tool
-        call.
+        This run's own deadline encloses the delegate's, as it does any tool call.
 
         Two things are deliberately not shared. A `session`: a delegate is handed fresh input,
         not a conversation. And `emit`: a stream event doesn't say which agent produced it, so a
@@ -141,42 +160,29 @@ class _Run:
         again, on resume, continues it instead of starting it over (`runa.paused_delegates` owns
         that protocol), and `input` is not read again. The returned `Run` is completed or errored.
         """
-        agent = delegate.agent
-        run_context = RunContext(context=self.run_context.context, user_id=self.run_context.user_id)
-        paused = self.governance.paused_delegates.take(call_id)
+        frame = self.frame
+        paused = frame.governance.paused_delegates.take(call_id)
+        start: str | RunState
         if paused is None:
-            message: str | None = input
-            target, transcript = agent, Transcript.start([user_message(input)])
+            target, message, start = delegate.agent, input, input
         else:
-            message, target, transcript = None, paused.agent, paused.transcript.copy()
-        agent_span = _Spans(self.trace, under.id).open(target.name, "agent", input=message)
-
-        async def turn() -> Run:
-            nested = replace(
-                self,
-                shape=await AgentShape.of(target),  # inside the boundary: see `_run_async`
-                transcript=transcript,
-                run_context=run_context,
-                agent_span=agent_span,
-                session=None,
-                emit=None,
-                resumed=paused,
-            )
-            return await _drive(nested, message)
-
-        run = await _guarded(
-            turn(),
-            trace=self.trace,
-            agent_span=agent_span,
-            run_context=run_context,
-            governance=self.governance,
-            timeout=target.timeout,
+            target, message, start = paused.agent, None, paused
+        nested = replace(
+            frame,
+            agent=target,
+            agent_span=_Spans(frame.trace, under.id).open(target.name, "agent", input=message),
+            run_context=RunContext(
+                context=frame.run_context.context, user_id=frame.run_context.user_id
+            ),
+            session=None,
+            emit=None,
         )
-        self.run_context.usage.add(run.usage)
+        run = await _within(nested, start)
+        frame.run_context.usage.add(run.usage)
         if run.status == "paused":
             state = run.to_state()
             state.run_context.usage = Usage()  # already merged into this run's
-            self.governance.paused_delegates.stash(call_id, state)
+            frame.governance.paused_delegates.stash(call_id, state)
             raise DelegatePaused(state.pending)
         return run
 
@@ -293,7 +299,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
             label="memory",
             agent_name=name,
             spans=spans,
-            user_id=run.run_context.user_id,
+            user_id=run.frame.run_context.user_id,
         )
         if memory is not None
         else _no_matches(),
@@ -347,18 +353,18 @@ async def _record_tool_results(
     if switched is not None:
         run.shape = await AgentShape.of(switched)
         run.notify(AgentUpdatedStreamEvent(new_agent=switched))
-        await run.hooks.on_agent_start(run.run_context, switched)
+        await run.frame.hooks.on_agent_start(run.frame.run_context, switched)
 
 
 async def _run_turns(run: _Run) -> _TurnOutcome:
     """Call the model and run its tool calls until it answers, pauses, or runs out of turns.
 
-    With `run.emit` (a streamed run), the model is streamed and every step is emitted as a
+    With `run.frame.emit` (a streamed run), the model is streamed and every step is emitted as a
     `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
-    transcript, hooks = run.transcript, run.hooks
+    transcript, hooks = run.transcript, run.frame.hooks
     max_turns, max_tokens = run.start.agent.max_turns, run.start.agent.max_tokens
-    run_context = run.run_context
+    run_context = run.frame.run_context
 
     if run.resumed is not None:
         results, interruptions, switched = await _run_message_tool_calls(
@@ -385,10 +391,10 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
                 handoffs=list(shape.handoffs.values()),
                 delegates=list(shape.delegates.values()),
             )
-            if run.emit is None:
+            if run.frame.emit is None:
                 response = await model.get_response(request)
             else:
-                response = await _stream_response(model, request, run.emit)
+                response = await _stream_response(model, request, run.frame.emit)
             run_context.usage.add(response.usage)
             llm_span.output = {"usage": response.usage.__dict__}
             _check_token_budget(run_context.usage, max_tokens)
@@ -448,46 +454,30 @@ def _export(trace: Trace) -> None:
     export_trace_later(trace)
 
 
-def _errored(
-    failure: RunaError,
-    *,
-    trace: Trace,
-    agent_span: Span,
-    run_context: RunContext,
-    governance: _Governance,
-) -> Run:
+def _errored(failure: RunaError, frame: _Frame) -> Run:
     """Close the run's agent span around `failure` and return the `Run` the caller was promised.
 
     The third way out of the loop, beside `_finish`'s completed and paused `Run`s, and built here
     for the same reason those are built there: one result shape, produced by the loop on every
     path, rather than a payload bolted onto the exception for the layer above to rebuild one from.
 
-    What a failed run can say is exactly what the trace, the `RunContext` and the `_Governance`
-    already hold -- the spans around the failure, what it spent, which guardrails ran -- so this
-    needs nothing the run hadn't put somewhere a caller can read. The items it generated before
-    failing are not among them: an unfinished turn is not history, so the `Run` carries an empty
-    `Transcript`.
+    What a failed run can say is exactly what its frame already holds -- the spans around the
+    failure, what it spent, which guardrails ran -- so this needs nothing the run hadn't put
+    somewhere a caller can read. The items it generated before failing are not among them: an
+    unfinished turn is not history, so the `Run` carries an empty `Transcript`.
     """
-    _close_span(agent_span, error=str(failure))
+    _close_span(frame.agent_span, error=str(failure))
     return Run(
         output=None,
-        trace=trace,
-        usage=run_context.usage,
+        trace=frame.trace,
+        usage=frame.run_context.usage,
         status="error",
         error=str(failure),
-        guardrail_results=governance.guardrail_results.snapshot(),
+        guardrail_results=frame.governance.guardrail_results.snapshot(),
     )
 
 
-async def _guarded(
-    turn: Awaitable[Run],
-    *,
-    trace: Trace,
-    agent_span: Span,
-    run_context: RunContext,
-    governance: _Governance,
-    timeout: float | None,
-) -> Run:
+async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
     """Await the whole run and return its `Run`, the `"error"` one included.
 
     This is the boundary the "errors never raise out of a run" promise is kept at, which is why
@@ -501,14 +491,13 @@ async def _guarded(
     the one run worth inspecting with its agent span open. So anything unrecognized becomes
     `UnexpectedError`, logged with its traceback on the way past, and the `Run` says what happened.
 
-    It takes the things a run is known by before its first turn rather than the `_Run` the
-    loop works on, because resolving the agent's shape is itself inside here: listing an MCP
-    server's tools starts a subprocess, which can fail. The trace and the span exist first and the
-    shape is resolved under them, so every way out of a run ends with its span closed. Exporting
-    the trace is not this boundary's: a delegate is guarded the same way inside its caller's
-    trace, which `_traced` exports once, around the run that started it.
+    It takes the run's `_Frame` rather than the `_Run` the loop works on, because resolving the
+    agent's shape is itself inside here (see `_within`), so every way out of a run ends with the
+    frame's span closed. Exporting the trace is not this boundary's: a delegate is guarded the
+    same way inside its caller's trace, which `_traced` exports once, around the run that started
+    it.
 
-    `timeout` (`Agent.timeout`) bounds the whole thing in wall-clock seconds. Exceeding it is
+    The frame agent's `timeout` bounds the whole thing in wall-clock seconds. Exceeding it is
     translated into `RunTimeout`, a `RunaError` like any other, so a timed-out run closes its
     span and comes back as `Run(status="error")` rather than leaving a half-finished trace behind.
 
@@ -518,6 +507,7 @@ async def _guarded(
     And an `OperatorError` is a sibling of `RunaError` precisely so a run never reports one as its
     own failure (see `runa.exceptions`); the span is still closed around it.
     """
+    timeout = frame.agent.timeout
     try:
         if timeout is None:
             result = await turn
@@ -528,27 +518,48 @@ async def _guarded(
             except TimeoutError as exc:
                 raise RunTimeout(f"run timed out after {timeout}s") from exc
     except OperatorError as exc:
-        _close_span(agent_span, error=str(exc))
+        _close_span(frame.agent_span, error=str(exc))
         raise
     except RunaError as exc:
         failure = exc
     except Exception as exc:
         logger.error(
             "agent %s failed with an unhandled %s",
-            agent_span.name,
+            frame.agent_span.name,
             type(exc).__name__,
             exc_info=True,
         )
         failure = UnexpectedError(exc)
     else:
         return result
-    return _errored(
-        failure,
-        trace=trace,
-        agent_span=agent_span,
-        run_context=run_context,
-        governance=governance,
-    )
+    return _errored(failure, frame)
+
+
+async def _within(frame: _Frame, input: str | list[ConversationItem] | RunState) -> Run:
+    """Run `frame.agent` on `input`, or continue the paused `RunState` it is, inside the boundary.
+
+    Every entry point ends here once its frame is built. Resolving the agent's shape, reading the
+    session's prior turns and building the `_Run` are all inside `_guarded`, beside the hooks and
+    the turn loop: each reaches something that can refuse -- `AgentShape.of` lists an MCP
+    server's tools, which starts its subprocess; a `Session` is the application's to implement,
+    and a locked SQLite file under `runa serve` is its most ordinary failure -- and inside the
+    boundary each ends the run the way every other failure does, with a trace to read.
+    """
+
+    async def turn() -> Run:
+        shape = await AgentShape.of(frame.agent)
+        if isinstance(input, RunState):
+            return await _drive(_Run(frame, shape, input.transcript.copy(), input), None)
+        session = frame.session
+        prior = await session.get_items() if session is not None else []
+        return await _drive(_Run(frame, shape, Transcript.start(_turn_items(input), prior)), input)
+
+    return await _guarded(turn(), frame)
+
+
+def _turn_items(input: str | list[ConversationItem]) -> list[ConversationItem]:
+    """The items one new turn's `input` adds to the conversation."""
+    return [user_message(input)] if isinstance(input, str) else list(input)
 
 
 async def _extract_memory(run: _Run, final_output: Any) -> None:
@@ -558,12 +569,12 @@ async def _extract_memory(run: _Run, final_output: Any) -> None:
     if memory is None or query is None:
         return
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
-    beside = _Spans(run.trace, run.agent_span.parent_id)
+    beside = _Spans(run.frame.trace, run.frame.agent_span.parent_id)
     with beside.span("memory", "custom", input=query) as span:
         try:
             stored = await memory.remember_from_conversation(
                 f"User: {query}\nAssistant: {final_output}",
-                user_id=run.run_context.user_id,
+                user_id=run.frame.run_context.user_id,
                 model=run.start.resolve_model(),
             )
         except _NOT_A_BACKEND_FAULT:
@@ -591,8 +602,9 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     `_traced`'s, on the way out, so one run is one exported trace whether it completed, paused
     or failed here -- saving to a session is as able to fail as any other step.
     """
-    _close_span(run.agent_span, output=outcome.final_output)
-    run_context, governance, transcript = run.run_context, run.governance, run.transcript
+    frame, transcript = run.frame, run.transcript
+    run_context, governance = frame.run_context, frame.governance
+    _close_span(frame.agent_span, output=outcome.final_output)
 
     if outcome.interruptions:
         state = RunState(
@@ -602,12 +614,12 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             pending=outcome.interruptions,
             run_context=run_context,
             _governance=governance,
-            trace=run.trace,
+            trace=frame.trace,
             guardrail_results=governance.guardrail_results.snapshot(),
         )
         return Run(
             output=None,
-            trace=run.trace,
+            trace=frame.trace,
             usage=run_context.usage,
             status="paused",
             interruptions=outcome.interruptions,
@@ -620,17 +632,17 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     tokens = outcome.context_tokens
     dropped = transcript.compact_history(run.start.agent.compactor, tokens)
     _note_compaction(run.spans, tokens, dropped)
-    if run.session is not None:
+    if frame.session is not None:
         if dropped is None:
-            await run.session.add_items(transcript.unsaved())
+            await frame.session.add_items(transcript.unsaved())
         else:
-            await run.session.set_items(transcript.history())
+            await frame.session.set_items(transcript.history())
     await _extract_memory(run, outcome.final_output)
 
-    await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
+    await frame.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
     return Run(
         output=outcome.final_output,
-        trace=run.trace,
+        trace=frame.trace,
         usage=run_context.usage,
         _transcript=transcript,
         guardrail_results=governance.guardrail_results.snapshot(),
@@ -645,7 +657,7 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
     A resumed agent still gets its own `on_agent_start`: `_finish` always fires `on_agent_end`,
     and a resumed run that skipped the start would emit an unpaired end.
     """
-    await run.hooks.on_agent_start(run.run_context, run.current_agent)
+    await run.frame.hooks.on_agent_start(run.frame.run_context, run.current_agent)
     if run.resumed is None:
         query = run.transcript.latest_user_text()
         if query is not None:
@@ -675,8 +687,6 @@ async def _run_async(
     if isinstance(input, RunState):
         return await _resume(input, dispatch, session, emit)
 
-    run_context = RunContext(context=context, user_id=_user_of(session))
-    governance = _Governance()
     trace = Trace(
         id=gen_trace_id(),
         name=type(agent).__name__,
@@ -688,42 +698,19 @@ async def _run_async(
     if group_id is not None:
         trace.metadata = {"group_id": group_id}
 
-    turn_input = [user_message(input)] if isinstance(input, str) else list(input)
-    query = latest_user_text(turn_input)
-    agent_span = _Spans(trace).open(agent.name, "agent", input=query)
-
-    async def turn() -> Run:
-        # The agent's shape is resolved here, not above, for the reason the session's prior turns
-        # are read here and the hooks below are dispatched here: all three are the run's work, and
-        # all three reach something that can refuse. `AgentShape.of` lists an MCP server's tools,
-        # which starts its subprocess; a `Session` is the application's to implement, and a locked
-        # SQLite file under `runa serve` is its most ordinary failure. Inside the boundary each
-        # ends the run the way every other failure does, with a trace to read, instead of
-        # escaping it.
-        shape = await AgentShape.of(agent)
-        prior = await session.get_items() if session is not None else []
-        run = _Run(
-            shape=shape,
-            transcript=Transcript.start(turn_input, prior),
-            run_context=run_context,
-            governance=governance,
-            trace=trace,
-            agent_span=agent_span,
-            session=session,
-            hooks=dispatch,
-            emit=emit,
-        )
-        return await _drive(run, input)
-
-    guarded = _guarded(
-        turn(),
+    frame = _Frame(
+        agent=agent,
         trace=trace,
-        agent_span=agent_span,
-        run_context=run_context,
-        governance=governance,
-        timeout=agent.timeout,
+        agent_span=_Spans(trace).open(
+            agent.name, "agent", input=latest_user_text(_turn_items(input))
+        ),
+        run_context=RunContext(context=context, user_id=_user_of(session)),
+        governance=_Governance(),
+        session=session,
+        hooks=dispatch,
+        emit=emit,
     )
-    return await _traced(guarded, trace)
+    return await _traced(_within(frame, input), trace)
 
 
 def _user_of(session: Session | None) -> str | None:
@@ -738,35 +725,19 @@ async def _resume(
     emit: Emit | None = None,
 ) -> Run:
     """Continue a paused run once its interruptions are resolved."""
-    agent_span = _Spans(state.trace).open(state.agent.name, "agent")
-    # The user is the resuming session's, as a fresh run's is: a serialized state doesn't carry it.
-    run_context = replace(state.run_context, user_id=_user_of(session))
-
-    async def turn() -> Run:
-        shape = await AgentShape.of(state.agent)  # inside the boundary: see `_run_async`
-        run = _Run(
-            shape=shape,
-            transcript=state.transcript.copy(),
-            run_context=run_context,
-            governance=state._governance,
-            trace=state.trace,
-            agent_span=agent_span,
-            session=session,
-            hooks=dispatch,
-            emit=emit,
-            resumed=state,
-        )
-        return await _drive(run, None)
-
-    guarded = _guarded(
-        turn(),
+    frame = _Frame(
+        agent=state.agent,
         trace=state.trace,
-        agent_span=agent_span,
-        run_context=run_context,
+        agent_span=_Spans(state.trace).open(state.agent.name, "agent"),
+        # The user is the resuming session's, as a fresh run's is: a serialized state doesn't
+        # carry it.
+        run_context=replace(state.run_context, user_id=_user_of(session)),
         governance=state._governance,
-        timeout=state.agent.timeout,
+        session=session,
+        hooks=dispatch,
+        emit=emit,
     )
-    return await _traced(guarded, state.trace)
+    return await _traced(_within(frame, state), state.trace)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]
