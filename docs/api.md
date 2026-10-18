@@ -122,11 +122,13 @@ signature-level reference.
 
 ::: runa.StreamEvent
 
-::: runa.AgentUpdatedStreamEvent
+::: runa.TextDelta
 
-::: runa.RawResponsesStreamEvent
+::: runa.ToolCalled
 
-::: runa.RunItemStreamEvent
+::: runa.ToolOutput
+
+::: runa.AgentChanged
 
 ## Evaluation
 

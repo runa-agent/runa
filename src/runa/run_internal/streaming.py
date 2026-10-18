@@ -3,7 +3,8 @@
 `run_streamed` runs the same turn loop as `run` (with an `emit` callback),
 so guardrails, approvals, tracing, hooks and sessions behave identically. The only
 streaming-specific step is here: consuming `Model.stream_response` instead of `get_response`,
-emitting each raw delta as it arrives.
+emitting each piece of text as a `TextDelta` as it arrives. A provider's delta never reaches the
+stream's consumer itself.
 """
 
 from collections.abc import Callable
@@ -13,7 +14,7 @@ from typing import Any
 from runa._items import assistant_message, tool_call
 from runa._models import Model, ModelRequest
 from runa._types import ModelResponse, Usage
-from runa.stream_events import RawResponsesStreamEvent, StreamEvent
+from runa.stream_events import StreamEvent, TextDelta
 
 Emit = Callable[[StreamEvent], None]
 
@@ -28,16 +29,16 @@ class _PartialCall:
 
 
 async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> ModelResponse:
-    """Consume `model.stream_response(request)` into a `ModelResponse`, emitting each delta."""
+    """Consume `model.stream_response(request)` into a `ModelResponse`, emitting its text."""
     text_parts: list[str] = []
     calls: dict[int, _PartialCall] = {}
     blocks: list[Any] = []
     usage = Usage()
 
     async for delta in model.stream_response(request):
-        emit(RawResponsesStreamEvent(data=delta))
         if delta.text:
             text_parts.append(delta.text)
+            emit(TextDelta(delta.text))
         if delta.provider_blocks:
             blocks.extend(delta.provider_blocks)
         if delta.tool_call_index is not None:

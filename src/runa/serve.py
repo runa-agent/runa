@@ -61,6 +61,7 @@ from runa.agent import Agent, declared_name
 from runa.exceptions import OperatorError, UserError
 from runa.run import Run
 from runa.run_state import RunState
+from runa.stream_events import TextDelta
 from runa.tracing.config import flush_exports
 
 API_KEY_ENV = "RUNA_API_KEY"
@@ -303,9 +304,9 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
             stream = agent.run_streamed(turn, session=session)
             try:
                 async for event in stream:
-                    text = _token_text(event)
-                    if text:
-                        yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
+                    if isinstance(event, TextDelta):
+                        token = {"type": "token", "text": event.text}
+                        yield f"data: {json.dumps(token)}\n\n"
                 if stream.run is not None:
                     payload = {"type": "run", **_run_payload(stream.run, agent_name)}
                     yield f"data: {json.dumps(payload)}\n\n"
@@ -353,17 +354,6 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
             # Only when it actually wrote: zero is the usual answer (a corpus the store already
             # held), and a line per agent per boot saying nothing happened is noise.
             logger.info("ingested %d knowledge chunks for %s", chunks, declared_name(agent_cls))
-
-
-def _token_text(event: Any) -> str | None:
-    """The incremental text on a `RawResponsesStreamEvent`, if it carries any.
-
-    Its `data` is a `StreamDelta` (see `runa.stream_events`), so the text is an attribute. The
-    other two event kinds carry completed items rather than fragments and contribute nothing
-    here; the finished `Run` at the end of the stream already reports what they produced.
-    """
-    text = getattr(getattr(event, "data", None), "text", None)
-    return text if isinstance(text, str) and text else None
 
 
 def _constant_time_equal(left: str, right: str) -> bool:

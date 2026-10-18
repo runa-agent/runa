@@ -945,30 +945,24 @@ def _streamed(agent: Any, message: Any, **kwargs: Any) -> tuple[list[Any], Run]:
     return events, stream.run
 
 
-def test_stream_response_yields_text_and_final_message() -> None:
-    """Streaming a plain-text reply yields raw deltas, then a `message_output_created` item."""
-    from runa.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
+def test_stream_response_yields_text_as_it_arrives() -> None:
+    """Streaming a plain-text reply yields one `TextDelta` per piece, and nothing else."""
+    from runa.stream_events import TextDelta
 
     agent = scripted_agent(
-        model=_ScriptedStreamingModel([StreamDelta(text="Hi"), StreamDelta(text=" there")])
+        model=_ScriptedStreamingModel(
+            [StreamDelta(text="Hi"), StreamDelta(usage=Usage()), StreamDelta(text=" there")]
+        )
     )
 
-    events, _ = _streamed(agent, "hi")
+    events, run = _streamed(agent, "hi")
 
-    raw = [e for e in events if isinstance(e, RawResponsesStreamEvent)]
-    assert [d.data.text for d in raw] == ["Hi", " there"]
-    (final,) = [
-        e
-        for e in events
-        if isinstance(e, RunItemStreamEvent) and e.name == "message_output_created"
-    ]
-    assert final.item["content"] == "Hi there"
+    assert events == [TextDelta("Hi"), TextDelta(" there")]
+    assert run.output == "Hi there"
 
 
 def test_stream_response_keeps_the_provider_blocks_it_was_handed() -> None:
     """What a streamed turn puts in the conversation matches what an unstreamed one returns."""
-    from runa.stream_events import RunItemStreamEvent
-
     block = {"type": "thinking", "thinking": "let me see", "signature": "sig-1"}
     agent = scripted_agent(
         model=_ScriptedStreamingModel(
@@ -976,14 +970,9 @@ def test_stream_response_keeps_the_provider_blocks_it_was_handed() -> None:
         )
     )
 
-    events, _ = _streamed(agent, "hi")
+    _streamed(agent, "hi")
 
-    (final,) = [
-        e
-        for e in events
-        if isinstance(e, RunItemStreamEvent) and e.name == "message_output_created"
-    ]
-    assert final.item == {
+    assert agent.history[-1] == {
         "role": "assistant",
         "content": "Hi",
         "tool_calls": None,
@@ -993,7 +982,7 @@ def test_stream_response_keeps_the_provider_blocks_it_was_handed() -> None:
 
 def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
     """After an `always=True` approval, a later call to the same tool runs mid-stream unasked."""
-    from runa.stream_events import RunItemStreamEvent
+    from runa.stream_events import ToolOutput
 
     @tool(needs_approval=True)
     def dangerous() -> str:
@@ -1019,15 +1008,13 @@ def test_stream_response_runs_a_sticky_approved_tool_without_raising() -> None:
     events, resumed = _streamed(agent, state)
 
     assert resumed.output == "all done"
-    tool_outputs = [
-        e for e in events if isinstance(e, RunItemStreamEvent) and e.name == "tool_output"
-    ]
+    tool_outputs = [e for e in events if isinstance(e, ToolOutput)]
     assert [e.item["content"] for e in tool_outputs] == ["done", "done"]
 
 
 def test_stream_response_feeds_back_malformed_tool_arguments() -> None:
-    """`run_streamed` turns invalid JSON arguments into a `tool_output` error too."""
-    from runa.stream_events import RunItemStreamEvent
+    """`run_streamed` turns invalid JSON arguments into a `ToolOutput` error too."""
+    from runa.stream_events import ToolOutput
 
     @tool
     def lookup(city: str) -> str:
@@ -1049,15 +1036,13 @@ def test_stream_response_feeds_back_malformed_tool_arguments() -> None:
 
     events, _ = _streamed(agent, "go")
 
-    tool_outputs = [
-        e for e in events if isinstance(e, RunItemStreamEvent) and e.name == "tool_output"
-    ]
+    tool_outputs = [e for e in events if isinstance(e, ToolOutput)]
     assert tool_outputs[0].item["content"].startswith("error: invalid JSON arguments")
 
 
 def test_stream_pauses_for_approval_and_resumes_streaming() -> None:
     """A gated call ends the stream with `interruptions`; the resolved state streams onward."""
-    from runa.stream_events import RunItemStreamEvent
+    from runa.stream_events import TextDelta, ToolCalled, ToolOutput
 
     ran: list[str] = []
 
@@ -1082,9 +1067,12 @@ def test_stream_pauses_for_approval_and_resumes_streaming() -> None:
         ),
     )
 
-    _, paused = _streamed(agent, "do it")
+    events, paused = _streamed(agent, "do it")
 
     assert ran == []
+    assert [e.item["function"]["name"] for e in events if isinstance(e, ToolCalled)] == [
+        "dangerous"
+    ]
     assert paused.output is None
     assert [item.name for item in paused.interruptions] == ["dangerous"]
 
@@ -1094,8 +1082,33 @@ def test_stream_pauses_for_approval_and_resumes_streaming() -> None:
 
     assert ran == ["dangerous"]
     assert resumed.output == "all done"
-    items = [(e.name, e.item.get("content")) for e in events if isinstance(e, RunItemStreamEvent)]
-    assert items == [("tool_output", "done"), ("message_output_created", "all done")]
+    assert [type(e) for e in events] == [ToolOutput, TextDelta]
+    assert events[0].item["content"] == "done"
+
+
+def test_stream_announces_the_agent_a_handoff_switched_to() -> None:
+    """A handoff mid-stream yields the call, its output, then `AgentChanged` naming the target."""
+    from runa.stream_events import AgentChanged, TextDelta, ToolCalled, ToolOutput
+
+    target = agent_class("Target", _ScriptedStreamingModel([StreamDelta(text="handled by target")]))
+    main = scripted_agent(
+        name="Main",
+        subagents=[target.handoff],
+        model=_ScriptedStreamingModel(
+            [
+                StreamDelta(
+                    tool_call_index=0, tool_call_id="call_1", tool_call_name="transfer_to_target"
+                ),
+                StreamDelta(tool_call_index=0, tool_call_arguments="{}"),
+            ]
+        ),
+    )
+
+    events, run = _streamed(main, "please transfer")
+
+    assert [type(e) for e in events] == [ToolCalled, ToolOutput, AgentChanged, TextDelta]
+    assert events[2].agent.name == "Target"
+    assert run.output == "handled by target"
 
 
 def test_stream_response_ends_in_error_on_a_replayed_call_id() -> None:

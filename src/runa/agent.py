@@ -624,8 +624,8 @@ class Agent:
     ) -> RunStream:
         """Run a turn as a stream of events: the same run as `run`, with the same arguments.
 
-        Iterate the returned `RunStream` for `StreamEvent`s (`raw_response_event`,
-        `run_item_stream_event`, `agent_updated_stream_event`) as they arrive; once it ends,
+        Iterate the returned `RunStream` for `StreamEvent`s (`TextDelta`, `ToolCalled`,
+        `ToolOutput`, `AgentChanged`) as they arrive; once it ends,
         its `.run` holds the `Run` that `run` would have returned, paused, completed or errored.
         History and usage are recorded only once the stream is fully consumed, so a caller that
         stops iterating early leaves them unchanged.

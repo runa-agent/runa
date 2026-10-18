@@ -54,10 +54,11 @@ if TYPE_CHECKING:
     from runa.run_state import Interruption, RunState
     from runa.session import SQLiteSession
     from runa.stream_events import (
-        AgentUpdatedStreamEvent,
-        RawResponsesStreamEvent,
-        RunItemStreamEvent,
+        AgentChanged,
         StreamEvent,
+        TextDelta,
+        ToolCalled,
+        ToolOutput,
     )
     from runa.tool import ToolCall
     from runa.tracing import (
@@ -75,7 +76,7 @@ __version__: str
 
 _EXPORTS = {
     "Agent": "runa.agent",
-    "AgentUpdatedStreamEvent": "runa.stream_events",
+    "AgentChanged": "runa.stream_events",
     "Cache": "runa.cache",
     "Case": "runa.eval",
     "CaseReport": "runa.eval",
@@ -97,11 +98,9 @@ _EXPORTS = {
     "Model": "runa._models",
     "ModelSettings": "runa._types",
     "OpenAICompatibleModel": "runa._models",
-    "RawResponsesStreamEvent": "runa.stream_events",
     "Report": "runa.eval",
     "Run": "runa.run",
     "RunContext": "runa._types",
-    "RunItemStreamEvent": "runa.stream_events",
     "RunState": "runa.run_state",
     "RunStatus": "runa.run",
     "RunStream": "runa.run",
@@ -111,8 +110,11 @@ _EXPORTS = {
     "Span": "runa.tracing",
     "StoreExporter": "runa.tracing",
     "StreamEvent": "runa.stream_events",
+    "TextDelta": "runa.stream_events",
     "Trace": "runa.tracing",
     "ToolCall": "runa.tool",
+    "ToolCalled": "runa.stream_events",
+    "ToolOutput": "runa.stream_events",
     "TraceExporter": "runa.tracing",
     "Usage": "runa._types",
     "add_exporter": "runa.tracing",
@@ -130,7 +132,7 @@ name that collides with a submodule's belongs up there with them.
 __all__ = [
     "DEFAULT_THRESHOLDS",
     "Agent",
-    "AgentUpdatedStreamEvent",
+    "AgentChanged",
     "Cache",
     "Case",
     "CaseReport",
@@ -151,12 +153,10 @@ __all__ = [
     "Model",
     "ModelSettings",
     "OpenAICompatibleModel",
-    "RawResponsesStreamEvent",
     "Report",
     "Run",
     "RunContext",
     "RunStream",
-    "RunItemStreamEvent",
     "RunState",
     "RunStatus",
     "SQLiteCache",
@@ -165,7 +165,10 @@ __all__ = [
     "Span",
     "StoreExporter",
     "StreamEvent",
+    "TextDelta",
     "ToolCall",
+    "ToolCalled",
+    "ToolOutput",
     "Trace",
     "TraceExporter",
     "Usage",

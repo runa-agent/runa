@@ -52,7 +52,7 @@ from runa.run_internal.tool_execution import (
 )
 from runa.run_state import RunState
 from runa.session import Session
-from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent, StreamEvent
+from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
 from runa.tracing.config import export_trace_later
 from runa.tracing.manual import current_trace
 from runa.tracing.spans import Span
@@ -282,10 +282,10 @@ async def _record_tool_results(
     """
     run.transcript.record(*results)
     for result in results:
-        run.notify(RunItemStreamEvent(name="tool_output", item=result))
+        run.notify(ToolOutput(result))
     if switched is not None:
         run.shape = await AgentShape.of(switched)
-        run.notify(AgentUpdatedStreamEvent(new_agent=switched))
+        run.notify(AgentChanged(switched))
         await run.frame.hooks.on_agent_start(run.frame.run_context, switched)
 
 
@@ -338,7 +338,6 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             raise ModelBehaviorError("model returned no output items")
         message = response.output[0]
         transcript.record(message)
-        run.notify(RunItemStreamEvent(name="message_output_created", item=message))
 
         calls = tool_calls(message)
         if not calls:
@@ -347,7 +346,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             return _TurnOutcome(_parse_output(agent, text), [], [], context_tokens)
 
         for call in calls:
-            run.notify(RunItemStreamEvent(name="tool_called", item=call))
+            run.notify(ToolCalled(call))
         results, interruptions, switched = await _run_message_tool_calls(run, message)
         if interruptions:
             return _TurnOutcome(None, interruptions, results)
