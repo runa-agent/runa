@@ -1916,19 +1916,6 @@ def test_a_delegate_that_pauses_pauses_its_caller_and_resumes_where_it_stopped()
     assert parent.history[-2]["content"] == "refunded 5"  # the delegate's answer, as a tool result
 
 
-def test_a_delegates_approval_is_recorded_on_the_delegates_own_state() -> None:
-    """A decision lands on the run that will execute the call, not on whoever surfaced it."""
-    parent = _parent_with_paused_delegate([])
-
-    run = parent.run_sync("please refund")
-    state = run.to_state()
-    state.approve(run.interruptions[0])
-
-    delegate = state._governance.paused_delegates.waiting["outer_1"]
-    assert delegate.approvals == {"inner_1": True}
-    assert state.approvals == {}  # the child's call is never the parent's to run
-
-
 def test_a_paused_delegate_survives_a_json_round_trip() -> None:
     """`to_json`/`from_json` carry the child's paused state, so a restart resumes it too."""
     calls: list[float] = []
@@ -1980,7 +1967,7 @@ def _parent_with_a_paused_grandchild(calls: list[float]) -> Agent:
 
 
 def test_a_delegate_of_a_delegate_pauses_the_whole_chain_and_resumes_it() -> None:
-    """Every depth pauses on the same call, and the deepest run is the one that owns it."""
+    """Every depth pauses on the same call, and approving it on the outermost state runs it."""
     calls: list[float] = []
     parent = _parent_with_a_paused_grandchild(calls)
 
@@ -1991,12 +1978,6 @@ def test_a_delegate_of_a_delegate_pauses_the_whole_chain_and_resumes_it() -> Non
 
     state = run.to_state()
     state.approve(run.interruptions[0])
-    stash = state._governance.paused_delegates
-
-    assert state.approvals == {}  # neither the parent's call to run...
-    assert stash.waiting["outer_1"].approvals == {}  # ...nor the child's
-    assert stash.waiting["mid_1"].approvals == {"inner_1": True}
-
     resumed = parent.run_sync(state)
 
     assert resumed.status == "completed"

@@ -7,14 +7,15 @@
 * a call id is claimed before it runs, and a claimed id never runs again.
 
 A run's governance (`runa._governance`) holds one ledger, shared by reference with every delegate
-the run starts, so a caller's "always" covers the delegate's matching tool. Which run resolves a
-paused delegate's call is `runa.paused_delegates`'.
+the run starts, so a caller's "always" covers the delegate's matching tool, and a decision about a
+delegate's paused call reaches the delegate whichever state it was made on. Both rest on a call id
+being unique across the whole run tree.
 
 Imports nothing from `runa` at runtime: `runa.tool` and `runa._governance` both import it.
 """
 
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -63,12 +64,9 @@ class ApprovalLedger:
 
     `sticky`/`sticky_messages` are the "always approve"/"always reject" decisions, keyed by tool
     *name*: once recorded they cover every later call to that tool, in this run or a delegate's.
-    `executed` is the set of call ids that have already run, so resuming a stale `RunState`
-    cannot run a tool a second time.
-
-    Per-*call* decisions aren't held here: they belong to the `RunState` the operator resolved
-    and are handed to `decide` as `approvals`/`rejection_messages`. Sticky decisions outlive any
-    one pause; per-call ones don't.
+    `calls`/`call_messages` are the one-off decisions, keyed by call id: each settles only the
+    call it names. `executed` is the set of call ids that have already run, so resuming a stale
+    `RunState` cannot run a tool a second time.
     """
 
     DEFAULT_REJECTION: ClassVar[str] = "rejected by the operator"
@@ -76,6 +74,8 @@ class ApprovalLedger:
 
     sticky: dict[str, bool] = field(default_factory=dict)
     sticky_messages: dict[str, str] = field(default_factory=dict)
+    calls: dict[str, bool] = field(default_factory=dict)
+    call_messages: dict[str, str] = field(default_factory=dict)
     executed: set[str] = field(default_factory=set)
 
     async def decide(
@@ -84,8 +84,6 @@ class ApprovalLedger:
         call_id: str,
         *,
         needs_approval: Callable[[], Awaitable[bool]],
-        approvals: Mapping[str, bool] | None = None,
-        rejection_messages: Mapping[str, str] | None = None,
     ) -> ApprovalDecision:
         """Decide whether this call runs, is rejected, or pauses the run for a human.
 
@@ -103,11 +101,11 @@ class ApprovalLedger:
             return self._rejection(self.sticky_messages.get(tool_name))
         if not await needs_approval():
             return ApprovalDecision("run")
-        verdict = (approvals or {}).get(call_id)
+        verdict = self.calls.get(call_id)
         if verdict is None:
             return ApprovalDecision("interrupt")
         if verdict is False:
-            return self._rejection((rejection_messages or {}).get(call_id))
+            return self._rejection(self.call_messages.get(call_id))
         return ApprovalDecision("run")
 
     def record(self, tool_name: str, *, approved: bool, message: str | None = None) -> None:
@@ -116,11 +114,14 @@ class ApprovalLedger:
         The decision owns its message slot: `message` replaces whatever was there, and `None`
         clears it, so a tool stickied twice can't answer with the earlier decision's text.
         """
-        self.sticky[tool_name] = approved
-        if message is None:
-            self.sticky_messages.pop(tool_name, None)
-        else:
-            self.sticky_messages[tool_name] = message
+        _set(self.sticky, self.sticky_messages, tool_name, approved, message)
+
+    def record_call(self, call_id: str, *, approved: bool, message: str | None = None) -> None:
+        """Record a decision for the one call `call_id`, as `RunState.approve`/`.reject`.
+
+        Its message slot behaves as `record`'s does.
+        """
+        _set(self.calls, self.call_messages, call_id, approved, message)
 
     def claim(self, call_id: str) -> bool:
         """Claim `call_id` for execution; `False` if it already ran and must not run again.
@@ -140,6 +141,21 @@ class ApprovalLedger:
     def _rejection(self, message: str | None) -> ApprovalDecision:
         """A `"reject"` decision carrying `message`, or the default text when there isn't one."""
         return ApprovalDecision("reject", message or self.DEFAULT_REJECTION)
+
+
+def _set(
+    verdicts: dict[str, bool],
+    messages: dict[str, str],
+    key: str,
+    approved: bool,
+    message: str | None,
+) -> None:
+    """Record `approved` under `key`, `message` replacing (or, as `None`, clearing) the last one."""
+    verdicts[key] = approved
+    if message is None:
+        messages.pop(key, None)
+    else:
+        messages[key] = message
 
 
 __all__ = ["ApprovalDecision", "ApprovalLedger", "approval"]

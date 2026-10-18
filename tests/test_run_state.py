@@ -44,23 +44,15 @@ _SERIALIZED_AS = {
     "transcript": ("transcript",),
     "ready_results": ("ready_results",),
     "pending": ("pending",),
-    "approvals": ("approvals",),
-    "rejection_messages": ("rejection_messages",),
     "run_context": ("context", "usage"),
-    "_governance": (
-        "approval_ledger",
-        "approval_ledger_messages",
-        "executed_call_ids",
-        "delegates",
-        "delegate_owners",
-    ),
+    "_governance": ("approval_ledger", "delegates"),
     "trace": ("trace_id", "trace_name", "trace_start_time"),
 }
 """Each `RunState` field and the `_RunStateSchema` field(s) `_to_schema` writes it to.
 
 Mostly one to one, under the same name. The three that aren't are the three holding an object
 rather than data: the `RunContext` flattens into its `context` and `usage`, the `_Governance` into
-the contents of two of the protocol objects it holds (`ApprovalLedger`, `PausedDelegates`), and
+its approval ledger and its paused delegates, and
 a `Trace` into the three fields that identify it, its spans being exported separately.
 """
 
@@ -147,7 +139,7 @@ def test_from_json_rejects_a_malformed_field() -> None:
     state = result.to_state()
     state.approve(state.pending[0])
     blob = state.to_json()
-    blob["approvals"] = "not-a-dict"
+    blob["approval_ledger"]["calls"] = "not-a-dict"
 
     with pytest.raises(UserError):
         RunState.from_json(gated(), blob)
@@ -230,7 +222,7 @@ def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> N
     state.approve(state.pending[0], always=True)
 
     blob = state.to_json()
-    assert blob["approval_ledger"] == {"dangerous": True}
+    assert blob["approval_ledger"]["sticky"] == {"dangerous": True}
 
     fresh = gated()
     restored = RunState.from_json(fresh, blob)

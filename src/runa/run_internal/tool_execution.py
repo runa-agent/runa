@@ -169,9 +169,10 @@ async def _run_message_tool_calls(
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
     agent's `model_settings.parallel_tool_calls` is `False`. Results keep the message's call
-    order either way. `resume` is the paused state being continued, read for its decisions about
-    the calls in `message` and the results it already computed for the rest of them: those are
-    reused as is, never executed a second time.
+    order either way. A call that needs approval is decided by the run's approval ledger.
+    `resume` is the paused state being continued, read for the results it already computed for
+    calls in `message` that didn't need approval: those are reused as is, never executed a
+    second time.
     """
     shape = run.shape
     agent = shape.agent
@@ -181,8 +182,6 @@ async def _run_message_tool_calls(
     deferred: list[tuple[_Slot, _Thunk]] = []
     interruptions: list[Interruption] = []
     switched_agent: AgentLike | None = None
-    approvals = resume.approvals if resume is not None else {}
-    rejection_messages = resume.rejection_messages if resume is not None else None
     ready = {
         answered_call_id(result): result
         for result in (resume.ready_results if resume is not None else [])
@@ -221,8 +220,6 @@ async def _run_message_tool_calls(
             tool.name,
             call_id,
             needs_approval=partial(_needs_approval, tool, run_context, args, call_id),
-            approvals=approvals,
-            rejection_messages=rejection_messages,
         )
         if gate.action == "interrupt":
             interruptions.append(

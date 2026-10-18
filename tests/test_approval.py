@@ -23,23 +23,20 @@ def _decide(
     needs_approval: bool = True,
     tool_name: str = "issue_refund",
     call_id: str = "call_1",
-    approvals: dict[str, bool] | None = None,
-    rejection_messages: dict[str, str] | None = None,
 ) -> ApprovalDecision:
     """Ask `ledger` about one call, with `needs_approval` standing in for the tool's predicate."""
 
     async def predicate() -> bool:
         return needs_approval
 
-    return asyncio.run(
-        ledger.decide(
-            tool_name,
-            call_id,
-            needs_approval=predicate,
-            approvals=approvals,
-            rejection_messages=rejection_messages,
-        )
-    )
+    return asyncio.run(ledger.decide(tool_name, call_id, needs_approval=predicate))
+
+
+def _ledger_with_call(approved: bool, message: str | None = None) -> ApprovalLedger:
+    """A ledger holding one per-call decision, for `call_1`."""
+    ledger = ApprovalLedger()
+    ledger.record_call("call_1", approved=approved, message=message)
+    return ledger
 
 
 def test_approval_binds_params_by_name() -> None:
@@ -122,11 +119,10 @@ def test_a_tool_that_needs_no_approval_runs() -> None:
 
 
 def test_a_per_call_decision_settles_a_call_that_needs_approval() -> None:
-    """A resolved `RunState`'s per-call verdicts decide the calls they name."""
-    ledger = ApprovalLedger()
-
-    assert _decide(ledger, approvals={"call_1": True}).action == "run"
-    assert _decide(ledger, approvals={"call_1": False}).action == "reject"
+    """A per-call verdict decides the call it names, and no other."""
+    assert _decide(_ledger_with_call(True)).action == "run"
+    assert _decide(_ledger_with_call(False)).action == "reject"
+    assert _decide(_ledger_with_call(True), call_id="call_2").action == "interrupt"
 
 
 def test_sticky_beats_the_tools_own_predicate() -> None:
@@ -142,10 +138,10 @@ def test_sticky_beats_the_tools_own_predicate() -> None:
 
 def test_sticky_beats_a_conflicting_per_call_decision() -> None:
     """Precedence is sticky, then the predicate, then per-call -- not the other way around."""
-    ledger = ApprovalLedger()
+    ledger = _ledger_with_call(True)
     ledger.record("issue_refund", approved=False)
 
-    assert _decide(ledger, approvals={"call_1": True}).action == "reject"
+    assert _decide(ledger).action == "reject"
 
 
 def test_a_rejection_with_no_message_falls_back_to_the_default() -> None:
@@ -154,10 +150,7 @@ def test_a_rejection_with_no_message_falls_back_to_the_default() -> None:
     sticky.record("issue_refund", approved=False)
 
     assert _decide(sticky).message == ApprovalLedger.DEFAULT_REJECTION
-    assert (
-        _decide(ApprovalLedger(), approvals={"call_1": False}).message
-        == ApprovalLedger.DEFAULT_REJECTION
-    )
+    assert _decide(_ledger_with_call(False)).message == ApprovalLedger.DEFAULT_REJECTION
 
 
 def test_a_rejection_message_is_fed_back_instead_of_the_default() -> None:
@@ -166,14 +159,7 @@ def test_a_rejection_message_is_fed_back_instead_of_the_default() -> None:
     sticky.record("issue_refund", approved=False, message="not authorized")
 
     assert _decide(sticky).message == "not authorized"
-    assert (
-        _decide(
-            ApprovalLedger(),
-            approvals={"call_1": False},
-            rejection_messages={"call_1": "not this one"},
-        ).message
-        == "not this one"
-    )
+    assert _decide(_ledger_with_call(False, "not this one")).message == "not this one"
 
 
 def test_recording_a_decision_clears_the_previous_ones_message() -> None:

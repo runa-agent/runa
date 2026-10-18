@@ -81,7 +81,7 @@ waiting on a decision and the `state` that resolves them:
     {"name": "issue_refund", "arguments": "{\"amount\": 75}", "call_id": "call_1",
      "agent": "refund_agent"}
   ],
-  "state": {"schema_version": 3, "agent_name": "refund_agent", "...": "..."}
+  "state": {"schema_version": 4, "agent_name": "refund_agent", "...": "..."}
 }
 ```
 

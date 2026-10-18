@@ -139,11 +139,11 @@ class _Run:
 
         A delegate that pauses for approval is stashed under `call_id` and raises
         `DelegatePaused`, so this run pauses on its interruptions; the same call reaching here
-        again, on resume, continues it instead of starting it over (`runa.paused_delegates` owns
-        that protocol), and `input` is not read again. The returned `Run` is completed or errored.
+        again, on resume, continues it instead of starting it over, and `input` is not read
+        again. The returned `Run` is completed or errored.
         """
         frame = self.frame
-        paused = frame.governance.paused_delegates.take(call_id)
+        paused = frame.governance.paused_delegates.pop(call_id, None)
         start: str | RunState
         if paused is None:
             target, message, start = delegate.agent, input, input
@@ -164,7 +164,7 @@ class _Run:
         if run.status == "paused":
             state = run.to_state()
             state.run_context.usage = Usage()  # already merged into this run's
-            frame.governance.paused_delegates.stash(call_id, state)
+            frame.governance.paused_delegates[call_id] = state
             raise DelegatePaused(state.pending)
         return run
 

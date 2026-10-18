@@ -18,7 +18,7 @@ from runa.handoff import reachable
 from runa.tracing.traces import Trace
 from runa.transcript import Transcript, _TranscriptSchema
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 @dataclass
@@ -30,10 +30,10 @@ class Interruption:
     `FunctionTool` here as well would mean `from_json` had to rebuild one from a name, which for
     an MCP tool means connecting to the server just to read a deserialized blob.
 
-    Which run a paused call belongs to isn't here either: a call surfaced by a `.delegate`
-    subagent appears in its caller's `interruptions` as the very same `Interruption`, so it is
-    the stash of paused delegates that knows whose it is (`runa.paused_delegates`), not the
-    interruption and not whichever `RunState` happens to be holding it.
+    Which run a paused call belongs to isn't here either, and needn't be: a call surfaced by a
+    `.delegate` subagent appears in its caller's `interruptions` as the very same `Interruption`,
+    and its decision is recorded by `call_id` on the approval ledger every run in the tree
+    shares, where the run that executes the call reads it.
     """
 
     name: str
@@ -71,32 +71,37 @@ class _InterruptionSchema(BaseModel):
     agent_name: str
 
 
+class _ApprovalLedgerSchema(BaseModel):
+    """JSON-safe mirror of `ApprovalLedger`; `executed` becomes a sorted list."""
+
+    sticky: dict[str, bool]
+    sticky_messages: dict[str, str]
+    calls: dict[str, bool]
+    call_messages: dict[str, str]
+    executed: list[str]
+
+
 class _RunStateSchema(BaseModel):
     """The JSON envelope a `RunState` actually serializes through.
 
     Every field is required, so a field `_to_schema` forgets is a type error there, and a blob
     missing a key is a `UserError` from `from_json`. The guardrail audit trail isn't serialized:
-    each result is already a span in the trace `trace_id` names. `delegates` and
-    `delegate_owners` are `PausedDelegates`' two halves.
+    each result is already a span in the trace `trace_id` names. `approval_ledger` and
+    `delegates` are the run's governance, read back from the outermost state only.
     """
 
-    schema_version: Literal[3]
+    schema_version: Literal[4]
     agent_name: str
     transcript: _TranscriptSchema
     ready_results: list[dict[str, Any]]
     pending: list[_InterruptionSchema]
-    approvals: dict[str, bool]
-    rejection_messages: dict[str, str]
     context: Any
     usage: _UsageSchema
-    approval_ledger: dict[str, bool]
-    approval_ledger_messages: dict[str, str]
-    executed_call_ids: list[str]
+    approval_ledger: _ApprovalLedgerSchema
     trace_id: str
     trace_name: str
     trace_start_time: float
     delegates: dict[str, _RunStateSchema]
-    delegate_owners: dict[str, str]
 
 
 def _context_to_json(context: Any) -> Any:
@@ -144,8 +149,6 @@ class RunState(GuardrailAudit):
     run_context: RunContext
     _governance: _Governance
     trace: Trace
-    approvals: dict[str, bool] = field(default_factory=dict)
-    rejection_messages: dict[str, str] = field(default_factory=dict)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
 
     @property
@@ -153,9 +156,8 @@ class RunState(GuardrailAudit):
         """The assistant message whose calls paused the run: the transcript's last, always.
 
         Where a resumed run picks the turn back up -- it finishes this one message's calls before
-        calling the model again, with `approvals`/`rejection_messages` as the decisions about them
-        and `ready_results` as the results it already has. The turn loop reads the four from here
-        rather than from a resumed-turn shape of its own.
+        calling the model again, with `ready_results` as the results it already has. The turn
+        loop reads both from here rather than from a resumed-turn shape of its own.
         """
         return self.transcript.items[-1]
 
@@ -166,9 +168,10 @@ class RunState(GuardrailAudit):
         call to this tool (by name), in this run or a nested delegate call sharing it (see
         `runa._governance`), skips the approval prompt entirely.
         """
+        ledger = self._governance.approval_ledger
         if always:
-            self._governance.approval_ledger.record(interruption.name, approved=True)
-        self._deciding(interruption).approvals[interruption.call_id] = True
+            ledger.record(interruption.name, approved=True)
+        ledger.record_call(interruption.call_id, approved=True)
 
     def reject(
         self,
@@ -183,30 +186,15 @@ class RunState(GuardrailAudit):
         `ApprovalLedger.DEFAULT_REJECTION`. `always=True` sticks the rejection (and message, if
         any) for every future call to this tool, the same way `approve(always=True)` does.
         """
+        ledger = self._governance.approval_ledger
         if always:
-            self._governance.approval_ledger.record(
-                interruption.name, approved=False, message=rejection_message
-            )
-        deciding = self._deciding(interruption)
-        deciding.approvals[interruption.call_id] = False
-        if rejection_message is not None:
-            deciding.rejection_messages[interruption.call_id] = rejection_message
-
-    def _deciding(self, interruption: Interruption) -> RunState:
-        """The state a decision about `interruption` belongs on: a paused delegate's, or this one.
-
-        A `.delegate` subagent's paused call rides up into its caller's `interruptions`, but it is
-        the delegate's own run that will execute it, so the decision is recorded there and this
-        state keeps only the calls it will run itself. Which is which is the paused-delegate
-        stash's to say (`runa.paused_delegates`).
-        """
-        return self._governance.paused_delegates.owner_of(interruption) or self
+            ledger.record(interruption.name, approved=False, message=rejection_message)
+        ledger.record_call(interruption.call_id, approved=False, message=rejection_message)
 
     def _to_schema(self, *, nested: bool = False) -> _RunStateSchema:
-        """This state as JSON; `nested` for a delegate's, whose shared context the caller holds."""
+        """This state as JSON; `nested` for a delegate's, whose governance the caller holds."""
         usage = self.run_context.usage
         ledger = self._governance.approval_ledger
-        delegates = self._governance.paused_delegates
         return _RunStateSchema(
             schema_version=_SCHEMA_VERSION,
             agent_name=self.agent.name,
@@ -218,8 +206,6 @@ class RunState(GuardrailAudit):
                 )
                 for i in self.pending
             ],
-            approvals=self.approvals,
-            rejection_messages=self.rejection_messages,
             context=_context_to_json(self.run_context.context),
             usage=_UsageSchema(
                 requests=usage.requests,
@@ -229,9 +215,13 @@ class RunState(GuardrailAudit):
                 input_tokens_details=dataclasses.asdict(usage.input_tokens_details),
                 output_tokens_details=dataclasses.asdict(usage.output_tokens_details),
             ),
-            approval_ledger=ledger.sticky,
-            approval_ledger_messages=ledger.sticky_messages,
-            executed_call_ids=sorted(ledger.executed),
+            approval_ledger=_ApprovalLedgerSchema(
+                sticky={} if nested else ledger.sticky,
+                sticky_messages={} if nested else ledger.sticky_messages,
+                calls={} if nested else ledger.calls,
+                call_messages={} if nested else ledger.call_messages,
+                executed=[] if nested else sorted(ledger.executed),
+            ),
             trace_id=self.trace.id,
             trace_name=self.trace.name,
             trace_start_time=self.trace.start_time,
@@ -239,9 +229,8 @@ class RunState(GuardrailAudit):
             if nested
             else {
                 call_id: state._to_schema(nested=True)
-                for call_id, state in delegates.waiting.items()
+                for call_id, state in self._governance.paused_delegates.items()
             },
-            delegate_owners={} if nested else dict(delegates.owners),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -279,19 +268,19 @@ class RunState(GuardrailAudit):
         except ValidationError as exc:
             raise UserError(f"invalid RunState JSON: {exc}") from exc
 
+        ledger = schema.approval_ledger
         governance = _Governance(
             approval_ledger=ApprovalLedger(
-                sticky=dict(schema.approval_ledger),
-                sticky_messages=dict(schema.approval_ledger_messages),
-                executed=set(schema.executed_call_ids),
+                sticky=dict(ledger.sticky),
+                sticky_messages=dict(ledger.sticky_messages),
+                calls=dict(ledger.calls),
+                call_messages=dict(ledger.call_messages),
+                executed=set(ledger.executed),
             ),
         )
-        governance.paused_delegates.restore(
-            {
-                call_id: cls._from_schema(initial_agent, delegate, governance)
-                for call_id, delegate in schema.delegates.items()
-            },
-            schema.delegate_owners,
+        governance.paused_delegates.update(
+            (call_id, cls._from_schema(initial_agent, delegate, governance))
+            for call_id, delegate in schema.delegates.items()
         )
         return cls._from_schema(initial_agent, schema, governance)
 
@@ -314,8 +303,6 @@ class RunState(GuardrailAudit):
             trace=Trace(
                 id=schema.trace_id, name=schema.trace_name, start_time=schema.trace_start_time
             ),
-            approvals=dict(schema.approvals),
-            rejection_messages=dict(schema.rejection_messages),
         )
         state.run_context.usage = Usage(
             requests=schema.usage.requests,
