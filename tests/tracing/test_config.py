@@ -8,7 +8,6 @@ from helpers import stand_in_agent
 
 from runa import db
 from runa._types import ModelResponse, Usage
-from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.tool import ToolCall, tool
 from runa.tracing import ConsoleExporter, Trace, config, observe
@@ -309,7 +308,7 @@ def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:
     """`capture_inputs=False` means a captured tool span's `input` stays `None`."""
     agent = _agent_with_tool()
     with observe.scoped(capture_inputs=False):
-        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
+        result = asyncio.run(_run_async(agent, "hi"))
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
@@ -331,7 +330,7 @@ def test_redact_scrubs_matching_keys_from_dict_shaped_output() -> None:
     )
 
     with observe.scoped(redact=["email"]):
-        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
+        result = asyncio.run(_run_async(agent, "hi"))
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
@@ -354,7 +353,7 @@ def test_max_input_bytes_truncates_a_long_tool_argument() -> None:
     )
 
     with observe.scoped(max_input_bytes=10):
-        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
+        result = asyncio.run(_run_async(agent, "hi"))
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")
@@ -383,7 +382,7 @@ def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> No
     )
 
     with observe.scoped(capture_inputs=False, max_tool_result_bytes=10):
-        result = asyncio.run(_run_async(agent, "hi", run_config=RunConfig(workflow_name="T")))
+        result = asyncio.run(_run_async(agent, "hi"))
 
     assert result.trace is not None
     tool_span = next(span for span in result.trace.spans if span.type == "tool")

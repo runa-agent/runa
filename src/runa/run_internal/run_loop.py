@@ -46,7 +46,6 @@ from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.guardrails import _run_guardrails
-from runa.run_internal.run_config import RunConfig
 from runa.run_internal.spans import _close_span, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import (
@@ -58,6 +57,7 @@ from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import AgentUpdatedStreamEvent, RunItemStreamEvent, StreamEvent
 from runa.tracing.config import export_trace_later
+from runa.tracing.manual import current_trace
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
@@ -69,15 +69,16 @@ class _Run:
     """One run, from the moment the loop starts it to the moment it becomes the caller's `Run`.
 
     The agent, its `Transcript`, the `RunContext` user code is handed and the governance it isn't,
-    the span everything hangs under, and the hooks, config and `emit` this particular call was
-    made with. The turn loop and the steps it calls take this, not a re-listing of its fields, so
-    something a run starts carrying doesn't ripple through a dozen signatures.
+    the span everything hangs under, and the hooks and `emit` this particular call was made with.
+    The turn loop and the steps it calls take this, not a re-listing of its fields, so something a
+    run starts carrying doesn't ripple through a dozen signatures.
 
     `shape` is the agent running now, resolved; `start` is the one the run began with. They are
     the same object until a handoff, and separate names afterwards because the two readings
-    differ: who answered, and what the caller asked for. Memory extraction and compaction are
-    the caller's agent's settings, so they read `start`; the turn itself reads `shape`. Either
-    one's settings are its `agent`'s, read as `shape.agent.<setting>`.
+    differ: who answered, and what the caller asked for. Memory extraction, compaction and the
+    run's turn and token ceilings are the caller's agent's settings, so they read `start`; the
+    turn itself reads `shape`. Either one's settings are its `agent`'s, read as
+    `shape.agent.<setting>`.
     """
 
     shape: AgentShape
@@ -88,7 +89,6 @@ class _Run:
     agent_span: Span
     session: Session | None
     hooks: _Dispatch[Any]
-    run_config: RunConfig
     emit: Emit | None = None
     resumed: RunState | None = None
     """The paused state this run is continuing, if it is one: the unfinished tool-call message,
@@ -127,8 +127,8 @@ class _Run:
         and is merged into this run's here), an agent span under the call's `under` span, and the
         agent's own turn, token and time ceilings. Everything else is shared, and anything a run
         starts carrying is shared too unless it is named below: the governance (one approval
-        ledger, one guardrail audit trail, one stash of paused delegates), the hooks, the trace,
-        the model provider. This run's own deadline encloses the delegate's, as it does any tool
+        ledger, one guardrail audit trail, one stash of paused delegates), the hooks, the trace.
+        This run's own deadline encloses the delegate's, as it does any tool
         call.
 
         Two things are deliberately not shared. A `session`: a delegate is handed fresh input,
@@ -150,12 +150,6 @@ class _Run:
         else:
             message, target, transcript = None, paused.agent, paused.transcript.copy()
         agent_span = _Spans(self.trace, under.id).open(target.name, "agent", input=message)
-        run_config = replace(
-            self.run_config,
-            max_turns=agent.max_turns,
-            max_tokens=agent.max_tokens,
-            timeout=agent.timeout,
-        )
 
         async def turn() -> Run:
             nested = replace(
@@ -165,7 +159,6 @@ class _Run:
                 run_context=run_context,
                 agent_span=agent_span,
                 session=None,
-                run_config=run_config,
                 emit=None,
                 resumed=paused,
             )
@@ -177,7 +170,7 @@ class _Run:
             agent_span=agent_span,
             run_context=run_context,
             governance=self.governance,
-            timeout=run_config.timeout,
+            timeout=target.timeout,
         )
         self.run_context.usage.add(run.usage)
         if run.status == "paused":
@@ -363,7 +356,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     With `run.emit` (a streamed run), the model is streamed and every step is emitted as a
     `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
-    transcript, hooks, run_config = run.transcript, run.hooks, run.run_config
+    transcript, hooks = run.transcript, run.hooks
+    max_turns, max_tokens = run.start.agent.max_turns, run.start.agent.max_tokens
     run_context = run.run_context
 
     if run.resumed is not None:
@@ -374,10 +368,10 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             return _TurnOutcome(None, interruptions, results)
         await _record_tool_results(run, results, switched)
 
-    for _turn in range(run_config.max_turns):
+    for _turn in range(max_turns):
         shape = run.shape
         agent = shape.agent
-        model = shape.resolve_model(run_config.model_provider)
+        model = shape.resolve_model()
         items = list(transcript.items)
         with run.span(str(agent.model), "llm", input=items) as llm_span:
             system_instructions = await _resolve_instructions(agent, run_context)
@@ -397,7 +391,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
                 response = await _stream_response(model, request, run.emit)
             run_context.usage.add(response.usage)
             llm_span.output = {"usage": response.usage.__dict__}
-            _check_token_budget(run_context.usage, run_config.max_tokens)
+            _check_token_budget(run_context.usage, max_tokens)
         await hooks.on_llm_end(run_context, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
         dropped = transcript.compact(agent.compactor, context_tokens)
@@ -422,7 +416,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             return _TurnOutcome(None, interruptions, results)
         await _record_tool_results(run, results, switched)
 
-    raise MaxTurnsExceeded(f"max turns ({run_config.max_turns}) exceeded")
+    raise MaxTurnsExceeded(f"max turns ({max_turns}) exceeded")
 
 
 async def _traced(run: Awaitable[Run], trace: Trace) -> Run:
@@ -570,7 +564,7 @@ async def _extract_memory(run: _Run, final_output: Any) -> None:
             stored = await memory.remember_from_conversation(
                 f"User: {query}\nAssistant: {final_output}",
                 user_id=run.run_context.user_id,
-                model=run.start.resolve_model(run.run_config.model_provider),
+                model=run.start.resolve_model(),
             )
         except _NOT_A_BACKEND_FAULT:
             raise
@@ -666,7 +660,6 @@ async def _run_async(
     *,
     context: Any = None,
     hooks: Hooks[Any] | None = None,
-    run_config: RunConfig | None = None,
     session: Session | None = None,
     emit: Emit | None = None,
 ) -> Run:
@@ -674,24 +667,26 @@ async def _run_async(
 
     `Agent.run` is the public door; this is the room behind it. A run that comes in here owns its
     trace and starts with a `_Governance` of its own; a `.delegate` subagent's never does, being a
-    nested run of its caller's (`_Run.delegate`).
+    nested run of its caller's (`_Run.delegate`). Its trace is named for `agent`'s class and
+    grouped under an enclosing `tracing.trace` block, else under `session`.
     """
-    run_config = run_config or RunConfig()
     dispatch = _Dispatch(hooks or LoggingHooks())
 
     if isinstance(input, RunState):
-        return await _resume(input, dispatch, run_config, session, emit)
+        return await _resume(input, dispatch, session, emit)
 
     run_context = RunContext(context=context, user_id=_user_of(session))
     governance = _Governance()
     trace = Trace(
         id=gen_trace_id(),
-        name=run_config.workflow_name,
+        name=type(agent).__name__,
         start_time=time.time(),
         session_id=session.session_id if session is not None else None,
     )
-    if run_config.group_id is not None or run_config.trace_metadata is not None:
-        trace.metadata = {**(run_config.trace_metadata or {}), "group_id": run_config.group_id}
+    outer = current_trace()
+    group_id = outer.id if outer is not None else trace.session_id
+    if group_id is not None:
+        trace.metadata = {"group_id": group_id}
 
     turn_input = [user_message(input)] if isinstance(input, str) else list(input)
     query = latest_user_text(turn_input)
@@ -716,7 +711,6 @@ async def _run_async(
             agent_span=agent_span,
             session=session,
             hooks=dispatch,
-            run_config=run_config,
             emit=emit,
         )
         return await _drive(run, input)
@@ -727,7 +721,7 @@ async def _run_async(
         agent_span=agent_span,
         run_context=run_context,
         governance=governance,
-        timeout=run_config.timeout,
+        timeout=agent.timeout,
     )
     return await _traced(guarded, trace)
 
@@ -740,7 +734,6 @@ def _user_of(session: Session | None) -> str | None:
 async def _resume(
     state: RunState,
     dispatch: _Dispatch[Any],
-    run_config: RunConfig,
     session: Session | None,
     emit: Emit | None = None,
 ) -> Run:
@@ -760,7 +753,6 @@ async def _resume(
             agent_span=agent_span,
             session=session,
             hooks=dispatch,
-            run_config=run_config,
             emit=emit,
             resumed=state,
         )
@@ -772,7 +764,7 @@ async def _resume(
         agent_span=agent_span,
         run_context=run_context,
         governance=state._governance,
-        timeout=run_config.timeout,
+        timeout=state.agent.timeout,
     )
     return await _traced(guarded, state.trace)
 

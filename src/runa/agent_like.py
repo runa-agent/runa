@@ -102,6 +102,21 @@ class AgentLike(Protocol):
         ...
 
     @property
+    def max_turns(self) -> int:
+        """How many model calls one run of it may make."""
+        ...
+
+    @property
+    def max_tokens(self) -> int | None:
+        """How many tokens one run of it may spend in total, or `None` for no ceiling."""
+        ...
+
+    @property
+    def timeout(self) -> float | None:
+        """How many wall-clock seconds one run of it may take, or `None` for no ceiling."""
+        ...
+
+    @property
     def hooks(self) -> Hooks[Any] | None:
         """The lifecycle callbacks that belong to this agent rather than to a run."""
         ...

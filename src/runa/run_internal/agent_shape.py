@@ -5,7 +5,8 @@ module holds only what a run has to *resolve* from them, asked by more than one 
 including the ones its MCP servers list; its handoffs and delegates, keyed by the tool name that
 triggers each; and its model. `run_loop`, `tool_execution` and `guardrails` all have to agree on
 those answers, so none of them owns these, and each is worked out once when the agent starts
-running rather than re-derived by whichever module needs it next.
+running rather than re-derived by whichever module needs it next. A model name resolves through
+the one process-wide `ModelProvider`, which caches each provider's client.
 
 Only `run_internal` imports this module. A question a public type asks too -- what a `handoffs`
 list may hold, which `RunState` needs to walk a graph of agents -- is answered by the public type
@@ -23,6 +24,8 @@ from runa._models import Model, ModelProvider
 from runa.agent_like import AgentLike
 from runa.handoff import Delegate, Handoff
 from runa.tool import FunctionTool
+
+_MODEL_PROVIDER = ModelProvider()
 
 
 @dataclass
@@ -57,15 +60,15 @@ class AgentShape:
                 return candidate
         return None
 
-    def resolve_model(self, provider: ModelProvider) -> Model:
-        """This agent's `model`: a string names one of `provider`'s, anything else is one.
+    def resolve_model(self) -> Model:
+        """This agent's `model`: a string names a provider's model, anything else is one.
 
         Resolved here rather than at construction because resolving a name builds the provider's
         client, which is a `UserError` when its API key is unset, and an `Agent` must be
-        constructible without one; it also keeps `RunConfig.model_provider` the run's to override.
+        constructible without one.
         """
         model = self.agent.model
-        return provider.get_model(model) if isinstance(model, str) else model
+        return _MODEL_PROVIDER.get_model(model) if isinstance(model, str) else model
 
 
 __all__ = ["AgentShape"]

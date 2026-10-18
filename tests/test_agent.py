@@ -6,7 +6,7 @@ import json
 import sys
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import Any, TypedDict, cast
@@ -786,23 +786,20 @@ def _every_setting_agent() -> Agent:
     return Everything()
 
 
-def test_every_resolved_setting_is_read_through_agent_like_or_a_run_config() -> None:
+def test_every_resolved_setting_is_read_through_agent_like() -> None:
     """`_reject_unknown_settings`, inverted: a setting stored on the agent and promised to nobody.
 
-    There are two paths into a run and a resolved setting takes one of them: `AgentLike`, the
-    protocol the turn loop reads an agent through, for what the agent is; `RunConfig` for a ceiling
-    on the call. A setting on neither is accepted, validated, stored on the instance -- and has no
-    way into the loop a type checker would let through. The other direction holds too: every
-    member `AgentLike` promises is one an `Agent` actually resolves.
+    `AgentLike` is the protocol the turn loop reads an agent through, so a resolved setting it
+    doesn't name is accepted, validated, stored on the instance -- and has no way into the loop a
+    type checker would let through. The other direction holds too: every member `AgentLike`
+    promises is one an `Agent` actually resolves.
     """
     from runa.agent_like import AgentLike
-    from runa.run_internal.run_config import RunConfig
 
     resolved = {name for name in vars(_every_setting_agent()) if name not in _PER_RUN_STATE}
     promised = {name for name, value in vars(AgentLike).items() if isinstance(value, property)}
-    homed = promised | {f.name for f in fields(RunConfig)}
 
-    assert resolved <= homed, f"resolved but read by no run: {sorted(resolved - homed)}"
+    assert resolved <= promised, f"resolved but read by no run: {sorted(resolved - promised)}"
     assert promised <= resolved, f"promised but never resolved: {sorted(promised - resolved)}"
 
 
@@ -817,17 +814,6 @@ def test_agent_shape_resolves_the_mcp_tools_and_handoffs_of_the_agent_it_wraps()
     assert shape.agent is agent
     assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
     assert set(shape.handoffs) == {"transfer_to_researcher"}
-
-
-def test_run_config_carries_every_ceiling_on_the_run() -> None:
-    """The other path: the three ceilings configure the call, so they travel as a `RunConfig`."""
-    from runa.run_internal.run_config import RunConfig
-
-    agent = _every_setting_agent()
-
-    config = RunConfig.of(agent)
-
-    assert (config.max_turns, config.max_tokens, config.timeout) == (3, 100, 5.0)
 
 
 def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() -> None:

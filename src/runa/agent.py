@@ -3,7 +3,7 @@
 `run`/`run_sync`/`run_streamed` are the only way to run an Agent, and `Run` the only thing they
 return. The turn loop under them is this class's implementation, not a second entry point, so
 every run gets an Agent's own wiring: its guardrail flattening, its memory and knowledge
-resolution, its `RunConfig`, its refusal of two concurrent session-less runs.
+resolution, its trace's grouping, its refusal of two concurrent session-less runs.
 """
 
 import asyncio
@@ -31,7 +31,6 @@ from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks
 from runa.memory import Memory, MemoryLike
 from runa.run import Run, RunStream
-from runa.run_internal.run_config import DEFAULT_MAX_TURNS, RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.session import Session
@@ -431,7 +430,7 @@ class Agent:
     delegate = _Mode("delegate")
     d = delegate
     model = DEFAULT_MODEL
-    max_turns = DEFAULT_MAX_TURNS
+    max_turns = 10
     max_tokens: int | None = None
     timeout: float | None = None
 
@@ -700,7 +699,6 @@ class Agent:
                 turn_input,
                 context=context,
                 hooks=hooks,
-                run_config=RunConfig.of(self, session),
                 session=session,
             )
             return self._record(run, session)
@@ -748,7 +746,6 @@ class Agent:
         """
         session = _resolve_session(session)
         turn_input = _turn_input(message, self.history, session, context)
-        run_config = RunConfig.of(self, session)
 
         async def events() -> AsyncIterator[StreamEvent]:
             # The latch is held here rather than in `run_streamed` because that is where the
@@ -771,7 +768,6 @@ class Agent:
                         turn_input,
                         context=context,
                         hooks=hooks,
-                        run_config=run_config,
                         session=session,
                         emit=queue.put_nowait,
                     )
@@ -827,11 +823,9 @@ check, having a signature: an unknown keyword is Python's own `TypeError`, sugge
 meant, and a type checker has already flagged the call (and a `max_turns="ten"` the validator
 would have let through).
 
-A new setting also has to reach a run, by exactly one of two paths chosen by what the setting
-is: a ceiling on the run (`max_turns`, `max_tokens`, `timeout`) belongs to `RunConfig`, which
-configures the call rather than the agent; everything the agent *is* is read off the agent itself,
-through a property of `runa.agent_like.AgentLike`, so a loop reading a setting that protocol
-doesn't name is a type error rather than a default.
+A new setting also has to reach a run, and it does so one way: read off the agent itself, through
+a property of `runa.agent_like.AgentLike`, so a loop reading a setting that protocol doesn't name
+is a type error rather than a default.
 """
 
 

@@ -7,7 +7,6 @@ from helpers import stand_in_agent
 
 from runa import Trace
 from runa._types import ModelResponse, Usage
-from runa.run_internal.run_config import RunConfig
 from runa.run_internal.run_loop import _run_async
 from runa.tracing import observe
 
@@ -35,9 +34,7 @@ def _agent() -> Any:
 def test_agent_run_sync_completes_even_when_the_exporter_fails() -> None:
     """A run still returns a completed result when the tracing exporter raises."""
     with observe.scoped(exporter=_BrokenExporter()):
-        result = asyncio.run(
-            _run_async(_agent(), "hi", run_config=RunConfig(workflow_name="Researcher"))
-        )
+        result = asyncio.run(_run_async(_agent(), "hi"))
 
     assert result.output == "ok"
     assert result.trace is not None

@@ -71,7 +71,7 @@ def check_model_name(name: str) -> None:
 
     `Agent.__init__` calls this at construction, so the common case
     fails before a run and names the attribute. `get_model` calls it too, being the seam a
-    `RunConfig`'s own provider can be reached through without an `Agent`. For an endpoint Runa
+    provider can be reached through without an `Agent`. For an endpoint Runa
     doesn't name -- a gateway, a proxy, something self-hosted -- the sanctioned shape is a `Model`
     instance rather than a bare name, which `_checked_model` passes through untouched.
     """

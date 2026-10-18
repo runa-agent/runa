@@ -11,7 +11,6 @@ the turn loop directly, so there is no second way to run an agent. What a caller
 the top level: `Run`/ `RunStream`, `RunState`, `Interruption`, and the stream-event types
 (`runa.run`, `runa.run_state`, `runa.stream_events`). This package holds only execution-time detail:
 `run_loop` (the turn loop itself, and the one value it passes down), `guardrails`,
-`tool_execution`, `streaming`, `run_config` (`RunConfig`, what `Agent` settles before the loop
-starts -- no public signature takes one, so it belongs here and not beside `RunState`),
-`agent_shape` (what a run resolves from an Agent), and `spans` (tracing span helpers).
+`tool_execution`, `streaming`, `agent_shape` (what a run resolves from an Agent), and `spans`
+(tracing span helpers).
 """
