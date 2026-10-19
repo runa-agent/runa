@@ -22,10 +22,9 @@ class DictSession(Session):
 
     _store: dict[str, list[ConversationItem]] = {}
 
-    def __init__(self, session_id: str, *, user_id: str | None = None) -> None:
-        """Store `session_id`; `user_id` scopes this session's automatic memory, if any."""
+    def __init__(self, session_id: str) -> None:
+        """Store `session_id`."""
         self.session_id = session_id
-        self.user_id = user_id
 
     async def get_items(self) -> list[ConversationItem]:
         """Return this session's items, oldest first."""

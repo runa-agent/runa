@@ -17,11 +17,20 @@ manual `remember`/`search` calls.
 
 ```python
 support = SupportAgent()  # memory = "auto"
-support.run_sync("I only speak Japanese.")
+support.run_sync("I only speak Japanese.", user_id="user-42")
 
 # ...later, a new run:
-support.run_sync("What's my order status?")  # sees "user speaks Japanese"
+support.run_sync("What's my order status?", user_id="user-42")  # sees "user speaks Japanese"
 ```
+
+## Scoping memory to a user
+
+`user_id=` on `run`/`run_sync`/`run_streamed` is who the run acts for, and the scope of every
+memory read and write it makes, `"auto"` and `"llm"` alike. It's independent of
+[Sessions](sessions.md): a session-less run is scoped the same way. A run with no `user_id`
+uses a scope of its own, shared by every other run that passes none, so an agent serving more
+than one user should always pass one. A tool or delegate reads it as `ctx.user_id`; a paused
+`RunState` carries it, so resuming takes no `user_id=`.
 
 ## `"llm"`: the model decides when to look
 

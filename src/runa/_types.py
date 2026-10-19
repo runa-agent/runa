@@ -123,8 +123,8 @@ class RunContext[TContext]:
 
     `context` is whatever was passed to `Agent.run()`/`run_sync()`, never sent to the model; it's
     how a tool's `ctx`, an `@approval` predicate's `ctx`, a `Hooks` method, and a single-argument
-    `instructions` callable reach it. `user_id` is who the run is for, taken from its session's
-    `user_id` (`None` without one) and shared by its delegates; it's the one scope every `Memory`
+    `instructions` callable reach it. `user_id` is who the run is for, the `user_id` passed to
+    `Agent.run()` and shared by its delegates; it's the one scope every `Memory`
     read and write the run makes uses, `"auto"` and `"llm"` alike. The run sets it; user code
     reads it. `usage` is what this run has spent so far.
 

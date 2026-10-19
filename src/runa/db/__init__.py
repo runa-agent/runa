@@ -136,18 +136,15 @@ def sqlite_database() -> Database:
     return _app.held(_app.MEMORY_DATABASE, MemoryDatabase)
 
 
-def session(session_id: str, *, user_id: str | None = None) -> Session:
-    """This deployment's session store for `session_id`.
-
-    `user_id` scopes the memory of a run on this session, if its agent has any; see `Session`.
-    """
+def session(session_id: str) -> Session:
+    """This deployment's session store for `session_id`."""
     if (url := shared_url()) is not None:
         from runa.session.postgres import PostgresSession
 
-        return PostgresSession(session_id, url, user_id=user_id)
+        return PostgresSession(session_id, url)
     from runa.session.sqlite import SQLiteSession
 
-    return SQLiteSession(session_id, user_id=user_id)
+    return SQLiteSession(session_id)
 
 
 def sessions() -> SessionStore:

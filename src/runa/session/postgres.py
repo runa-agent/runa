@@ -37,10 +37,9 @@ class PostgresSession(Shared, Session):
     identity that matters to a caller is still `Session`, which this is the write side of.
     """
 
-    def __init__(self, session_id: str, url: str, *, user_id: str | None = None) -> None:
+    def __init__(self, session_id: str, url: str) -> None:
         """Store `session_id` and which Postgres database its history lives in."""
         self.session_id = session_id
-        self.user_id = user_id
         super().__init__(url, SESSIONS, MESSAGES)
 
     async def get_items(self) -> list[ConversationItem]:

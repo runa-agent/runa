@@ -1673,7 +1673,7 @@ def test_run_streamed_resolves_a_session_id_string_too(monkeypatch: pytest.Monke
 def test_a_session_object_is_passed_through_untouched(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The fuller form still works: `db.session(id, user_id=...)` and custom stores pass through."""
+    """The fuller form still works: a `Session` object passes through untouched."""
     captured: dict[str, Any] = {}
 
     def fake_run_sync(agent: Any, turn_input: Any, *, session: Any, **kwargs: Any) -> Run:
@@ -1682,7 +1682,7 @@ def test_a_session_object_is_passed_through_untouched(
 
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
-    session = SQLiteSession("s", tmp_path / "runa.db", user_id="u1")
+    session = SQLiteSession("s", tmp_path / "runa.db")
     Researcher().run_sync("hi", session=session)
 
     assert captured["session"] is session
@@ -1858,8 +1858,9 @@ def test_to_payload_renders_the_other_output_types_as_data_too() -> None:
     }
 
 
-def test_resuming_with_a_context_is_refused() -> None:
-    """A `RunState` carries the context of the run it paused, so a second one is a mistake."""
+@pytest.mark.parametrize(("setting", "value"), [("context", {"user": "42"}), ("user_id", "u1")])
+def test_resuming_with_a_context_or_a_user_is_refused(setting: str, value: Any) -> None:
+    """A `RunState` carries the context and user of the run it paused, so a second is a mistake."""
     from runa.exceptions import UserError
 
     class Support(Agent):
@@ -1873,8 +1874,8 @@ def test_resuming_with_a_context_is_refused() -> None:
     agent = Support()
     state = agent.run_sync("refund $75").to_state()
 
-    with pytest.raises(UserError, match="context"):
-        agent.run_sync(state, context={"user": "42"})
+    with pytest.raises(UserError, match=setting):
+        agent.run_sync(state, **{setting: value})
 
 
 def test_to_state_on_a_run_that_did_not_pause_raises() -> None:

@@ -712,6 +712,7 @@ async def _run_async(
     input: str | list[ConversationItem] | RunState,
     *,
     context: Any = None,
+    user_id: str | None = None,
     hooks: Hooks[Any] | None = None,
     session: Session | None = None,
     emit: Emit | None = None,
@@ -740,7 +741,6 @@ async def _run_async(
         trace.metadata = {"group_id": group_id}
 
     shape = agent._shape
-    user_id = session.user_id if session is not None else None
     frame = _Frame(
         shape=shape,
         record=_RunRecord(agent=agent, run_context=RunContext(context=context, user_id=user_id)),

@@ -38,7 +38,7 @@ For anything beyond the id, ask `runa.db` for the session itself and pass that:
 ```python
 from runa import db
 
-session = db.session("user-42", user_id="user-42")
+session = db.session("user-42")
 agent.run_sync("My order hasn't arrived.", session=session)
 
 await session.get_items()  # this session's items, oldest first
@@ -47,9 +47,9 @@ await session.set_items(items)  # replace this session's whole history
 await session.clear_session()  # delete the session and its history
 ```
 
-`user_id` scopes that agent's automatic [Memory](memory.md) to this user. It is unrelated to
-conversation history itself; `run` reads it only to know which user's memories to retrieve and
-store.
+A session is where a conversation's turns live, not who it's for. That is the run's `user_id=`,
+which scopes the agent's [Memory](memory.md) with or without a session; see
+[Scoping memory to a user](memory.md#scoping-memory-to-a-user).
 
 ## Loading an Existing Transcript
 

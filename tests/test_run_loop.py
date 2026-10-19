@@ -1595,24 +1595,22 @@ def test_a_sources_streamed_model_call_is_one_of_the_runs() -> None:
     assert [s.output["usage"]["total_tokens"] for s in llm_spans] == [0, 5]
 
 
-def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:
-    """`Session(user_id=...)` scopes both the retrieval and the extraction call."""
-    from runa.session import SQLiteSession
-
+def test_memory_is_scoped_by_the_runs_user_id_without_a_session() -> None:
+    """`run(user_id=...)` scopes both the retrieval and the extraction call, no session needed."""
     memory = _FakeSource()
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db", user_id="u1")
-    agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=memory)
+    agent = scripted_agent(
+        model=ScriptedModel([text_response("ok"), text_response("ok")]), memory=memory
+    )
 
-    agent.run_sync("hi", session=session)
+    agent.run_sync("hi", user_id="u1")
+    agent.run_sync("hey", user_id="u2")
 
-    assert memory.consulted == [("hi", "u1")]
-    assert memory.told[0][2] == "u1"
+    assert memory.consulted == [("hi", "u1"), ("hey", "u2")]
+    assert [told[2] for told in memory.told] == ["u1", "u2"]
 
 
-def test_a_tool_and_a_delegate_see_the_sessions_user_on_their_run_context(tmp_path: Any) -> None:
-    """`RunContext.user_id` is the session's, for a tool and for a delegate's tools alike."""
-    from runa.session import SQLiteSession
-
+def test_a_tool_and_a_delegate_see_the_runs_user_on_their_run_context() -> None:
+    """`RunContext.user_id` is the run's, for a tool and for a delegate's tools alike."""
     seen: list[str | None] = []
 
     @tool
@@ -1640,9 +1638,7 @@ def test_a_tool_and_a_delegate_see_the_sessions_user_on_their_run_context(tmp_pa
         tools=[whoami],
         subagents=[helper.delegate],
     )
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db", user_id="u1")
-
-    result = agent.run_sync("hi", session=session)
+    result = agent.run_sync("hi", user_id="u1")
 
     assert result.status == "completed", result.error
     assert seen == ["u1", "u1"]

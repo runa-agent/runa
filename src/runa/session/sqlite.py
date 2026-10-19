@@ -79,20 +79,15 @@ class SQLiteSession(Session):
         self,
         session_id: str,
         db_path: str | Path | None = None,
-        *,
-        user_id: str | None = None,
     ) -> None:
         """Store `session_id` and where in `runa.db` its history lives.
 
         `db_path` defaults to `runa.db.sqlite_database()`, so this history lands in the same local
         database as every other concern's -- including when `RUNA_DATABASE_URL` relocates it or
         keeps it in memory. Pass one to point at some other file.
-
-        `user_id` scopes the memory of a run on this session, if its agent has any; see `Session`.
         """
         self.session_id = session_id
         self.db_path = Path(db_path) if db_path is not None else sqlite_database()
-        self.user_id = user_id
 
     def _connect(self) -> sqlite3.Connection:
         return _connect_db(self.db_path, SESSIONS, MESSAGES)

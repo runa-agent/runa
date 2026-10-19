@@ -86,7 +86,6 @@ def test_a_custom_session_gets_clear_session_from_set_items() -> None:
     class PlainSession(Session):
         def __init__(self) -> None:
             self.session_id = "s1"
-            self.user_id = None
             self._items: list[Any] = []
 
         async def get_items(self) -> list[Any]:

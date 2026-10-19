@@ -4,14 +4,14 @@ See RUNA.md #7 and docs/memory.md.
 
 Before each run, Runa searches memory for anything relevant to the user's message. After the
 run, it asks the model what's durably worth keeping and stores it -- no manual `remember`/
-`search` calls. Memory is scoped by `user_id`, set on the `session` passed to `run`.
+`search` calls. Memory is scoped by the `user_id` passed to `run`, session or not.
 
 Run it:
 
     uv run python examples/07_memory/auto_memory.py
 """
 
-from runa import Agent, SQLiteSession
+from runa import Agent
 
 
 class SupportAgent(Agent):
@@ -22,12 +22,10 @@ class SupportAgent(Agent):
     memory = "auto"
 
 
-agent = SupportAgent()
-session = SQLiteSession("chat-1", user_id="user-42")
+SupportAgent().run_sync(
+    "I only speak Japanese, please reply in Japanese from now on.", user_id="user-42"
+)
 
-agent.run_sync("I only speak Japanese, please reply in Japanese from now on.", session=session)
-
-# ... a new conversation later, a different session, same user ...
-later_session = SQLiteSession("chat-2", user_id="user-42")
-run = agent.run_sync("What's my order status?", session=later_session)
+# ... a new conversation later, a fresh agent with no history, same user ...
+run = SupportAgent().run_sync("What's my order status?", user_id="user-42")
 print(run.output)  # sees "user speaks Japanese", retrieved automatically

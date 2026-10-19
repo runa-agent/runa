@@ -241,7 +241,7 @@ def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:
         tools=[safe, dangerous],
         **settings,
     )
-    return gated().run_sync("do it", session=db.session("s", user_id="u1")), gated
+    return gated().run_sync("do it", session=db.session("s"), user_id="u1"), gated
 
 
 def test_a_restored_run_keeps_its_user_and_the_tool_calls_made_before_the_pause() -> None:
@@ -254,7 +254,7 @@ def test_a_restored_run_keeps_its_user_and_the_tool_calls_made_before_the_pause(
     restored = RunState.from_json(fresh, state.to_json())
 
     assert restored.run_context.user_id == "u1"
-    resumed = fresh.run_sync(restored, session=db.session("s", user_id="u1"))
+    resumed = fresh.run_sync(restored, session=db.session("s"))
     assert [call.name for call in resumed.tool_calls] == ["safe", "dangerous"]
 
 

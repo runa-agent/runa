@@ -71,20 +71,22 @@ def _turn_input(
     history: list[ConversationItem],
     session: Session | None,
     context: Any = None,
+    user_id: str | None = None,
 ) -> str | list[ConversationItem] | RunState:
     """Build the `input` for the turn loop from this turn's `message`.
 
-    A paused `RunState` passes through to be resumed; it carries its own `context`, so a
-    `context=` alongside one is refused rather than dropped. A list `message` goes through
-    `runa.content.parts`. With no `session`, the message joins `history`; with one, only the new
-    turn is sent, a plain string as is and a multimodal one as a single user message.
+    A paused `RunState` passes through to be resumed; it carries its own `context` and
+    `user_id`, so either one alongside it is refused rather than dropped. A list `message` goes
+    through `runa.content.parts`. With no `session`, the message joins `history`; with one, only
+    the new turn is sent, a plain string as is and a multimodal one as a single user message.
     """
     if isinstance(message, RunState):
-        if context is not None:
-            raise UserError(
-                "a RunState already carries the context of the run it paused, so `context=` "
-                "would be ignored when resuming it: pass `context=` to the first run instead."
-            )
+        for name, value in (("context", context), ("user_id", user_id)):
+            if value is not None:
+                raise UserError(
+                    f"a RunState already carries the {name} of the run it paused, so `{name}=` "
+                    f"would be ignored when resuming it: pass `{name}=` to the first run instead."
+                )
         return message
     resolved = message if isinstance(message, str) else content.parts(message)
     if session is not None:
@@ -516,6 +518,7 @@ class Agent:
         context: Any = None,
         hooks: Hooks[Any] | None = None,
         session: Session | str | None = None,
+        user_id: str | None = None,
     ) -> Run:
         """Run a turn asynchronously, appending it to the conversation history.
 
@@ -534,15 +537,18 @@ class Agent:
         guardrails, etc.) as-is; it is never sent to the model. `hooks` receives lifecycle
         callbacks (`on_agent_start`, `on_tool_end`, etc.); it defaults to `LoggingHooks`.
 
+        `user_id` is who the run acts for, `RunContext.user_id` to its tools and delegates. It is
+        the scope of every `memory` read and write the run makes; `None` is a scope of its own,
+        shared by every run that passes none. Like `context`, a paused `RunState` carries it.
+
         Pass a `session` to persist conversation history there instead of on `self.history`; the
         session supplies prior turns automatically, so only the new `message` is sent as input,
         and `self.history` is left untouched. Resume a paused run with the same `session` it
         started with.
 
-        A `session` is normally the conversation's id: `session="user-42"` persists to whichever
-        backend `RUNA_DATABASE_URL` names, so an app moves to Postgres without naming one here.
-        Pass a `Session` instead when the run needs more than the id -- `db.session(id,
-        user_id=...)` to scope the run's memory, or your own store.
+        A `session` is normally the conversation's id: `session="ticket-42"` persists to
+        whichever backend `RUNA_DATABASE_URL` names, so an app moves to Postgres without naming
+        one here. Pass a `Session` instead to point at a store of your own.
 
         Returns a `Run`. A tool call needing approval pauses it (`status="paused"`). Nothing a run
         fails on propagates: a guardrail tripwire, `MaxTurnsExceeded`, a model error and an
@@ -555,7 +561,7 @@ class Agent:
         `UserError`. Give each run its own `session`, or its own `Agent`.
         """
         session = _resolve_session(session)
-        turn_input = _turn_input(message, self.history, session, context)
+        turn_input = _turn_input(message, self.history, session, context, user_id)
         with self._exclusive(session):
             # A run's own failure comes back as an `"error"` `Run`; only an `OperatorError` or a
             # `CancelledError` gets through, and those are the caller's to see.
@@ -563,6 +569,7 @@ class Agent:
                 self,
                 turn_input,
                 context=context,
+                user_id=user_id,
                 hooks=hooks,
                 session=session,
             )
@@ -574,6 +581,7 @@ class Agent:
         context: Any = None,
         hooks: Hooks[Any] | None = None,
         session: Session | str | None = None,
+        user_id: str | None = None,
     ) -> Run:
         """Synchronous `run`, for callers not already inside an event loop.
 
@@ -582,7 +590,7 @@ class Agent:
         is written by the time this returns, where `run` only queues its export.
         """
         try:
-            return _loop.run(self.run(message, context, hooks, session))
+            return _loop.run(self.run(message, context, hooks, session, user_id))
         finally:
             flush_exports()
 
@@ -592,6 +600,7 @@ class Agent:
         context: Any = None,
         hooks: Hooks[Any] | None = None,
         session: Session | str | None = None,
+        user_id: str | None = None,
     ) -> RunStream:
         """Run a turn as a stream of events: the same run as `run`, with the same arguments.
 
@@ -606,7 +615,7 @@ class Agent:
         flight raises `UserError` rather than interleaving the two histories.
         """
         session = _resolve_session(session)
-        turn_input = _turn_input(message, self.history, session, context)
+        turn_input = _turn_input(message, self.history, session, context, user_id)
 
         async def events() -> AsyncIterator[StreamEvent]:
             # Held only while a consumer iterates, so a stream built and dropped holds nothing.
@@ -618,6 +627,7 @@ class Agent:
                         self,
                         turn_input,
                         context=context,
+                        user_id=user_id,
                         hooks=hooks,
                         session=session,
                         emit=queue.put_nowait,

@@ -94,16 +94,23 @@ class RunRequest(BaseModel):
         description="Continue (or start) this conversation. Omitted, the turn is stateless.",
     )
     user_id: str | None = Field(
-        default=None, description="Scopes an agent's memory to one user, when it has memory."
+        default=None,
+        description="Who a new turn is for: scopes an agent's memory to one user, session or not.",
     )
 
     @model_validator(mode="after")
     def _exactly_one_turn(self) -> Self:
-        """Reject a body that is neither a turn nor a resume, or tries to be both."""
+        """Reject a body that is neither a turn nor a resume, tries to be both, or re-sends a user.
+
+        A paused `state` carries the `user_id` of the turn that paused, so one beside it is
+        refused, as `Agent.run` refuses it, rather than dropped.
+        """
         if (self.message is None) == (self.state is None):
             raise ValueError("send either a `message` to run or the `state` of a paused run")
         if self.decisions and self.state is None:
             raise ValueError("`decisions` resolve a paused run, so they need its `state` too")
+        if self.user_id is not None and self.state is not None:
+            raise ValueError("a paused `state` already carries the `user_id` its turn was sent")
         return self
 
 
@@ -251,8 +258,8 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         (and the same `session_id`) resumes it here.
         """
         agent = _build(agent_name)
-        session = db.session(body.session_id, user_id=body.user_id) if body.session_id else None
-        run = await agent.run(_turn(agent, body), session=session)
+        session = db.session(body.session_id) if body.session_id else None
+        run = await agent.run(_turn(agent, body), session=session, user_id=body.user_id)
         return _run_payload(run, agent_name)
 
     @api.post("/agents/{agent_name}/runs/stream")
@@ -271,11 +278,11 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         `status="error"` is one wire shape for a turn that answered and one that didn't.
         """
         agent = _build(agent_name)
-        session = db.session(body.session_id, user_id=body.user_id) if body.session_id else None
+        session = db.session(body.session_id) if body.session_id else None
         turn = _turn(agent, body)
 
         async def events() -> AsyncIterator[str]:
-            stream = agent.run_streamed(turn, session=session)
+            stream = agent.run_streamed(turn, session=session, user_id=body.user_id)
             try:
                 async for event in stream:
                     if isinstance(event, TextDelta):

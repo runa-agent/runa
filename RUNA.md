@@ -156,8 +156,8 @@ a custom `rejection_message`, fed back to the model instead of the default text;
 `always=True` it's reused for every later rejected call to that tool too. A `call_id` that
 already executed once can't be submitted again: resuming the same `RunState` twice raises
 `DuplicateToolCallError` rather than silently re-running the tool. A state carries the `context`
-of the run it paused, so passing `context=` alongside one raises `UserError` instead of being
-dropped: pass it to the first run.
+and `user_id` of the run it paused, so passing either alongside one raises `UserError` instead of
+being dropped: pass them to the first run.
 
 `run_streamed` pauses the same way: once the stream ends, its `.run` is the paused `Run`,
 resumed with `agent.run_streamed(state)` (or `run`/`run_sync`).
@@ -234,9 +234,10 @@ agent.run_sync("...", session="user-42")
 resolved through `db.session(...)`, so one call persists to a local
 file, a shared Postgres, or nothing at all, according to
 `RUNA_DATABASE_URL` -- a backend is never named at the call site. Pass a
-`Session` instead only when a run needs more than the id:
-`db.session(id, user_id=...)` to scope the run's memory, or
-`SQLiteSession(id, "other/runa.db")` to point at one specific file.
+`Session` instead only when a run needs a specific store:
+`SQLiteSession(id, "other/runa.db")` to point at one specific file. A
+session is where turns live, never who the run is for: that's
+`user_id=` on the run (see [Memory](#7-memory)).
 
 With a `session`, only the new message is ever passed to `run`/`run_sync`,
 prior turns come back from `runa.db` automatically, and `agent.history`
@@ -276,6 +277,13 @@ class SupportAgent(Agent):
 `db/runa.db` (`sqlite-vec`) `SQLiteSession` uses: `remember`/`search`/
 `forget`, nothing lower. This is long-term memory *across* conversations;
 for one conversation's own turns, see [Session](#6-session).
+
+**Who a run is for is `user_id=` on `run`/`run_sync`/`run_streamed`**,
+beside `context=`, session or not. It's `RunContext.user_id` to the run's
+tools and delegates and the scope of every memory read and write the run
+makes. A run passing none shares one user-less scope with every other such
+run, so an agent serving many users passes it on every turn. A paused
+`RunState` carries it: passing `user_id=` alongside one raises `UserError`.
 
 **Embedding is the one call an agent's `model` doesn't route.** Memory and
 [Knowledge](#8-knowledge) send text to OpenAI (`OPENAI_API_KEY`) whatever

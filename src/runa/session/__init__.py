@@ -20,16 +20,9 @@ class Session(ABC):
     A custom store implements the three abstract methods, the whole of what a run calls.
     `clear_session` has a default built on `set_items`; override it when deleting a session means
     more than emptying its history.
-
-    `user_id` is optional and unrelated to history: it's who a run on this session is for, handed
-    to that run as `RunContext.user_id`, which scopes all of its `Agent.memory` use -- automatic
-    retrieval and persistence and the model's `search_memory` calls alike -- so app code doesn't
-    have to thread a `user_id` through `Memory.remember`/`.search` itself. `None` means memory
-    that goes through this session lands in its own user-less scope, not everyone's.
     """
 
     session_id: str
-    user_id: str | None
 
     @abstractmethod
     async def get_items(self) -> list[ConversationItem]:

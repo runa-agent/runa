@@ -583,6 +583,43 @@ def test_separate_sessions_stay_separate(client: TestClient) -> None:
     assert other.json()["output"] == "items=1"
 
 
+def test_a_user_id_reaches_the_run_with_or_without_a_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Who a turn is for scopes its memory, so a stateless turn must not drop it."""
+    from runa import Agent
+
+    seen: list[tuple[str | None, str | None]] = []
+    original = Agent.run
+
+    async def recording_run(self: Agent, message: Any, **kwargs: Any) -> Any:
+        session = kwargs.get("session")
+        seen.append((kwargs.get("user_id"), session.session_id if session else None))
+        return await original(self, message, **kwargs)
+
+    monkeypatch.setattr(Agent, "run", recording_run)
+
+    for body in (
+        {"message": "one", "user_id": "u1"},
+        {"message": "two", "session_id": "c", "user_id": "u2"},
+    ):
+        client.post("/agents/support_agent/runs", json=body, headers=_auth())
+
+    assert seen == [("u1", None), ("u2", "c")]
+
+
+def test_a_user_id_beside_a_paused_state_is_refused(client: TestClient) -> None:
+    """A paused `state` already carries its user, so a second one is a `422`, not dropped."""
+    response = client.post(
+        "/agents/support_agent/runs",
+        json={"state": {}, "user_id": "u1"},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 422
+    assert "user_id" in response.text
+
+
 def test_a_session_is_persisted_to_the_projects_database(client: TestClient, project: Path) -> None:
     """Sessions land in the app's own `db/runa.db`, where `runa ui` and `runa chat` find them."""
     client.post(
