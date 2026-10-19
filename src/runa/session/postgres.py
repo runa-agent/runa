@@ -43,24 +43,13 @@ class PostgresSession(Shared, Session):
         self.user_id = user_id
         super().__init__(url, SESSIONS, MESSAGES)
 
-    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
-        """Return this session's items, oldest first, capped at the latest `limit` if given."""
+    async def get_items(self) -> list[ConversationItem]:
+        """Return this session's items, oldest first."""
         pool = await self._pool()
-        if limit is None:
-            rows = await pool.fetch(
-                f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = $1 ORDER BY id",
-                self.session_id,
-            )
-        else:
-            rows = await pool.fetch(
-                f"""
-                SELECT message_data FROM {MESSAGES.name} WHERE session_id = $1
-                ORDER BY id DESC LIMIT $2
-                """,
-                self.session_id,
-                limit,
-            )
-            rows.reverse()
+        rows = await pool.fetch(
+            f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = $1 ORDER BY id",
+            self.session_id,
+        )
         return [json.loads(row["message_data"]) for row in rows]
 
     async def add_items(self, items: list[ConversationItem]) -> None:
@@ -105,23 +94,8 @@ class PostgresSession(Shared, Session):
                 self.session_id,
             )
 
-    async def pop_item(self) -> ConversationItem | None:
-        """Remove and return this session's most recent item, or `None` if it has none."""
-        pool = await self._pool()
-        row = await pool.fetchrow(
-            f"""
-            DELETE FROM {MESSAGES.name}
-            WHERE id = (
-                SELECT id FROM {MESSAGES.name} WHERE session_id = $1 ORDER BY id DESC LIMIT 1
-            )
-            RETURNING message_data
-            """,
-            self.session_id,
-        )
-        return json.loads(row["message_data"]) if row else None
-
     async def clear_session(self) -> None:
-        """Delete this session and all of its items."""
+        """Delete this session's history and its `agent_sessions` row, in one transaction."""
         pool = await self._pool()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(

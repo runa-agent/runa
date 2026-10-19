@@ -15,12 +15,11 @@ from runa._items import ConversationItem
 
 
 class Session(ABC):
-    """What `run_internal` needs to persist and replay conversation history across turns.
+    """The conversation history a run replays before its turn and saves after it.
 
-    A base class, where the read side (`SessionStore`) and `Cache` are protocols a backend
-    satisfies by shape alone: inheritance is what lets `set_items` below hand a default
-    implementation out, so a custom backend writes four methods and gets `Agent(compact=...)`
-    without a fifth.
+    A custom store implements the three abstract methods, the whole of what a run calls.
+    `clear_session` has a default built on `set_items`; override it when deleting a session means
+    more than emptying its history.
 
     `user_id` is optional and unrelated to history: it's who a run on this session is for, handed
     to that run as `RunContext.user_id`, which scopes all of its `Agent.memory` use -- automatic
@@ -33,31 +32,20 @@ class Session(ABC):
     user_id: str | None
 
     @abstractmethod
-    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
-        """Return this session's items, oldest first, capped at the latest `limit` if given."""
+    async def get_items(self) -> list[ConversationItem]:
+        """Return this session's items, oldest first."""
 
     @abstractmethod
     async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items` to this session's history."""
 
     @abstractmethod
-    async def pop_item(self) -> ConversationItem | None:
-        """Remove and return this session's most recent item, or `None` if it has none."""
-
-    @abstractmethod
-    async def clear_session(self) -> None:
-        """Delete this session and all of its items."""
-
     async def set_items(self, items: list[ConversationItem]) -> None:
-        """Replace this session's entire history with `items`, `Agent(compact=...)`'s hook.
+        """Replace this session's entire history with `items`."""
 
-        A concrete default built from `clear_session`/`add_items`, not `@abstractmethod`: an
-        existing custom `Session` gets this for free, with no new method it's forced to
-        implement. Override for a single-transaction replace if that matters for your store, the
-        way `SQLiteSession` does.
-        """
-        await self.clear_session()
-        await self.add_items(items)
+    async def clear_session(self) -> None:
+        """Delete this session's history."""
+        await self.set_items([])
 
 
 # Below `Session`, not above: `session/sqlite.py` subclasses it, so the name has to exist

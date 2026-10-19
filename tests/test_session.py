@@ -1,10 +1,10 @@
 """What `SQLiteSession` promises beyond the session contract every backend answers.
 
-The round-trip, `limit`, `pop_item`, `set_items`, `clear_session` and isolation behavior is
+The round-trip, `set_items`, `clear_session` and isolation behavior is
 `tests/contracts/session.py`, driven over this adapter (among others) by
 `tests/test_session_store.py`. What is left here is this adapter's own: that clearing a session
 removes its `agent_sessions` row rather than just its messages, that its blocking `sqlite3` calls
-happen off the event loop, and that a hand-written `Session` gets `set_items` without
+happen off the event loop, and that a hand-written `Session` gets `clear_session` without
 implementing it.
 """
 
@@ -80,12 +80,8 @@ def test_a_session_call_leaves_the_event_loop_free(
     assert bodies and loop_thread not in bodies
 
 
-def test_sessionabc_default_set_items_works_without_an_override(tmp_path: Path) -> None:
-    """A custom `Session` gets `set_items` for free from `clear_session`/`add_items`.
-
-    No new abstract method to implement -- an existing subclass that predates `set_items` still
-    gets correct (if not transactional) behavior for it, unlike `SQLiteSession`'s own override.
-    """
+def test_a_custom_session_gets_clear_session_from_set_items() -> None:
+    """A `Session` implementing only the three abstract methods can still be cleared."""
 
     class PlainSession(Session):
         def __init__(self) -> None:
@@ -93,23 +89,20 @@ def test_sessionabc_default_set_items_works_without_an_override(tmp_path: Path) 
             self.user_id = None
             self._items: list[Any] = []
 
-        async def get_items(self, limit: int | None = None) -> list[Any]:
-            return list(self._items) if limit is None else self._items[-limit:]
+        async def get_items(self) -> list[Any]:
+            return list(self._items)
 
         async def add_items(self, items: list[Any]) -> None:
             self._items.extend(items)
 
-        async def pop_item(self) -> Any | None:
-            return self._items.pop() if self._items else None
-
-        async def clear_session(self) -> None:
-            self._items = []
+        async def set_items(self, items: list[Any]) -> None:
+            self._items = list(items)
 
     session = PlainSession()
 
     async def _run() -> list[Any]:
         await session.add_items([{"role": "user", "content": "old"}])
-        await session.set_items([{"role": "user", "content": "new"}])
+        await session.clear_session()
         return await session.get_items()
 
-    assert asyncio.run(_run()) == [{"role": "user", "content": "new"}]
+    assert asyncio.run(_run()) == []

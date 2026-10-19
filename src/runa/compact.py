@@ -53,8 +53,7 @@ def default_compactor(
     drop until a conversation has a second turn: a first turn's own tool loop, however long, all
     sits after that one user message. Swap in a summarizing `Compactor` to trim that too.
 
-    Where that message is is `_items.latest_user_index`' to say, as it is for a memory query: the
-    cut lands on the latest plain-text user turn, so a multimodal one keeps the turn before it
+    The cut lands on the latest plain-text user turn, so a multimodal one keeps the turn before it
     too rather than being cut into.
     """
     if usage_tokens <= DEFAULT_COMPACTION_TOKENS:

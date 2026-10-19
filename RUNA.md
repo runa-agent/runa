@@ -250,7 +250,8 @@ earlier conversation through the seam the chosen mode already has:
 before the first run with a session.
 `db.session` is how every shipped implementation is reached, so which one
 a deployment gets is never a call site's decision; a custom store
-subclasses `Session`'s four methods, nothing less.
+subclasses `Session`'s three abstract methods (`get_items`, `add_items`,
+`set_items`), the whole of what a run calls.
 
 ## 7. Memory
 

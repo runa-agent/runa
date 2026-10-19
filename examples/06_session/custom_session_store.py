@@ -1,4 +1,4 @@
-"""Writing your own session backend: `Session`'s four abstract methods, nothing less.
+"""Writing your own session backend: `Session`'s three abstract methods.
 
 See RUNA.md #6 and docs/sessions.md ("Writing Your Own Backend").
 
@@ -27,23 +27,17 @@ class DictSession(Session):
         self.session_id = session_id
         self.user_id = user_id
 
-    async def get_items(self, limit: int | None = None) -> list[ConversationItem]:
-        """Return this session's items, oldest first, capped at the latest `limit` if given."""
-        items = self._store.get(self.session_id, [])
-        return items if limit is None else items[-limit:]
+    async def get_items(self) -> list[ConversationItem]:
+        """Return this session's items, oldest first."""
+        return list(self._store.get(self.session_id, []))
 
     async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items` to this session's history."""
         self._store.setdefault(self.session_id, []).extend(items)
 
-    async def pop_item(self) -> ConversationItem | None:
-        """Remove and return this session's most recent item, or `None` if it has none."""
-        items = self._store.get(self.session_id, [])
-        return items.pop() if items else None
-
-    async def clear_session(self) -> None:
-        """Delete this session and all of its items."""
-        self._store.pop(self.session_id, None)
+    async def set_items(self, items: list[ConversationItem]) -> None:
+        """Replace this session's entire history with `items`."""
+        self._store[self.session_id] = list(items)
 
 
 class SupportAgent(Agent):

@@ -71,30 +71,6 @@ async def check_add_items_then_get_items_round_trips_in_order(pair: SessionPair)
     ]
 
 
-async def check_get_items_with_limit_returns_the_latest_n_in_order(pair: SessionPair) -> None:
-    """`limit` returns the most recent items, still oldest-first."""
-    session = await _write(pair, "", "0", "1", "2")
-
-    items = await session.get_items(limit=2)
-
-    assert [item["content"] for item in items] == ["1", "2"]
-
-
-async def check_pop_item_removes_and_returns_the_most_recent_item(pair: SessionPair) -> None:
-    """`pop_item` removes the last item added and returns it."""
-    session = await _write(pair, "", "first", "second")
-
-    popped = await session.pop_item()
-
-    assert popped == {"role": "user", "content": "second"}
-    assert await session.get_items() == [{"role": "user", "content": "first"}]
-
-
-async def check_pop_item_on_an_empty_session_returns_none(pair: SessionPair) -> None:
-    """Popping from a session with no history returns `None`, not an error."""
-    assert await pair.session().pop_item() is None
-
-
 async def check_set_items_replaces_the_entire_history(pair: SessionPair) -> None:
     """`set_items` drops whatever was stored and writes `items` in its place."""
     session = await _write(pair, "", "old", "older")
@@ -222,9 +198,6 @@ async def check_messages_flattens_a_list_shaped_content(pair: SessionPair) -> No
 
 CONTRACT: list[Check] = [
     check_add_items_then_get_items_round_trips_in_order,
-    check_get_items_with_limit_returns_the_latest_n_in_order,
-    check_pop_item_removes_and_returns_the_most_recent_item,
-    check_pop_item_on_an_empty_session_returns_none,
     check_set_items_replaces_the_entire_history,
     check_clear_session_removes_everything_and_can_be_written_to_again,
     check_sessions_are_isolated_by_session_id,

@@ -108,12 +108,7 @@ class RunRequest(BaseModel):
 
 
 def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
-    """A `Run` on the wire, plus the one thing HTTP knows and the run doesn't: which agent ran it.
-
-    `Run.to_payload()` owns the rest. Re-listing a `Run`'s fields here is what let this module
-    report an `Interruption.tool_name` that never existed, so the mapping lives next to the type
-    it maps and a transport adds only what is genuinely its own.
-    """
+    """`Run.to_payload()`, plus the one thing HTTP knows and the run doesn't: which agent ran it."""
     return {"agent": agent_name, **run.to_payload()}
 
 

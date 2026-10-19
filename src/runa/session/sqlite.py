@@ -98,23 +98,13 @@ class SQLiteSession(Session):
         return _connect_db(self.db_path, SESSIONS, MESSAGES)
 
     @_off_loop
-    def get_items(self, limit: int | None = None) -> list[ConversationItem]:
-        """Return this session's items, oldest first, capped at the latest `limit` if given."""
+    def get_items(self) -> list[ConversationItem]:
+        """Return this session's items, oldest first."""
         with closing(self._connect()) as conn:
-            if limit is None:
-                rows = conn.execute(
-                    f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = ? ORDER BY id",
-                    (self.session_id,),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    f"""
-                    SELECT message_data FROM {MESSAGES.name} WHERE session_id = ?
-                    ORDER BY id DESC LIMIT ?
-                    """,
-                    (self.session_id, limit),
-                ).fetchall()
-                rows.reverse()
+            rows = conn.execute(
+                f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = ? ORDER BY id",
+                (self.session_id,),
+            ).fetchall()
         return [json.loads(row[0]) for row in rows]
 
     @_off_loop
@@ -158,25 +148,8 @@ class SQLiteSession(Session):
             conn.commit()
 
     @_off_loop
-    def pop_item(self) -> ConversationItem | None:
-        """Remove and return this session's most recent item, or `None` if it has none."""
-        with closing(self._connect()) as conn:
-            row = conn.execute(
-                f"""
-                DELETE FROM {MESSAGES.name}
-                WHERE id = (
-                    SELECT id FROM {MESSAGES.name} WHERE session_id = ? ORDER BY id DESC LIMIT 1
-                )
-                RETURNING message_data
-                """,
-                (self.session_id,),
-            ).fetchone()
-            conn.commit()
-        return json.loads(row[0]) if row else None
-
-    @_off_loop
     def clear_session(self) -> None:
-        """Delete this session and all of its items."""
+        """Delete this session's history and its `agent_sessions` row, in one transaction."""
         with closing(self._connect()) as conn:
             conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
             conn.execute(f"DELETE FROM {SESSIONS.name} WHERE session_id = ?", (self.session_id,))

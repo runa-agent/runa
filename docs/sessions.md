@@ -44,8 +44,7 @@ agent.run_sync("My order hasn't arrived.", session=session)
 await session.get_items()  # this session's items, oldest first
 await session.add_items(items)  # append items to this session's history
 await session.set_items(items)  # replace this session's whole history
-await session.pop_item()  # remove and return the most recent item
-await session.clear_session()  # delete the session and all its items
+await session.clear_session()  # delete the session and its history
 ```
 
 `user_id` scopes that agent's automatic [Memory](memory.md) to this user. It is unrelated to
@@ -75,10 +74,11 @@ conversations; `set_items` replaces its history instead. Both are `async`, hence
 ## Writing Your Own Backend
 
 Runa ships one implementation per backend `RUNA_DATABASE_URL` understands, and `db.session`
-picks between them. A custom store subclasses `Session`'s four abstract methods (`get_items`,
-`add_items`, `pop_item`, `clear_session`), nothing less.
+picks between them. A custom store subclasses `Session` and implements its three abstract
+methods, `get_items`, `add_items` and `set_items`: everything a run calls. `clear_session` comes
+for free as `set_items([])`; override it if deleting a session means more than emptying it.
 
-All four are `async def`, and a run awaits them on the event loop that `runa serve` is answering
+All of them are `async def`, and a run awaits them on the event loop that `runa serve` is answering
 every other request on. If your store talks to something with a blocking client, hand the body
 to `asyncio.to_thread` the way a sync `@tool` is handed to it -- the shipped `SQLiteSession` does
 exactly that with `sqlite3`.

@@ -93,7 +93,7 @@ def _in_memory_database(monkeypatch: pytest.MonkeyPatch) -> None:
 class _UnreadableSession(SQLiteSession):
     """A `Session` whose backend doesn't answer: a locked SQLite file, a dropped connection."""
 
-    async def get_items(self, limit: int | None = None) -> list[Any]:
+    async def get_items(self) -> list[Any]:
         raise OSError("database is locked")
 
 
@@ -232,7 +232,7 @@ def test_an_operator_error_is_not_reported_as_a_run_failure() -> None:
     """
 
     class _MisconfiguredSession(SQLiteSession):
-        async def get_items(self, limit: int | None = None) -> list[Any]:
+        async def get_items(self) -> list[Any]:
             raise OperatorError("could not parse RUNA_DATABASE_URL")
 
     exports = _Exports()
@@ -296,7 +296,7 @@ def test_a_streamed_operator_error_is_not_reported_as_a_run_failure() -> None:
     """The stream makes the same exception for the same reason `run` does, not a quieter one."""
 
     class _MisconfiguredSession(SQLiteSession):
-        async def get_items(self, limit: int | None = None) -> list[Any]:
+        async def get_items(self) -> list[Any]:
             raise OperatorError("could not parse RUNA_DATABASE_URL")
 
     async def consume() -> None:
