@@ -29,7 +29,9 @@ def test_case_report_passes_when_every_result_passes_or_is_skipped() -> None:
             EvaluationResult(
                 metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
             ),
-            EvaluationResult(metric="faithfulness", status=EvalStatus.SKIPPED, reason="no context"),
+            EvaluationResult(
+                metric="faithfulness", status=EvalStatus.SKIPPED, reason="no retrieval passages"
+            ),
         ],
     )
 

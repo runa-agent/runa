@@ -200,7 +200,7 @@ def test_each_endpoint_gets_its_own_client(monkeypatch: pytest.MonkeyPatch) -> N
 class _EmbeddingSource:
     """A context source that embeds the user's message before the turn, and keeps nothing."""
 
-    async def context(self, query: str, run_context: Any) -> None:
+    async def retrieve(self, query: str, run_context: Any) -> None:
         await embeddings.embed([query])
 
     async def after_turn(self, *args: Any) -> list[str]:

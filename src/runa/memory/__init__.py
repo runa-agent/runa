@@ -4,7 +4,7 @@
 `user_id`, `text` and `metadata` beside its embedding, partitioned by `user_id`. Which store a
 bare `Memory()` gets is `runa.db`'s decision, not this module's.
 
-A run consults its agent's memory through `context`, before its first turn, and `after_turn`, to
+A run consults its agent's memory through `retrieve`, before its first turn, and `after_turn`, to
 turn the exchange into zero or more remembered facts; `MemoryLike` is that contract, the one a
 wholesale custom `memory=` object needs, as opposed to `Memory(store=...)`'s narrower escape
 hatch of swapping just the storage backend.
@@ -70,8 +70,8 @@ class MemoryLike(ContextSource, Protocol):
 
     `Memory` satisfies this already. Implement it yourself to replace Runa's embeddings-based
     memory entirely -- a different scoring method, a hosted memory service, keyword search,
-    whatever -- rather than just swapping `Memory(store=...)`'s storage backend: `context`
-    retrieves for the run's `user_id` and labels what it found, `after_turn` learns from the
+    whatever -- rather than just swapping `Memory(store=...)`'s storage backend: `retrieve`
+    searches for the run's `user_id` and labels what it found, `after_turn` learns from the
     exchange. No inheritance required; `Agent.__init__` accepts any object shaped like this.
     """
 
@@ -163,7 +163,7 @@ class Memory:
 
         return search_memory
 
-    async def context(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
+    async def retrieve(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
         """The run's user's memories relevant to `query`, as a labeled block, or `None` if none.
 
         Called by the run before its first turn when `agent.memory` is set; see `MemoryLike`.

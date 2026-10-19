@@ -114,6 +114,26 @@ def test_evaluate_agent_runs_each_case_on_its_own_agent(monkeypatch: pytest.Monk
     assert _AGENT not in ran_on
 
 
+def test_evaluate_agent_passes_each_case_s_context_to_its_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A case's `context` is its run's `context=`, and a case without one passes `None`."""
+    _patch_run_and_storage(monkeypatch, {})
+    _stub_semantic(monkeypatch)
+    contexts: dict[str, Any] = {}
+
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        contexts[message] = kwargs.get("context")
+        return _run(message)
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+
+    dataset = [Case(input="with", context={"tier": "gold"}), Case(input="without")]
+    asyncio.run(evaluate_agent(_AGENT, dataset))
+
+    assert contexts == {"with": {"tier": "gold"}, "without": None}
+
+
 def test_evaluate_agent_skips_semantic_metrics_after_a_deterministic_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

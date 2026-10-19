@@ -14,7 +14,7 @@ class EvalStatus(StrEnum):
     """A metric's outcome for one case.
 
     `SKIPPED` means the metric didn't apply (e.g. faithfulness with no
-    retrieval context); `ERROR` means the check itself failed to run (e.g.
+    retrieval passages); `ERROR` means the check itself failed to run (e.g.
     the judge model call raised). Neither is a score of 0 or 1: a `PASS`/
     `FAIL` verdict claims to have actually measured something.
     """

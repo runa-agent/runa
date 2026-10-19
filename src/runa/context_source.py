@@ -28,7 +28,7 @@ class ContextSource(Protocol):
     that doesn't answer; a source with a backend of its own translates that backend's failures.
     """
 
-    async def context(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
+    async def retrieve(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
         """The block to put before the user's message `query`, or `None` when nothing is relevant.
 
         `run_context.user_id` is who the run is for, for a source scoped by user.

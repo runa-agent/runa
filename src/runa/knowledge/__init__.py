@@ -14,7 +14,7 @@ Two pieces of process-local state remain: `_digests`, a cache of what the files 
 write (an empty one costs a re-read, never a re-embed), and `_ingest_locks`, which keeps one
 process from embedding one corpus twice at once.
 
-A run consults an agent's `knowledge` through `context` before its first turn, so retrieval is
+A run consults an agent's `knowledge` through `retrieve` before its first turn, so retrieval is
 automatic. `KnowledgeLike` is the contract a wholesale custom
 `knowledge=` object needs, as opposed to `Knowledge(store=...)`'s narrower escape hatch of
 swapping just the storage backend.
@@ -315,7 +315,7 @@ class Knowledge:
         (vector,) = await embed([query], model=self.model)
         return [_match(row) for row in await self._store.nearest(embedding=vector, k=k)]
 
-    async def context(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
+    async def retrieve(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
         """The chunks relevant to `query`, as a labeled block, or `None` if none are.
 
         Called by the run before its first turn when `agent.knowledge` is set; see

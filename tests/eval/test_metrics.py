@@ -53,8 +53,8 @@ def test_what_a_metric_needs_is_declared_data_not_a_rule_inline_in_the_runner() 
     """Each metric says what a case must supply, as the reason it's skipped when it doesn't."""
     assert ANSWER_CORRECTNESS.missing(Case(input="hi")) == "no expected answer"
     assert ANSWER_CORRECTNESS.missing(Case(input="hi", expected="hello")) is None
-    assert FAITHFULNESS.missing(Case(input="hi")) == "no retrieval context"
-    assert FAITHFULNESS.missing(Case(input="hi", context=["x"])) is None
+    assert FAITHFULNESS.missing(Case(input="hi")) == "no retrieval passages"
+    assert FAITHFULNESS.missing(Case(input="hi", passages=["x"])) is None
     assert TASK_COMPLETION.missing(Case(input="hi")) is None
 
 

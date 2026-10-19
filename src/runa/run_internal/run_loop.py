@@ -319,7 +319,7 @@ async def _consult(
         run.span(name, "retrieval", input=query) as span,
         _fails_open(span, f"{name} retrieval", run.start.name),
     ):
-        block = await source.context(query, run.run_context)
+        block = await source.retrieve(query, run.run_context)
         span.output = block
     return block
 

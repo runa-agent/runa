@@ -25,13 +25,15 @@ Pass the Agent's `name` to run just its dataset, for example `runa eval support_
 
 ## What a `Case` Can Carry
 
-Only `input` is required. Everything else is optional evidence that decides which metrics run:
+Only `input` is required. `context` is passed to the case's run as `agent.run(context=...)`, for an
+agent whose instructions or tools need one. Everything else is optional evidence that decides
+which metrics run:
 
 | Field | Enables |
 |---|---|
 | `expected` | Answer-correctness grading |
 | `expected_tool` | A deterministic "was it called" tool-correctness check, a delegate's calls included |
-| `context` | Faithfulness grading against retrieval passages |
+| `passages` | Faithfulness grading against retrieval passages |
 | `metadata` | Arbitrary data carried through to the report |
 
 With none of them, task completion and answer relevance still run. Every case runs to completion

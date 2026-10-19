@@ -59,7 +59,7 @@ class Metric:
 
     missing: Requirement = _needs_nothing
     """What the case must supply for this metric to mean anything, answered as the reason it's
-    `SKIPPED` without it: correctness needs a reference answer, faithfulness needs context."""
+    `SKIPPED` without it: correctness needs a reference answer, faithfulness needs passages."""
 
     @property
     def judged(self) -> bool:
@@ -127,7 +127,7 @@ FAITHFULNESS = Metric(
     label="Faithfulness",
     threshold=0.85,
     grade=grade_faithfulness,
-    missing=lambda case: None if case.context else "no retrieval context",
+    missing=lambda case: None if case.passages else "no retrieval passages",
 )
 
 TOOL_CORRECTNESS = Metric(

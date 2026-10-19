@@ -129,14 +129,14 @@ async def grade_answer_correctness(judge: JudgeModel, case: Case, run: Run) -> t
 
 
 async def grade_faithfulness(judge: JudgeModel, case: Case, run: Run) -> tuple[float, str]:
-    """Score the fraction of the output's claims that `case.context` doesn't contradict."""
-    context = "\n\n".join(case.context or [])
+    """Score the fraction of the output's claims that `case.passages` don't contradict."""
+    passages = "\n\n".join(case.passages or [])
     truths_reply, claims_reply = await asyncio.gather(
         judge.ask(
             "List the factual, undisputed truths that can be inferred from the following "
             "context. Include a truth even if you can't verify it's actually correct, only that "
             "the context asserts it.\n\n"
-            f"Context:\n{context}\n\n"
+            f"Context:\n{passages}\n\n"
             'Reply with JSON only: {"truths": ["...", ...]}'
         ),
         judge.ask(

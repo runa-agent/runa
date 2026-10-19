@@ -128,7 +128,9 @@ def test_grade_faithfulness_scores_the_fraction_not_contradicted() -> None:
             ('{"reason": "..."}', '{"reason": "one unsupported claim about fees"}'),
         ]
     )
-    case = Case(input="what's the refund policy?", context=["refunds are processed within 30 days"])
+    case = Case(
+        input="what's the refund policy?", passages=["refunds are processed within 30 days"]
+    )
     run = finished_run("refunds within 30 days, no fee applies")
 
     score, reason = asyncio.run(grade_faithfulness(judge, case, run))
@@ -145,7 +147,7 @@ def test_grade_faithfulness_treats_no_claims_as_perfect() -> None:
             ('"claims":', '{"claims": []}'),
         ]
     )
-    case = Case(input="hi", context=["x"])
+    case = Case(input="hi", passages=["x"])
     run = finished_run("ok")
 
     score, reason = asyncio.run(grade_faithfulness(judge, case, run))

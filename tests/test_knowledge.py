@@ -539,10 +539,10 @@ def test_context_is_a_labeled_block_of_matching_chunks(tmp_path: Path) -> None:
     (tmp_path / "empty").mkdir()
     empty = _knowledge(tmp_path / "empty", tmp_path / "does-not-exist")
 
-    block = asyncio.run(know.context("query about pets", RunContext()))
+    block = asyncio.run(know.retrieve("query about pets", RunContext()))
 
     assert block == {"role": "system", "content": "Relevant knowledge:\n- cats are great pets"}
-    assert asyncio.run(empty.context("query about pets", RunContext())) is None
+    assert asyncio.run(empty.retrieve("query about pets", RunContext())) is None
 
 
 def test_after_turn_keeps_nothing(tmp_path: Path) -> None:

@@ -54,7 +54,7 @@ async def _evaluate_case(
     # A run that fails (a guardrail tripwire, `MaxTurnsExceeded`, ...) comes back as
     # `status="error"` rather than raising, so a bad case doesn't stop the rest of a dataset from
     # evaluating: there is nothing here to catch `RunaError` a second time for.
-    run = await agent._fresh().run(case.input)
+    run = await agent._fresh().run(case.input, context=case.context)
     results = [check_run_completed(run)]
     if run.status == "completed":
         tool_result = check_expected_tool_called(case, run)

@@ -1446,7 +1446,7 @@ class _FakeSource:
         self.consulted: list[tuple[str, str | None]] = []
         self.told: list[tuple[str, Any, str | None, Any]] = []
 
-    async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
+    async def retrieve(self, query: str, run_context: Any) -> dict[str, Any] | None:
         self.consulted.append((query, run_context.user_id))
         return None if self.block is None else {"role": "system", "content": self.block}
 
@@ -1683,7 +1683,7 @@ def test_memory_retrieval_failure_degrades_gracefully() -> None:
     """A backend that doesn't answer doesn't fail the run; the turn proceeds without memory."""
 
     class _BoomMemory(_FakeSource):
-        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
+        async def retrieve(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise ServiceUnavailable("boom")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_BoomMemory())
@@ -1725,7 +1725,7 @@ def test_retrieval_does_not_swallow_a_framework_bug() -> None:
     """
 
     class _BuggyKnowledge(_FakeSource):
-        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
+        async def retrieve(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise AttributeError("'NoneType' object has no attribute 'embed'")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), knowledge=_BuggyKnowledge())
@@ -1744,7 +1744,7 @@ def test_retrieval_ends_the_run_on_a_failure_it_was_not_told_to_skip() -> None:
     """
 
     class _StaleKnowledge(_FakeSource):
-        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
+        async def retrieve(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise RuntimeError("Event loop is closed")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), knowledge=_StaleKnowledge())
@@ -1779,7 +1779,7 @@ def test_retrieval_misconfiguration_ends_the_run_with_its_trace() -> None:
     """
 
     class _UnconfiguredMemory(_FakeSource):
-        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
+        async def retrieve(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise UserError("OPENAI_API_KEY is not set.")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_UnconfiguredMemory())
@@ -1843,7 +1843,7 @@ def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
     """A backend that doesn't answer doesn't fail the run; the turn proceeds without knowledge."""
 
     class _BoomKnowledge(_FakeSource):
-        async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
+        async def retrieve(self, query: str, run_context: Any) -> dict[str, Any] | None:
             raise ServiceUnavailable("boom")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), knowledge=_BoomKnowledge())

@@ -325,8 +325,8 @@ def test_context_is_a_labeled_block_of_the_run_users_memories(tmp_path: Path) ->
 
     async def _run():
         await mem.remember("User prefers Japanese.", user_id="u1")
-        mine = await mem.context("language preference", RunContext(user_id="u1"))
-        theirs = await mem.context("language preference", RunContext(user_id="u2"))
+        mine = await mem.retrieve("language preference", RunContext(user_id="u1"))
+        theirs = await mem.retrieve("language preference", RunContext(user_id="u2"))
         return mine, theirs
 
     mine, theirs = asyncio.run(_run())
