@@ -46,7 +46,10 @@ def connect(db_path: Path, *tables: Declaration, load_vec: bool = False) -> sqli
     `vec0` virtual table (`db/vectors/sqlite.py`) -- everyone else pays nothing for it.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    created = not db_path.exists()
     conn = sqlite3.connect(db_path)
+    if created:
+        _forget(db_path)
     # Off by default in SQLite, and per-connection: without it every `REFERENCES ... ON DELETE
     # CASCADE` in an adapter's DDL is decorative, and deleting a trace or an eval run leaves its
     # spans and cases behind as orphans.
@@ -116,10 +119,11 @@ def _pending(db_path: Path, tables: tuple[Declaration, ...]) -> bool:
     scan -- on every connection, which here means every call, three of them in one
     session-backed turn.
 
-    Keyed on the file's identity rather than its name: a database deleted underneath a live
-    process (a test, rather than a deployment) comes back with a new inode, so the next connect
-    creates its tables again instead of trusting what this process did to the old file. Keyed on
-    the declarations too, since a file holds several adapters' tables and each applies its own.
+    Keyed on the file's identity rather than its name, so a database replaced underneath a live
+    process isn't trusted for what this process did to the old one. An inode number alone can't
+    promise that, since Linux hands a freed one straight to the next file created: a connect that
+    creates the file forgets its identity first (`_forget`). Keyed on the declarations too, since
+    a file holds several adapters' tables and each applies its own.
 
     Two threads can both be told yes for the same pair and both apply it. That costs a duplicate
     script, not a wrong database: every statement either side runs is `IF NOT EXISTS` or an
@@ -137,6 +141,15 @@ def _remember(db_path: Path, tables: tuple[Declaration, ...]) -> None:
     """
     with _applied_lock:
         _applied.add(_key(db_path, tables))
+
+
+def _forget(db_path: Path) -> None:
+    """Drop everything recorded for `db_path`'s identity, which a file just created can't have."""
+    info = db_path.stat()
+    with _applied_lock:
+        _applied.difference_update(
+            key for key in list(_applied) if key[:2] == (info.st_dev, info.st_ino)
+        )
 
 
 def _key(
