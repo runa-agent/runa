@@ -1789,11 +1789,11 @@ def test_to_payload_is_the_one_wire_shape_of_a_run() -> None:
             "agent": "Support",
         }
     ]
-    assert paused["state"]["run"]["pending"][0]["name"] == "refund"
+    assert "state" not in paused  # the approval ledger is the transport's to keep, not to send
     assert json.loads(json.dumps(paused)) == paused  # the whole payload is JSON, not just a dict
 
 
-def test_to_payload_carries_the_output_and_no_state_once_completed() -> None:
+def test_to_payload_carries_the_output_once_completed() -> None:
     """A completed run has an answer and nothing left to resume."""
 
     class Echo(Agent):
@@ -1807,7 +1807,6 @@ def test_to_payload_carries_the_output_and_no_state_once_completed() -> None:
     assert payload["output"] == "hi"
     assert payload["error"] is None
     assert payload["interruptions"] == []
-    assert payload["state"] is None
 
 
 def test_to_payload_renders_a_dataclass_output_type() -> None:

@@ -108,9 +108,9 @@ by name -- a live `Agent` instance cannot round-trip through JSON itself. Both a
 synchronous calls, like `to_json`/`to_string`: reading a blob resolves no tools and so never
 connects to an agent's MCP servers.
 
-Over HTTP that round trip is already written: a paused run served by `runa serve` reports its
-`state`, and posting that back with a decision per interruption resumes it (see
-[Deployment](deployment.md#resuming-a-paused-run)).
+Over HTTP that round trip is already written, and the blob never leaves the server: `runa serve`
+keeps a paused run's state in `runa.db` and reports a `run_id`, and posting that back with a
+decision per interruption resumes it, once (see [Deployment](deployment.md#resuming-a-paused-run)).
 
 Everything the run carries comes back: its conversation, `context` and user, its usage, the
 tool calls it already made and the time it has already spent against its `timeout`. A `context`

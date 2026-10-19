@@ -42,7 +42,7 @@ curl -X POST http://127.0.0.1:8000/agents/support_agent/runs \
   "trace_id": "2ebeef9a3d224da3bd3bb55eb0af747a",
   "usage": {"input_tokens": 412, "output_tokens": 38, "total_tokens": 450, "requests": 2},
   "interruptions": [],
-  "state": null
+  "run_id": null
 }
 ```
 
@@ -70,7 +70,7 @@ answer from a dropped connection.
 ### Resuming a paused run
 
 A run that hits a tool needing [human approval](approval.md) comes back paused, with the calls
-waiting on a decision and the `state` that resolves them:
+waiting on a decision and the `run_id` that resolves them:
 
 ```json
 {
@@ -81,17 +81,17 @@ waiting on a decision and the `state` that resolves them:
     {"name": "issue_refund", "arguments": "{\"amount\": 75}", "call_id": "call_1",
      "agent": "refund_agent"}
   ],
-  "state": {"schema_version": 4, "agent_name": "refund_agent", "...": "..."}
+  "run_id": "5f0c9a3e2b..."
 }
 ```
 
-Post that `state` back where the message would have gone, with one decision per interruption:
+Post that `run_id` back where the message would have gone, with one decision per interruption:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/agents/refund_agent/runs \
   -H "Authorization: Bearer $RUNA_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"state": {...}, "decisions": [{"call_id": "call_1", "approve": true}],
+  -d '{"run_id": "5f0c9a3e2b...", "decisions": [{"call_id": "call_1", "approve": true}],
        "session_id": "conv-42"}'
 ```
 
@@ -103,20 +103,19 @@ curl -X POST http://127.0.0.1:8000/agents/refund_agent/runs \
 | `rejection_message` | Fed back to the model instead of the default rejection text. |
 
 The response is the same payload as any other run: completed, errored, or paused again if the
-agent asks for something else. `state` and `message` are the same argument of `Agent.run`, so a
-body carrying both (or neither) is a `422`, and the streaming route takes the same body -- a
-client that streamed a run that paused resumes it streaming. Send the `session_id` the run paused
+agent asks for something else, under a new `run_id`. `run_id` and `message` stand for the same
+argument of `Agent.run`, so a body carrying both (or neither) is a `422`, and the streaming route
+takes the same body -- a client that streamed a run that paused resumes it streaming. Send the `session_id` the run paused
 on: a session-backed run persists nothing while paused, and the whole turn is saved once the
 resumed run finishes. An interruption you send no decision for pauses the run again rather than
 being decided for you.
 
-The `state` blob is a capability, not an opaque receipt: it names the agent, carries the run's
-context and its approval ledger, and nothing on the server tracks that a given blob was already
-spent -- posting an approved one twice runs the approved call twice, so treat it as single-use
-the way you would any other idempotency key. `RUNA_API_KEY` is a server-to-server credential for
-exactly this reason -- put `runa serve`
-behind your own API and keep the blob between your backend and Runa. Handing it to a browser
-means handing out an approval, so sign it or stash it under a key of your own first.
+The paused run itself stays on the server, in `runa.db` beside your sessions, so its context and
+approval ledger are never the client's to edit, and any replica sharing `RUNA_DATABASE_URL` can
+resume it. A `run_id` resumes once: resuming claims it, so posting the same approval twice runs
+the call once and the second request is a `404`, as is a `run_id` sent to a different agent's
+route. A decision for a call the pause doesn't have (`422`) spends nothing. A pause nobody
+resumes stays in the `paused_runs` table until you prune it by `created_at`.
 
 ### Authentication
 

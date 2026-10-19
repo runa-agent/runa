@@ -326,16 +326,15 @@ def test_a_paused_run_names_the_tool_awaiting_approval(pausing_client: TestClien
     assert json.loads(interruptions[0]["arguments"]) == {"amount": 75}
 
 
-def test_a_paused_run_carries_the_state_that_resolves_it(
+def test_a_paused_run_is_kept_on_the_server_and_named_by_a_run_id(
     pausing_client: TestClient, project: Path
 ) -> None:
-    """A status of `"paused"` is useless without the blob that resumes it, so it travels too.
+    """The client gets a handle; the state, and the approval ledger in it, stay in `runa.db`."""
+    paused = _paused_body(pausing_client)
 
-    Rebuilt here the way the other side of an HTTP boundary would: `RunState.from_json` against a
-    fresh instance of the agent that started the run.
-    """
-    state_json = _paused_body(pausing_client)["state"]
-
+    assert "state" not in paused
+    state_json = asyncio.run(db.paused_runs().load("refund_agent", paused["run_id"]))
+    assert state_json is not None
     with loaded_app(project):
         classes = {
             getattr(cls, "name", None): cls
@@ -366,10 +365,10 @@ def _stream_run(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
 def _resume(
     client: TestClient, paused: dict[str, Any], decisions: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Hand a paused payload's `state` back with `decisions`, the way a client resolves a pause."""
+    """Hand a paused payload's `run_id` back with `decisions`, the way a client resolves a pause."""
     response = client.post(
         "/agents/refund_agent/runs",
-        json={"state": paused["state"], "decisions": decisions},
+        json={"run_id": paused["run_id"], "decisions": decisions},
         headers=_auth(),
     )
 
@@ -381,11 +380,7 @@ def _resume(
 def test_an_approved_pause_resumes_through_the_route_it_paused_on(
     pausing_client: TestClient,
 ) -> None:
-    """The inverse of a paused response: the `state` it carried, plus what the human decided.
-
-    `serve` used to report a pause and accept nothing back, which left every deploying app to
-    re-derive `RunState.from_json`, the decisions and the re-render for itself.
-    """
+    """The inverse of a paused response: the `run_id` it carried, plus what the human decided."""
     paused = _paused_body(pausing_client)
 
     body = _resume(pausing_client, paused, [{"call_id": "call_1", "approve": True}])
@@ -393,7 +388,34 @@ def test_an_approved_pause_resumes_through_the_route_it_paused_on(
     assert body["status"] == "completed"
     assert body["output"] == "refunded 75"
     assert body["interruptions"] == []
-    assert body["state"] is None
+    assert body["run_id"] is None
+
+
+def test_a_pause_resumes_once(pausing_client: TestClient) -> None:
+    """Posting the same approval twice runs the approved call once; the second finds it spent."""
+    paused = _paused_body(pausing_client)
+    body = {"run_id": paused["run_id"], "decisions": [{"call_id": "call_1", "approve": True}]}
+
+    first = pausing_client.post("/agents/refund_agent/runs", json=body, headers=_auth())
+    second = pausing_client.post("/agents/refund_agent/runs", json=body, headers=_auth())
+
+    assert first.json()["status"] == "completed"
+    assert second.status_code == 404
+
+
+def test_a_pause_is_not_resumed_through_another_agents_route(pausing_client: TestClient) -> None:
+    """A `run_id` is found only under the agent it paused on, and stays there to be resumed."""
+    paused = _paused_body(pausing_client)
+
+    response = pausing_client.post(
+        "/agents/support_agent/runs", json={"run_id": paused["run_id"]}, headers=_auth()
+    )
+
+    assert response.status_code == 404
+    assert (
+        _resume(pausing_client, paused, [{"call_id": "call_1", "approve": True}])["status"]
+        == "completed"
+    )
 
 
 def test_a_rejected_pause_tells_the_model_why(pausing_client: TestClient) -> None:
@@ -411,17 +433,18 @@ def test_a_rejected_pause_tells_the_model_why(pausing_client: TestClient) -> Non
 
 
 def test_an_undecided_interruption_pauses_again(pausing_client: TestClient) -> None:
-    """Nothing is invented for a call nobody decided: the run comes back paused on it."""
+    """Nothing is invented for a call nobody decided: the run comes back paused on it, anew."""
     paused = _paused_body(pausing_client)
 
     body = _resume(pausing_client, paused, [])
 
     assert body["status"] == "paused"
     assert [item["call_id"] for item in body["interruptions"]] == ["call_1"]
+    assert body["run_id"] != paused["run_id"]
 
 
 def test_a_streamed_run_pauses_and_resumes_on_its_own_route(pausing_client: TestClient) -> None:
-    """A streaming client resumes streaming: the state travels on the route it came from.
+    """A streaming client resumes streaming: the `run_id` travels on the route it came from.
 
     Which is why a resume is the same route taking a different body rather than a second pair of
     endpoints -- those would strand exactly this client.
@@ -431,7 +454,7 @@ def test_a_streamed_run_pauses_and_resumes_on_its_own_route(pausing_client: Test
 
     resumed = _stream_run(
         pausing_client,
-        {"state": paused["state"], "decisions": [{"call_id": "call_1", "approve": True}]},
+        {"run_id": paused["run_id"], "decisions": [{"call_id": "call_1", "approve": True}]},
     )
 
     assert resumed["status"] == "completed"
@@ -455,7 +478,7 @@ def test_a_resume_carries_the_session_the_run_paused_on(pausing_client: TestClie
     resumed = pausing_client.post(
         "/agents/refund_agent/runs",
         json={
-            "state": first["state"],
+            "run_id": first["run_id"],
             "decisions": [{"call_id": "call_1", "approve": True}],
             "session_id": "conv-refund",
         },
@@ -471,45 +494,52 @@ def test_a_resume_carries_the_session_the_run_paused_on(pausing_client: TestClie
 def test_a_decision_for_a_call_this_pause_does_not_have_is_a_422(
     pausing_client: TestClient,
 ) -> None:
-    """Dropping it silently would pause the run again with nothing saying why."""
+    """Dropping it silently would pause the run again with nothing saying why; nor is it spent."""
     paused = _paused_body(pausing_client)
 
     response = pausing_client.post(
         "/agents/refund_agent/runs",
-        json={"state": paused["state"], "decisions": [{"call_id": "call_9", "approve": True}]},
+        json={"run_id": paused["run_id"], "decisions": [{"call_id": "call_9", "approve": True}]},
         headers=_auth(),
     )
 
     assert response.status_code == 422
     assert "call_9" in json.dumps(response.json())
-
-
-def test_an_unreadable_state_is_a_422(pausing_client: TestClient) -> None:
-    """The blob is the client's, so a version this Runa cannot read is its error, not a 500."""
-    paused = _paused_body(pausing_client)
-    stale = {**paused["state"], "schema_version": 99}
-
-    response = pausing_client.post(
-        "/agents/refund_agent/runs", json={"state": stale}, headers=_auth()
+    assert (
+        _resume(pausing_client, paused, [{"call_id": "call_1", "approve": True}])["status"]
+        == "completed"
     )
 
-    assert response.status_code == 422
+
+def test_a_pause_this_runa_cannot_read_is_a_409(pausing_client: TestClient) -> None:
+    """A pause saved by an incompatible release exists but can't be resumed, so it's no 500."""
+    paused = _paused_body(pausing_client)
+    store = db.paused_runs()
+    stale = asyncio.run(store.load("refund_agent", paused["run_id"]))
+    assert stale is not None
+    run_id = asyncio.run(store.save("refund_agent", {**stale, "schema_version": 99}))
+
+    response = pausing_client.post(
+        "/agents/refund_agent/runs", json={"run_id": run_id}, headers=_auth()
+    )
+
+    assert response.status_code == 409
 
 
-def test_a_message_and_a_state_together_are_a_422(pausing_client: TestClient) -> None:
+def test_a_message_and_a_run_id_together_are_a_422(pausing_client: TestClient) -> None:
     """They are the same argument of `Agent.run`, so a body carrying both is not a guess."""
     paused = _paused_body(pausing_client)
 
     response = pausing_client.post(
         "/agents/refund_agent/runs",
-        json={"message": "refund $75", "state": paused["state"]},
+        json={"message": "refund $75", "run_id": paused["run_id"]},
         headers=_auth(),
     )
 
     assert response.status_code == 422
 
 
-def test_decisions_without_a_state_are_a_422(client: TestClient) -> None:
+def test_decisions_without_a_run_id_are_a_422(client: TestClient) -> None:
     """A decision resolves an interruption of a specific paused run, or it resolves nothing."""
     response = client.post(
         "/agents/support_agent/runs",
@@ -520,11 +550,11 @@ def test_decisions_without_a_state_are_a_422(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_a_completed_run_carries_no_state(client: TestClient) -> None:
-    """Only a paused run has something to resume, so `state` is `None` for every other status."""
+def test_a_completed_run_carries_no_run_id(client: TestClient) -> None:
+    """Only a paused run has something to resume, so `run_id` is `None` for every other status."""
     response = client.post("/agents/support_agent/runs", json={"message": "hi"}, headers=_auth())
 
-    assert response.json()["state"] is None
+    assert response.json()["run_id"] is None
 
 
 def test_an_unknown_agent_is_404(client: TestClient) -> None:
@@ -608,11 +638,11 @@ def test_a_user_id_reaches_the_run_with_or_without_a_session(
     assert seen == [("u1", None), ("u2", "c")]
 
 
-def test_a_user_id_beside_a_paused_state_is_refused(client: TestClient) -> None:
-    """A paused `state` already carries its user, so a second one is a `422`, not dropped."""
+def test_a_user_id_beside_a_paused_run_is_refused(client: TestClient) -> None:
+    """A paused run already carries its user, so a second one is a `422`, not dropped."""
     response = client.post(
         "/agents/support_agent/runs",
-        json={"state": {}, "user_id": "u1"},
+        json={"run_id": "r1", "user_id": "u1"},
         headers=_auth(),
     )
 

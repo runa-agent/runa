@@ -102,10 +102,11 @@ class Run(GuardrailAudit):
 
         `status` is the `Run`'s own, so a caller distinguishes "the agent answered" from "it needs
         an approval" from "it failed" without parsing prose. `trace_id` is the handle for
-        `runa traces show`, which is what makes a production incident debuggable. A paused run
-        carries `state`, `RunState.to_json()`'s blob: the one thing that can resolve the pause,
-        handed back through `RunState.from_json` to resume (see `runa.run_state`). It is `None`
-        for any other status.
+        `runa traces show`, which is what makes a production incident debuggable.
+
+        A paused run's `RunState` is not part of it: the state carries the run's approval ledger,
+        which is the server's to keep, so a transport holds it itself and hands out a handle
+        (`runa serve` keeps it in `runa.db.paused_runs()`).
 
         One-way, unlike `RunState.to_json()`: a `Run` holds live objects (an `Agent`, a `Trace`'s
         spans) and there is no `from_payload`. The guardrail audit trail is left out for the same
@@ -133,7 +134,6 @@ class Run(GuardrailAudit):
                 }
                 for item in self.interruptions
             ],
-            "state": self._state.to_json() if self._state is not None else None,
         }
 
 

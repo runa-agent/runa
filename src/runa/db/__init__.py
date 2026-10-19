@@ -1,7 +1,7 @@
 """`runa.db`: where state lives, decided once, by the environment.
 
-Everything Runa persists -- sessions, memory, knowledge, the cache, traces, eval history -- is
-local, shared or ephemeral, and this module is the only place that decides which, from
+Everything Runa persists -- sessions, memory, knowledge, the cache, traces, eval history, paused
+runs -- is local, shared or ephemeral, and this module is the only place that decides which, from
 `RUNA_DATABASE_URL` alone. Unset means one `db/runa.db` SQLite file, created on first write. A
 `postgresql://` URL moves every concern to that database, which is what running more than one
 replica needs. `memory://` persists nothing: the stores live and die with the process, as a test
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from runa.db.sqlite import Database
     from runa.db.vectors import VectorSpec, VersionedVectorStore
     from runa.eval.store import EvalStore
+    from runa.run_state.store import PausedRunStore
     from runa.session import Session
     from runa.session.store import SessionStore
     from runa.tracing.store import TraceStore
@@ -78,7 +79,7 @@ def ephemeral() -> bool:
     """Whether this deployment keeps its state in this process only (`memory://`).
 
     The honest answer to "where does state live" for a test suite: one `monkeypatch.setenv`
-    moves all six concerns into one in-memory SQLite database at once, with no live Postgres and
+    moves every concern into one in-memory SQLite database at once, with no live Postgres and
     no temporary file, and `runa.db` stays the only thing that decided.
     """
     url = os.environ.get(DATABASE_URL_ENV) or None
@@ -213,13 +214,24 @@ def cache() -> Cache:
     return SQLiteCache()
 
 
+def paused_runs() -> PausedRunStore:
+    """This deployment's `PausedRunStore`: the runs `runa serve` paused, held until resumed."""
+    if (url := shared_url()) is not None:
+        from runa.run_state.postgres import PostgresPausedRunStore
+
+        return PostgresPausedRunStore(url)
+    from runa.run_state.sqlite import SQLitePausedRunStore
+
+    return SQLitePausedRunStore()
+
+
 def reset_ephemeral() -> None:
     """Empty the `memory://` database, for a test that wants an empty one.
 
     The in-memory database lives for the whole process, the way a file stays on disk: two
     `db.traces()` calls have to see each other's writes, so a fresh database per call would make
     the whole backend a no-op. That makes emptying it an explicit step, and this is it. One call
-    covers all six concerns, because they share the one database: this drops it, and the next
+    covers every concern, because they share the one database: this drops it, and the next
     store to ask gets a new, empty one (`runa._app` closes the old one as it forgets it). Only
     the database is emptied: the app this process reads and its tracing policy stay as they were.
     """
@@ -232,6 +244,7 @@ __all__ = [
     "cache",
     "ephemeral",
     "evals",
+    "paused_runs",
     "project_path",
     "reset_ephemeral",
     "session",

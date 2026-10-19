@@ -82,7 +82,7 @@ scaffolded [`asgi.py`](deployment.md#your-own-server), which is the address a su
 Requires `RUNA_API_KEY` and refuses to start without it, unless `--no-auth` is passed. Routes:
 `GET /health` (unauthenticated), `GET /agents`, `POST /agents/{name}/runs` and
 `POST /agents/{name}/runs/stream`. A run that pauses for approval resumes through the same route
-it paused on, by posting its `state` back with the decisions a human made.
+it paused on, by posting its `run_id` back with the decisions a human made.
 
 ## `runa ui`
 

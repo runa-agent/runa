@@ -1,11 +1,12 @@
 """db/sqlite.py: shared connect-and-create-if-missing plumbing for the local SQLite database.
 
 Every SQLite adapter (`session/sqlite.py`, `cache/sqlite.py`, `tracing/sqlite.py`,
-`eval/sqlite.py`, and the two vector stores through `db/vectors/sqlite.py`) owns a different set
-of tables in the same database. This opens the connection, creating the file and its parent `db/`
-lazily, and brings each caller's `Table`s up to their declaration with `db/schema.py`'s `ddl` and
-`reconcile`: a local file can be older than the release opening it. That happens once per
-database per process (`_pending`), however many connections the adapters open.
+`eval/sqlite.py`, `run_state/sqlite.py`, and the two vector stores through
+`db/vectors/sqlite.py`) owns a different set of tables in the same database. This opens the
+connection, creating the file and its parent `db/` lazily, and brings each caller's `Table`s up to
+their declaration with `db/schema.py`'s `ddl` and `reconcile`: a local file can be older than the
+release opening it. That happens once per database per process (`_pending`), however many
+connections the adapters open.
 
 That database is a `Database`: a file, or the `MemoryDatabase` `memory://` keeps in this
 process. The two are the same SQL through the same adapters; only where the pages live differs.

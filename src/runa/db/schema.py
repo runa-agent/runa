@@ -1,10 +1,10 @@
 """db/schema.py: a table declared once, rendered in whichever dialect the adapter speaks.
 
-Four concerns keep rows in `runa.db`'s database -- sessions, traces, eval history and the cache --
-and each has a SQLite and a Postgres adapter. A concern declares its `Table`s once, beside the
-code that turns a row into an object, and `ddl(dialect, *tables)` renders them, so a column added
-to a declaration appears in both backends or in neither. The whole difference between the
-dialects is the substitutions in `SQLITE` and `POSTGRES`.
+Five concerns keep rows in `runa.db`'s database -- sessions, traces, eval history, the cache and
+paused runs -- and each has a SQLite and a Postgres adapter. A concern declares its `Table`s
+once, beside the code that turns a row into an object, and `ddl(dialect, *tables)` renders them,
+so a column added to a declaration appears in both backends or in neither. The whole difference
+between the dialects is the substitutions in `SQLITE` and `POSTGRES`.
 
 This is not a query builder: adapters write their own SQL, where they genuinely differ. The only
 query fragments here are `Dialect.placeholder` and `Table.placeholders` (`?` against `$1`). A
