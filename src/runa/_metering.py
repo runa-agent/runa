@@ -1,9 +1,10 @@
 """_metering.py: charging a model call made below a run to the run it was made for.
 
-A run counts the model calls its loop makes. A call made deeper down, by code the run reaches
-without handing it anything (the embedding request inside `Memory.search`, say), is wrapped in
-`metered` instead: inside a run it is charged to that run, its usage counted and a span put in its
-trace; outside one (a `Knowledge.ingest()` at `runa serve` startup) it is charged to nothing.
+Every model call a run pays for is wrapped in `metered`, whether the run's loop makes it or code
+the run reaches without handing it anything (the embedding request inside `Memory.search`, say).
+Inside a run it is charged to that run, its usage counted and a span put in its trace under the
+innermost span open; outside one (a `Knowledge.ingest()` at `runa serve` startup) it is charged
+to nothing.
 """
 
 from collections.abc import Callable, Iterator
