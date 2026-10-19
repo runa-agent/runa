@@ -266,10 +266,8 @@ def test_reachable_names_every_agent_once_even_through_a_cycle() -> None:
         instructions = "Second."
 
     first, second = First(), Second()
-    first.handoffs.append(handoff.Handoff.from_agent(second))
-    second.handoffs.append(
-        handoff.Handoff.from_agent(first)
-    )  # a back-edge the walk must not follow forever
+    first.handoffs = (handoff.Handoff.from_agent(second),)
+    second.handoffs = (handoff.Handoff.from_agent(first),)  # a back-edge the walk must not follow
 
     assert [agent.name for agent in reachable(first)] == ["first", "second"]
 

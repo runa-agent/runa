@@ -1,10 +1,10 @@
 """Tests for `runa.eval.evaluate`: `evaluate_agent`, behind `agent.evaluate()`."""
 
 import asyncio
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from helpers import finished_run
+from helpers import ScriptedModel, finished_run
 
 from runa import db
 from runa._types import Usage
@@ -169,7 +169,7 @@ def test_evaluate_agent_defaults_the_judge_to_the_agent_s_own_model(
 def test_evaluate_agent_needs_a_judge_when_the_model_isn_t_a_name() -> None:
     """An agent whose `model` is a constructed `Model` has no name to grade with by default."""
     agent = _TestAgent()
-    agent.model = cast(Any, object())
+    agent.model = ScriptedModel([])
 
     with pytest.raises(UserError, match="needs judge="):
         asyncio.run(evaluate_agent(agent, [Case(input="hi")]))

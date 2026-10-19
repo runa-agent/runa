@@ -12,20 +12,14 @@ module that needs "everything reachable from this agent" asks here rather than r
 `handoffs` and `delegates` itself, which is what keeps a third mode from being a change in five
 places.
 
-An agent is read here, never built, so the attributes that walk is made of are `runa.agent_like`'s
-`AgentLike` (which is also why no read below needs a `getattr` default: an agent that has no
-`handoffs` is a type error at `Agent.run`, not an agent with no subagents). The one exception is
-`Delegate.agent`, which the turn loop *runs* rather than reads, with its own ceilings, and so is
-annotated as the `Agent` it always is -- a type-only import, so the runtime dependency still
-points one way.
+An agent is read here, never built: `Agent` is a type-only import, so the runtime dependency
+still points from `runa.agent` to this module.
 """
 
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
-
-from runa.agent_like import AgentLike
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -51,13 +45,13 @@ class Handoff:
     `tool_name` as a request to switch `current_agent` to `agent`, rather than a normal tool call.
     """
 
-    agent: AgentLike
+    agent: Agent
     tool_name: str
     tool_description: str
 
     @classmethod
     def from_agent(
-        cls, agent: AgentLike, tool_name: str | None = None, tool_description: str | None = None
+        cls, agent: Agent, tool_name: str | None = None, tool_description: str | None = None
     ) -> Handoff:
         """Build a `Handoff` for `agent`, its name/description derived from it unless given."""
         return cls(
@@ -99,7 +93,7 @@ class Delegate:
         )
 
 
-def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
+def subagent_edges(agent: Agent) -> Iterator[tuple[Mode, Agent]]:
     """`agent`'s outgoing edges in the agent graph: one `(mode, target)` per subagent of it.
 
     Handoffs first, then delegates, each in declaration order. An `auto`-mode subagent is wired
@@ -115,14 +109,14 @@ def subagent_edges(agent: AgentLike) -> Iterator[tuple[Mode, AgentLike]]:
         yield "delegate", delegate.agent
 
 
-def reachable(agent: AgentLike) -> Iterator[AgentLike]:
+def reachable(agent: Agent) -> Iterator[Agent]:
     """`agent`, then every agent reachable from it through handoffs and delegates, breadth-first.
 
     Each agent once, by identity, so a cycle (two agents listing each other, an agent listing
     itself) terminates rather than recursing forever.
     """
     seen: set[int] = set()
-    queue: list[AgentLike] = [agent]
+    queue: list[Agent] = [agent]
     while queue:
         candidate = queue.pop(0)
         if id(candidate) in seen:

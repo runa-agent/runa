@@ -12,22 +12,23 @@ MCP servers too, which a walk over agents alone doesn't carry.
 
 from typing import TYPE_CHECKING
 
-from runa.agent_like import AgentLike
 from runa.handoff import Mode, subagent_edges
 
 if TYPE_CHECKING:
     from graphviz import Digraph
+
+    from runa.agent import Agent
 
 _EDGE_STYLE: dict[Mode, str] = {"handoff": "dashed", "delegate": "dotted"}
 """How each subagent mode is drawn. A mode `runa.handoff` grows and this doesn't is a `KeyError`
 here, not a plausible-looking edge in the wrong style."""
 
 
-def _agent_node_id(agent: AgentLike) -> str:
+def _agent_node_id(agent: Agent) -> str:
     return f"agent_{id(agent)}"
 
 
-def _add_agent(dot: Digraph, agent: AgentLike, seen: set[int]) -> None:
+def _add_agent(dot: Digraph, agent: Agent, seen: set[int]) -> None:
     if id(agent) in seen:
         return
     seen.add(id(agent))
@@ -55,7 +56,7 @@ def _add_agent(dot: Digraph, agent: AgentLike, seen: set[int]) -> None:
         _add_agent(dot, target, seen)
 
 
-def draw_graph(agent: AgentLike) -> Digraph:
+def draw_graph(agent: Agent) -> Digraph:
     """Render `agent`, and its tools/subagents/MCP servers (recursively), as a Graphviz `Digraph`.
 
     Building it runs no Graphviz executable: only `.render()` (or Jupyter's inline image) needs

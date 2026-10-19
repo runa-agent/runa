@@ -23,7 +23,6 @@ from runa._items import (
 )
 from runa._items import call_id as id_of  # `call_id` here is the id of the call at hand
 from runa._types import RunContext
-from runa.agent_like import AgentLike
 from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase
 from runa.handoff import Delegate
@@ -32,6 +31,7 @@ from runa.run_state import Interruption, RunState
 from runa.tool import FunctionTool, ToolCall
 
 if TYPE_CHECKING:
+    from runa.agent import Agent
     from runa.run_internal.run_loop import _Run
 
 
@@ -164,7 +164,7 @@ class _TurnOutcome:
 
 async def _run_message_tool_calls(
     run: _Run, message: dict[str, Any], resume: RunState | None = None
-) -> tuple[list[ConversationItem], list[Interruption], AgentLike | None]:
+) -> tuple[list[ConversationItem], list[Interruption], Agent | None]:
     """Execute (or defer for approval) every tool call in `message`; returns results so far.
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
@@ -181,7 +181,7 @@ async def _run_message_tool_calls(
     slots: list[_Slot] = []
     deferred: list[tuple[_Slot, _Thunk]] = []
     interruptions: list[Interruption] = []
-    switched_agent: AgentLike | None = None
+    switched_agent: Agent | None = None
     ready = {
         answered_call_id(result): result
         for result in (resume.ready_results if resume is not None else [])
@@ -234,7 +234,7 @@ async def _run_message_tool_calls(
         slots.append(slot)
         deferred.append((slot, partial(_run_tool_call, run, tool, call)))
 
-    parallel = agent.model_settings.parallel_tool_calls is not False
+    parallel = shape.model_settings.parallel_tool_calls is not False
     outcomes = await _execute([thunk for _, thunk in deferred], parallel)
     for (slot, _), outcome in zip(deferred, outcomes, strict=True):
         if isinstance(outcome, DelegatePaused):

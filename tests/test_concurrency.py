@@ -55,6 +55,9 @@ class _YieldingStreamModel:
     def __init__(self, texts: list[str]) -> None:
         self._texts = list(texts)
 
+    async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
+        raise AssertionError("only ever streamed")
+
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
         await asyncio.sleep(0.01)
         yield StreamDelta(text=self._texts.pop(0))

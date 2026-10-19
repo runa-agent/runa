@@ -8,8 +8,6 @@ signature-level reference.
 
 ::: runa.Agent
 
-::: runa.agent_like.AgentLike
-
 ## Tool
 
 ::: runa.tool.tool

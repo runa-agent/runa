@@ -10,7 +10,7 @@ import time
 from collections.abc import Awaitable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -25,7 +25,6 @@ from runa._items import (
 from runa._log import logger
 from runa._models import ModelRequest
 from runa._types import RunContext, Usage
-from runa.agent_like import AgentLike
 from runa.context_source import ContextSource
 from runa.exceptions import (
     MaxTokensExceeded,
@@ -60,17 +59,21 @@ from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 from runa.transcript import Transcript
 
+if TYPE_CHECKING:
+    from runa.agent import Agent
+
 
 @dataclass
 class _Frame:
-    """What a run is known by before its agent is resolved, and all a failed run can report.
+    """What a run is known by before its MCP tools are listed, and all a failed run can report.
 
-    The starting agent, the trace and agent span, the `RunContext` and the governance, and the
-    session, hooks and `emit` of this call. Every entry point builds one, then hands it to
-    `_within`. It exists before the agent is resolved, so a run that fails resolving still reports.
+    The starting agent's shape, the trace and agent span, the `RunContext` and the governance,
+    and the session, hooks and `emit` of this call. Every entry point builds one, then hands it to
+    `_within`. It exists before the MCP servers are reached, so a run that fails reaching them
+    still reports.
     """
 
-    agent: AgentLike
+    shape: AgentShape
     trace: Trace
     agent_span: Span
     run_context: RunContext
@@ -84,12 +87,12 @@ class _Frame:
 class _Run:
     """One run, from the moment the loop starts it to the moment it becomes the caller's `Run`.
 
-    Its `frame`, plus what needed the agent resolved: the `shape`, the `Transcript`, and the
-    paused state it continues, if any.
+    Its `frame`, plus what needed the MCP servers reached: the `shape` with their tools, the
+    `Transcript`, and the paused state it continues, if any.
 
-    `shape` is the agent running now; `start` is the one the run began with, the same object
-    until a handoff. Its context sources, compaction and the turn and token ceilings read `start`;
-    the turn itself reads `shape`.
+    `shape` is the agent running now and `start` the one the run began with, the same until a
+    handoff. The run as a whole (its context sources, its compaction of history, its turn and
+    token ceilings) belongs to `start`; each turn reads `shape`.
     """
 
     frame: _Frame
@@ -104,7 +107,7 @@ class _Run:
         self.start = self.shape
 
     @property
-    def current_agent(self) -> AgentLike:
+    def current_agent(self) -> Agent:
         """The agent running now, as user code sees it: a hook's callback, a guardrail, a pause."""
         return self.shape.agent
 
@@ -146,10 +149,11 @@ class _Run:
             target, message, start = delegate.agent, input, input
         else:
             target, message, start = paused.agent, None, paused
+        shape = target._shape
         nested = replace(
             frame,
-            agent=target,
-            agent_span=_Spans(frame.trace, under.id).open(target.name, "agent", input=message),
+            shape=shape,
+            agent_span=_Spans(frame.trace, under.id).open(shape.name, "agent", input=message),
             run_context=RunContext(
                 context=frame.run_context.context, user_id=frame.run_context.user_id
             ),
@@ -166,23 +170,23 @@ class _Run:
         return run
 
 
-async def _resolve_instructions(agent: AgentLike, run_context: RunContext) -> str | None:
-    """Resolve `agent.instructions`: a string passes through, a callable is called and awaited."""
-    instructions = agent.instructions
+async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
+    """Resolve `shape.instructions`: a string passes through, a callable is called and awaited."""
+    instructions = shape.instructions
     if not callable(instructions):
         return instructions
-    resolved: Any = instructions(run_context, agent)
+    resolved: Any = instructions(run_context, shape.agent)
     return await resolved if inspect.isawaitable(resolved) else resolved
 
 
-def _parse_output(agent: AgentLike, text: str) -> Any:
-    """The model's final `text`, validated into `agent.output_type` when it declares one.
+def _parse_output(shape: AgentShape, text: str) -> Any:
+    """The model's final `text`, validated into `shape.output_type` when it declares one.
 
     Strictly, through the schema the model was asked for, and deliberately not through
     `parsed_json_object`'s tolerance: a declared `output_type` is a contract the provider enforces
     on its side, not prose to mine a JSON object out of.
     """
-    output_type = agent.output_type
+    output_type = shape.output_type
     if output_type is None or output_type is str:
         return text
     try:
@@ -193,9 +197,9 @@ def _parse_output(agent: AgentLike, text: str) -> Any:
         ) from exc
 
 
-def _context_sources(agent: AgentLike) -> list[tuple[str, ContextSource]]:
-    """`agent`'s memory and knowledge, those it has, each with the name its spans go by."""
-    sources = [("memory", agent.memory), ("knowledge", agent.knowledge)]
+def _context_sources(shape: AgentShape) -> list[tuple[str, ContextSource]]:
+    """`shape`'s memory and knowledge, those it has, each with the name its spans go by."""
+    sources = [("memory", shape.memory), ("knowledge", shape.knowledge)]
     return [(name, source) for name, source in sources if source is not None]
 
 
@@ -226,7 +230,7 @@ async def _consult(
     block = None
     with (
         run.span(name, "retrieval", input=query) as span,
-        _fails_open(span, f"{name} retrieval", run.start.agent.name),
+        _fails_open(span, f"{name} retrieval", run.start.name),
     ):
         block = await source.context(query, run.frame.run_context)
         span.output = block
@@ -239,7 +243,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
     The sources are consulted concurrently, and each block goes right before the message it was
     retrieved for, memory's before knowledge's.
     """
-    sources = _context_sources(run.start.agent)
+    sources = _context_sources(run.start)
     blocks = await asyncio.gather(*(_consult(run, name, source, query) for name, source in sources))
     found = [block for block in blocks if block is not None]
     if found:
@@ -271,7 +275,7 @@ def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
 
 
 async def _record_tool_results(
-    run: _Run, results: list[ConversationItem], switched: AgentLike | None
+    run: _Run, results: list[ConversationItem], switched: Agent | None
 ) -> None:
     """Fold one message's tool results into the run, following a handoff if there was one.
 
@@ -281,7 +285,7 @@ async def _record_tool_results(
     for result in results:
         run.notify(ToolOutput(result))
     if switched is not None:
-        run.shape = await AgentShape.of(switched)
+        run.shape = await switched._shape.with_mcp_tools()
         run.notify(AgentChanged(switched))
         await run.frame.hooks.on_agent_start(run.frame.run_context, switched)
 
@@ -293,7 +297,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
     transcript, hooks = run.transcript, run.frame.hooks
-    max_turns, max_tokens = run.start.agent.max_turns, run.start.agent.max_tokens
+    max_turns, max_tokens = run.start.max_turns, run.start.max_tokens
     run_context = run.frame.run_context
 
     if run.resumed is not None:
@@ -309,15 +313,15 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         agent = shape.agent
         model = shape.resolve_model()
         items = list(transcript.items)
-        with run.span(str(agent.model), "llm", input=items) as llm_span:
-            system_instructions = await _resolve_instructions(agent, run_context)
+        with run.span(str(shape.model), "llm", input=items) as llm_span:
+            system_instructions = await _resolve_instructions(shape, run_context)
             await hooks.on_llm_start(run_context, agent, system_instructions, items)
             request = ModelRequest(
                 input=items,
                 system_instructions=system_instructions,
-                model_settings=agent.model_settings,
+                model_settings=shape.model_settings,
                 tools=shape.offered,
-                output_schema=agent.output_type,
+                output_schema=shape.output_type,
             )
             if run.frame.emit is None:
                 response = await model.get_response(request)
@@ -340,7 +344,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         if not calls:
             text = item_text(message)
             await _run_guardrails(run, Phase.OUTPUT, text)
-            return _TurnOutcome(_parse_output(agent, text), [], [], context_tokens)
+            return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
 
         for call in calls:
             run.notify(ToolCalled(call))
@@ -396,12 +400,12 @@ async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
     The boundary where "errors never raise out of a run" is kept: it encloses everything a run
     does, application code included (a `Hooks` method, a `Session`, a `Compactor`), and catches
     `Exception`. Anything not a `RunaError` becomes `UnexpectedError`, its traceback logged.
-    The frame agent's `timeout` bounds it, as `RunTimeout`. The frame's span is closed on every
+    The starting agent's `timeout` bounds it, as `RunTimeout`. The frame's span is closed on every
     way out; exporting the trace is `_traced`'s.
 
     `BaseException` (cancellation) and `OperatorError` pass through, the span still closed.
     """
-    timeout = frame.agent.timeout
+    timeout = frame.shape.timeout
     try:
         if timeout is None:
             result = await turn
@@ -430,15 +434,15 @@ async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
 
 
 async def _within(frame: _Frame, input: str | list[ConversationItem] | RunState) -> Run:
-    """Run `frame.agent` on `input`, or continue the paused `RunState` it is, inside the boundary.
+    """Run `frame.shape`'s agent on `input`, or continue the paused `RunState` it is, guarded.
 
-    Every entry point ends here once its frame is built. Resolving the agent's shape (which may
-    start an MCP subprocess) and reading the session are inside `_guarded` too, so their
-    failures end the run like any other.
+    Every entry point ends here once its frame is built. Listing the MCP tools (which may start a
+    subprocess) and reading the session are inside `_guarded` too, so their failures end the run
+    like any other.
     """
 
     async def turn() -> Run:
-        shape = await AgentShape.of(frame.agent)
+        shape = await frame.shape.with_mcp_tools()
         if isinstance(input, RunState):
             return await _drive(_Run(frame, shape, input.transcript.copy(), input), None)
         session = frame.session
@@ -455,7 +459,7 @@ def _turn_items(input: str | list[ConversationItem]) -> list[ConversationItem]:
 
 async def _after_turn(run: _Run, final_output: Any) -> None:
     """Hand the completed exchange to each of the starting agent's context sources, in turn."""
-    sources = _context_sources(run.start.agent)
+    sources = _context_sources(run.start)
     query = run.transcript.latest_user_text()
     if not sources or query is None:
         return
@@ -465,7 +469,7 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
     for name, source in sources:
         with (
             beside.span(name, "custom", input=query) as span,
-            _fails_open(span, f"{name} after_turn", run.start.agent.name),
+            _fails_open(span, f"{name} after_turn", run.start.name),
         ):
             kept = await source.after_turn(query, final_output, run.frame.run_context, model)
             span.output = {"stored": len(kept)}
@@ -544,7 +548,7 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
 
 
 async def _run_async(
-    agent: AgentLike,
+    agent: Agent,
     input: str | list[ConversationItem] | RunState,
     *,
     context: Any = None,
@@ -574,11 +578,12 @@ async def _run_async(
     if group_id is not None:
         trace.metadata = {"group_id": group_id}
 
+    shape = agent._shape
     frame = _Frame(
-        agent=agent,
+        shape=shape,
         trace=trace,
         agent_span=_Spans(trace).open(
-            agent.name, "agent", input=latest_user_text(_turn_items(input))
+            shape.name, "agent", input=latest_user_text(_turn_items(input))
         ),
         run_context=RunContext(context=context, user_id=_user_of(session)),
         governance=_Governance(),
@@ -601,10 +606,11 @@ async def _resume(
     emit: Emit | None = None,
 ) -> Run:
     """Continue a paused run once its interruptions are resolved."""
+    shape = state.agent._shape
     frame = _Frame(
-        agent=state.agent,
+        shape=shape,
         trace=state.trace,
-        agent_span=_Spans(state.trace).open(state.agent.name, "agent"),
+        agent_span=_Spans(state.trace).open(shape.name, "agent"),
         # The user is the resuming session's, as a fresh run's is: a serialized state doesn't
         # carry it.
         run_context=replace(state.run_context, user_id=_user_of(session)),

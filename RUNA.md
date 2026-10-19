@@ -40,6 +40,11 @@ methods, properties and `_`-prefixed attributes are the subclass's own business,
 attributes. Passing a setting beats declaring it, and passing `None` means `None`
 (`SupportAgent(memory=None)` turns a declared `memory = "auto"` off for that instance).
 
+**A run reads the settings as resolved when the agent was built.** Reassigning one on an instance
+(`agent.model = ...`) resolves it again, so it reaches the next run and a bad value is a
+`UserError` at that line. The list settings are stored as tuples, so they change by
+reassignment, never in place.
+
 **An agent is run only through its own methods**: `run`, `run_sync` or `run_streamed`, each
 returning (or ending with) a `Run`: `.output`, `.status` (`"completed"`, `"paused"` or
 `"error"`), `.interruptions`, `.trace`, `.usage`, `.error`, `.tool_calls`, and the guardrail audit trail. Errors never raise out of a run;

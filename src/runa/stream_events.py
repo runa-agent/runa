@@ -6,9 +6,12 @@ with.
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from runa._items import ConversationItem
-from runa.agent_like import AgentLike
+
+if TYPE_CHECKING:
+    from runa.agent import Agent
 
 
 @dataclass(frozen=True)
@@ -36,7 +39,7 @@ class ToolOutput:
 class AgentChanged:
     """A handoff switched the agent running this turn to `agent`."""
 
-    agent: AgentLike
+    agent: Agent
 
 
 StreamEvent = TextDelta | ToolCalled | ToolOutput | AgentChanged

@@ -3,20 +3,22 @@
 import dataclasses
 import json
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
 from runa._governance import _Governance
 from runa._items import ConversationItem
 from runa._types import InputTokensDetails, OutputTokensDetails, RunContext, Usage
-from runa.agent_like import AgentLike
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.handoff import reachable
 from runa.tracing.traces import Trace
 from runa.transcript import Transcript, _TranscriptSchema
+
+if TYPE_CHECKING:
+    from runa.agent import Agent
 
 _SCHEMA_VERSION = 4
 
@@ -39,7 +41,7 @@ class Interruption:
     name: str
     arguments: str
     call_id: str
-    agent: AgentLike
+    agent: Agent
 
 
 # --- JSON schema (Pydantic) -------------------------------------------------------------
@@ -111,7 +113,7 @@ def _context_to_json(context: Any) -> Any:
     return context
 
 
-def _find_agent_by_name(root: AgentLike, name: str) -> AgentLike:
+def _find_agent_by_name(root: Agent, name: str) -> Agent:
     """`root`, or the agent reachable from it, that is named `name`.
 
     Deserialization carries an agent as a name string, so resuming has to find the instance
@@ -142,7 +144,7 @@ class RunState(GuardrailAudit):
     restart -- see their docstrings for what is (and isn't) preserved.
     """
 
-    agent: AgentLike
+    agent: Agent
     transcript: Transcript
     ready_results: list[ConversationItem]
     pending: list[Interruption]
@@ -248,7 +250,7 @@ class RunState(GuardrailAudit):
         return self._to_schema().model_dump_json()
 
     @classmethod
-    def from_json(cls, initial_agent: AgentLike, state_json: dict[str, Any]) -> RunState:
+    def from_json(cls, initial_agent: Agent, state_json: dict[str, Any]) -> RunState:
         """Rebuild a paused `RunState` from `to_json()`'s output.
 
         `initial_agent` is a fresh instance of the agent the run started with; the current agent
@@ -286,7 +288,7 @@ class RunState(GuardrailAudit):
 
     @classmethod
     def _from_schema(
-        cls, initial_agent: AgentLike, schema: _RunStateSchema, governance: _Governance
+        cls, initial_agent: Agent, schema: _RunStateSchema, governance: _Governance
     ) -> RunState:
         """Rebuild one state (the caller's, or a paused delegate's) onto the shared `governance`.
 
@@ -324,7 +326,7 @@ class RunState(GuardrailAudit):
         return state
 
     @classmethod
-    def from_string(cls, initial_agent: AgentLike, state_string: str) -> RunState:
+    def from_string(cls, initial_agent: Agent, state_string: str) -> RunState:
         """As `from_json()`, but from a JSON string produced by `to_string()`."""
         try:
             state_json = json.loads(state_string)

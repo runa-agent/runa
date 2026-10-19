@@ -6,13 +6,13 @@ import json
 import sys
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from types import ModuleType
 from typing import Any, TypedDict, cast
 
 import pytest
-from helpers import shape_of
+from helpers import scripted_agent, shape_of
 from pydantic import BaseModel
 
 from runa import Agent, tracing
@@ -181,7 +181,7 @@ def test_handoff_adds_only_to_handoffs() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert agent.tools == []
+    assert agent.tools == ()
 
 
 def test_delegate_adds_only_to_tools() -> None:
@@ -194,7 +194,7 @@ def test_delegate_adds_only_to_tools() -> None:
 
     agent = Main()
 
-    assert agent.handoffs == []
+    assert agent.handoffs == ()
     assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool_name]
 
 
@@ -271,7 +271,7 @@ def test_delegate_tool_name_and_description_override() -> None:
     (delegate,) = agent.delegates
     assert delegate.tool_name == "do_research"
     assert delegate.tool_description == "Look into it."
-    assert agent.tools == []
+    assert agent.tools == ()
 
 
 def test_bare_subagent_wires_both_handoff_and_delegate() -> None:
@@ -311,8 +311,8 @@ def test_no_subagents_leaves_handoffs_and_tools_empty() -> None:
 
     agent = Main()
 
-    assert agent.handoffs == []
-    assert agent.tools == []
+    assert agent.handoffs == ()
+    assert agent.tools == ()
 
 
 def test_dict_subagents_are_rejected() -> None:
@@ -741,7 +741,7 @@ def test_a_misspelled_constructor_kwarg_is_rejected_by_the_signature() -> None:
         Fine(nonsense=1)  # type: ignore[call-arg]
 
 
-_PER_RUN_STATE = frozenset({"history", "usage", "last_usage", "_in_flight"})
+_PER_RUN_STATE = frozenset({"history", "usage", "last_usage"})
 """What `Agent._fresh` clears: one run's state rather than configuration, so it goes nowhere."""
 
 
@@ -792,34 +792,62 @@ def _every_setting_agent() -> Agent:
     return Everything()
 
 
-def test_every_resolved_setting_is_read_through_agent_like() -> None:
-    """`_reject_unknown_settings`, inverted: a setting stored on the agent and promised to nobody.
+def test_the_shape_holds_every_setting_the_agent_stores() -> None:
+    """`_reject_unknown_settings`, inverted: a setting stored on the agent that no run reads.
 
-    `AgentLike` is the protocol the turn loop reads an agent through, so a resolved setting it
-    doesn't name is accepted, validated, stored on the instance -- and has no way into the loop a
-    type checker would let through. The other direction holds too: every member `AgentLike`
-    promises is one an `Agent` actually resolves.
+    The turn loop reads an agent only through its shape, so a setting stored on the instance and
+    missing from the shape is accepted, validated -- and reaches no run. Derived fields go by the
+    setting they come from (`compactor` is `compact`'s).
     """
-    from runa.agent_like import AgentLike
-
-    resolved = {name for name in vars(_every_setting_agent()) if name not in _PER_RUN_STATE}
-    promised = {name for name, value in vars(AgentLike).items() if isinstance(value, property)}
-
-    assert resolved <= promised, f"resolved but read by no run: {sorted(resolved - promised)}"
-    assert promised <= resolved, f"promised but never resolved: {sorted(promised - resolved)}"
-
-
-def test_agent_shape_resolves_the_mcp_tools_and_handoffs_of_the_agent_it_wraps() -> None:
-    """`AgentShape.of` adds what a run has to resolve, and reads everything else off the agent."""
     from runa.run_internal.agent_shape import AgentShape
 
     agent = _every_setting_agent()
+    stored = {name for name in vars(agent) if not name.startswith("_")} - _PER_RUN_STATE
+    read = {field.name for field in fields(AgentShape)} - {"agent", "compactor"} | {"compact"}
 
-    shape = asyncio.run(AgentShape.of(agent))
+    assert stored - {"hooks"} == read, f"stored but read by no run: {sorted(stored - read)}"
+
+
+def test_with_mcp_tools_adds_the_servers_tools_for_one_run() -> None:
+    """A run's shape lists the MCP servers' tools after the agent's own, leaving the agent's be."""
+    agent = _every_setting_agent()
+
+    shape = asyncio.run(agent._shape.with_mcp_tools())
 
     assert shape.agent is agent
     assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
+    assert [t.name for t in agent._shape.tools] == _tool_names(agent)
     assert set(shape.handoffs) == {"transfer_to_researcher"}
+
+
+def test_a_run_reuses_the_shape_built_at_construction() -> None:
+    """Recording a run's history and usage leaves the shape be: it is built once, not per run."""
+    agent = scripted_agent(_ScriptedModel([_final_message("one"), _final_message("two")]))
+    shape = agent._shape
+
+    agent.run_sync("hi")
+    agent.run_sync("again")
+
+    assert agent._shape is shape
+
+
+def test_reassigning_a_setting_rebuilds_the_shape_a_run_reads() -> None:
+    """`agent.max_turns = 3` reaches the next run, and a bad value fails where it is set."""
+    agent = scripted_agent(_ScriptedModel([_final_message("hi")]))
+
+    agent.max_turns = 3
+
+    assert agent._shape.max_turns == 3
+    with pytest.raises(UserError, match="compact must be"):
+        agent.compact = cast(Any, "yes")
+
+
+def test_the_list_settings_change_by_reassignment_only() -> None:
+    """Stored as tuples, so an in-place `append` fails rather than reaching no run."""
+    agent = scripted_agent(_ScriptedModel([_final_message("hi")]))
+
+    with pytest.raises(AttributeError):
+        agent.tools.append(_refund_tool([]))  # type: ignore[attr-defined]
 
 
 def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() -> None:
@@ -882,8 +910,8 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert agent.model_settings is model_settings
     assert _tool_names(agent) == ["ping"]
     assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
-    assert agent.guardrails == passed["guardrails"]
-    assert agent.mcp_servers == passed["mcp"]
+    assert agent.guardrails == tuple(passed["guardrails"])
+    assert agent.mcp_servers == tuple(passed["mcp"])
     assert agent.output_type is Answer
     assert agent.hooks is hooks
     assert isinstance(agent.memory, Memory)
@@ -1033,7 +1061,7 @@ async def _prompt_of(agent: Any, label: str) -> str | None:
     """`agent.instructions` as the loop resolves it."""
     from runa.run_internal.run_loop import _resolve_instructions
 
-    return await _resolve_instructions(agent, RunContext(context=_Ctx(label=label)))
+    return await _resolve_instructions(agent._shape, RunContext(context=_Ctx(label=label)))
 
 
 def test_single_arg_instructions_resolves_from_run_context() -> None:
@@ -1397,6 +1425,9 @@ class _ScriptedStreamModel:
 
     def __init__(self, text: str) -> None:
         self._text = text
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
+        raise AssertionError("only ever streamed")
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
         yield StreamDelta(text=self._text)
@@ -1809,6 +1840,9 @@ def test_run_streamed_pauses_and_resumes_like_run() -> None:
         def __init__(self, turns: list[list[StreamDelta]]) -> None:
             self._turns = turns
 
+        async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
+            raise AssertionError("only ever streamed")
+
         async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
             for delta in self._turns.pop(0):
                 yield delta
@@ -1850,6 +1884,9 @@ def test_run_streamed_reports_an_error_as_an_error_run() -> None:
     """A `RunaError` mid-stream ends the stream with an `"error"` `Run`, like `run`."""
 
     class _AlwaysCallsATool:
+        async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
+            raise AssertionError("only ever streamed")
+
         async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[StreamDelta]:  # noqa: ANN002, ANN003
             yield StreamDelta(tool_call_index=0, tool_call_id="call_1", tool_call_name="missing")
 

@@ -2,8 +2,8 @@
 
 `run`/`run_sync`/`run_streamed` are the only way to run an Agent, and `Run` the only thing they
 return. The turn loop under them is this class's implementation, not a second entry point, so
-every run gets an Agent's own wiring: its guardrail flattening, its memory and knowledge
-resolution, its trace's grouping, its refusal of two concurrent session-less runs.
+every run gets an Agent's own wiring: its settings resolved once into the shape a run reads, its
+trace's grouping, its refusal of two concurrent session-less runs.
 """
 
 import asyncio
@@ -11,7 +11,7 @@ import copy
 import difflib
 import inspect
 import re
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -21,16 +21,17 @@ from typing import TYPE_CHECKING, Any, Literal
 from runa import _loop, content
 from runa._items import ConversationItem, user_message
 from runa._log import logger
-from runa._models import DEFAULT_MODEL, Model, check_model_name
-from runa._types import MessageContent, ModelSettings, RunContext, Usage
-from runa.compact import Compactor, resolve_compactor
+from runa._models import DEFAULT_MODEL, Model
+from runa._types import MessageContent, ModelSettings, Usage
+from runa.compact import Compactor
 from runa.exceptions import UserError
-from runa.guardrail import GuardrailsList, flatten_guardrails
+from runa.guardrail import GuardrailsList
 from runa.handoff import Delegate, Handoff, Mode
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks
 from runa.memory import Memory, MemoryLike
 from runa.run import Run, RunStream
+from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.session import Session
@@ -50,24 +51,6 @@ _UNSET: Any = object()
 `SupportAgent(memory=None)` turns off a declared `memory`, so `None` can't also mean "not passed".
 Typed `Any` so every parameter keeps its own annotation.
 """
-
-
-def _adapt_instructions(instructions: Any) -> Any:
-    """Let `instructions` be a `(context) -> str` callable instead of the runner's 2-arg shape.
-
-    The turn loop calls a callable `instructions(run_context, agent)`. A single-parameter callable
-    is wrapped so it receives just `run_context.context`; anything else passes through unchanged.
-    """
-    if not callable(instructions):
-        return instructions
-    params = list(inspect.signature(instructions).parameters.values())
-    if len(params) != 1:
-        return instructions
-
-    def _resolved(run_context: RunContext[Any], _agent: Agent) -> Any:
-        return instructions(run_context.context)
-
-    return _resolved
 
 
 def _resolve_session(session: Session | str | None) -> Session | None:
@@ -206,22 +189,6 @@ def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
             _under_construction.reset(token)
 
 
-def _checked_model(model: Any) -> Any:
-    """Check `model=` names a model Runa can route, or is one, without building it yet.
-
-    Resolving a name builds the provider's client, which needs its API key, so that waits for the
-    run; checking the name doesn't, so a bad one is a `UserError` at construction.
-    """
-    if isinstance(model, str):
-        check_model_name(model)
-    elif model is not None and not hasattr(model, "get_response"):
-        raise UserError(
-            f"model must be a model name, a Model instance, or None for Runa's default, "
-            f"got {model!r}"
-        )
-    return model
-
-
 def _is_code(value: Any) -> bool:
     """Is this class-body entry code (a method, a property, a nested class) rather than config?
 
@@ -329,6 +296,10 @@ class Agent:
 
     An instance carries per-run state (`history`, `usage`), so it is not safe to share across
     concurrent runs; see `run` for the rule and the two ways to satisfy it.
+
+    A run reads the settings as they stood when the agent was built, or when one was last
+    reassigned (`agent.model = ...` takes effect from the next run). The list settings are
+    stored as tuples, so they change by reassignment only.
     """
 
     handoff = _Mode("handoff")
@@ -442,21 +413,21 @@ class Agent:
             setting["knowledge"], Knowledge
         )
 
-        self.instructions = _adapt_instructions(instructions)
-        self.model: str | Any = _checked_model(setting["model"])
+        self.instructions: str | Callable[..., Any] | None = instructions
+        self.model: str | Any = setting["model"]
         self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
-        self.tools: list[FunctionTool] = [*tools, *memory_tools, *knowledge_tools]
-        self.handoffs: list[Handoff] = handoffs
-        self.delegates: list[Delegate] = delegates
-        self.mcp_servers: list[Any] = list(setting["mcp"] or [])
-        # Kept as declared: a run's `AgentShape` holds them sorted by phase and resolved. Both are
-        # checked now, so a bad value is a `UserError` before any model call.
-        self.guardrails: GuardrailsList = setting["guardrails"] or []
-        flatten_guardrails(self.guardrails)
+        self.tools: Sequence[FunctionTool] = (*tools, *memory_tools, *knowledge_tools)
+        self.handoffs: Sequence[Handoff] = tuple(handoffs)
+        self.delegates: Sequence[Delegate] = tuple(delegates)
+        self.mcp_servers: Sequence[Any] = tuple(setting["mcp"] or ())
+        declared = setting["guardrails"] or ()
+        # Anything but a list stays as declared, for the shape to refuse by name.
+        self.guardrails: GuardrailsList = (
+            tuple(declared) if isinstance(declared, list) else declared
+        )
         self.output_type: type | None = setting["output_type"]
         self.hooks: Hooks[Any] | None = setting["hooks"]
         self.compact: bool | Compactor | None = setting["compact"]
-        resolve_compactor(self.compact)
         self.max_turns: int = setting["max_turns"]
         self.max_tokens: int | None = setting["max_tokens"]
         self.timeout: float | None = setting["timeout"]
@@ -465,6 +436,13 @@ class Agent:
         self.usage = Usage()
         self.last_usage = Usage()
         self._in_flight = 0
+        self._shape = AgentShape.of(self)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Set an attribute, rebuilding the shape a run reads when it is one of the settings."""
+        super().__setattr__(name, value)
+        if not name.startswith("_") and name not in _PER_RUN_STATE and "_shape" in vars(self):
+            self._shape = AgentShape.of(self)
 
     @property
     def graph(self) -> Digraph:
@@ -499,6 +477,7 @@ class Agent:
         clone.usage = Usage()
         clone.last_usage = Usage()
         clone._in_flight = 0
+        clone._shape = AgentShape.of(clone)
         return clone
 
     @contextmanager
@@ -676,10 +655,10 @@ class Agent:
 
 
 _AGENT_FIELDS = tuple(inspect.signature(Agent.__init__).parameters)[1:]
-"""Every name that configures an Agent: `Agent.__init__`'s keyword-only parameters.
+"""Every name that configures an Agent: `Agent.__init__`'s keyword-only parameters."""
 
-A run reads each one off the agent through `runa.agent_like.AgentLike`.
-"""
+_PER_RUN_STATE = frozenset({"history", "usage", "last_usage"})
+"""The public attributes a run records into rather than reads: setting one leaves the shape be."""
 
 
 @dataclass(frozen=True)
