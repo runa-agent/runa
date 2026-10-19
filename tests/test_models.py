@@ -22,7 +22,7 @@ from runa._models import (
     ToolSchema,
 )
 from runa._types import ModelSettings
-from runa.exceptions import UserError
+from runa.exceptions import ModelBehaviorError, RunaError, ServiceUnavailable, UserError
 
 
 @pytest.fixture(autouse=True)
@@ -307,28 +307,39 @@ def test_openai_compatible_retries_rate_limits_and_server_errors(no_backoff: lis
 
 
 def test_openai_compatible_gives_up_after_max_retries(no_backoff: list[float]) -> None:
-    """Still failing after the retries, the last status surfaces as a `ModelBehaviorError`."""
-    from runa.exceptions import ModelBehaviorError
+    """Still failing after the retries, the last status surfaces as a `ServiceUnavailable`."""
+    from runa.exceptions import ServiceUnavailable
 
     model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: httpx.Response(500)))
 
-    with pytest.raises(ModelBehaviorError, match="500"):
+    with pytest.raises(ServiceUnavailable, match="500"):
         _get_response(model)
     assert len(no_backoff) == 2
 
 
 def test_openai_compatible_retries_connection_errors(no_backoff: list[float]) -> None:
-    """A dropped connection is retried, then raised as a `ModelBehaviorError`, not a raw error."""
-    from runa.exceptions import ModelBehaviorError
+    """A dropped connection is retried, then raised as a `ServiceUnavailable`, not a raw error."""
+    from runa.exceptions import ServiceUnavailable
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
     model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
 
-    with pytest.raises(ModelBehaviorError, match="ConnectError"):
+    with pytest.raises(ServiceUnavailable, match="ConnectError"):
         _get_response(model)
     assert len(no_backoff) == 2
+
+
+def test_openai_compatible_refused_key_is_a_user_error(no_backoff: list[float]) -> None:
+    """A 401 is a key that was sent and refused: not retried, and not taken as a service outage."""
+    model = OpenAICompatibleModel(
+        "gpt-5.4-nano", _mock_client(lambda _: httpx.Response(401, json={"error": "bad key"}))
+    )
+
+    with pytest.raises(UserError, match="401"):
+        _get_response(model)
+    assert no_backoff == []
 
 
 def test_openai_compatible_stream_retries_before_the_first_event(no_backoff: list[float]) -> None:
@@ -697,21 +708,33 @@ def test_anthropic_asks_for_the_output_types_json_schema() -> None:
     assert "output_config" not in _anthropic_request(message, output_schema=str)
 
 
-def test_anthropic_api_errors_surface_as_model_behavior_errors() -> None:
-    """An `anthropic.APIError` the SDK's own retries couldn't fix becomes a `RunaError`."""
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (None, ServiceUnavailable),
+        (529, ServiceUnavailable),
+        (401, UserError),
+        (400, ModelBehaviorError),
+    ],
+)
+def test_anthropic_api_errors_are_classified_like_the_chat_completions_backend(
+    status: int | None, expected: type[RunaError]
+) -> None:
+    """An `anthropic.APIError` the SDK's retries couldn't fix becomes the `RunaError` it means."""
     import anthropic
-
-    from runa.exceptions import ModelBehaviorError
 
     request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 
     async def create(**_: Any) -> Any:
-        raise anthropic.APIConnectionError(request=request)
+        if status is None:
+            raise anthropic.APIConnectionError(request=request)
+        response = httpx.Response(status, request=request, json={"error": "nope"})
+        raise anthropic.APIStatusError("nope", response=response, body=None)
 
     client = SimpleNamespace(messages=SimpleNamespace(create=create))
     model = AnthropicModel("claude-sonnet-5", client=client)  # type: ignore[arg-type]
 
-    with pytest.raises(ModelBehaviorError, match="model request failed"):
+    with pytest.raises(expected, match="model request failed"):
         asyncio.run(model.get_response(ModelRequest(input=[{"role": "user", "content": "hi"}])))
 
 

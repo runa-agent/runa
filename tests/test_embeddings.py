@@ -11,7 +11,7 @@ from helpers import ScriptedModel, scripted_agent, text_response, tool_call_resp
 from runa import embeddings
 from runa._loop import LoopCache
 from runa._models import OPENAI, transport
-from runa.exceptions import ModelBehaviorError, UserError
+from runa.exceptions import ModelBehaviorError, ServiceUnavailable, UserError
 from runa.tool import tool
 
 
@@ -77,6 +77,31 @@ def test_embed_raises_on_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
     _serve(monkeypatch, handler)
 
     with pytest.raises(ModelBehaviorError):
+        asyncio.run(embeddings.embed(["a"]))
+
+
+def test_embed_raises_user_error_for_a_refused_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A revoked key is configuration, so retrieval ends the run instead of skipping memory."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-revoked")
+    _serve(monkeypatch, lambda request: httpx.Response(401, json={"error": "invalid api key"}))
+
+    with pytest.raises(UserError, match="401"):
+        asyncio.run(embeddings.embed(["a"]))
+
+
+def test_embed_raises_service_unavailable_once_retries_run_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 503 that outlasts the retries is the one failure a context source is skipped for."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    async def sleep(seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr("runa._models.transport.asyncio.sleep", sleep)
+    _serve(monkeypatch, lambda request: httpx.Response(503))
+
+    with pytest.raises(ServiceUnavailable, match="503"):
         asyncio.run(embeddings.embed(["a"]))
 
 

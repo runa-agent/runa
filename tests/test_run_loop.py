@@ -23,7 +23,7 @@ from helpers import (
 from runa._models import ModelRequest, StreamDelta
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.compact import default_compactor
-from runa.exceptions import UserError
+from runa.exceptions import ServiceUnavailable, UserError
 from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase, guardrail
 from runa.lifecycle import Hooks
 from runa.run import Run
@@ -1670,7 +1670,7 @@ def test_memory_retrieval_failure_degrades_gracefully() -> None:
 
     class _BoomMemory(_FakeSource):
         async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
-            raise ConnectionError("boom")
+            raise ServiceUnavailable("boom")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_BoomMemory())
 
@@ -1688,7 +1688,7 @@ def test_memory_extraction_failure_degrades_gracefully() -> None:
 
     class _BoomMemory(_FakeSource):
         async def after_turn(self, *args: Any) -> list[str]:
-            raise ConnectionError("boom")
+            raise ServiceUnavailable("boom")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_BoomMemory())
 
@@ -1722,13 +1722,11 @@ def test_retrieval_does_not_swallow_a_framework_bug() -> None:
     assert re.search(r"AttributeError: .*no attribute 'embed'", result.error or "")
 
 
-def test_retrieval_fails_open_on_a_loop_lifetime_fault() -> None:
-    """A closed-loop error is the backend not answering, not Runa's own code being wrong.
+def test_retrieval_ends_the_run_on_a_failure_it_was_not_told_to_skip() -> None:
+    """Only `ServiceUnavailable` is skipped; any other exception from a source ends the run.
 
-    It's what httpx and asyncio raise for a client or pool that outlived the loop it was opened
-    on -- the failure `runa._loop` exists for, because `run_sync` opens a loop per call. A custom
-    store holding its own client has none of that protection, and reaching one shouldn't cost a
-    run that is still worth finishing without knowledge.
+    A built-in type says nothing about whether a service is down or misconfigured, so a source
+    that means "skip me" says so.
     """
 
     class _StaleKnowledge(_FakeSource):
@@ -1739,11 +1737,25 @@ def test_retrieval_fails_open_on_a_loop_lifetime_fault() -> None:
 
     result = agent.run_sync("hi")
 
-    assert result.output == "ok"
-
+    assert result.status == "error"
+    assert "RuntimeError: Event loop is closed" in (result.error or "")
     (retrieval_span,) = [s for s in result.trace.spans if s.type == "retrieval"]
     assert retrieval_span.status == "error"
-    assert retrieval_span.error == "Event loop is closed"
+
+
+def test_after_turn_ends_the_run_on_a_refused_key() -> None:
+    """A rejected key is a `UserError`, so a run says so rather than quietly forgetting."""
+
+    class _RefusedMemory(_FakeSource):
+        async def after_turn(self, *args: Any) -> list[str]:
+            raise UserError("model request failed with 401: invalid api key")
+
+    agent = scripted_agent(model=ScriptedModel([text_response("ok")]), memory=_RefusedMemory())
+
+    result = agent.run_sync("hi")
+
+    assert result.status == "error"
+    assert "401" in (result.error or "")
 
 
 def test_retrieval_misconfiguration_ends_the_run_with_its_trace() -> None:
@@ -1818,7 +1830,7 @@ def test_knowledge_retrieval_failure_degrades_gracefully() -> None:
 
     class _BoomKnowledge(_FakeSource):
         async def context(self, query: str, run_context: Any) -> dict[str, Any] | None:
-            raise ConnectionError("boom")
+            raise ServiceUnavailable("boom")
 
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]), knowledge=_BoomKnowledge())
 

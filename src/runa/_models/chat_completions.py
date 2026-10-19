@@ -23,7 +23,7 @@ from runa._types import (
     ToolChoice,
     Usage,
 )
-from runa.exceptions import ModelBehaviorError
+from runa.exceptions import ServiceUnavailable
 
 _CHAT_COMPLETIONS_PATH = "chat/completions"
 
@@ -163,7 +163,7 @@ class OpenAICompatibleModel:
                 for delta in _openai_deltas(cast(dict[str, Any], sse.json())):
                     yield delta
         except httpx.TransportError as exc:  # mid-stream: too late to retry, events went out
-            raise ModelBehaviorError(f"model stream failed: {exc!r}") from exc
+            raise ServiceUnavailable(f"model stream failed: {exc!r}") from exc
         finally:
             await response.aclose()
 

@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from anthropic import APIError, AsyncAnthropic
+from anthropic import APIConnectionError, APIError, APIStatusError, AsyncAnthropic
 
 from runa._items import (
     answered_call_id,
@@ -22,6 +22,7 @@ from runa._items import (
     tool_call,
     tool_calls,
 )
+from runa._models import transport
 from runa._models.interface import (
     ModelRequest,
     StreamDelta,
@@ -36,7 +37,7 @@ from runa._types import (
     ToolChoice,
     Usage,
 )
-from runa.exceptions import ModelBehaviorError
+from runa.exceptions import ModelBehaviorError, RunaError, ServiceUnavailable
 
 
 def _to_anthropic_messages(messages: list[Any]) -> tuple[str | None, list[dict[str, Any]]]:
@@ -197,7 +198,7 @@ class AnthropicModel:
 
     Retries (connection errors, 408/409/429/5xx, with backoff) are the SDK's own, capped at
     `ModelSettings.max_retries` so both backends take the same knob; a request that still fails
-    raises `ModelBehaviorError`, like the chat-completions backend.
+    raises what the chat-completions backend would for the same failure (see `_failure`).
     """
 
     def __init__(self, model: str, client: AsyncAnthropic) -> None:
@@ -256,7 +257,7 @@ class AnthropicModel:
         try:
             response = await self._messages(request.model_settings).create(**body)
         except APIError as exc:
-            raise ModelBehaviorError(f"model request failed: {exc}") from exc
+            raise _failure(exc) from exc
 
         message: dict[str, Any] = _to_chat_message(response)
         usage = _to_usage(response.usage)
@@ -270,7 +271,21 @@ class AnthropicModel:
             async for delta in _anthropic_deltas(raw_stream):
                 yield delta
         except APIError as exc:
-            raise ModelBehaviorError(f"model request failed: {exc}") from exc
+            raise _failure(exc) from exc
+
+
+def _failure(exc: APIError) -> RunaError:
+    """The `RunaError` an SDK error the SDK's own retries couldn't fix ends a request with.
+
+    Classified the way `runa._models.transport` classifies the chat-completions backend's, so a
+    refused key, a service not answering and a request it couldn't make sense of are the same
+    three errors whichever provider an agent's `model` names.
+    """
+    if isinstance(exc, APIConnectionError):  # a timeout included
+        return ServiceUnavailable(f"model request failed: {exc}")
+    if isinstance(exc, APIStatusError):
+        return transport.status_error(exc.status_code, str(exc))
+    return ModelBehaviorError(f"model request failed: {exc}")
 
 
 def _to_chat_message(message: Any) -> dict[str, Any]:

@@ -298,6 +298,15 @@ instance to pass one to, and where a deployment's embeddings come from is
 not a call site's decision. `model=` on `Memory`/`Knowledge` still names
 the embedding model, which is the application's decision.
 
+**A source that doesn't answer is skipped; anything else ends the run.**
+A connection error, a timeout, or a 408/409/429/5xx still failing after
+the retries is a `ServiceUnavailable`: the run goes on without that
+memory or knowledge, with the failure on its span and in the log. A
+refused key is a `UserError`, and like any other exception it ends the
+run, because an empty block reads like nothing relevant. A custom
+`memory=`/`knowledge=` object raises `runa.exceptions.ServiceUnavailable`
+to be skipped the same way. Enforced in code.
+
 ## 8. Knowledge
 
 **Opt in via `Agent(knowledge=...)`, one of `"auto"`, `"llm"`, a `Knowledge(...)` instance, or

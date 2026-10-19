@@ -1,8 +1,8 @@
 """exceptions.py: Runa's two exception roots.
 
 `RunaError` is the base every run-ending failure raises: a tripped guardrail, `MaxTurnsExceeded`, a
-model behaving unexpectedly, or a `UserError` in how the framework itself was used. They are
-raised freely inside a run and caught at its boundary, which reports each as
+model behaving unexpectedly, a service not answering, or a `UserError` in how the framework itself
+was used. They are raised freely inside a run and caught at its boundary, which reports each as
 `Run(status="error", ...)`; anything else a run touches raises (an app's own hook, `Session` or
 `Compactor`) is wrapped in `UnexpectedError` there. None of them carry a payload for the caller.
 
@@ -78,6 +78,15 @@ class ModelBehaviorError(RunaError):
     """
 
 
+class ServiceUnavailable(RunaError):
+    """Raised when a service a run calls doesn't answer: it is down, slow, or shedding load.
+
+    A connection that can't be made, a timeout, or a 408/409/429/5xx still failing after the
+    retries. The one failure a context source (`runa.context_source.ContextSource`) is skipped
+    for rather than ending the run; a custom source raises it to be skipped the same way.
+    """
+
+
 class UserError(RunaError):
     """Raised when the caller has misused the framework itself (bad config, missing credentials)."""
 
@@ -147,6 +156,7 @@ __all__ = [
     "OperatorError",
     "RunTimeout",
     "RunaError",
+    "ServiceUnavailable",
     "UnexpectedError",
     "UserError",
 ]

@@ -36,8 +36,8 @@ from runa.exceptions import (
     OperatorError,
     RunaError,
     RunTimeout,
+    ServiceUnavailable,
     UnexpectedError,
-    UserError,
 )
 from runa.guardrail import GuardrailResult, GuardrailResults, Phase
 from runa.handoff import Delegate
@@ -328,22 +328,16 @@ def _context_sources(shape: AgentShape) -> list[tuple[str, ContextSource]]:
     return [(name, source) for name, source in sources if source is not None]
 
 
-# A context source degrades to nothing when its backend doesn't answer, because a run is still
-# worth finishing without it. These are not that: missing configuration (`UserError`, no
-# embeddings key) and a custom source not shaped as `ContextSource` says. An empty block reads
-# like a corpus with nothing relevant, so these raise instead. A `RuntimeError` ("Event loop is
-# closed", a closed client) is a backend not answering, and degrades.
-_NOT_A_BACKEND_FAULT = (UserError, AttributeError, NameError, TypeError)
-
-
 @contextmanager
 def _fails_open(span: Span, step: str, agent_name: str) -> Iterator[None]:
-    """Let the block's backend fault go, recorded on `span` and logged; raise anything else."""
+    """Let the block's `ServiceUnavailable` go, recorded on `span` and logged; raise anything else.
+
+    A run is still worth finishing without a source whose service didn't answer. Anything else
+    ends it, because the empty block it would leave reads like a corpus with nothing relevant.
+    """
     try:
         yield
-    except _NOT_A_BACKEND_FAULT:
-        raise
-    except Exception as exc:
+    except ServiceUnavailable as exc:
         span.error = str(exc)
         logger.warning("%s failed for agent %s", step, agent_name, exc_info=True)
 

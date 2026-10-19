@@ -21,9 +21,11 @@ from runa._types import RunContext
 class ContextSource(Protocol):
     """Something a run consults before its first turn and tells about the exchange after its last.
 
-    A method that raises `UserError`, `AttributeError`, `NameError` or `TypeError` ends the run:
-    those are a misconfiguration or a bug, and an empty block would hide them. Any other exception
-    is the backend not answering, and the run carries on without this source.
+    Raise `runa.exceptions.ServiceUnavailable` to be skipped: the run records it on the source's
+    span, logs it and carries on without this source. Any other exception ends the run, since the
+    empty block it would leave reads like a corpus with nothing relevant. A call through
+    `runa.embeddings.embed` or the `model` a source is handed already raises it for a service
+    that doesn't answer; a source with a backend of its own translates that backend's failures.
     """
 
     async def context(self, query: str, run_context: RunContext[Any]) -> ConversationItem | None:
