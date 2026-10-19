@@ -346,8 +346,15 @@ them on, so the server does, for every tool it exposes:
 `MCPServer(name=..., needs_approval=..., guardrails=[...])` takes the same
 `bool`/[`@approval`](#4-human-approval) predicate and the same
 [guardrail](#3-guardrail) list `@tool` does. Per server, because trust is a
-property of the server rather than of the transport it's reached over. The
-connection opens lazily and lives for the agent's whole lifetime, so
+property of the server rather than of the transport it's reached over.
+
+**A name is a key.** Every tool, delegate and handoff an agent offers has a
+name no other one has, and every agent in one graph has a name of its own:
+the model calls a tool by name, a sticky approval is keyed by it, and a
+resumed run finds its agent by it. Enforced in code, a duplicate is a
+`UserError`. An MCP tool is offered as `<server>__<tool>` (`files__read_file`),
+so two servers exposing the same tool stay two tools, told apart by their
+`name=`. The connection opens lazily and lives for the agent's whole lifetime, so
 there's no explicit `.connect()`/`.close()` for user code to call in the
 common case.
 

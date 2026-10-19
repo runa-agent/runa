@@ -177,12 +177,20 @@ def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
 
     A class listed twice below one root is built once, and a cycle (a specialist handing back to
     triage) closes onto the agent still being built. Construction stays eager, so a broken
-    subagent declaration fails when the root is built.
+    subagent declaration fails when the root is built. An agent is found again by its `name`
+    when a paused run resumes, so two classes in one graph sharing a name is a `UserError`.
     """
     built = _under_construction.get()
     token = _under_construction.set(built := {}) if built is None else None
-    built[type(agent)] = agent
     try:
+        for other in built.values():
+            if other.name == agent.name:
+                raise UserError(
+                    f"{type(other).__name__} and {type(agent).__name__} are both named "
+                    f"{agent.name!r} in one agent graph, so a paused run could resume the "
+                    f"wrong one. Give each agent a name of its own."
+                )
+        built[type(agent)] = agent
         yield lambda cls: built[cls] if cls in built else cls()
     finally:
         if token is not None:

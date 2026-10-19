@@ -72,7 +72,7 @@ async def _count_close(server: _FakeServer) -> AsyncIterator[None]:
 
 
 def test_list_tools_maps_mcp_tools_to_function_tools() -> None:
-    """Each MCP `Tool`'s name/description/schema becomes a `FunctionTool`'s."""
+    """Each MCP `Tool` becomes a `FunctionTool`, named under its server and otherwise as listed."""
     tool = Tool(
         name="add",
         description="Add two numbers.",
@@ -83,7 +83,7 @@ def test_list_tools_maps_mcp_tools_to_function_tools() -> None:
     tools = asyncio.run(server.list_tools())
 
     assert len(tools) == 1
-    assert tools[0].name == "add"
+    assert tools[0].name == "fake__add"
     assert tools[0].description == "Add two numbers."
     assert tools[0].params_json_schema == tool.input_schema
 
@@ -284,14 +284,14 @@ def test_a_run_pauses_on_an_mcp_tool_that_needs_approval() -> None:
     session = _FakeSession([tool], {"write_file": written})
     server = _FakeServer(session, needs_approval=True)
     model: Any = _ScriptedModel(
-        [_tool_call_message("write_file", '{"path": "/tmp/x"}'), _final_message("done")]
+        [_tool_call_message("fake__write_file", '{"path": "/tmp/x"}'), _final_message("done")]
     )
     agent = _FileAgent(model=model, mcp=[server])
 
     paused = agent.run_sync("write a file")
 
     assert paused.status == "paused"
-    assert [item.name for item in paused.interruptions] == ["write_file"]
+    assert [item.name for item in paused.interruptions] == ["fake__write_file"]
     assert session.calls == []  # the gate held before anything reached the server
 
     state = paused.to_state()
@@ -307,7 +307,9 @@ def test_a_servers_guardrail_trips_before_the_call_reaches_the_server() -> None:
     tool = Tool(name="read_file", input_schema={"type": "object"})
     session = _FakeSession([tool], {})
     server = _FakeServer(session, guardrails=[no_path_traversal.input])
-    model: Any = _ScriptedModel([_tool_call_message("read_file", '{"path": "../etc/passwd"}')])
+    model: Any = _ScriptedModel(
+        [_tool_call_message("fake__read_file", '{"path": "../etc/passwd"}')]
+    )
     agent = _FileAgent(model=model, mcp=[server])
 
     result = agent.run_sync("read ../etc/passwd")

@@ -10,7 +10,8 @@ start a subprocess) and the model client (`resolve_model`, which needs the provi
 """
 
 import inspect
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
@@ -61,9 +62,28 @@ def _checked_model(model: Any) -> Any:
     return model
 
 
+def _checked_unique(agent_name: str, names: Iterable[str]) -> None:
+    """Refuse two callables offered under one name: a call could only ever reach one of them.
+
+    The name is what the model calls, what a call is dispatched by and what a sticky approval is
+    keyed by, so a duplicate would leave all but one of them unreachable, silently.
+    """
+    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
+    if duplicates:
+        raise UserError(
+            f"{agent_name} offers the model more than one tool named {duplicates[0]!r}, so only "
+            f"one of them could ever be called. Rename the @tool, pass tool_name= to the "
+            f"subagent's .handoff/.delegate, or give each MCP server its own name=."
+        )
+
+
 @dataclass(frozen=True)
 class AgentShape:
-    """One agent's settings, each in the form the turn loop uses it."""
+    """One agent's settings, each in the form the turn loop uses it.
+
+    Every tool, delegate and handoff it offers has a name no other one has: a shape where two
+    would share one is a `UserError` instead.
+    """
 
     agent: Agent
     name: str
@@ -92,6 +112,14 @@ class AgentShape:
     @classmethod
     def of(cls, agent: Agent) -> AgentShape:
         """`agent`'s shape, read off its attributes; a value no run could use is a `UserError`."""
+        _checked_unique(
+            agent.name,
+            (
+                *(tool.name for tool in agent.tools),
+                *(delegate.tool_name for delegate in agent.delegates),
+                *(handoff.tool_name for handoff in agent.handoffs),
+            ),
+        )
         return cls(
             agent=agent,
             name=agent.name,
@@ -117,7 +145,9 @@ class AgentShape:
         if not self.mcp_servers:
             return self
         listed = [tool for server in self.mcp_servers for tool in await server.list_tools()]
-        return replace(self, tools=(*self.tools, *listed))
+        shape = replace(self, tools=(*self.tools, *listed))
+        _checked_unique(self.name, (schema.name for schema in shape.offered))
+        return shape
 
     @cached_property
     def offered(self) -> list[ToolSchema]:

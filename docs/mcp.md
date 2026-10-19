@@ -21,6 +21,12 @@ exposed to the model exactly like an ordinary `@tool` function. The model can't 
 difference. The connection itself opens lazily and stays open for the agent's whole lifetime,
 not reopened every turn.
 
+Each tool is offered under its server's name, as `<server>__<tool>`: the filesystem server's
+`read_file` above is `files__read_file`. A tool's own name is the server's choice, not yours, so
+this is what keeps two servers that both expose `delete` from shadowing each other, or sharing
+one `always=True` approval. Give each server its own `name=`: two tools an agent offers under one
+name are a `UserError`.
+
 ## Approval and Guardrails
 
 Exactly like an ordinary tool includes the two things a tool carries besides its schema: whether

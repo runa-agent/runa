@@ -25,6 +25,7 @@ every server connected on that loop down -- a subagent's included -- instead of 
 process per turn behind. That cost is the reason a long-lived app should prefer `run`.
 """
 
+import re
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -69,7 +70,10 @@ class _MCPServerBase:
         needs_approval: _NeedsApproval = False,
         guardrails: GuardrailsList | None = None,
     ) -> None:
-        """Store the server's display `name`, the `address` its connections are keyed by, policy.
+        """Store the server's `name`, the `address` its connections are keyed by, and its policy.
+
+        `name` prefixes every tool the server lists, so it is the part of a tool's name the app
+        controls: two servers exposing the same tool are told apart by naming them differently.
 
         `address` is where this server is reached -- a URL, or a command line -- and is the key
         its per-loop connection is held under, the way `cache/redis.py` keys its client by the
@@ -79,6 +83,7 @@ class _MCPServerBase:
         `connect`/`list_tools` does.
         """
         self.name = name or "mcp"
+        self._tool_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.name).strip("_") or "mcp"
         self._address = address
         self._needs_approval = needs_approval
         self._guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
@@ -132,8 +137,10 @@ class _MCPServerBase:
     def _as_function_tool(self, tool: Any) -> FunctionTool:
         """One listed MCP tool as a `FunctionTool`: its schema, a call back through `connect`.
 
-        The server's approval and guardrail policy comes along, so the gates `run_internal`
-        already runs for every tool call have something to read here too.
+        Named `<server>__<tool>`: the tool's own name is the server's choice, not the app's, so
+        two servers' `delete` stay two tools -- and two sticky approvals -- rather than one. The
+        server's approval and guardrail policy comes along, so the gates `run_internal` already
+        runs for every tool call have something to read here too.
         """
 
         async def on_invoke_tool(ctx: RunContext, arguments_json: str, call_id: str) -> Any:
@@ -146,7 +153,7 @@ class _MCPServerBase:
             return text or result.structured_content
 
         return FunctionTool(
-            name=tool.name,
+            name=f"{self._tool_prefix}__{tool.name}",
             description=tool.description or "",
             params_json_schema=tool.input_schema,
             on_invoke_tool=on_invoke_tool,

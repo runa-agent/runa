@@ -258,6 +258,41 @@ def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
     assert left.delegates[0].agent is right.delegates[0].agent
 
 
+def test_two_classes_sharing_a_name_in_one_graph_is_a_user_error() -> None:
+    """A resumed run finds its agent by name, so one name must mean one agent in the graph."""
+
+    class Impostor(Agent):
+        name = "Researcher"
+        instructions = "impostor"
+
+    class Main(Agent):
+        name = "Main"
+        instructions = "main"
+        subagents = [Researcher.delegate, Impostor.handoff]
+
+    with pytest.raises(UserError, match="Researcher and Impostor are both named 'Researcher'"):
+        Main()
+    Researcher()  # builds: the failed graph left no names behind to collide with
+
+
+def test_two_tools_offered_under_one_name_is_a_user_error() -> None:
+    """An `@tool` named like a delegate would shadow it: only one of them could be called."""
+
+    @tool
+    def researcher(query: str) -> str:
+        """Research a query."""
+        return query
+
+    class Main(Agent):
+        name = "Main"
+        instructions = "main"
+        tools = [researcher]
+        subagents = [Researcher.delegate]
+
+    with pytest.raises(UserError, match="more than one tool named 'researcher'"):
+        Main()
+
+
 def test_delegate_tool_name_and_description_override() -> None:
     """Calling a `.delegate` subagent overrides the generated tool's name/description."""
 
@@ -818,6 +853,24 @@ def test_with_mcp_tools_adds_the_servers_tools_for_one_run() -> None:
     assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
     assert [t.name for t in agent._shape.tools] == _tool_names(agent)
     assert set(shape.handoffs) == {"transfer_to_researcher"}
+
+
+def test_an_mcp_tool_named_like_the_agents_own_is_a_user_error() -> None:
+    """A server's tools join the offered names when a run lists them, and are checked there."""
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    class _Server:
+        async def list_tools(self) -> list[Any]:
+            return [ping]
+
+    agent = scripted_agent(_ScriptedModel([]), tools=[ping], mcp=[_Server()])
+
+    with pytest.raises(UserError, match="more than one tool named 'ping'"):
+        asyncio.run(agent._shape.with_mcp_tools())
 
 
 def test_a_run_reuses_the_shape_built_at_construction() -> None:
