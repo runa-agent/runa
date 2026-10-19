@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import httpx2 as httpx
 
 from runa._loop import LoopCache
+from runa._models import transport
 from runa._models.interface import Model
 from runa.exceptions import UserError
 
@@ -84,7 +85,7 @@ def _prefix_hint(name: str) -> str:
 
 
 def _client_for(endpoint: Endpoint) -> httpx.AsyncClient:
-    """An HTTP client pointed at `endpoint`, carrying the key its env var holds.
+    """This loop's HTTP client for `endpoint`, carrying the key its env var holds.
 
     Raises `UserError` when that variable is unset; the client is built lazily, so an app that
     never names a `gemini-*` model needs no `GEMINI_API_KEY`.
@@ -94,11 +95,7 @@ def _client_for(endpoint: Endpoint) -> httpx.AsyncClient:
         raise UserError(
             f"{endpoint.api_key_env} is not set. Set it to use a {endpoint.name}-* model."
         )
-    return httpx.AsyncClient(
-        base_url=endpoint.base_url,
-        headers={"Authorization": f"Bearer {api_key}"},
-        timeout=600.0,
-    )
+    return transport.client(endpoint.base_url, api_key)
 
 
 class ModelProvider:
@@ -114,12 +111,11 @@ class ModelProvider:
     """
 
     def __init__(self) -> None:
-        """Start with no clients; each is created lazily, on first use, and then reused.
+        """Start with no Anthropic client; it is created lazily, on first use, and then reused.
 
-        A client's connections are bound to the event loop that first uses it, so each is held per
-        loop by a `LoopCache`.
+        A client's connections are bound to the event loop that first uses it, so it is held per
+        loop by a `LoopCache`. Every other provider's client is `runa._models.transport`'s.
         """
-        self._http_clients: LoopCache[str, httpx.AsyncClient] = LoopCache()
         self._anthropic_clients: LoopCache[str, AsyncAnthropic] = LoopCache()
 
     def get_model(self, model_name: str | None) -> Model:
@@ -137,10 +133,7 @@ class ModelProvider:
 
         # Total: `_PREFIXES` is these endpoints' prefixes plus Anthropic's, both handled above.
         endpoint = next(e for e in _ENDPOINTS if lower.startswith(e.prefixes))
-        return OpenAICompatibleModel(name, self._get_http_client(endpoint))
-
-    def _get_http_client(self, endpoint: Endpoint) -> httpx.AsyncClient:
-        return self._http_clients.get(endpoint.name, lambda: _client_for(endpoint))
+        return OpenAICompatibleModel(name, _client_for(endpoint))
 
     def _get_anthropic_client(self) -> AsyncAnthropic:
         from anthropic import AsyncAnthropic

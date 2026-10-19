@@ -1,22 +1,21 @@
 """embeddings.py: text -> vector, for `runa.memory` and `runa.knowledge`.
 
 Embeddings go to OpenAI, at the address and key variable `ModelProvider` routes `gpt-*` with,
-over `httpx2`. An agent's `model` doesn't pick it: `claude-sonnet-5` with `memory = "auto"`
-still needs `OPENAI_API_KEY`. `RUNA_EMBEDDINGS_BASE_URL` points it elsewhere (Azure, a gateway,
-something self-hosted), with `RUNA_EMBEDDINGS_API_KEY` when that endpoint's token differs.
-
-Its client is held per event loop (see `runa._loop`): `Agent.run_sync` opens a loop per call.
+through the transport a chat turn uses (`runa._models.transport`), so they get its per-loop
+client, timeout and retries. An agent's `model` doesn't pick it: `claude-sonnet-5` with
+`memory = "auto"` still needs `OPENAI_API_KEY`. `RUNA_EMBEDDINGS_BASE_URL` points it elsewhere
+(Azure, a gateway, something self-hosted), with `RUNA_EMBEDDINGS_API_KEY` when that endpoint's
+token differs.
 """
 
 import os
 
 import httpx2 as httpx
 
-from runa._loop import LoopCache
 from runa._metering import metered
-from runa._models import OPENAI
+from runa._models import OPENAI, transport
 from runa._types import Usage
-from runa.exceptions import ModelBehaviorError, UserError
+from runa.exceptions import UserError
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 
@@ -28,8 +27,6 @@ _BASE_URL_ENV = "RUNA_EMBEDDINGS_BASE_URL"
 _API_KEY_ENV = "RUNA_EMBEDDINGS_API_KEY"
 
 _EMBEDDINGS_PATH = "embeddings"
-
-_clients: LoopCache[str, httpx.AsyncClient] = LoopCache()
 
 
 def resolve_dimensions(model: str, dimensions: int | None) -> int:
@@ -64,16 +61,9 @@ def _api_key() -> str:
     return api_key
 
 
-def _new_client() -> httpx.AsyncClient:
-    """A client pointed at `_base_url()`, carrying the token `_api_key()` resolves."""
-    return httpx.AsyncClient(
-        base_url=_base_url(), headers={"Authorization": f"Bearer {_api_key()}"}, timeout=60.0
-    )
-
-
-def _get_client() -> httpx.AsyncClient:
-    """This loop's client, keyed by base URL the way `ModelProvider` keys its own by prefix."""
-    return _clients.get(_base_url(), _new_client)
+def _client() -> httpx.AsyncClient:
+    """This loop's client for `_base_url()`, carrying the token `_api_key()` resolves."""
+    return transport.client(_base_url(), _api_key())
 
 
 async def embed(texts: list[str], *, model: str = DEFAULT_EMBEDDING_MODEL) -> list[list[float]]:
@@ -83,14 +73,13 @@ async def embed(texts: list[str], *, model: str = DEFAULT_EMBEDDING_MODEL) -> li
     it is an `"llm"` span in the run's trace.
     """
     with metered(model, input=texts) as charge:
-        response = await _get_client().post(_EMBEDDINGS_PATH, json={"model": model, "input": texts})
-        if response.status_code >= 400:
-            raise ModelBehaviorError(
-                f"embeddings request failed with {response.status_code}: {response.text[:2000]}"
-            )
-        body = response.json()
-        charge(_usage(body.get("usage") or {}))
-    data = body["data"]
+        client = _client()
+        body = {"model": model, "input": texts}
+        response = await transport.send(lambda: client.post(_EMBEDDINGS_PATH, json=body))
+        transport.raise_for_status(response.status_code, response.text)
+        reply = response.json()
+        charge(_usage(reply.get("usage") or {}))
+    data = reply["data"]
     return [item["embedding"] for item in sorted(data, key=lambda item: item["index"])]
 
 

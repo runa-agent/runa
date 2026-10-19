@@ -19,8 +19,9 @@ concern.
 A turn is one `ModelRequest`, so adding something a request carries doesn't re-thread a parameter
 through every backend. Split by concern: `interface` (the `Model` protocol, `ModelRequest`,
 `StreamDelta`, and what both backends share), `chat_completions` (the chat-completions backend),
-`anthropic` (the Claude backend), and `provider` (`ModelProvider`, routing a name to one of the
-two).
+`anthropic` (the Claude backend), `provider` (`ModelProvider`, routing a name to one of the
+two), and `transport` (the HTTP client and retry policy that every request not made through
+Anthropic's SDK goes through, `runa.embeddings` included).
 
 The two backends are resolved one name at a time, the way `runa`'s own facade resolves the
 public surface: a package's `__init__` runs before any of its submodules, so naming them here

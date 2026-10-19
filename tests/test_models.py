@@ -288,7 +288,7 @@ def no_backoff(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     async def sleep(seconds: float) -> None:
         delays.append(seconds)
 
-    monkeypatch.setattr("runa._models.chat_completions.asyncio.sleep", sleep)
+    monkeypatch.setattr("runa._models.transport.asyncio.sleep", sleep)
     return delays
 
 
