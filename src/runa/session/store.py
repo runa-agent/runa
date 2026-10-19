@@ -3,21 +3,19 @@
 What `runa sessions`, `runa chat --list/--continue/--resume` and `runa ui`'s Sessions pages read.
 The write side is `Session` itself; this is the transcript view over whatever it wrote.
 
-One interface, three adapters: `session/sqlite.py`, `session/postgres.py`, `session/ephemeral.py`.
+One interface, two adapters: `session/sqlite.py` and `session/postgres.py`.
 Which one a caller gets is `runa.db.sessions(...)`'s decision, asked once, so no reader here or
 in `web/` branches on a backend or names a file. Nothing in this module touches a database: it
-holds the two tables both SQL adapters create (`db/schema.py` renders them per dialect), the
+holds the two tables both adapters create (`db/schema.py` renders them per dialect), the
 contract, the two objects a row becomes, and the rules the adapters have to agree on -- how a
 session id matches an agent, how a listing is ordered, and how a timestamp is rendered. What a
 stored message's `role` and `text` are is `runa._items`'s rule, applied here by `to_message`.
 
-The first two are one rule in two languages: `listing_clause` is it in SQL, for the two adapters
-that speak it, and `listing_rows` is it in Python, for the one that doesn't. They sit side by side
-below, which is the whole reason they are here rather than in the adapters that call them.
+The first two are `listing_clause`, rendered in either dialect, which is the whole reason it is
+here rather than in the adapters that call it.
 """
 
 import json
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -139,24 +137,6 @@ def listing_clause(agent: str | None, dialect: Dialect) -> tuple[str, tuple[str,
     )
 
 
-def listing_rows(
-    summaries: Iterable[SessionSummary], agent: str | None = None
-) -> list[SessionSummary]:
-    """`listing_clause` said in Python, for the adapter that keeps its sessions in memory.
-
-    Same filters and order, down to the tie-break, over the `SessionSummary` rows
-    `session/ephemeral.py` keeps. Change one rendering and the other with it: `runa chat --list`
-    must list sessions the same way on every backend.
-    """
-    matching = [
-        summary
-        for summary in summaries
-        if agent is None or summary.id == agent or summary.id.startswith(f"{agent}-")
-    ]
-    matching.sort(key=lambda summary: (summary.updated_at, summary.id), reverse=True)
-    return matching
-
-
 def to_message(created_at: str | datetime, message_data: str) -> SessionMessage:
     """One stored `(created_at, message_data)` row as a `SessionMessage`.
 
@@ -176,6 +156,5 @@ __all__ = [
     "SessionSummary",
     "as_timestamp",
     "listing_clause",
-    "listing_rows",
     "to_message",
 ]

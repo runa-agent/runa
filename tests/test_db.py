@@ -268,29 +268,28 @@ def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.Monkey
     """`memory://` is the third answer: no file, no server, all six concerns together.
 
     The promise `runa.db` exists to keep is that one variable moves everything, so a backend
-    that only some concerns honored would be worse than none.
+    that only some concerns honored would be worse than none. Every one of them lands in the same
+    in-memory database, through the adapters a local deployment uses.
     """
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
 
-    from runa.cache.memory import MemoryCache
-    from runa.db.vectors.ephemeral import EphemeralVectorStore
-    from runa.eval.ephemeral import EphemeralEvalStore
-    from runa.session.ephemeral import EphemeralSession, EphemeralSessionStore
-    from runa.tracing.ephemeral import EphemeralTraceStore
+    from runa.db.sqlite import MemoryDatabase
+
+    database = db.sqlite_database()
 
     assert db.ephemeral() is True
     assert db.shared_url() is None
-    assert isinstance(db.session("s"), EphemeralSession)
-    assert isinstance(db.sessions(), EphemeralSessionStore)
-    assert isinstance(db.traces(), EphemeralTraceStore)
-    assert isinstance(db.evals(), EphemeralEvalStore)
-    assert isinstance(db.cache(), MemoryCache)
+    assert isinstance(database, MemoryDatabase)
+    assert db.session("s").db_path is database  # type: ignore[attr-defined]
+    assert db.sessions().db_path is database  # type: ignore[attr-defined]
+    assert db.traces().db_path is database  # type: ignore[attr-defined]
+    assert db.evals().db_path is database  # type: ignore[attr-defined]
+    assert db.cache().db_path is database  # type: ignore[attr-defined]
+    assert Memory(dimensions=4)._store.db_path is database  # type: ignore[attr-defined]
+    assert Knowledge(dimensions=4)._store.db_path is database  # type: ignore[attr-defined]
 
-    assert isinstance(Memory(dimensions=4)._store, EphemeralVectorStore)
-    assert isinstance(Knowledge(dimensions=4)._store, EphemeralVectorStore)
 
-
-def test_the_ephemeral_cache_is_one_cache_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_in_memory_cache_is_one_cache_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two `db.cache()` calls see each other's writes, as two connections to a file would."""
     import asyncio
 
@@ -299,6 +298,30 @@ def test_the_ephemeral_cache_is_one_cache_per_process(monkeypatch: pytest.Monkey
     asyncio.run(db.cache().set("k", "v"))
 
     assert asyncio.run(db.cache().get("k")) == "v"
+
+
+def test_the_in_memory_database_takes_concurrent_writers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Concurrent turns write from worker threads at once, and each waits out the others' locks.
+
+    A shared-cache in-memory database would fail all but one of them with `database table is
+    locked` rather than wait; this is the property `memdb` is chosen for.
+    """
+    import asyncio
+
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+
+    async def write(index: int) -> None:
+        session = db.session(f"s{index}")
+        for turn in range(10):
+            await session.add_items([{"role": "user", "content": f"{index}-{turn}"}])
+
+    async def write_all() -> None:
+        await asyncio.gather(*(write(index) for index in range(8)))
+
+    asyncio.run(write_all())
+
+    assert len(db.sessions().listing()) == 8
+    assert all(len(db.sessions().messages(f"s{index}")) == 10 for index in range(8))
 
 
 def test_reset_ephemeral_empties_every_store(monkeypatch: pytest.MonkeyPatch) -> None:

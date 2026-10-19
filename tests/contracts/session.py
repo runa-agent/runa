@@ -12,11 +12,10 @@ with a tag unique to that check, so the same checks hold against a live Postgres
 
 The one rule deliberately left out is how ties on `updated_at` break. Every backend orders a
 listing by `updated_at` descending and breaks ties on session id descending, but only a
-second-resolution clock (SQLite's `CURRENT_TIMESTAMP`, and the ephemeral store, which matches it)
-produces the tie at all; Postgres timestamps three writes distinctly. It is asserted in
+second-resolution clock (SQLite's `CURRENT_TIMESTAMP`, in a file or in memory) produces the tie
+at all; Postgres timestamps three writes distinctly. It is asserted in
 `tests/test_session_store.py`, against the backends that can actually produce it -- and what the
-contract can't reach, `session/store.py` states instead, as `listing_clause` and `listing_rows`
-side by side.
+contract can't reach, `session/store.py`'s `listing_clause` states instead.
 """
 
 from collections.abc import Callable, Coroutine

@@ -1,11 +1,10 @@
 """eval/store.py: `EvalStore`, the history every `agent.evaluate()` run is graded against.
 
-One interface, three adapters: `eval/sqlite.py`, `eval/postgres.py`, `eval/ephemeral.py`. Which
-one a caller gets is `runa.db.evals(...)`'s decision, asked once, so a CI job and a laptop
-compare against the baseline their deployment actually shares rather than whichever file each
-happened to open.
+One interface, two adapters: `eval/sqlite.py` and `eval/postgres.py`. Which one a caller gets is
+`runa.db.evals(...)`'s decision, asked once, so a CI job and a laptop compare against the
+baseline their deployment actually shares rather than whichever file each happened to open.
 
-`RUNS`/`CASES` are the two tables both SQL adapters create, declared once here and rendered per
+`RUNS`/`CASES` are the two tables both adapters create, declared once here and rendered per
 dialect by `db/schema.py`. `EvalRun`/`EvalCaseRow` are what a row becomes, declared here rather
 than in an adapter: both
 backends read the same two objects back, and `web/evaluations.py` renders them without knowing
@@ -13,15 +12,12 @@ which one it got. `case_values`/`to_case`/`to_run` are that mapping in both dire
 once, so `passed` cannot come back as SQLite's `0`/`1` from one store and a `bool` from the other.
 
 `baseline_clause` is here for the same reason: which run is "the baseline" is this module's rule,
-not each backend's, so both SQL adapters select it with one clause rather than two phrasings of
-one sentence. `baseline_row` is that same sentence in Python, for `eval/ephemeral.py`, which has
-no SQL to bind it to -- written beside the clause, because a rule stated in two languages in two
-files is a rule nobody reads twice.
+not each backend's, so both adapters select it with one clause rather than two phrasings of one
+sentence. It decides what `runa eval` calls a regression, so a laptop and CI have to agree on it.
 """
 
 import builtins
 import json
-from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
@@ -129,25 +125,6 @@ def baseline_clause(
     return f"{clause} ORDER BY id DESC LIMIT 1", params
 
 
-def baseline_row(
-    runs: Iterable[dict[str, Any]], agent_name: str, before: int | None
-) -> dict[str, Any] | None:
-    """`baseline_clause` said in Python, for the adapter whose runs never reach a database.
-
-    The same sentence over the rows `eval/ephemeral.py` keeps -- the newest run of `agent_name`,
-    strictly older than `before` when there is one, `None` when there is no such run. Two
-    renderings because two languages need them; one file, because this is the rule that decides
-    what `runa eval` calls a regression, and a backend that drew the boundary differently would
-    be flagging different cases on a laptop than in CI.
-    """
-    candidates = [
-        run
-        for run in runs
-        if run["agent_name"] == agent_name and (before is None or run["id"] < before)
-    ]
-    return max(candidates, key=lambda run: run["id"], default=None)
-
-
 def case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
     """One graded `case`'s column values, in `CASES.column_names` order."""
     return (
@@ -196,7 +173,6 @@ __all__ = [
     "EvalRun",
     "EvalStore",
     "baseline_clause",
-    "baseline_row",
     "case_values",
     "to_case",
     "to_run",

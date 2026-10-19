@@ -7,9 +7,8 @@ on a laptop. `tests/test_postgres_observability.py` runs them against `PostgresE
 `test_adds_trace_id_to_an_older_local_file` stays here, outside the contract: a shared database is
 created by whichever replica connects first and has always had the column, where a local file can
 predate it. `baseline_clause` is asserted per dialect for the same reason `listing_clause` is in
-`tests/test_session_store.py`: both SQL adapters bind what it returns, and only one of them can be
-run without a server. Its Python twin, `baseline_row`, needs no test of its own here -- the
-contract runs over the ephemeral store, which is the adapter that calls it.
+`tests/test_session_store.py`: both adapters bind what it returns, and only one of them can be run
+without a server.
 """
 
 import sqlite3
@@ -29,12 +28,12 @@ from runa.eval.store import EvalStore, baseline_clause
 from runa.project import use
 
 
-@pytest.fixture(params=["sqlite", "ephemeral"])
+@pytest.fixture(params=["sqlite", "memory"])
 def store(
     request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> EvalStore:
     """An `EvalStore`, resolved by `runa.db` the way an app's would be."""
-    if request.param == "ephemeral":
+    if request.param == "memory":
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
         return db.evals()
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)

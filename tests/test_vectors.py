@@ -14,11 +14,10 @@ from contracts.vector import CONTRACT, DIMENSIONS, Build, Check, flat, partition
 
 from runa import db
 from runa.db.vectors import Column, VectorSpec
-from runa.db.vectors.ephemeral import EphemeralVectorStore
 from runa.db.vectors.sqlite import SQLiteVectorStore
 
 
-@pytest.fixture(params=["sqlite", "ephemeral"])
+@pytest.fixture(params=["sqlite", "memory"])
 def build(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Build:
     """A `VectorStore` factory, resolved by `runa.db` the way each concern's store gets one.
 
@@ -26,7 +25,7 @@ def build(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.Mo
     thing that decides: `sqlite://` with four slashes is an absolute path, which is how a test
     keeps the local backend's file in its own `tmp_path`.
     """
-    if request.param == "ephemeral":
+    if request.param == "memory":
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
     else:
         monkeypatch.setenv(db.DATABASE_URL_ENV, f"sqlite:///{tmp_path / 'runa.db'}")
@@ -83,19 +82,22 @@ def test_a_json_column_is_declared_text_locally(tmp_path: Path) -> None:
     assert "extra TEXT" in ddl
 
 
-def test_two_in_process_stores_for_one_spec_share_their_rows() -> None:
-    """The in-process tables live at module level, the way a database keeps them on disk.
+def test_two_in_memory_stores_for_one_spec_share_their_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under `memory://` the tables live in one database, the way a file keeps them on disk.
 
-    Two `db.vector_store()` calls have to see each other's writes, so a fresh set of rows per
-    instance would make the whole backend a no-op.
+    Two `db.vector_store()` calls have to see each other's writes, so a fresh database per store
+    would make the whole backend a no-op.
     """
+    monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
     spec = partitioned("shared")
 
     async def add_then_read() -> int:
-        await EphemeralVectorStore(spec).add(
+        await db.vector_store(spec).add(
             payload={"owner": "u", "text": "a", "extra": None}, embedding=[1.0, 0.0, 0.0, 0.0]
         )
-        found = await EphemeralVectorStore(spec).nearest(
+        found = await db.vector_store(spec).nearest(
             embedding=[1.0, 0.0, 0.0, 0.0], k=5, partition="u"
         )
         return len(found)
@@ -103,12 +105,15 @@ def test_two_in_process_stores_for_one_spec_share_their_rows() -> None:
     assert asyncio.run(add_then_read()) == 1
 
 
-def test_reset_ephemeral_empties_the_in_process_vector_tables() -> None:
-    """`db.reset_ephemeral()` reaches this backend too, which is what the test fixture relies on."""
+def test_reset_ephemeral_empties_the_in_memory_vector_tables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`db.reset_ephemeral()` reaches this concern too, which is what a test fixture relies on."""
+    monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
     spec = partitioned("resettable")
 
     async def add() -> None:
-        await EphemeralVectorStore(spec).add(
+        await db.vector_store(spec).add(
             payload={"owner": "u", "text": "a", "extra": None}, embedding=[1.0, 0.0, 0.0, 0.0]
         )
 
@@ -117,9 +122,7 @@ def test_reset_ephemeral_empties_the_in_process_vector_tables() -> None:
 
     async def count() -> int:
         return len(
-            await EphemeralVectorStore(spec).nearest(
-                embedding=[1.0, 0.0, 0.0, 0.0], k=5, partition="u"
-            )
+            await db.vector_store(spec).nearest(embedding=[1.0, 0.0, 0.0, 0.0], k=5, partition="u")
         )
 
     assert asyncio.run(count()) == 0

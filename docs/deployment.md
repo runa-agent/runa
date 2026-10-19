@@ -252,9 +252,9 @@ somewhere specific.
 
 ### Testing against the store
 
-`memory://` is the third answer to the same question: every concern resolves to an in-process
-store that dies with the process. No file to clean up, no server to run, and the code under test
-goes through the same interfaces a deployment does.
+`memory://` is the third answer to the same question: the local SQLite database is held in
+memory instead of a file, and dies with the process. No file to clean up, no server to run, and
+the code under test runs the same adapters and the same SQL a local deployment does.
 
 ```python
 import pytest
@@ -264,7 +264,7 @@ from runa import db
 @pytest.fixture(autouse=True)
 def in_memory_store(monkeypatch):
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
-    db.reset_ephemeral()  # the stores are process-wide, like a file
+    db.reset_ephemeral()  # the database is process-wide, like a file
 ```
 
 It is a testing and local-prototyping backend, not a deployment one: nothing is persisted, and

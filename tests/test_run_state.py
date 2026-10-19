@@ -12,11 +12,11 @@ from typing import Any
 import pytest
 from helpers import ScriptedModel, agent_class, text_response, tool_call_response
 
+from runa import db
 from runa.agent import Agent
 from runa.exceptions import UserError
 from runa.run import Run
 from runa.run_state import RunState, _RunRecord, _RunStateSchema
-from runa.session.ephemeral import EphemeralSession
 from runa.tool import tool
 
 
@@ -210,6 +210,12 @@ def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> N
     assert "call_1" in restored._approvals.executed
 
 
+@pytest.fixture(autouse=True)
+def _in_memory_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every session these tests open in the `memory://` database, never in the cwd's file."""
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+
+
 def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:
     """Pause on `dangerous` in a message whose `safe` call already ran, for `settings`."""
 
@@ -235,7 +241,7 @@ def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:
         tools=[safe, dangerous],
         **settings,
     )
-    return gated().run_sync("do it", session=EphemeralSession("s", user_id="u1")), gated
+    return gated().run_sync("do it", session=db.session("s", user_id="u1")), gated
 
 
 def test_a_restored_run_keeps_its_user_and_the_tool_calls_made_before_the_pause() -> None:
@@ -248,7 +254,7 @@ def test_a_restored_run_keeps_its_user_and_the_tool_calls_made_before_the_pause(
     restored = RunState.from_json(fresh, state.to_json())
 
     assert restored.run_context.user_id == "u1"
-    resumed = fresh.run_sync(restored, session=EphemeralSession("s", user_id="u1"))
+    resumed = fresh.run_sync(restored, session=db.session("s", user_id="u1"))
     assert [call.name for call in resumed.tool_calls] == ["safe", "dangerous"]
 
 

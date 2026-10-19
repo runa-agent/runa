@@ -1,4 +1,4 @@
-"""Tests for the local `Cache` backends: `MemoryCache`, `SQLiteCache`, and `memory://`'s shared one.
+"""Tests for the local `Cache` backends: `MemoryCache`, `SQLiteCache`, and `memory://`'s.
 
 The contract itself lives in `tests/contracts/cache.py` and is driven here over every backend a
 plain `make test` can reach. `PostgresCache` is held to the same checks in `test_postgres.py`,
@@ -58,7 +58,7 @@ def test_memory_cache_does_not_persist_across_instances(tmp_path: Path) -> None:
     assert asyncio.run(_run()) is None
 
 
-def test_shared_memory_cache_is_one_cache_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_memory_url_cache_is_one_cache_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
     """Under `memory://`, two `db.cache()` calls are the same cache, or every write is a no-op."""
     monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
 

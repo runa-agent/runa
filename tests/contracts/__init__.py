@@ -18,7 +18,7 @@ Who drives them:
 - `tests/test_cache.py`, `tests/test_session_store.py`, `tests/test_memory.py`,
   `tests/test_knowledge.py`, `tests/test_vectors.py`, `tests/tracing/test_store.py` and
   `tests/eval/test_store.py` drive every contract over the backends a plain `make test` can reach:
-  the SQLite adapters and the `memory://` ones.
+  the SQLite adapters, on a file and on the `memory://` database.
 - `tests/test_postgres.py` and `tests/test_postgres_observability.py` drive the same checks over
   the Postgres adapters, which need a live server, and are skipped without one.
 

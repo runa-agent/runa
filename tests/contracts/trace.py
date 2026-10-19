@@ -91,8 +91,8 @@ def check_list_breaks_a_start_time_tie_on_the_trace_id(store: TraceStore, tag: s
 
     `start_time` alone leaves the order to whatever each backend happens to return, which is how
     the Sessions listing once came out differently on a laptop and on a shared deployment. The
-    tie-break lives in `tracing/store.py`, as `listing_clause` for the backends that speak SQL and
-    `listing_rows` for the one that doesn't, so this is the check that the two agree.
+    tie-break lives in `tracing/store.py`'s `listing_clause`, so this is the check that both
+    dialects render it.
     """
     for suffix in ("b", "a", "c"):
         store.save(_trace(f"{tag}-{suffix}", name=tag, start_time=1.0))
@@ -129,9 +129,8 @@ def check_session_id_round_trips_and_filters_list(store: TraceStore, tag: str) -
 def check_structured_span_input_comes_back_as_text(store: TraceStore, tag: str) -> None:
     """A span's dict `input` is stored as JSON text, identically in every backend.
 
-    The assertion that keeps the ephemeral adapter honest: it holds marshalled rows rather than
-    the `Trace` it was handed, so a caller cannot get a dict back from one store and a string
-    from another.
+    A store keeps marshalled rows rather than the `Trace` it was handed, so a caller cannot get a
+    dict back from one store and a string from another.
     """
     trace = _trace(f"{tag}-1", name=tag)
     trace.spans[0].input = {"city": "Paris"}

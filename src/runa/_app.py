@@ -1,11 +1,11 @@
 """`runa._app`: the facts this process holds once, and the one `reset` that forgets them all.
 
 A process runs one app, the way a Rails process has one `Rails.root`. The things that app
-resolves are held here as well: tracing's default policy and the tables of the `memory://`
-database. Each one is held under a name and resolved the first time something reads it (`held`),
-never at import, so the environment that decides it is whatever the app's `main.py` has set up by
-then. A module that needs new process state holds it here instead of in a global of its own, and
-`reset` forgets it with everything else.
+resolves are held here as well: tracing's default policy and the `memory://` database. Each one
+is held under a name and resolved the first time something reads it (`held`), never at import,
+so the environment that decides it is whatever the app's `main.py` has set up by then. A module
+that needs new process state holds it here instead of in a global of its own, and `reset`
+forgets it with everything else.
 
 This module is a leaf: it imports nothing from Runa but its exceptions, so any module can hold a
 fact here without an import cycle. A fact's type belongs to the module that owns it, which passes
@@ -48,8 +48,7 @@ _MODULE_NAMES = ("main", "app", "tests", "evals")
 _held: dict[str, Any] = {}
 
 MEMORY_DATABASE = "memory://"
-"""The prefix every `memory://` store's tables are held under: emptying that database is one
-`forget(MEMORY_DATABASE)`."""
+"""The name the `memory://` database is held under: emptying it is one `forget(MEMORY_DATABASE)`."""
 
 
 def use(new_root: Path | None) -> None:
@@ -102,9 +101,15 @@ def hold(name: str, value: object) -> None:
 
 
 def forget(prefix: str) -> None:
-    """Forget every fact whose name starts with `prefix`, so the next `held` builds it again."""
+    """Forget every fact whose name starts with `prefix`, so the next `held` builds it again.
+
+    A fact holding a resource (one with a `close()`, like the `memory://` database's connection)
+    is closed as it is forgotten, rather than left for the garbage collector.
+    """
     for name in [name for name in _held if name.startswith(prefix)]:
-        del _held[name]
+        fact = _held.pop(name)
+        if callable(close := getattr(fact, "close", None)):
+            close()
 
 
 def reset() -> None:

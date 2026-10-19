@@ -178,6 +178,8 @@ signature-level reference.
 
 ::: runa.db.sqlite_path
 
+::: runa.db.sqlite_database
+
 ::: runa.db.ephemeral
 
 ::: runa.session.store.SessionStore

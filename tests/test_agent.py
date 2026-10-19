@@ -19,6 +19,7 @@ from runa import Agent, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContext, Usage
 from runa.agent import _AGENT_FIELDS, Subagent
+from runa.db.sqlite import MemoryDatabase
 from runa.exceptions import OperatorError, UserError
 from runa.guardrail import Phase, guardrail
 from runa.handoff import Delegate
@@ -28,7 +29,7 @@ from runa.mcp import _Connection, _MCPServerBase
 from runa.memory import Memory
 from runa.run import Run
 from runa.run_state import RunState
-from runa.session.ephemeral import EphemeralSession
+from runa.session.sqlite import SQLiteSession
 from runa.tool import FunctionTool, tool
 from runa.transcript import Transcript
 
@@ -1379,7 +1380,7 @@ def test_run_sync_auto_detects_images_in_a_plain_string_list(
 
 
 def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """With a `session`, a multimodal message is wrapped in a one-item message list.
 
@@ -1397,7 +1398,7 @@ def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     parts = [content.image("https://example.test/cat.png")]
-    Researcher().run_sync(parts, session=EphemeralSession("s"))
+    Researcher().run_sync(parts, session=SQLiteSession("s", tmp_path / "runa.db"))
 
     assert captured["turn_input"] == [{"role": "user", "content": parts}]
 
@@ -1598,7 +1599,7 @@ def test_run_streamed_yields_events_and_updates_history(monkeypatch: pytest.Monk
 
 
 def test_run_streamed_with_a_session_sends_only_the_new_turn(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """With a `session`, `run_streamed` passes it through and leaves `self.history` alone."""
     captured: dict[str, Any] = {}
@@ -1612,7 +1613,7 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
     monkeypatch.setattr("runa.agent._run_async", fake_run)
     agent = Researcher()
     agent.history = [{"role": "user", "content": "earlier"}]
-    session = EphemeralSession("s")
+    session = SQLiteSession("s", tmp_path / "runa.db")
 
     async def _consume() -> None:
         async for _ in agent.run_streamed("hi", session=session):
@@ -1627,7 +1628,7 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
 def test_a_session_id_string_resolves_through_db(monkeypatch: pytest.MonkeyPatch) -> None:
     """`session="user-42"` is the sanctioned shape: the id is the app's, the backend is `db`'s.
 
-    Under `memory://` that means an `EphemeralSession`, with no `SQLiteSession` named anywhere
+    Under `memory://` that means a `SQLiteSession` on the in-memory database, with no store named
     at the call site -- the same string on a Postgres deployment resolves there instead.
     """
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
@@ -1641,7 +1642,8 @@ def test_a_session_id_string_resolves_through_db(monkeypatch: pytest.MonkeyPatch
 
     Researcher().run_sync("hi", session="user-42")
 
-    assert isinstance(captured["session"], EphemeralSession)
+    assert isinstance(captured["session"], SQLiteSession)
+    assert isinstance(captured["session"].db_path, MemoryDatabase)
     assert captured["session"].session_id == "user-42"
 
 
@@ -1663,11 +1665,14 @@ def test_run_streamed_resolves_a_session_id_string_too(monkeypatch: pytest.Monke
 
     asyncio.run(_consume())
 
-    assert isinstance(captured["session"], EphemeralSession)
+    assert isinstance(captured["session"], SQLiteSession)
+    assert isinstance(captured["session"].db_path, MemoryDatabase)
     assert captured["session"].session_id == "user-42"
 
 
-def test_a_session_object_is_passed_through_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_session_object_is_passed_through_untouched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The fuller form still works: `db.session(id, user_id=...)` and custom stores pass through."""
     captured: dict[str, Any] = {}
 
@@ -1677,7 +1682,7 @@ def test_a_session_object_is_passed_through_untouched(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
-    session = EphemeralSession("s", user_id="u1")
+    session = SQLiteSession("s", tmp_path / "runa.db", user_id="u1")
     Researcher().run_sync("hi", session=session)
 
     assert captured["session"] is session

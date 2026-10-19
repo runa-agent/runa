@@ -23,7 +23,7 @@ from runa.project import use
 from runa.tracing.store import TraceStore, listing_clause
 
 
-@pytest.fixture(params=["sqlite", "ephemeral"])
+@pytest.fixture(params=["sqlite", "memory"])
 def store(
     request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> TraceStore:
@@ -32,7 +32,7 @@ def store(
     Built through `db.traces()` rather than by naming an adapter, so the resolution the rest
     of Runa depends on is exercised by every check here too.
     """
-    if request.param == "ephemeral":
+    if request.param == "memory":
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
         return db.traces()
     monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)

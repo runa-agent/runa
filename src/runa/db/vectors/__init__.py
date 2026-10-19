@@ -6,21 +6,20 @@ payload row beside it, and a nearest-neighbor search that returns the closest pa
 distances. Only the payload differs, so each concern holds one of these stores directly and maps
 its own payload onto it.
 
-Three adapters, one per answer `runa.db` gives about where state lives: `sqlite.py` (a `vec0`
-virtual table), `postgres.py` (a `pgvector` column) and `ephemeral.py` (brute force, in process).
+Two adapters, one per answer `runa.db` gives about where state lives: `sqlite.py` (a `vec0`
+virtual table, in a file or in memory) and `postgres.py` (a `pgvector` column).
 `runa.db.vector_store` is how a caller picks one, so nothing above it names a backend.
 
 A backend Runa doesn't ship is one more of these, handed to `Memory(store=...)` or
 `Knowledge(store=...)`: `VectorStore`'s three methods for `Memory`, `VersionedVectorStore`'s six
-for `Knowledge`, held to `tests/contracts/vector.py` like the three in-tree adapters.
+for `Knowledge`, held to `tests/contracts/vector.py` like the two in-tree adapters.
 
 `reset`/`stamp`/`version` is the trio only `Knowledge` uses, and it lives at this layer rather
 than above it because a version has to be stored wherever the rows are, durably and atomically,
 which only an adapter can do. `Memory` never resets and keeps no version.
 
-Distance is L2 in every adapter: `vec0`'s default, `pgvector`'s `<->`, and `math.sqrt` of the
-summed squares in process. `Memory`'s duplicate threshold compares against it, so the three have to
-agree on more than the ordering.
+Distance is L2 in every adapter: `vec0`'s default and `pgvector`'s `<->`. `Memory`'s duplicate
+threshold compares against it, so the two have to agree on more than the ordering.
 """
 
 import json

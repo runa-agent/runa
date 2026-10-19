@@ -105,8 +105,7 @@ async def check_a_json_payload_round_trips_through_json_in_every_backend(
     """A value JSON cannot represent exactly comes back the same way in every backend.
 
     A tuple is the cheapest example: every backend stores a JSON column encoded, so it comes back
-    a list. The in-process adapter kept payloads as live objects once, and handed this one back a
-    tuple, which made `memory://` a stand-in a test could pass against and a deployment could not.
+    a list, so no backend can hand a tuple back that another would not.
     """
     store = build(partitioned())
     await store.add(payload={"owner": tag, "text": "a", "extra": {"pair": (1, 2)}}, embedding=_NEAR)

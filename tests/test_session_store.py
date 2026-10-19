@@ -24,7 +24,7 @@ from runa.project import use
 from runa.session.store import listing_clause
 
 
-@pytest.fixture(params=["sqlite", "ephemeral"])
+@pytest.fixture(params=["sqlite", "memory"])
 def project(
     request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -33,7 +33,7 @@ def project(
     The tests name no path because neither side of the session backend takes one: a CLI command
     tells `runa.db` which project it is running in, once, and both halves follow.
     """
-    if request.param == "ephemeral":
+    if request.param == "memory":
         monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
     else:
         monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)

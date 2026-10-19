@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from runa.cache import ENTRIES
-from runa.db import sqlite_path
+from runa.db import sqlite_database
 from runa.db.sqlite import connect as _connect_db
 from runa.db.sqlite import read as _read_db
 
@@ -22,11 +22,11 @@ class SQLiteCache:
     """Persistent `Cache`: the `cache_entries` table inside `db/runa.db`, surviving restarts."""
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        """Store where this cache's table lives, defaulting to `db.sqlite_path()`.
+        """Store where this cache's table lives, defaulting to `db.sqlite_database()`.
 
         The table is created on first use.
         """
-        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
+        self.db_path = Path(db_path) if db_path is not None else sqlite_database()
 
     def _connect(self) -> sqlite3.Connection:
         return _connect_db(self.db_path, ENTRIES)

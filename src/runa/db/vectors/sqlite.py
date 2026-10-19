@@ -1,21 +1,21 @@
 """db/vectors/sqlite.py: the local `VectorStore`, a `vec0` virtual table paired with its payload.
 
-What `runa.db.vector_store()` resolves to for a deployment keeping its own `db/runa.db` file, which
-is every deployment that has not set `RUNA_DATABASE_URL`.
+What `runa.db.vector_store()` resolves to for a deployment keeping its state locally: its own
+`db/runa.db` file, or under `memory://` the in-memory database.
 
 `sqlite-vec` holds embeddings in a `vec0` virtual table that stores no payload of its own, so one
 store is two tables joined by rowid: one `add` is two inserts that have to agree on a rowid, and
 one search is a `MATCH`/`k` query against the virtual table joined back for the payload. That
 pairing is what both concerns had identical, down to the `ORDER BY vectors.distance`.
 
-Where the file lives is `runa.db.sqlite_path`'s answer, not this module's.
+Which database that is is `runa.db.sqlite_database`'s answer, not this module's.
 """
 
 import sqlite3
 from contextlib import closing
-from pathlib import Path
 from typing import Any
 
+from runa.db.sqlite import Database
 from runa.db.sqlite import connect as _connect
 from runa.db.sqlite import pack_vector as pack
 from runa.db.vectors import VectorMatch, VectorSpec
@@ -24,8 +24,8 @@ from runa.db.vectors import VectorMatch, VectorSpec
 class SQLiteVectorStore:
     """The local `VectorStore`: a `vec0` table and its payload table in `db/runa.db`."""
 
-    def __init__(self, spec: VectorSpec, db_path: Path) -> None:
-        """Name this store's two tables, from `spec.name`, and the file they live in."""
+    def __init__(self, spec: VectorSpec, db_path: Database) -> None:
+        """Name this store's two tables, from `spec.name`, and the database they live in."""
         self.spec = spec
         self.db_path = db_path
         self.items = f"{spec.name}_items"

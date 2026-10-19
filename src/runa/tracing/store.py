@@ -1,9 +1,9 @@
 """tracing/store.py: `TraceStore`, where finished traces go and where `runa ui` reads them from.
 
-One interface, three adapters: `tracing/sqlite.py`, `tracing/postgres.py`,
-`tracing/ephemeral.py`. Which one a caller gets is `runa.db.traces(...)`'s decision, asked once,
-which is what lets `runa traces`, `runa ui` and the exporter stay backend-agnostic: they hold a
-`TraceStore` and get whichever history the deployment actually has.
+One interface, two adapters: `tracing/sqlite.py` and `tracing/postgres.py`. Which one a caller
+gets is `runa.db.traces(...)`'s decision, asked once, which is what lets `runa traces`, `runa ui`
+and the exporter stay backend-agnostic: they hold a `TraceStore` and get whichever history the
+deployment actually has.
 
 Asked once is the point: the exporter a deployment installs and the store its traces land in
 can't disagree.
@@ -15,16 +15,13 @@ a column read out of order or a `json.dumps` left off is a mistake there is only
 make.
 
 So does the one query every adapter has to phrase identically: `listing_clause` is the whole of
-`list`'s filter, order and cap in SQL, and `listing_rows` is the same sentence in Python for
-`tracing/ephemeral.py`, which never reaches a database. Which column `agent` means and how ties
-break are this module's rule, not each backend's, so the two renderings sit side by side below,
-reading their filters off one list of columns. What stays each adapter's own is what genuinely
-differs -- the upsert, and whether spans are fetched per trace or in one batch.
+`list`'s filter, order and cap, rendered in either dialect. Which column `agent` means and how
+ties break are this module's rule, not each backend's. What stays each adapter's own is what
+genuinely differs -- the upsert, and whether spans are fetched per trace or in one batch.
 """
 
 import builtins
 import json
-from collections.abc import Iterable
 from typing import Any, Protocol
 
 from runa.db.schema import Column, Dialect, Index, Table
@@ -128,18 +125,6 @@ def require_trace(store: TraceStore, trace_id: str) -> Trace:
     return trace
 
 
-def _filters(
-    agent: str | None, status: str | None, session_id: str | None
-) -> tuple[tuple[str, Any], ...]:
-    """Each of `list`'s filters against the column it means, for both renderings below.
-
-    `agent` is `traces.name` -- the workflow name, not an `agent` column -- which is the decision
-    worth writing once. Both `listing_clause` and `listing_rows` read it from here, so a filter
-    added to `TraceStore.list` reaches SQL and Python at the same time or neither.
-    """
-    return (("name", agent), ("status", status), ("session_id", session_id))
-
-
 def listing_clause(
     *,
     limit: int,
@@ -151,9 +136,9 @@ def listing_clause(
     """Everything after `SELECT ... FROM traces` for `TraceStore.list`, and the values it binds.
 
     One sentence of policy: keep the traces matching whichever of the three filters were given,
-    newest first, at most `limit` of them. Which column each filter means is `_filters`' to say,
-    and the tie-break is this clause's -- both backends leave it to chance when the `ORDER BY`
-    names `start_time` alone.
+    newest first, at most `limit` of them. `agent` is `traces.name` -- the workflow name, not an
+    `agent` column. The tie-break is this clause's -- both backends leave it to chance when the
+    `ORDER BY` names `start_time` alone.
 
     The whole tail rather than the `WHERE` alone, because a numbered placeholder counts every
     value bound before it: an adapter handed the filter and left to append `LIMIT` has to know
@@ -162,7 +147,7 @@ def listing_clause(
     """
     clauses: list[str] = []
     params: list[Any] = []
-    for column, value in _filters(agent, status, session_id):
+    for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
         if value is not None:
             params.append(value)
             clauses.append(f"{column} = {dialect.placeholder(len(params))}")
@@ -170,30 +155,6 @@ def listing_clause(
     params.append(limit)
     order = f"ORDER BY start_time DESC, id DESC LIMIT {dialect.placeholder(len(params))}"
     return f"{where}{order}", tuple(params)
-
-
-def listing_rows(
-    rows: Iterable[dict[str, Any]],
-    *,
-    limit: int,
-    agent: str | None = None,
-    status: str | None = None,
-    session_id: str | None = None,
-) -> list[dict[str, Any]]:
-    """`listing_clause` said in Python, for the adapter whose rows never reach a database.
-
-    Same filters, same order, same cap, down to breaking ties on the trace id, over the
-    marshalled rows `tracing/ephemeral.py` keeps. Change one rendering and the other with it:
-    `runa ui` must list traces the same way on every backend.
-    """
-    filters = _filters(agent, status, session_id)
-    matching = [
-        row
-        for row in rows
-        if all(value is None or row[column] == value for column, value in filters)
-    ]
-    matching.sort(key=lambda row: (row["start_time"], row["id"]), reverse=True)
-    return matching[:limit]
 
 
 def as_text(value: object) -> str | None:
@@ -281,7 +242,6 @@ __all__ = [
     "TraceStore",
     "as_text",
     "listing_clause",
-    "listing_rows",
     "require_trace",
     "span_values",
     "to_span",

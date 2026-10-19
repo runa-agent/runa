@@ -8,8 +8,6 @@ durable facts about a user; this is `ActiveSupport::Cache::MemoryStore`'s namesa
 import time
 from typing import Any
 
-from runa import _app
-
 
 class MemoryCache:
     """In-process `Cache`: a plain dict, gone when the process exits."""
@@ -46,14 +44,4 @@ class MemoryCache:
         self._entries.clear()
 
 
-def shared() -> MemoryCache:
-    """The one process-wide `MemoryCache`, which is what `memory://` resolves `db.cache()` to.
-
-    A fresh dict per `db.cache()` call would make that backend a no-op, since a `set` and the
-    `get` after it are usually two separate resolutions. The other ephemeral adapters keep their
-    tables in `runa._app` for the same reason.
-    """
-    return _app.held(f"{_app.MEMORY_DATABASE}cache", MemoryCache)
-
-
-__all__ = ["MemoryCache", "shared"]
+__all__ = ["MemoryCache"]

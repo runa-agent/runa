@@ -28,6 +28,7 @@ from runa.exceptions import OperatorError
 
 if TYPE_CHECKING:
     from runa.cache import Cache
+    from runa.db.sqlite import Database
     from runa.db.vectors import VectorSpec, VersionedVectorStore
     from runa.eval.store import EvalStore
     from runa.session import Session
@@ -77,8 +78,8 @@ def ephemeral() -> bool:
     """Whether this deployment keeps its state in this process only (`memory://`).
 
     The honest answer to "where does state live" for a test suite: one `monkeypatch.setenv`
-    swaps all six concerns onto their in-process adapters at once, with no live Postgres and no
-    temporary file, and `runa.db` stays the only thing that decided.
+    moves all six concerns into one in-memory SQLite database at once, with no live Postgres and
+    no temporary file, and `runa.db` stays the only thing that decided.
     """
     url = os.environ.get(DATABASE_URL_ENV) or None
     return url is not None and url.startswith(_MEMORY_SCHEME)
@@ -121,67 +122,65 @@ def sqlite_path() -> Path:
     return project_path(path)
 
 
+def sqlite_database() -> Database:
+    """The SQLite database this deployment's local state lives in.
+
+    The file at `sqlite_path()`, or under `memory://` this process's one `MemoryDatabase`, which
+    every local adapter shares until `reset_ephemeral` drops it. Every SQLite adapter defaults to
+    this, so both answers go through the same adapters and the same SQL.
+    """
+    if not ephemeral():
+        return sqlite_path()
+    from runa.db.sqlite import MemoryDatabase
+
+    return _app.held(_app.MEMORY_DATABASE, MemoryDatabase)
+
+
 def session(session_id: str, *, user_id: str | None = None) -> Session:
     """This deployment's session store for `session_id`.
 
     `user_id` scopes the memory of a run on this session, if its agent has any; see `Session`.
     """
-    if ephemeral():
-        from runa.session.ephemeral import EphemeralSession
-
-        return EphemeralSession(session_id, user_id=user_id)
     if (url := shared_url()) is not None:
         from runa.session.postgres import PostgresSession
 
         return PostgresSession(session_id, url, user_id=user_id)
     from runa.session.sqlite import SQLiteSession
 
-    return SQLiteSession(session_id, sqlite_path(), user_id=user_id)
+    return SQLiteSession(session_id, user_id=user_id)
 
 
 def sessions() -> SessionStore:
     """This deployment's `SessionStore`: the read side of its conversation history."""
-    if ephemeral():
-        from runa.session.ephemeral import EphemeralSessionStore
-
-        return EphemeralSessionStore()
     if (url := shared_url()) is not None:
         from runa.session.postgres import PostgresSessionStore
 
         return PostgresSessionStore(url)
     from runa.session.sqlite import SQLiteSessionStore
 
-    return SQLiteSessionStore(sqlite_path())
+    return SQLiteSessionStore()
 
 
 def traces() -> TraceStore:
     """This deployment's `TraceStore`: where finished traces are written and read back."""
-    if ephemeral():
-        from runa.tracing.ephemeral import EphemeralTraceStore
-
-        return EphemeralTraceStore()
     if (url := shared_url()) is not None:
         from runa.tracing.postgres import PostgresTraceStore
 
         return PostgresTraceStore(url)
     from runa.tracing.sqlite import SQLiteTraceStore
 
-    return SQLiteTraceStore(sqlite_path())
+    return SQLiteTraceStore()
 
 
 def evals() -> EvalStore:
     """This deployment's `EvalStore`: every `agent.evaluate()` run and its baseline."""
-    if ephemeral():
-        from runa.eval.ephemeral import EphemeralEvalStore
-
-        return EphemeralEvalStore()
     if (url := shared_url()) is not None:
         from runa.eval.postgres import PostgresEvalStore
 
         return PostgresEvalStore(url)
     from runa.eval.sqlite import SQLiteEvalStore
 
-    return SQLiteEvalStore(sqlite_path())
+    return SQLiteEvalStore()
 
 
 def vector_store(spec: VectorSpec) -> VersionedVectorStore:
@@ -190,50 +189,42 @@ def vector_store(spec: VectorSpec) -> VersionedVectorStore:
     Each of the two passes its own spec, so one call serves both concerns and each gets its own
     tables.
     """
-    if ephemeral():
-        from runa.db.vectors.ephemeral import EphemeralVectorStore
-
-        return EphemeralVectorStore(spec)
     if (url := shared_url()) is not None:
         from runa.db.vectors.postgres import PostgresVectorStore
 
         return PostgresVectorStore(spec, url)
     from runa.db.vectors.sqlite import SQLiteVectorStore
 
-    return SQLiteVectorStore(spec, sqlite_path())
+    return SQLiteVectorStore(spec, sqlite_database())
 
 
 def cache() -> Cache:
     """This deployment's persistent `Cache`: a table in whichever database it already has.
 
     No second variable and no second service: the cache follows `RUNA_DATABASE_URL` like
-    everything else, which under `memory://` means the same `MemoryCache` you can also ask for by
-    name. `MemoryCache()` stays the explicit choice for a cache that should die with the process
-    while everything else persists, and `RedisCache(url)` for a deployment that wants its hot
-    keys off the query path.
+    everything else, which under `memory://` means a table in the in-memory database.
+    `MemoryCache()` stays the explicit choice for a cache that should die with the process while
+    everything else persists, and `RedisCache(url)` for a deployment that wants its hot keys off
+    the query path.
     """
-    if ephemeral():
-        from runa.cache.memory import shared
-
-        return shared()
     if (url := shared_url()) is not None:
         from runa.cache.postgres import PostgresCache
 
         return PostgresCache(url)
     from runa.cache.sqlite import SQLiteCache
 
-    return SQLiteCache(sqlite_path())
+    return SQLiteCache()
 
 
 def reset_ephemeral() -> None:
-    """Empty every `memory://` store, for a test that wants an empty database.
+    """Empty the `memory://` database, for a test that wants an empty one.
 
-    The ephemeral adapters keep their tables for the whole process, the way a database keeps them
-    on disk: two `db.traces()` calls have to see each other's writes, so a fresh object per call
-    would make the whole backend a no-op. That makes emptying them an explicit step, and this is
-    it. One call covers all six concerns, because every one of them holds its tables in
-    `runa._app` under the same `memory://` prefix. Only the database is emptied: the app this
-    process reads and its tracing policy stay as they were.
+    The in-memory database lives for the whole process, the way a file stays on disk: two
+    `db.traces()` calls have to see each other's writes, so a fresh database per call would make
+    the whole backend a no-op. That makes emptying it an explicit step, and this is it. One call
+    covers all six concerns, because they share the one database: this drops it, and the next
+    store to ask gets a new, empty one (`runa._app` closes the old one as it forgets it). Only
+    the database is emptied: the app this process reads and its tracing policy stay as they were.
     """
     _app.forget(_app.MEMORY_DATABASE)
 
@@ -249,6 +240,7 @@ __all__ = [
     "session",
     "sessions",
     "shared_url",
+    "sqlite_database",
     "sqlite_path",
     "traces",
     "vector_store",

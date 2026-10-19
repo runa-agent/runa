@@ -9,8 +9,7 @@ dialects is the substitutions in `SQLITE` and `POSTGRES`.
 This is not a query builder: adapters write their own SQL, where they genuinely differ. The only
 query fragments here are `Dialect.placeholder` and `Table.placeholders` (`?` against `$1`). A
 predicate both adapters must phrase identically lives beside its concern's tables as a function
-of the values and the `Dialect` (`listing_clause`, `baseline_clause`), with a Python twin over
-rows for the ephemeral store in the same file.
+of the values and the `Dialect` (`listing_clause`, `baseline_clause`).
 
 `db/runa.db` outlives installs, so a column added to a declaration has to reach databases that
 already exist, which `CREATE TABLE IF NOT EXISTS` doesn't do. `reconcile` diffs the declaration

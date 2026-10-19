@@ -25,7 +25,7 @@ from runa._types import ModelResponse, Usage
 from runa.exceptions import OperatorError, UnexpectedError
 from runa.lifecycle import Hooks
 from runa.run import Run
-from runa.session.ephemeral import EphemeralSession
+from runa.session.sqlite import SQLiteSession
 from runa.tracing import Trace, observe
 
 
@@ -84,14 +84,20 @@ def _agent_span(trace: Trace | None) -> Any:
     return span
 
 
-class _UnreadableSession(EphemeralSession):
+@pytest.fixture(autouse=True)
+def _in_memory_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every session these tests open in the `memory://` database, never in the cwd's file."""
+    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
+
+
+class _UnreadableSession(SQLiteSession):
     """A `Session` whose backend doesn't answer: a locked SQLite file, a dropped connection."""
 
     async def get_items(self, limit: int | None = None) -> list[Any]:
         raise OSError("database is locked")
 
 
-class _UnwritableSession(EphemeralSession):
+class _UnwritableSession(SQLiteSession):
     """A `Session` that reads fine and fails on the write, after the turn already answered."""
 
     async def add_items(self, items: list[Any]) -> None:
@@ -225,7 +231,7 @@ def test_an_operator_error_is_not_reported_as_a_run_failure() -> None:
     as one line rather than a run that mysteriously errored. The trace is still closed out.
     """
 
-    class _MisconfiguredSession(EphemeralSession):
+    class _MisconfiguredSession(SQLiteSession):
         async def get_items(self, limit: int | None = None) -> list[Any]:
             raise OperatorError("could not parse RUNA_DATABASE_URL")
 
@@ -289,7 +295,7 @@ def test_a_streamed_run_reports_an_unexpected_failure_on_its_run() -> None:
 def test_a_streamed_operator_error_is_not_reported_as_a_run_failure() -> None:
     """The stream makes the same exception for the same reason `run` does, not a quieter one."""
 
-    class _MisconfiguredSession(EphemeralSession):
+    class _MisconfiguredSession(SQLiteSession):
         async def get_items(self, limit: int | None = None) -> list[Any]:
             raise OperatorError("could not parse RUNA_DATABASE_URL")
 

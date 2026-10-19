@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from runa._items import ConversationItem
-from runa.db import sqlite_path
+from runa.db import sqlite_database
 from runa.db.schema import SQLITE
 from runa.db.sqlite import connect as _connect_db
 from runa.db.sqlite import read as _read_db
@@ -84,14 +84,14 @@ class SQLiteSession(Session):
     ) -> None:
         """Store `session_id` and where in `runa.db` its history lives.
 
-        `db_path` defaults to `runa.db.sqlite_path()`, so this history lands in the same local
-        file as every other concern's -- including when `RUNA_DATABASE_URL` relocates it. Pass
-        one to point at some other file.
+        `db_path` defaults to `runa.db.sqlite_database()`, so this history lands in the same local
+        database as every other concern's -- including when `RUNA_DATABASE_URL` relocates it or
+        keeps it in memory. Pass one to point at some other file.
 
         `user_id` scopes the memory of a run on this session, if its agent has any; see `Session`.
         """
         self.session_id = session_id
-        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
+        self.db_path = Path(db_path) if db_path is not None else sqlite_database()
         self.user_id = user_id
 
     def _connect(self) -> sqlite3.Connection:
@@ -192,8 +192,8 @@ class SQLiteSessionStore:
     """
 
     def __init__(self, db_path: str | Path | None = None) -> None:
-        """Store which SQLite file this history lives in, defaulting to `db.sqlite_path()`."""
-        self.db_path = Path(db_path) if db_path is not None else sqlite_path()
+        """Store which SQLite database this history lives in: `db.sqlite_database()` by default."""
+        self.db_path = Path(db_path) if db_path is not None else sqlite_database()
 
     def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this file's sessions, most recently updated first."""
