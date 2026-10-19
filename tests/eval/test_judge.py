@@ -4,8 +4,8 @@ import asyncio
 from typing import Any
 
 import pytest
+from helpers import finished_run
 
-from runa._types import Usage
 from runa.agent import Agent
 from runa.eval.judge import judge_model
 from runa.exceptions import ModelBehaviorError
@@ -19,7 +19,7 @@ def test_judge_model_asks_through_the_named_model(monkeypatch: pytest.MonkeyPatc
     async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
         captured["model"] = self.model
         captured["input"] = message
-        return Run(output="PASS", trace=None, usage=Usage())
+        return finished_run("PASS")
 
     monkeypatch.setattr(Agent, "run", fake_run)
 
@@ -36,7 +36,7 @@ def test_judge_model_raises_when_the_run_did_not_complete(
     """A judge run reported as `status="error"` raises, rather than returning its empty output."""
 
     async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
-        return Run(output=None, trace=None, usage=Usage(), status="error", error="no API key")
+        return finished_run(None, status="error", error="no API key")
 
     monkeypatch.setattr(Agent, "run", fake_run)
 

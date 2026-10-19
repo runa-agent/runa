@@ -447,7 +447,7 @@ db.evals().save(
             CaseReport(
                 index=0,
                 case=Case(input="my invoice looks wrong", expected="looks up the invoice"),
-                run=Run(output="your total is $42.00", trace=None, usage=Usage()),
+                run=Run(output="your total is $42.00", trace=trace_ok, usage=Usage()),
                 results=[
                     EvaluationResult(
                         metric="task_completion",
@@ -460,7 +460,7 @@ db.evals().save(
             CaseReport(
                 index=1,
                 case=Case(input="refund me $500", expected="declines politely"),
-                run=Run(output="sure, here's the refund", trace=None, usage=Usage()),
+                run=Run(output="sure, here's the refund", trace=trace_ok2, usage=Usage()),
                 results=[
                     EvaluationResult(
                         metric="task_completion",

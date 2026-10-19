@@ -4,6 +4,7 @@ import asyncio
 from typing import Any, cast
 
 import pytest
+from helpers import finished_run
 
 from runa import db
 from runa._types import Usage
@@ -46,7 +47,7 @@ def _patch_run_and_storage(monkeypatch: pytest.MonkeyPatch, outputs: dict[str, A
     async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
         if message in outputs and isinstance(outputs[message], Exception):
             exc = outputs[message]
-            return Run(output=None, trace=None, usage=Usage(), status="error", error=str(exc))
+            return finished_run(None, status="error", error=str(exc))
         return _run(outputs.get(message, message))
 
     monkeypatch.setattr(Agent, "run", fake_run)

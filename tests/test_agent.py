@@ -19,7 +19,7 @@ from runa import Agent, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContext, Usage
 from runa.agent import _AGENT_FIELDS, Subagent
-from runa.exceptions import MaxTurnsExceeded, OperatorError, RunErrorDetails, UserError
+from runa.exceptions import OperatorError, UserError
 from runa.guardrail import Phase, guardrail
 from runa.handoff import Delegate
 from runa.knowledge import Knowledge
@@ -864,7 +864,6 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
         "subagents": [Translator.delegate],
         "guardrails": [block_empty.input],
         "mcp": [_Server()],
-        "mcp_servers": [_Server()],
         "output_type": Answer,
         "hooks": hooks,
         "memory": "auto",
@@ -884,7 +883,7 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert _tool_names(agent) == ["ping"]
     assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
     assert agent.guardrails == passed["guardrails"]
-    assert len(agent.mcp_servers) == 2, "`mcp` and `mcp_servers` are merged, not one or the other"
+    assert agent.mcp_servers == passed["mcp"]
     assert agent.output_type is Answer
     assert agent.hooks is hooks
     assert isinstance(agent.memory, Memory)
@@ -1322,22 +1321,19 @@ def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
     assert captured["turn_input"] == [{"role": "user", "content": parts}]
 
 
-def test_run_sync_catches_runa_error_as_error_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A `RunaError` (guardrail tripwire, `MaxTurnsExceeded`, ...) is captured, not raised.
+def test_run_sync_records_usage_of_an_error_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An `"error"` `Run` still has its usage recorded.
 
     `self.history` is left unchanged, since the turn never completed.
     """
-    exc = MaxTurnsExceeded("too many turns")
-    exc.run_data = RunErrorDetails(
-        input="hi",
-        new_items=[],
-        raw_responses=[],
-        last_agent=cast(Any, None),
-        context_wrapper=RunContext(context=None, usage=Usage(input_tokens=5, output_tokens=6)),
-    )
 
     def fake_run_sync(*args: Any, **kwargs: Any) -> Run:
-        raise exc
+        return _loop_run(
+            output=None,
+            status="error",
+            error="too many turns",
+            usage=Usage(input_tokens=5, output_tokens=6),
+        )
 
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 

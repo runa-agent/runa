@@ -115,15 +115,16 @@ def check_baseline_is_none_for_an_agent_that_has_never_run(store: EvalStore, tag
 
 def check_save_links_each_case_to_its_runs_trace(store: EvalStore, tag: str) -> None:
     """A case's `trace_id` is its run's trace, so a failing case opens straight onto its spans."""
-    traced = _graded("hi", EvalStatus.PASS)
-    traced.run.trace = Trace(id=f"{tag}-trace", name=tag, start_time=0.0)
-    untraced = _graded("yo", EvalStatus.PASS, index=1)
+    first = _graded("hi", EvalStatus.PASS)
+    first.run.trace = Trace(id=f"{tag}-first", name=tag, start_time=0.0)
+    second = _graded("yo", EvalStatus.PASS, index=1)
+    second.run.trace = Trace(id=f"{tag}-second", name=tag, start_time=0.0)
 
-    run_id = store.save(Report(tag, [traced, untraced]))
+    run_id = store.save(Report(tag, [first, second]))
 
     run = store.get(run_id)
     assert run is not None
-    assert [row.trace_id for row in run.cases] == [f"{tag}-trace", None]
+    assert [row.trace_id for row in run.cases] == [f"{tag}-first", f"{tag}-second"]
 
 
 CONTRACT: list[Check] = [
