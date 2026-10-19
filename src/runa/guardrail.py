@@ -2,7 +2,7 @@
 
 Agent-or-tool by input-or-output is a fact about guardrails, so it lives here as data -- one
 `Phase` -- rather than as structure spread across the codebase. One entry type carries its phase,
-one verdict type comes back from every phase, one runner (`run_internal.guardrails`) takes it as
+one verdict type comes back from every phase, one runner (the turn loop's) takes it as
 an argument, one exception reports it, and a run's audit trail is one mapping keyed by it. A fifth
 phase is a member of `Phase`, not a new field, class and list in nine modules.
 """

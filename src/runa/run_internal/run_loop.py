@@ -24,9 +24,11 @@ from runa._items import (
 from runa._log import logger
 from runa._models import ModelRequest
 from runa._types import RunContext, Usage
-from runa.approval import ApprovalLedger
+from runa.approval import ApprovalDecision, ApprovalLedger
 from runa.context_source import ContextSource
 from runa.exceptions import (
+    DuplicateToolCallError,
+    GuardrailTripwireTriggered,
     MaxTokensExceeded,
     MaxTurnsExceeded,
     ModelBehaviorError,
@@ -36,12 +38,11 @@ from runa.exceptions import (
     UnexpectedError,
     UserError,
 )
-from runa.guardrail import GuardrailResults, Phase
+from runa.guardrail import GuardrailResult, GuardrailResults, Phase
 from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape
-from runa.run_internal.guardrails import _run_guardrails
 from runa.run_internal.spans import _close_span, _Spans
 from runa.run_internal.streaming import Emit, _stream_response
 from runa.run_internal.tool_execution import (
@@ -52,6 +53,7 @@ from runa.run_internal.tool_execution import (
 from runa.run_state import RunState, _RunRecord
 from runa.session import Session
 from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
+from runa.tool import FunctionTool
 from runa.tracing.config import export_trace_later
 from runa.tracing.manual import current_trace
 from runa.tracing.spans import Span
@@ -138,10 +140,75 @@ class _Run:
         """A span under this run's agent span, for a `with` block."""
         return self.spans.span(name, span_type, input=input)
 
+    @property
+    def run_context(self) -> RunContext[Any]:
+        """What user code is told about the run."""
+        return self.frame.run_context
+
     def notify(self, event: StreamEvent) -> None:
         """Hand `event` to a streamed run's consumer; a non-streamed run has nowhere to put it."""
         if self.frame.emit is not None:
             self.frame.emit(event)
+
+    async def fire(self, event: str, *args: Any) -> None:
+        """Fire the `Hooks` method named `event` with `(run_context, current_agent, *args)`."""
+        await getattr(self.frame.hooks, event)(self.run_context, self.current_agent, *args)
+
+    def claim(self, call_id: str, name: str) -> None:
+        """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
+        if not self.frame.approvals.claim(call_id):
+            raise DuplicateToolCallError(call_id, name)
+
+    def release(self, call_id: str) -> None:
+        """Give `call_id`'s claim back: the call didn't finish, so resuming may run it again."""
+        self.frame.approvals.release(call_id)
+
+    async def decide(
+        self, tool: FunctionTool, call_id: str, args: dict[str, Any]
+    ) -> ApprovalDecision:
+        """Whether this call to `tool` runs, is rejected, or waits on a human."""
+
+        async def needs_approval() -> bool:
+            if isinstance(tool.needs_approval, bool):
+                return tool.needs_approval
+            verdict = tool.needs_approval(self.run_context, args, call_id)
+            return bool(await verdict if inspect.isawaitable(verdict) else verdict)
+
+        return await self.frame.approvals.decide(tool.name, call_id, needs_approval=needs_approval)
+
+    async def guard(
+        self,
+        phase: Phase,
+        value: Any,
+        *,
+        tool: FunctionTool | None = None,
+        under: Span | None = None,
+    ) -> None:
+        """Run `phase`'s guardrails over `value` in list order, raising on the first that trips.
+
+        The ordering rule is stated here and nowhere else: the first tripwire stops the entries
+        after it, but every entry that already ran is in the run's audit trail, so a tripped run's
+        trail is complete up to the stop.
+
+        `phase` decides whose list to read (the running agent's, or `tool`'s), and which phase the
+        audit trail and a tripwire report. Every entry is called with the one `value` the caller
+        already has; what each phase makes of it is stated beside `Phase` in `runa.guardrail`. A
+        tool phase passes the call's span as `under`, so its guardrails hang under the call they
+        guard rather than under the run.
+        """
+        entries = (self.shape.guardrails if tool is None else tool.guardrails).get(phase, ())
+        if not entries:
+            return
+        scope = self.spans if under is None else self.spans.under(under)
+        for entry in entries:
+            with scope.span(entry.get_name(), "guardrail") as span:
+                verdict = await entry.guardrail_function(value)
+                if verdict.tripped:
+                    span.error = "tripwire triggered"
+            result = GuardrailResult(entry, verdict, verdict.tripped, phase)
+            self.frame.guardrail_results.record(result)
+            if verdict.tripped:
+                raise GuardrailTripwireTriggered(result)
 
     async def delegate(self, delegate: Delegate, input: str, call_id: str, *, under: Span) -> Run:
         """Run `delegate`'s agent on `input` as a nested run of this one, and return its `Run`.
@@ -253,7 +320,7 @@ async def _consult(
         run.span(name, "retrieval", input=query) as span,
         _fails_open(span, f"{name} retrieval", run.start.name),
     ):
-        block = await source.context(query, run.frame.run_context)
+        block = await source.context(query, run.run_context)
         span.output = block
     return block
 
@@ -308,7 +375,7 @@ async def _record_tool_results(
     if switched is not None:
         await run.hand_off(switched)
         run.notify(AgentChanged(switched))
-        await run.frame.hooks.on_agent_start(run.frame.run_context, switched)
+        await run.fire("on_agent_start")
 
 
 async def _run_turns(run: _Run) -> _TurnOutcome:
@@ -317,9 +384,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
     With `run.frame.emit` (a streamed run), the model is streamed and every step is emitted as a
     `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
-    transcript, hooks = run.transcript, run.frame.hooks
+    transcript, record, run_context = run.transcript, run.record, run.run_context
     max_turns, max_tokens = run.start.max_turns, run.start.max_tokens
-    run_context, record = run.frame.run_context, run.record
 
     if record.pending:
         results, interruptions, switched = await _run_message_tool_calls(
@@ -332,12 +398,11 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
 
     for _turn in range(max_turns):
         shape = run.shape
-        agent = shape.agent
         model = shape.resolve_model()
         items = list(transcript.items)
         with run.span(str(shape.model), "llm", input=items) as llm_span:
             system_instructions = await _resolve_instructions(shape, run_context)
-            await hooks.on_llm_start(run_context, agent, system_instructions, items)
+            await run.fire("on_llm_start", system_instructions, items)
             request = ModelRequest(
                 input=items,
                 system_instructions=system_instructions,
@@ -352,7 +417,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             run_context.usage.add(response.usage)
             llm_span.output = {"usage": response.usage.__dict__}
             _check_token_budget(run_context.usage, max_tokens)
-        await hooks.on_llm_end(run_context, agent, response)
+        await run.fire("on_llm_end", response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
         dropped = transcript.compact(shape.compactor, context_tokens)
         _note_compaction(run.spans, context_tokens, dropped)
@@ -365,7 +430,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         calls = tool_calls(message)
         if not calls:
             text = item_text(message)
-            await _run_guardrails(run, Phase.OUTPUT, text)
+            await run.guard(Phase.OUTPUT, text)
             return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
 
         for call in calls:
@@ -497,7 +562,7 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
             beside.span(name, "custom", input=query) as span,
             _fails_open(span, f"{name} after_turn", run.start.name),
         ):
-            kept = await source.after_turn(query, final_output, run.frame.run_context, model)
+            kept = await source.after_turn(query, final_output, run.run_context, model)
             span.output = {"stored": len(kept)}
 
 
@@ -539,7 +604,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             await frame.session.set_items(transcript.history())
     await _after_turn(run, outcome.final_output)
 
-    await frame.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
+    await run.fire("on_agent_end", outcome.final_output)
     return Run(
         output=outcome.final_output,
         trace=frame.trace,
@@ -556,12 +621,12 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
     against the agent's input guardrails; a resumed one (`input=None`) did both before it paused.
     A resumed agent still gets `on_agent_start`, pairing the `on_agent_end` `_finish` fires.
     """
-    await run.frame.hooks.on_agent_start(run.frame.run_context, run.current_agent)
+    await run.fire("on_agent_start")
     if input is not None:
         query = run.transcript.latest_user_text()
         if query is not None:
             await _inject_retrieved(run, query)
-        await _run_guardrails(run, Phase.INPUT, input)
+        await run.guard(Phase.INPUT, input)
     return await _finish(run, await _run_turns(run))
 
 
