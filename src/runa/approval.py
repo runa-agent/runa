@@ -6,12 +6,12 @@
 * a rejection with no message of its own gets `ApprovalLedger.DEFAULT_REJECTION`;
 * a call id is claimed before it runs, and a claimed id never runs again.
 
-A run's governance (`runa._governance`) holds one ledger, shared by reference with every delegate
-the run starts, so a caller's "always" covers the delegate's matching tool, and a decision about a
-delegate's paused call reaches the delegate whichever state it was made on. Both rest on a call id
-being unique across the whole run tree.
+A run holds one ledger, shared by reference with every delegate the run starts, so a caller's
+"always" covers the delegate's matching tool, and a decision about a delegate's paused call reaches
+the delegate whichever state it was made on. Both rest on a call id being unique across the whole
+run tree.
 
-Imports nothing from `runa` at runtime: `runa.tool` and `runa._governance` both import it.
+Imports nothing from `runa` at runtime: `runa.tool` and `runa.run_state` both import it.
 """
 
 import inspect

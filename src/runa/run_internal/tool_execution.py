@@ -7,7 +7,7 @@ dependency still points from the loop to here.
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -27,7 +27,7 @@ from runa.exceptions import DuplicateToolCallError
 from runa.guardrail import Phase
 from runa.handoff import Delegate
 from runa.run_internal.guardrails import _run_guardrails
-from runa.run_state import Interruption, RunState
+from runa.run_state import Interruption
 from runa.tool import FunctionTool, ToolCall
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
 
 def _claim(run: _Run, call_id: str, name: str) -> None:
     """Refuse to execute `call_id` a second time (a resumed or duplicated `RunState`)."""
-    if not run.frame.governance.approval_ledger.claim(call_id):
+    if not run.frame.approvals.claim(call_id):
         raise DuplicateToolCallError(call_id, name)
 
 
@@ -94,7 +94,7 @@ async def _run_delegate_call(
         try:
             nested = await run.delegate(delegate, str(args.get("input", "")), call_id, under=span)
         except DelegatePaused as paused:
-            run.frame.governance.approval_ledger.release(call_id)
+            run.frame.approvals.release(call_id)
             span.output = "paused for approval"
             return paused
         if nested.status == "completed":
@@ -163,16 +163,15 @@ class _TurnOutcome:
 
 
 async def _run_message_tool_calls(
-    run: _Run, message: dict[str, Any], resume: RunState | None = None
+    run: _Run, message: dict[str, Any], ready_results: Sequence[ConversationItem] = ()
 ) -> tuple[list[ConversationItem], list[Interruption], Agent | None]:
     """Execute (or defer for approval) every tool call in `message`; returns results so far.
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
     agent's `model_settings.parallel_tool_calls` is `False`. Results keep the message's call
     order either way. A call that needs approval is decided by the run's approval ledger.
-    `resume` is the paused state being continued, read for the results it already computed for
-    calls in `message` that didn't need approval: those are reused as is, never executed a
-    second time.
+    `ready_results` are a paused run's results already computed for calls in `message` that
+    didn't need approval: those are reused as is, never executed a second time.
     """
     shape = run.shape
     agent = shape.agent
@@ -182,10 +181,7 @@ async def _run_message_tool_calls(
     deferred: list[tuple[_Slot, _Thunk]] = []
     interruptions: list[Interruption] = []
     switched_agent: Agent | None = None
-    ready = {
-        answered_call_id(result): result
-        for result in (resume.ready_results if resume is not None else [])
-    }
+    ready = {answered_call_id(result): result for result in ready_results}
 
     for call in tool_calls(message):
         name = call_name(call)
@@ -216,7 +212,7 @@ async def _run_message_tool_calls(
         if isinstance(args, str):
             slots.append(_Slot(tool_result(call_id, args)))
             continue
-        gate = await run.frame.governance.approval_ledger.decide(
+        gate = await run.frame.approvals.decide(
             tool.name,
             call_id,
             needs_approval=partial(_needs_approval, tool, run_context, args, call_id),

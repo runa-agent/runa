@@ -1731,7 +1731,7 @@ def test_to_payload_is_the_one_wire_shape_of_a_run() -> None:
             "agent": "Support",
         }
     ]
-    assert paused["state"]["pending"][0]["name"] == "refund"
+    assert paused["state"]["run"]["pending"][0]["name"] == "refund"
     assert json.loads(json.dumps(paused)) == paused  # the whole payload is JSON, not just a dict
 
 

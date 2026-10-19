@@ -1,10 +1,11 @@
 """Tests for `Transcript`: one run's conversation, and the JSON it carries through a pause."""
 
-from dataclasses import fields
 from typing import Any
 
+from pydantic import TypeAdapter
+
 from runa.tool import ToolCall
-from runa.transcript import Transcript, _TranscriptSchema
+from runa.transcript import Transcript
 
 _HI = {"role": "user", "content": "hi"}
 _HELLO = {"role": "assistant", "content": "hello"}
@@ -18,35 +19,19 @@ def _transcript() -> Transcript:
     return transcript
 
 
-def test_every_field_but_the_tool_calls_and_a_finished_runs_cut_is_serialized() -> None:
-    """A fact added to the transcript travels through a restart unless it's named as not.
-
-    `tool_calls` is left out because a restored run reports the calls it makes itself, as its
-    trace does; the compacted history because only a finished run has one, and only a paused one
-    is serialized.
-    """
-    transcript_fields = {field.name.removeprefix("_") for field in fields(Transcript)}
-
-    assert set(_TranscriptSchema.model_fields) == transcript_fields - {
-        "tool_calls",
-        "compacted_history",
-    }
-
-
-def test_a_schema_round_trip_keeps_the_conversation_and_drops_the_tool_calls() -> None:
-    """What a paused run's blob carries: the four lists, never the calls already reported."""
+def test_a_json_round_trip_keeps_the_conversation_and_the_tool_calls() -> None:
+    """What a paused run's blob carries: every field, so a restored run reports every call."""
     transcript = Transcript.start([_HI], prior=_EARLIER)
     transcript.record(_HELLO)
     transcript.record_call(ToolCall(name="now", arguments="{}", output="noon"))
+    adapter = TypeAdapter(Transcript)
 
-    restored = Transcript._from_schema(
-        _TranscriptSchema.model_validate(transcript._to_schema().model_dump(mode="json"))
-    )
+    restored = adapter.validate_python(adapter.dump_python(transcript, mode="json"))
 
     assert restored.history() == transcript.history()
     assert restored.unsaved() == transcript.unsaved()
     assert restored.items == transcript.items
-    assert restored.tool_calls == ()
+    assert restored.tool_calls == transcript.tool_calls
 
 
 def test_a_session_less_run_starts_from_its_input_and_saves_nothing_else() -> None:

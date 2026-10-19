@@ -160,8 +160,11 @@ resumed with `agent.run_streamed(state)` (or `run`/`run_sync`).
 serialize it (as a plain dict, or a JSON string); `RunState.from_json(agent, blob)`/
 `.from_string(agent, blob)` rebuild it, synchronously, given a fresh instance of the agent the
 run started with (used to re-resolve the current agent by name; a live `Agent` instance can't
-round-trip through JSON itself). Reading a blob resolves no tools, so it never connects to an
-agent's MCP servers: the resumed run looks each pending call's tool up itself. A `context` that
+round-trip through JSON itself). Everything else the run carries comes back too: its
+conversation, `context` and user, usage, the tool calls it already made, and the time already
+spent against its `timeout` (time paused doesn't count). Reading a blob resolves no tools, so it
+never connects to an agent's MCP servers: the resumed run looks each pending call's tool up
+itself. A `context` that
 was a dataclass comes back as a plain dict, not its original class; the run's guardrail-result
 audit trail (see below) and trace spans aren't included in the serialized blob: spans are
 already durably persisted separately (see [Tracing](#14-tracing)). An unrecognized

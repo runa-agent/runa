@@ -82,7 +82,8 @@ class SupportAgent(Agent):
 `max_turns` bounds how often a run calls the model. `max_tokens` bounds what those calls cost,
 which a turn limit alone cannot: ten calls over a long conversation can cost far more than ten
 over a short one. `timeout` bounds elapsed time, which neither of the others can, and is the only
-one that helps when a tool or a provider hangs.
+one that helps when a tool or a provider hangs. A run paused for approval keeps its clock: time
+spent waiting on a human doesn't count, and resuming spends only what is left.
 
 `max_tokens` here is the run's whole budget, and is a different knob from
 `ModelSettings(max_tokens=...)`, which caps the length of a single response:

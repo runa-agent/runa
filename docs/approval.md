@@ -112,7 +112,9 @@ Over HTTP that round trip is already written: a paused run served by `runa serve
 `state`, and posting that back with a decision per interruption resumes it (see
 [Deployment](deployment.md#resuming-a-paused-run)).
 
-A `context` that was a dataclass comes back as a plain dict, not its original class. The run's
+Everything the run carries comes back: its conversation, `context` and user, its usage, the
+tool calls it already made and the time it has already spent against its `timeout`. A `context`
+that was a dataclass comes back as a plain dict, not its original class. The run's
 [guardrail audit trail](guardrails.md#audit-trail) and trace spans are not included in the serialized blob. Spans are
 already persisted separately (see [Tracing and Hooks](tracing.md)). An unrecognized
 `schema_version` raises `UserError` rather than resuming from a blob a different, incompatible

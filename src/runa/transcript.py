@@ -4,33 +4,17 @@ What a run started from, what the model is sent, what it produced and what is le
 turn loop works on a `Transcript`, a paused `RunState` carries one, and the caller's `Run` keeps
 one. Every rule about the conversation is kept behind the methods below -- what reaches the
 model, what counts as history, what a session stores, how compaction cuts it -- and nothing
-outside this module writes to its lists. A fact the conversation starts carrying is added here,
-with its JSON, and nowhere else.
+outside this module writes to its lists. A fact the conversation starts carrying is a field here,
+and nowhere else: a `RunState` serializes every field as it is.
 """
 
 import copy
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
-
-from pydantic import BaseModel
 
 from runa._items import ConversationItem, latest_user_index, latest_user_text
 from runa.compact import Compactor
 from runa.tool import ToolCall
-
-
-class _TranscriptSchema(BaseModel):
-    """The JSON a `Transcript` serializes through: its four lists, all required.
-
-    Required because `Transcript._to_schema` is the only writer, so a field it forgets is a type
-    error there rather than a list silently empty after a restart.
-    """
-
-    prior: list[dict[str, Any]]
-    input: list[dict[str, Any]]
-    items: list[dict[str, Any]]
-    generated: list[dict[str, Any]]
 
 
 @dataclass
@@ -71,11 +55,7 @@ class Transcript:
 
     @property
     def tool_calls(self) -> tuple[ToolCall, ...]:
-        """Every tool call this run executed, in the order they finished (see `ToolCall`).
-
-        Not serialized, for the reason a trace's spans aren't: a restored run reports what it did
-        after being restored.
-        """
+        """Every tool call this run executed, in the order they finished (see `ToolCall`)."""
         return tuple(self._tool_calls)
 
     def latest_user_text(self) -> str | None:
@@ -155,20 +135,6 @@ class Transcript:
             _generated=list(self._generated),
             _tool_calls=list(self._tool_calls),
             _compacted_history=None if compacted is None else list(compacted),
-        )
-
-    def _to_schema(self) -> _TranscriptSchema:
-        return _TranscriptSchema(
-            prior=self._prior, input=self._input, items=self._items, generated=self._generated
-        )
-
-    @classmethod
-    def _from_schema(cls, schema: _TranscriptSchema) -> Transcript:
-        return cls(
-            _prior=schema.prior,
-            _input=schema.input,
-            _items=schema.items,
-            _generated=schema.generated,
         )
 
 
