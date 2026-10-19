@@ -46,7 +46,8 @@ class Run(GuardrailAudit):
     `None` unless `status` is `"completed"`. `trace` is the hierarchical `Trace` (agent/LLM/tool/
     handoff/guardrail spans) captured for this call, see `runa.tracing`; always present, whatever
     the `status`, because the trace is opened before anything a run can fail on. `usage` is this
-    call's token usage, same value as `Agent.last_usage` after the call.
+    call's token usage, every model and embedding call made on its behalf included, same value
+    as `Agent.last_usage` after the call.
 
     `status` is `"paused"` when a tool call needs human approval: resolve each of
     `interruptions` on `to_state()`, then pass that state back to `run`/`run_sync` in place of a

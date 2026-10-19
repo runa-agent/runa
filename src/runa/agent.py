@@ -297,7 +297,8 @@ class Agent:
     `RunContext.usage`, which the turn loop populates regardless of `hooks`.
 
     One run is bounded three ways, each `None`/unset meaning "no ceiling of that kind":
-    `max_turns` (model calls, default 10), `max_tokens` (total tokens the run may spend), and
+    `max_turns` (model calls, default 10), `max_tokens` (total tokens the run may spend, its
+    memory's and knowledge's embedding and extraction calls included), and
     `timeout` (wall-clock seconds). Hitting any of them ends the run as `Run(status="error")`,
     the same as every other `RunaError`. `max_tokens` is the run's whole budget and is not the
     same knob as `ModelSettings(max_tokens=...)`, which caps one response's length.
@@ -374,7 +375,7 @@ class Agent:
         Checked here; anything else is a `UserError`.
 
         `max_turns` caps how many model calls one run may make before `MaxTurnsExceeded`;
-        `max_tokens` caps the tokens they may spend before `MaxTokensExceeded`; `timeout` caps
+        `max_tokens` caps the tokens the run may spend before `MaxTokensExceeded`; `timeout` caps
         the run's wall-clock seconds before `RunTimeout`. All three are optional ceilings, and
         all three end the run as `Run(status="error")`.
         """

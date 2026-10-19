@@ -13,7 +13,9 @@ import os
 import httpx2 as httpx
 
 from runa._loop import LoopCache
+from runa._metering import metered
 from runa._models import OPENAI
+from runa._types import Usage
 from runa.exceptions import ModelBehaviorError, UserError
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -75,14 +77,31 @@ def _get_client() -> httpx.AsyncClient:
 
 
 async def embed(texts: list[str], *, model: str = DEFAULT_EMBEDDING_MODEL) -> list[list[float]]:
-    """Embed `texts` with `model`, returning one vector per input, in the same order."""
-    response = await _get_client().post(_EMBEDDINGS_PATH, json={"model": model, "input": texts})
-    if response.status_code >= 400:
-        raise ModelBehaviorError(
-            f"embeddings request failed with {response.status_code}: {response.text[:2000]}"
-        )
-    data = response.json()["data"]
+    """Embed `texts` with `model`, returning one vector per input, in the same order.
+
+    Made inside a run, the request is one of that run's: its tokens are in the run's usage, and
+    it is an `"llm"` span in the run's trace.
+    """
+    with metered(model, input=texts) as charge:
+        response = await _get_client().post(_EMBEDDINGS_PATH, json={"model": model, "input": texts})
+        if response.status_code >= 400:
+            raise ModelBehaviorError(
+                f"embeddings request failed with {response.status_code}: {response.text[:2000]}"
+            )
+        body = response.json()
+        charge(_usage(body.get("usage") or {}))
+    data = body["data"]
     return [item["embedding"] for item in sorted(data, key=lambda item: item["index"])]
+
+
+def _usage(reported: dict[str, int]) -> Usage:
+    """One embeddings request's `Usage`: every token it reports is an input token."""
+    tokens = reported.get("prompt_tokens", 0)
+    return Usage(
+        requests=1,
+        input_tokens=tokens,
+        total_tokens=reported.get("total_tokens", tokens),
+    )
 
 
 __all__ = ["DEFAULT_EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS", "embed", "resolve_dimensions"]

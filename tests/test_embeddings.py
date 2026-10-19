@@ -6,11 +6,13 @@ from typing import Any
 
 import httpx2 as httpx
 import pytest
+from helpers import ScriptedModel, scripted_agent, text_response, tool_call_response
 
 from runa import embeddings
 from runa._loop import LoopCache
 from runa._models import OPENAI
 from runa.exceptions import ModelBehaviorError, UserError
+from runa.tool import tool
 
 
 @pytest.fixture(autouse=True)
@@ -149,3 +151,84 @@ def test_each_endpoint_gets_its_own_client(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert default is not gateway
     assert str(gateway.base_url) == "https://gateway.example.com/v1/"
+
+
+class _EmbeddingSource:
+    """A context source that embeds the user's message before the turn, and keeps nothing."""
+
+    async def context(self, query: str, run_context: Any) -> None:
+        await embeddings.embed([query])
+
+    async def after_turn(self, *args: Any) -> list[str]:
+        return []
+
+
+def _serve_usage(monkeypatch: pytest.MonkeyPatch, tokens: int) -> None:
+    """Answer every embeddings request with one vector, reporting `tokens` spent."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = {
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
+        }
+        return httpx.Response(200, json=body)
+
+    _serve(monkeypatch, handler)
+
+
+def test_an_embedding_made_inside_a_run_is_charged_to_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A retrieval's embedding is in the run's usage, and an `"llm"` span under the retrieval."""
+    _serve_usage(monkeypatch, 7)
+    model = ScriptedModel([text_response("ok")])
+    agent = scripted_agent(model=model, memory=_EmbeddingSource())
+
+    result = agent.run_sync("hi")
+
+    assert result.usage.total_tokens == 2 + 7
+    assert result.usage.requests == 2
+    (retrieval,) = [s for s in result.trace.spans if s.type == "retrieval"]
+    (embedding,) = [s for s in result.trace.spans if s.parent_id == retrieval.id]
+    assert embedding.type == "llm"
+    assert embedding.name == "text-embedding-3-small"
+    assert embedding.output["usage"]["input_tokens"] == 7
+
+
+def test_an_embedding_counts_against_the_runs_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run's budget is its whole spend: a retrieval's embedding can exhaust it."""
+    _serve_usage(monkeypatch, 100)
+    model = ScriptedModel([text_response("ok")])
+    agent = scripted_agent(model=model, memory=_EmbeddingSource(), max_tokens=50)
+
+    result = agent.run_sync("hi")
+
+    assert result.status == "error"
+    assert "max tokens (50) exceeded: 102 used" in (result.error or "")
+
+
+def test_an_embedding_made_by_a_tool_is_charged_under_its_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool that embeds (`memory = "llm"`'s `search_memory`, say) puts its span under the call."""
+    _serve_usage(monkeypatch, 3)
+
+    @tool
+    async def lookup(query: str) -> str:
+        """Embed `query`.
+
+        query: what to look up
+        """
+        await embeddings.embed([query])
+        return "found"
+
+    model = ScriptedModel(
+        [tool_call_response("lookup", '{"query": "cats"}'), text_response("done")]
+    )
+    agent = scripted_agent(model=model, tools=[lookup])
+
+    result = agent.run_sync("hi")
+
+    assert result.usage.total_tokens == 2 + 3 + 2
+    (call,) = [s for s in result.trace.spans if s.type == "tool"]
+    (embedding,) = [s for s in result.trace.spans if s.parent_id == call.id]
+    assert embedding.type == "llm"

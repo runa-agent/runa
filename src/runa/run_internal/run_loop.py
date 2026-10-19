@@ -7,7 +7,7 @@ The implementation behind `Agent.run`/`run_streamed`, not a seam of its own. Eve
 import asyncio
 import inspect
 import time
-from collections.abc import Awaitable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
@@ -22,8 +22,9 @@ from runa._items import (
     user_message,
 )
 from runa._log import logger
-from runa._models import ModelRequest
-from runa._types import RunContext, Usage
+from runa._metering import Charge, charging
+from runa._models import ModelRequest, StreamDelta
+from runa._types import ModelResponse, RunContext, Usage
 from runa.approval import ApprovalDecision, ApprovalLedger
 from runa.context_source import ContextSource
 from runa.exceptions import (
@@ -44,7 +45,7 @@ from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.spans import _close_span, _Spans
-from runa.run_internal.streaming import Emit, _stream_response
+from runa.run_internal.streaming import Emit, _Assembly, _stream_response
 from runa.run_internal.tool_execution import (
     DelegatePaused,
     _run_message_tool_calls,
@@ -91,6 +92,30 @@ class _Frame:
     def run_context(self) -> RunContext[Any]:
         """The record's `RunContext`: what user code is told about the run."""
         return self.record.run_context
+
+
+@dataclass(frozen=True)
+class _Meter:
+    """Charges one model call to `run_context`'s usage, as an `"llm"` span in `spans`.
+
+    Every call a run pays for goes through one: the loop's own, a context source's, and an
+    embedding request made anywhere below the run. Holding the run to its `max_tokens` is the
+    loop's, after each of its own calls, so a charge made between two of them counts at the next.
+    """
+
+    run_context: RunContext[Any]
+    spans: _Spans
+
+    @contextmanager
+    def call(self, name: str, *, input: Any = None) -> Iterator[Charge]:
+        """A span for the call to the model `name`, and what to charge its `Usage` to."""
+        with self.spans.span(name, "llm", input=input) as span:
+
+            def charge(usage: Usage) -> None:
+                self.run_context.usage.add(usage)
+                span.output = {"usage": usage.__dict__}
+
+            yield charge
 
 
 @dataclass
@@ -140,6 +165,14 @@ class _Run:
         """A span under this run's agent span, for a `with` block."""
         return self.spans.span(name, span_type, input=input)
 
+    def meter(self, under: Span | None = None) -> _Meter:
+        """What a call made on this run's behalf is charged to, its span under `under` if given."""
+        return _Meter(self.run_context, self.spans if under is None else self.spans.under(under))
+
+    def charging(self, under: Span | None = None) -> AbstractContextManager[None]:
+        """Charge the calls made below the run inside the block to it, as `meter` would."""
+        return charging(self.meter(under))
+
     @property
     def run_context(self) -> RunContext[Any]:
         """What user code is told about the run."""
@@ -150,9 +183,13 @@ class _Run:
         if self.frame.emit is not None:
             self.frame.emit(event)
 
-    async def fire(self, event: str, *args: Any) -> None:
-        """Fire the `Hooks` method named `event` with `(run_context, current_agent, *args)`."""
-        await getattr(self.frame.hooks, event)(self.run_context, self.current_agent, *args)
+    async def fire(self, event: str, *args: Any, agent: Agent | None = None) -> None:
+        """Fire the `Hooks` method named `event` with `(run_context, agent, *args)`.
+
+        `agent` is the one acting, the agent running now unless given.
+        """
+        acting = self.current_agent if agent is None else agent
+        await getattr(self.frame.hooks, event)(self.run_context, acting, *args)
 
     def claim(self, call_id: str, name: str) -> None:
         """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
@@ -319,6 +356,7 @@ async def _consult(
     with (
         run.span(name, "retrieval", input=query) as span,
         _fails_open(span, f"{name} retrieval", run.start.name),
+        run.charging(under=span),
     ):
         block = await source.context(query, run.run_context)
         span.output = block
@@ -400,7 +438,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         shape = run.shape
         model = shape.resolve_model()
         items = list(transcript.items)
-        with run.span(str(shape.model), "llm", input=items) as llm_span:
+        with run.meter().call(str(shape.model), input=items) as charge:
             system_instructions = await _resolve_instructions(shape, run_context)
             await run.fire("on_llm_start", system_instructions, items)
             request = ModelRequest(
@@ -414,8 +452,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
                 response = await model.get_response(request)
             else:
                 response = await _stream_response(model, request, run.frame.emit)
-            run_context.usage.add(response.usage)
-            llm_span.output = {"usage": response.usage.__dict__}
+            charge(response.usage)
             _check_token_budget(run_context.usage, max_tokens)
         await run.fire("on_llm_end", response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
@@ -554,7 +591,6 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
     query = run.transcript.latest_user_text()
     if not sources or query is None:
         return
-    model = run.start.resolve_model()
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
     beside = _Spans(run.frame.trace, run.frame.agent_span.parent_id)
     for name, source in sources:
@@ -562,8 +598,48 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
             beside.span(name, "custom", input=query) as span,
             _fails_open(span, f"{name} after_turn", run.start.name),
         ):
-            kept = await source.after_turn(query, final_output, run.run_context, model)
+            meter = _Meter(run.run_context, beside.under(span))
+            with charging(meter):
+                model = _SourceModel(run, meter)
+                kept = await source.after_turn(query, final_output, run.run_context, model)
             span.output = {"stored": len(kept)}
+
+
+@dataclass(frozen=True)
+class _SourceModel:
+    """The starting agent's model as a context source is handed it, each call one of the run's.
+
+    A call is an `"llm"` span under the source's own, fires the hooks the loop's calls fire, and
+    is counted in the run's usage, but isn't held to the run's `max_tokens`: a source calls it
+    once the answer is in, and a finished answer isn't failed for what was spent after it.
+    """
+
+    run: _Run
+    meter: _Meter
+
+    async def get_response(self, request: ModelRequest) -> ModelResponse:
+        """One call to the agent's model, charged to the run."""
+        start = self.run.start
+        with self.meter.call(str(start.model), input=list(request.input)) as charge:
+            await self._fire("on_llm_start", request.system_instructions, list(request.input))
+            response = await start.resolve_model().get_response(request)
+            charge(response.usage)
+        await self._fire("on_llm_end", response)
+        return response
+
+    async def stream_response(self, request: ModelRequest) -> AsyncIterator[StreamDelta]:
+        """One streamed call to the agent's model, charged to the run once the stream ends."""
+        start, assembly = self.run.start, _Assembly()
+        with self.meter.call(str(start.model), input=list(request.input)) as charge:
+            await self._fire("on_llm_start", request.system_instructions, list(request.input))
+            async for delta in start.resolve_model().stream_response(request):
+                assembly.add(delta)
+                yield delta
+            charge(assembly.usage)
+        await self._fire("on_llm_end", assembly.response())
+
+    async def _fire(self, event: str, *args: Any) -> None:
+        await self.run.fire(event, *args, agent=self.run.start.agent)
 
 
 async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
@@ -621,13 +697,14 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
     against the agent's input guardrails; a resumed one (`input=None`) did both before it paused.
     A resumed agent still gets `on_agent_start`, pairing the `on_agent_end` `_finish` fires.
     """
-    await run.fire("on_agent_start")
-    if input is not None:
-        query = run.transcript.latest_user_text()
-        if query is not None:
-            await _inject_retrieved(run, query)
-        await run.guard(Phase.INPUT, input)
-    return await _finish(run, await _run_turns(run))
+    with run.charging():
+        await run.fire("on_agent_start")
+        if input is not None:
+            query = run.transcript.latest_user_text()
+            if query is not None:
+                await _inject_retrieved(run, query)
+            await run.guard(Phase.INPUT, input)
+        return await _finish(run, await _run_turns(run))
 
 
 async def _run_async(

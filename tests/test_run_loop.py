@@ -20,7 +20,7 @@ from helpers import (
     tool_call_response,
 )
 
-from runa._models import StreamDelta
+from runa._models import ModelRequest, StreamDelta
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.compact import default_compactor
 from runa.exceptions import UserError
@@ -1523,20 +1523,76 @@ def test_memory_with_no_block_injects_nothing() -> None:
     assert model.calls[0] == [{"role": "user", "content": "hi"}]
 
 
-def test_memory_is_told_the_exchange_after_the_turn_with_the_resolved_model() -> None:
-    """After a run, the runner hands memory the turn's exchange and the agent's own model."""
+def test_memory_is_told_the_exchange_after_the_turn() -> None:
+    """After a run, the runner hands memory the turn's exchange, for the run's user."""
     memory = _FakeSource()
-    model = ScriptedModel([text_response("sure, noted")])
-    agent = scripted_agent(model=model, memory=memory)
+    agent = scripted_agent(model=ScriptedModel([text_response("sure, noted")]), memory=memory)
 
     result = agent.run_sync("I prefer Japanese")
 
-    assert memory.told == [("I prefer Japanese", "sure, noted", None, model)]
+    assert [told[:3] for told in memory.told] == [("I prefer Japanese", "sure, noted", None)]
 
     (extraction_span,) = [s for s in result.trace.spans if s.type == "custom"]
     assert extraction_span.name == "memory"
     assert extraction_span.status == "ok"
     assert extraction_span.output == {"stored": 0}
+
+
+class _AskingSource(_FakeSource):
+    """A source whose `after_turn` makes one call of its own through the model it's handed."""
+
+    def __init__(self, *, streamed: bool = False) -> None:
+        super().__init__()
+        self.streamed = streamed
+
+    async def after_turn(self, query: str, output: Any, run_context: Any, model: Any) -> list[str]:
+        request = ModelRequest(input=[{"role": "user", "content": "anything to keep?"}])
+        if self.streamed:
+            async for _delta in model.stream_response(request):
+                pass
+        else:
+            await model.get_response(request)
+        return []
+
+
+def test_a_sources_model_call_is_one_of_the_runs() -> None:
+    """The call memory makes after the answer is in the run's usage, trace and hooks.
+
+    But not held to `max_tokens`: the answer was already finished when it was spent.
+    """
+    extraction = Usage(input_tokens=40, output_tokens=10, total_tokens=50, requests=1)
+    model = ScriptedModel([text_response("ok"), text_response("{}", extraction)])
+    log: list[str] = []
+    agent = scripted_agent(model=model, memory=_AskingSource(), max_tokens=10)
+
+    result = agent.run_sync("hi", hooks=_RecordingHooks(log, "run"))
+
+    assert result.status == "completed"
+    assert result.usage.total_tokens == 52
+    assert result.usage.requests == 2
+    assert log.count("run:llm_start:TestAgent") == 2
+    assert log.count("run:llm_end:TestAgent") == 2
+
+    (source_span,) = [s for s in result.trace.spans if s.type == "custom"]
+    (extraction_span,) = [s for s in result.trace.spans if s.parent_id == source_span.id]
+    assert extraction_span.type == "llm"
+    assert extraction_span.output["usage"]["total_tokens"] == 50
+
+
+def test_a_sources_streamed_model_call_is_one_of_the_runs() -> None:
+    """Streamed through the model it's handed, a source's call is charged once the stream ends."""
+    extraction = Usage(input_tokens=4, output_tokens=1, total_tokens=5, requests=1)
+    model = _SequentialStreamingModel(
+        [[StreamDelta(text="ok")], [StreamDelta(text="{}"), StreamDelta(usage=extraction)]]
+    )
+    agent = scripted_agent(model=model, memory=_AskingSource(streamed=True))
+
+    _events, result = _streamed(agent, "hi")
+
+    assert result.status == "completed"
+    assert result.usage.total_tokens == 5
+    llm_spans = [s for s in result.trace.spans if s.type == "llm"]
+    assert [s.output["usage"]["total_tokens"] for s in llm_spans] == [0, 5]
 
 
 def test_memory_user_id_is_derived_from_the_session(tmp_path: Any) -> None:

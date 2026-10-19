@@ -46,7 +46,7 @@ async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) ->
     run.claim(call_id, tool.name)
 
     args_json = call_arguments(call)
-    with run.span(tool.name, "tool", input=args_json) as span:
+    with run.span(tool.name, "tool", input=args_json) as span, run.charging(under=span):
         await run.fire("on_tool_start", tool)
         await run.guard(Phase.TOOL_INPUT, args_json, tool=tool, under=span)
         try:

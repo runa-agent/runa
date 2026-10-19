@@ -2,8 +2,10 @@
 
 A run consults each source twice: before the first turn, for a block of context about the user's
 message, and once the run completes, with the exchange it produced. What a source searches, how it
-scopes and labels what it found, and what it keeps from an exchange are its own. Tracing each call
-and finishing a run without a source that didn't answer belong to the run.
+scopes and labels what it found, and what it keeps from an exchange are its own. Tracing each call,
+paying for it, and finishing a run without a source that didn't answer belong to the run: a model
+call through the `model` it's handed and an `runa.embeddings.embed` request made inside either
+method are charged to the run, in its usage and its trace.
 
 `runa.memory.MemoryLike` and `runa.knowledge.KnowledgeLike` are this contract as each setting
 names it; a custom `memory=`/`knowledge=` object implements those.
@@ -37,8 +39,9 @@ class ContextSource(Protocol):
         """Keep what's worth keeping from a completed exchange, returning the texts kept.
 
         `query` is the user's message and `output` the run's final output. `model` is the
-        agent's own resolved `Model`, for a source that wants an LLM call of its own. A source
-        that learns nothing from conversations returns `[]`.
+        agent's own model, for a source that wants an LLM call of its own; each call through it
+        is one of the run's, in its trace, its hooks and its usage. A source that learns nothing
+        from conversations returns `[]`.
         """
         ...
 

@@ -8,11 +8,11 @@ stream's consumer itself.
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from runa._items import assistant_message, tool_call
-from runa._models import Model, ModelRequest
+from runa._models import Model, ModelRequest, StreamDelta
 from runa._types import ModelResponse, Usage
 from runa.stream_events import StreamEvent, TextDelta
 
@@ -28,21 +28,23 @@ class _PartialCall:
     arguments: str = ""
 
 
-async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> ModelResponse:
-    """Consume `model.stream_response(request)` into a `ModelResponse`, emitting its text."""
-    text_parts: list[str] = []
-    calls: dict[int, _PartialCall] = {}
-    blocks: list[Any] = []
-    usage = Usage()
+@dataclass
+class _Assembly:
+    """A streamed response put back together, one `StreamDelta` at a time."""
 
-    async for delta in model.stream_response(request):
+    text_parts: list[str] = field(default_factory=list)
+    calls: dict[int, _PartialCall] = field(default_factory=dict)
+    blocks: list[Any] = field(default_factory=list)
+    usage: Usage = field(default_factory=Usage)
+
+    def add(self, delta: StreamDelta) -> None:
+        """Fold `delta` into the response so far."""
         if delta.text:
-            text_parts.append(delta.text)
-            emit(TextDelta(delta.text))
+            self.text_parts.append(delta.text)
         if delta.provider_blocks:
-            blocks.extend(delta.provider_blocks)
+            self.blocks.extend(delta.provider_blocks)
         if delta.tool_call_index is not None:
-            call = calls.setdefault(delta.tool_call_index, _PartialCall())
+            call = self.calls.setdefault(delta.tool_call_index, _PartialCall())
             if delta.tool_call_id:
                 call.id = delta.tool_call_id
             if delta.tool_call_name:
@@ -50,14 +52,27 @@ async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> M
             if delta.tool_call_arguments:
                 call.arguments += delta.tool_call_arguments
         if delta.usage is not None:
-            usage = delta.usage
+            self.usage = delta.usage
 
-    message = assistant_message(
-        "".join(text_parts),
-        [tool_call(calls[i].id, calls[i].name, calls[i].arguments) for i in sorted(calls)],
-        blocks,
-    )
-    return ModelResponse(output=[message], usage=usage)
+    def response(self) -> ModelResponse:
+        """Every delta added so far, as the `ModelResponse` the same call would have returned."""
+        calls = self.calls
+        message = assistant_message(
+            "".join(self.text_parts),
+            [tool_call(calls[i].id, calls[i].name, calls[i].arguments) for i in sorted(calls)],
+            self.blocks,
+        )
+        return ModelResponse(output=[message], usage=self.usage)
 
 
-__all__ = ["Emit", "_stream_response"]
+async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> ModelResponse:
+    """Consume `model.stream_response(request)` into a `ModelResponse`, emitting its text."""
+    assembly = _Assembly()
+    async for delta in model.stream_response(request):
+        assembly.add(delta)
+        if delta.text:
+            emit(TextDelta(delta.text))
+    return assembly.response()
+
+
+__all__ = ["Emit", "_Assembly", "_stream_response"]
