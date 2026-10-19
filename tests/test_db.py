@@ -433,9 +433,9 @@ def test_a_local_connection_grows_a_file_that_predates_a_column(tmp_path: Path) 
         conn.execute(f"INSERT INTO {SESSIONS.name} (session_id) VALUES ('s1')")
         conn.commit()
 
-    grown = replace(SESSIONS, columns=(*SESSIONS.columns, Column("agent_name", "text", null=True)))
+    grown = replace(SESSIONS, columns=(*SESSIONS.columns, Column("title", "text", null=True)))
     with closing(connect(db_path, grown, MESSAGES)) as conn:
-        rows = conn.execute(f"SELECT session_id, agent_name FROM {grown.name}").fetchall()
+        rows = conn.execute(f"SELECT session_id, title FROM {grown.name}").fetchall()
 
     assert rows == [("s1", None)]
 

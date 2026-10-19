@@ -636,6 +636,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     dropped = transcript.compact_history(run.start.compactor, tokens)
     _note_compaction(run.spans, tokens, dropped)
     if frame.session is not None:
+        frame.session.agent_name = run.start.name
         if dropped is None:
             await frame.session.add_items(transcript.unsaved())
         else:

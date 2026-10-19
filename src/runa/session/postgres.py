@@ -67,8 +67,10 @@ class PostgresSession(Shared, Session):
                 [(self.session_id, json.dumps(item)) for item in items],
             )
             await conn.execute(
-                f"UPDATE {SESSIONS.name} SET updated_at = now() WHERE session_id = $1",
+                f"UPDATE {SESSIONS.name} SET updated_at = now(), "
+                "agent_name = COALESCE(agent_name, $2) WHERE session_id = $1",
                 self.session_id,
+                self.agent_name,
             )
 
     async def set_items(self, items: list[ConversationItem]) -> None:
@@ -89,8 +91,10 @@ class PostgresSession(Shared, Session):
                     [(self.session_id, json.dumps(item)) for item in items],
                 )
             await conn.execute(
-                f"UPDATE {SESSIONS.name} SET updated_at = now() WHERE session_id = $1",
+                f"UPDATE {SESSIONS.name} SET updated_at = now(), "
+                "agent_name = COALESCE(agent_name, $2) WHERE session_id = $1",
                 self.session_id,
+                self.agent_name,
             )
 
     async def clear_session(self) -> None:

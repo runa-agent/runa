@@ -7,8 +7,8 @@ One interface, two adapters: `session/sqlite.py` and `session/postgres.py`.
 Which one a caller gets is `runa.db.sessions(...)`'s decision, asked once, so no reader here or
 in `web/` branches on a backend or names a file. Nothing in this module touches a database: it
 holds the two tables both adapters create (`db/schema.py` renders them per dialect), the
-contract, the two objects a row becomes, and the rules the adapters have to agree on -- how a
-session id matches an agent, how a listing is ordered, and how a timestamp is rendered. What a
+contract, the two objects a row becomes, and the rules the adapters have to agree on -- which
+agent a session belongs to, how a listing is ordered, and how a timestamp is rendered. What a
 stored message's `role` and `text` are is `runa._items`'s rule, applied here by `to_message`.
 
 The first two are `listing_clause`, rendered in either dialect, which is the whole reason it is
@@ -30,9 +30,16 @@ SESSIONS = Table(
         Column("session_id", "text", primary_key=True),
         Column("created_at", "timestamp", default_now=True),
         Column("updated_at", "timestamp", default_now=True),
+        Column("agent_name", "text", null=True),
     ),
     indexes=(Index("updated_at", "updated_at DESC, session_id DESC"),),
 )
+"""One row per session. `agent_name` is the agent whose run first saved a turn to it.
+
+Null until then: a session seeded with `add_items` before its first run belongs to no agent yet.
+The first write that names an agent fills it and no later one changes it, so a session one agent
+started stays that agent's after a handoff or a reuse of its id.
+"""
 
 MESSAGES = Table(
     "agent_messages",
@@ -78,9 +85,8 @@ class SessionStore(Protocol):
     def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this deployment's sessions, most recently updated first.
 
-        `agent` keeps only that agent's sessions, matching a session id that is either exactly
-        `agent` (the old, pre-session-per-chat default) or starts with `f"{agent}-"`
-        (`cli/chat.py`'s current scheme), so `--continue`/`--resume` find history under either.
+        `agent` keeps only the sessions whose `agent_name` is `agent`, the agent whose run first
+        saved a turn to it. A session id is the application's and says nothing about its agent.
 
         Ties on `updated_at` break by session id descending, in every adapter, so `runa chat
         --list` and the Sessions page agree between a local deployment and a shared one.
@@ -113,28 +119,17 @@ _ORDER = "ORDER BY updated_at DESC, session_id DESC"
 
 
 def listing_clause(agent: str | None, dialect: Dialect) -> tuple[str, tuple[str, ...]]:
-    r"""Everything after `SELECT ... FROM agent_sessions` for `listing`, and the values it binds.
+    """Everything after `SELECT ... FROM agent_sessions` for `listing`, and the values it binds.
 
-    One sentence of policy: keep the sessions belonging to `agent`, if one was named, most
-    recently updated first, ties broken on the session id. Belonging means a session id that is
-    either exactly `agent` or starts with `f"{agent}-"`, with wildcards in `agent` escaped, so an
-    agent named `a_b` can't match a session of `axb` in one backend and not the other.
-    `agent=None` filters nothing, so a listing composes the same string either way. Placeholders
-    are the `dialect`'s, like `Table.placeholders`.
-
-    The whole tail rather than the `LIKE` pattern alone, because escaping a wildcard only works
-    paired with the `ESCAPE` clause naming the escape character, and an adapter handed the pattern
-    plus a docstring asking for the clause can take half the rule. The `ORDER BY` is here for the
-    same reason: one tie-break, not one per adapter.
+    One sentence of policy: keep the sessions whose `agent_name` is `agent`, if one was named,
+    most recently updated first, ties broken on the session id. `agent=None` filters nothing, so a
+    listing composes the same string either way. Placeholders are the `dialect`'s, like
+    `Table.placeholders`. The whole tail rather than the filter alone, so the tie-break is one
+    rule rather than one per adapter.
     """
     if agent is None:
         return _ORDER, ()
-    exact, prefix = dialect.placeholder(1), dialect.placeholder(2)
-    escaped = agent.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return (
-        rf"WHERE session_id = {exact} OR session_id LIKE {prefix} ESCAPE '\' {_ORDER}",
-        (agent, f"{escaped}-%"),
-    )
+    return f"WHERE agent_name = {dialect.placeholder(1)} {_ORDER}", (agent,)
 
 
 def to_message(created_at: str | datetime, message_data: str) -> SessionMessage:

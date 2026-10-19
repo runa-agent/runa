@@ -141,7 +141,7 @@ from runa import db
 store = db.sessions()
 
 store.listing()                      # every session, most recently updated first
-store.listing(agent="support_agent") # one agent's past sessions
+store.listing(agent="support_agent") # sessions support_agent saved a turn to, whatever their ids
 store.messages("support_agent-1")    # that session's transcript, oldest first
 ```
 

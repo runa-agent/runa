@@ -117,8 +117,9 @@ class SQLiteSession(Session):
                 [(self.session_id, json.dumps(item)) for item in items],
             )
             conn.execute(
-                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
-                (self.session_id,),
+                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP, "
+                "agent_name = COALESCE(agent_name, ?) WHERE session_id = ?",
+                (self.agent_name, self.session_id),
             )
             conn.commit()
 
@@ -137,8 +138,9 @@ class SQLiteSession(Session):
                     [(self.session_id, json.dumps(item)) for item in items],
                 )
             conn.execute(
-                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
-                (self.session_id,),
+                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP, "
+                "agent_name = COALESCE(agent_name, ?) WHERE session_id = ?",
+                (self.agent_name, self.session_id),
             )
             conn.commit()
 

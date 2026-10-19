@@ -53,8 +53,9 @@ Check = Callable[[SessionPair], Coroutine[Any, Any, None]]
 
 
 async def _write(pair: SessionPair, suffix: str, *texts: str) -> Session:
-    """One session with one user message per text, through the write side."""
+    """One session with one user message per text, saved the way a run saves it: as `pair.tag`."""
     session = pair.session(suffix)
+    session.agent_name = pair.tag
     await session.add_items([{"role": "user", "content": text} for text in texts])
     return session
 
@@ -136,24 +137,34 @@ async def check_listing_renders_updated_at_the_same_way_in_every_backend(
     assert "+" not in updated_at
 
 
-async def check_listing_by_agent_matches_prefixed_and_exact_ids(pair: SessionPair) -> None:
-    """`listing(agent=...)` finds both `Agent-<suffix>` chats and a bare `Agent` one."""
-    await _write(pair, "-20260101-000000-aaaa", "hi")
-    await _write(pair, "", "hi")
-    await _write(pair, "z-20260101-000000-bbbb", "hi")
+async def check_listing_by_agent_matches_the_recorded_agent_whatever_the_id(
+    pair: SessionPair,
+) -> None:
+    """`listing(agent=...)` finds a session by the agent that wrote it, not by its id's shape."""
+    await _write(pair, "-user-42", "hi")
+    other = pair.session("-escalation")
+    other.agent_name = pair.id("-escalation")
+    await other.add_items([{"role": "user", "content": "hi"}])
 
     listed = pair.read.listing(agent=pair.tag)
 
-    assert {summary.id for summary in listed} == {pair.id("-20260101-000000-aaaa"), pair.id()}
+    assert [summary.id for summary in listed] == [pair.id("-user-42")]
 
 
-async def check_listing_by_agent_does_not_treat_underscores_as_wildcards(
-    pair: SessionPair,
-) -> None:
-    """An agent named `a_b` doesn't match a session of `axb`, in any backend."""
-    await _write(pair, "xb-1", "hi")
+async def check_the_first_agent_to_write_keeps_the_session(pair: SessionPair) -> None:
+    """A session seeded with no agent takes the first one that writes, and keeps it."""
+    session = pair.session()
+    await session.add_items([{"role": "user", "content": "seeded"}])
+    unowned = pair.read.listing(agent=pair.tag)
 
-    assert pair.read.listing(agent=pair.id("_b")) == []
+    session.agent_name = pair.tag
+    await session.add_items([{"role": "user", "content": "first run"}])
+    session.agent_name = pair.id("-other")
+    await session.set_items([{"role": "user", "content": "second run"}])
+
+    assert unowned == []
+    assert [summary.id for summary in pair.read.listing(agent=pair.tag)] == [pair.id()]
+    assert pair.read.listing(agent=pair.id("-other")) == []
 
 
 async def check_messages_raises_for_an_unknown_session(pair: SessionPair) -> None:
@@ -204,8 +215,8 @@ CONTRACT: list[Check] = [
     check_listing_returns_each_written_session_once,
     check_listing_is_empty_for_an_agent_with_no_history,
     check_listing_renders_updated_at_the_same_way_in_every_backend,
-    check_listing_by_agent_matches_prefixed_and_exact_ids,
-    check_listing_by_agent_does_not_treat_underscores_as_wildcards,
+    check_listing_by_agent_matches_the_recorded_agent_whatever_the_id,
+    check_the_first_agent_to_write_keeps_the_session,
     check_messages_raises_for_an_unknown_session,
     check_messages_splits_each_message_into_role_and_text,
     check_messages_are_oldest_first,

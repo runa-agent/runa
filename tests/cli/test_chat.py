@@ -19,6 +19,13 @@ def _write_agent(project_dir: Path, filename: str, source: str) -> None:
     (project_dir / "app" / "agents" / filename).write_text(source)
 
 
+def _save_turn(db_path: Path, session_id: str, agent_name: str) -> None:
+    """Save one turn to `session_id` the way `agent_name`'s run would."""
+    session = SQLiteSession(session_id, db_path=db_path)
+    session.agent_name = agent_name
+    asyncio.run(session.add_items([{"role": "user", "content": "hi"}]))
+
+
 class _SupportAgentStub(Agent):
     """A stand-in for an `Interruption.agent`; never actually run."""
 
@@ -190,9 +197,7 @@ def test_run_agent_repl_continue_resumes_the_most_recent_session(
     """`continue_last=True` reuses the Agent's most recently updated session."""
     project_dir = _scaffold_with_agent(tmp_path)
     db_path = project_dir / "db" / "runa.db"
-    asyncio.run(
-        SQLiteSession("Support-old", db_path=db_path).add_items([{"role": "user", "content": "hi"}])
-    )
+    _save_turn(db_path, "user-42", "Support")
 
     seen: list[str] = []
 
@@ -205,7 +210,7 @@ def test_run_agent_repl_continue_resumes_the_most_recent_session(
 
     run_agent_repl("Support", root=project_dir, continue_last=True)
 
-    assert seen == ["Support-old"]
+    assert seen == ["user-42"]
 
 
 def test_run_agent_repl_continue_with_no_history_starts_a_new_session(
@@ -252,12 +257,9 @@ def test_run_agent_repl_resume_without_an_id_prompts_a_picker(
     """`resume=""` lists past sessions, newest first, and resumes the operator's pick."""
     project_dir = _scaffold_with_agent(tmp_path)
     db_path = project_dir / "db" / "runa.db"
-    asyncio.run(
-        SQLiteSession("Support-a", db_path=db_path).add_items([{"role": "user", "content": "hi"}])
-    )
-    asyncio.run(
-        SQLiteSession("Support-b", db_path=db_path).add_items([{"role": "user", "content": "hi"}])
-    )
+    _save_turn(db_path, "a", "Support")
+    _save_turn(db_path, "b", "Support")
+    _save_turn(db_path, "c", "SupportEscalation")
 
     seen: list[str] = []
 
@@ -270,8 +272,11 @@ def test_run_agent_repl_resume_without_an_id_prompts_a_picker(
 
     run_agent_repl("Support", root=project_dir, resume="")
 
-    assert seen == ["Support-b"]
-    assert "Support-a" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert seen == ["b"]
+    assert "1. b" in out
+    assert "2. a" in out
+    assert "3." not in out
 
 
 def test_run_agent_repl_resume_without_an_id_and_no_history_starts_a_new_session(

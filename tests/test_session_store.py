@@ -70,7 +70,9 @@ def test_listing_breaks_updated_at_ties_by_session_id_descending(project: None) 
     """
     pair = _pair()
     for suffix in ("-a", "-c", "-b"):
-        asyncio.run(pair.session(suffix).add_items([{"role": "user", "content": "hi"}]))
+        session = pair.session(suffix)
+        session.agent_name = pair.tag
+        asyncio.run(session.add_items([{"role": "user", "content": "hi"}]))
 
     listed = pair.read.listing(agent=pair.tag)
 
@@ -78,18 +80,12 @@ def test_listing_breaks_updated_at_ties_by_session_id_descending(project: None) 
 
 
 @pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
-def test_listing_clause_carries_its_escape_clause_in_every_dialect(dialect: Dialect) -> None:
-    """The escaped pattern and the `ESCAPE` clause that gives it meaning come back together.
-
-    Both are one value because an adapter handed the pattern alone can bind it without the clause,
-    which is how the Postgres listing was written: correct only because a backslash happens to be
-    its default escape character. Asserted per dialect rather than per adapter, since the live
-    Postgres half of the contract is `tests/test_postgres.py`.
-    """
+def test_listing_clause_filters_on_the_recorded_agent_in_every_dialect(dialect: Dialect) -> None:
+    """The agent is matched as a value of its own column, never as a pattern over session ids."""
     clause, params = listing_clause("a_b", dialect)
 
-    assert "ESCAPE '\\'" in clause
-    assert params == ("a_b", "a\\_b-%")
+    assert clause.startswith(f"WHERE agent_name = {dialect.placeholder(1)} ")
+    assert params == ("a_b",)
 
 
 @pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
