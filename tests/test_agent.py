@@ -12,13 +12,13 @@ from types import ModuleType
 from typing import Any, TypedDict, cast
 
 import pytest
+from helpers import shape_of
 from pydantic import BaseModel
 
 from runa import Agent, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContext, Usage
 from runa.agent import _AGENT_FIELDS, Subagent
-from runa.compact import default_compactor
 from runa.exceptions import MaxTurnsExceeded, OperatorError, RunErrorDetails, UserError
 from runa.guardrail import Phase, guardrail
 from runa.handoff import Delegate
@@ -587,15 +587,13 @@ def test_knowledge_rejects_an_unknown_string() -> None:
 
 def test_compact_defaults_to_no_compactor() -> None:
     """Without `compact=`, an agent behaves exactly as if `runa.compact` didn't exist."""
-    agent = Researcher()
-
-    assert agent.compactor is None
+    assert shape_of(Researcher()).compactor is None
 
 
 def test_compact_true_resolves_to_the_default_compactor() -> None:
     """`compact=True` is sugar for Runa's own rolling-window `Compactor`, resolved at construction.
 
-    The turn loop reads `compactor`, so `True` has to have become a callable by the time a run
+    A run reads its shape's `compactor`, so `True` has become a callable by the time a turn
     starts -- it is not the loop's job to know what the bool meant.
     """
     from runa.compact import default_compactor
@@ -605,7 +603,7 @@ def test_compact_true_resolves_to_the_default_compactor() -> None:
         instructions = "compacts"
         compact = True
 
-    assert Compacting().compactor is default_compactor
+    assert shape_of(Compacting()).compactor is default_compactor
 
 
 def test_compact_accepts_a_custom_compactor_callable() -> None:
@@ -619,7 +617,7 @@ def test_compact_accepts_a_custom_compactor_callable() -> None:
         instructions = "compacts"
         compact = drop_oldest_item
 
-    assert Compacting().compactor is drop_oldest_item
+    assert shape_of(Compacting()).compactor is drop_oldest_item
 
 
 def test_compact_false_resolves_to_no_compactor() -> None:
@@ -630,7 +628,7 @@ def test_compact_false_resolves_to_no_compactor() -> None:
         instructions = "does not compact"
         compact = False
 
-    assert NotCompacting().compactor is None
+    assert shape_of(NotCompacting()).compactor is None
 
 
 def test_compact_rejects_a_value_that_is_neither_a_bool_nor_a_callable() -> None:
@@ -644,7 +642,7 @@ def test_compact_rejects_a_value_that_is_neither_a_bool_nor_a_callable() -> None
     class BadCompact(Agent):
         name = "BadCompact"
         instructions = "bad compact"
-        compact = "sometimes"
+        compact = cast(Any, "sometimes")
 
     with pytest.raises(UserError, match="compact"):
         BadCompact()
@@ -885,13 +883,13 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert agent.model_settings is model_settings
     assert _tool_names(agent) == ["ping"]
     assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
-    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
+    assert agent.guardrails == passed["guardrails"]
     assert len(agent.mcp_servers) == 2, "`mcp` and `mcp_servers` are merged, not one or the other"
     assert agent.output_type is Answer
     assert agent.hooks is hooks
     assert isinstance(agent.memory, Memory)
     assert isinstance(agent.knowledge, Knowledge)
-    assert agent.compactor is default_compactor
+    assert agent.compact is True
     assert (agent.max_turns, agent.max_tokens, agent.timeout) == (3, 100, 5.0)
 
 
@@ -988,7 +986,7 @@ def test_subagents_and_guardrails_can_also_be_passed_to_the_constructor() -> Non
     agent = Lead(subagents=[Researcher.handoff], guardrails=[block_empty.input])
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
+    assert [g.name for g in shape_of(agent).guardrails[Phase.INPUT]] == ["block_empty"]
 
 
 def test_model_accepts_a_model_instance_without_a_provider() -> None:

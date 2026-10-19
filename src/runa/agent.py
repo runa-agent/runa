@@ -16,16 +16,16 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from runa import _loop, content
 from runa._items import ConversationItem, user_message
 from runa._log import logger
 from runa._models import DEFAULT_MODEL, Model, check_model_name
 from runa._types import MessageContent, ModelSettings, RunContext, Usage
-from runa.compact import Compactor, default_compactor
+from runa.compact import Compactor, resolve_compactor
 from runa.exceptions import UserError
-from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
+from runa.guardrail import GuardrailsList, flatten_guardrails
 from runa.handoff import Delegate, Handoff, Mode
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks
@@ -204,23 +204,6 @@ def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
     finally:
         if token is not None:
             _under_construction.reset(token)
-
-
-def _resolve_compactor(compact: Any) -> Compactor | None:
-    """Resolve a `compact=` setting to the `Compactor` the turn loop should run, or `None` for off.
-
-    Resolved at construction, so a bad value is a `UserError` before any model call is paid for.
-    """
-    if compact is None or compact is False:
-        return None
-    if compact is True:
-        return default_compactor
-    if callable(compact):
-        return cast(Compactor, compact)
-    raise UserError(
-        f"compact must be True, False, a (items, usage_tokens) -> items|None callable, "
-        f"or None, got {compact!r}"
-    )
 
 
 def _checked_model(model: Any) -> Any:
@@ -409,7 +392,7 @@ class Agent:
           - a `runa.compact.Compactor` (any `(items, usage_tokens) -> items | None` callable):
             your own strategy -- a different threshold, an LLM summary, whatever you return.
           - `False` (the default): off.
-        Resolved here, as `self.compactor`; anything else is a `UserError`.
+        Checked here; anything else is a `UserError`.
 
         `max_turns` caps how many model calls one run may make before `MaxTurnsExceeded`;
         `max_tokens` caps the tokens they may spend before `MaxTokensExceeded`; `timeout` caps
@@ -466,14 +449,14 @@ class Agent:
         self.handoffs: list[Handoff] = handoffs
         self.delegates: list[Delegate] = delegates
         self.mcp_servers: list[Any] = list(setting["mcp"] or [])
-        # Not `self.guardrails`, the name a subclass declares the list under.
-        self.bound_guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
-            setting["guardrails"] or []
-        )
+        # Kept as declared: a run's `AgentShape` holds them sorted by phase and resolved. Both are
+        # checked now, so a bad value is a `UserError` before any model call.
+        self.guardrails: GuardrailsList = setting["guardrails"] or []
+        flatten_guardrails(self.guardrails)
         self.output_type: type | None = setting["output_type"]
         self.hooks: Hooks[Any] | None = setting["hooks"]
-        # Not `self.compact`, the name a subclass declares the setting under.
-        self.compactor: Compactor | None = _resolve_compactor(setting["compact"])
+        self.compact: bool | Compactor | None = setting["compact"]
+        resolve_compactor(self.compact)
         self.max_turns: int = setting["max_turns"]
         self.max_tokens: int | None = setting["max_tokens"]
         self.timeout: float | None = setting["timeout"]

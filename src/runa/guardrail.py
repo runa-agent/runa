@@ -9,7 +9,7 @@ phase is a member of `Phase`, not a new field, class and list in nine modules.
 
 import asyncio
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
@@ -261,7 +261,7 @@ def guardrail(func: _Predicate) -> Guardrail:
     return Guardrail(func)
 
 
-GuardrailsList = list["BoundGuardrail | Guardrail"]
+GuardrailsList = Sequence["BoundGuardrail | Guardrail"]
 
 
 def _entries(guardrails: Any) -> list[Any]:

@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 from helpers import run as run_awaitable
+from helpers import shape_of
 
 from runa import Agent, guardrail
 from runa.exceptions import UserError
@@ -40,8 +41,8 @@ def test_guardrails_split_into_input_and_output() -> None:
 
     agent = Support()
 
-    assert agent.bound_guardrails[Phase.INPUT] == [bound_input]
-    assert agent.bound_guardrails[Phase.OUTPUT] == [bound_output]
+    assert shape_of(agent).guardrails[Phase.INPUT] == [bound_input]
+    assert shape_of(agent).guardrails[Phase.OUTPUT] == [bound_output]
 
 
 def test_no_guardrails_leaves_both_lists_empty() -> None:
@@ -53,8 +54,8 @@ def test_no_guardrails_leaves_both_lists_empty() -> None:
 
     agent = Support()
 
-    assert agent.bound_guardrails[Phase.INPUT] == []
-    assert agent.bound_guardrails[Phase.OUTPUT] == []
+    assert shape_of(agent).guardrails[Phase.INPUT] == []
+    assert shape_of(agent).guardrails[Phase.OUTPUT] == []
 
 
 def test_invalid_guardrail_entry_raises() -> None:
@@ -63,7 +64,7 @@ def test_invalid_guardrail_entry_raises() -> None:
     class Support(Agent):
         name = "Support"
         instructions = "support"
-        guardrails = [lambda value: False]
+        guardrails = cast(Any, [lambda value: False])
 
     with pytest.raises(UserError, match="guardrails entries must be"):
         Support()
@@ -79,8 +80,8 @@ def test_bare_guardrail_wires_both_input_and_output() -> None:
 
     agent = Support()
 
-    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
-    assert [g.name for g in agent.bound_guardrails[Phase.OUTPUT]] == ["block_empty"]
+    assert [g.name for g in shape_of(agent).guardrails[Phase.INPUT]] == ["block_empty"]
+    assert [g.name for g in shape_of(agent).guardrails[Phase.OUTPUT]] == ["block_empty"]
 
 
 def test_dict_guardrails_are_rejected() -> None:
@@ -122,8 +123,8 @@ def test_i_and_o_are_shorthand_for_input_and_output() -> None:
 
     agent = Support()
 
-    assert [g.name for g in agent.bound_guardrails[Phase.INPUT]] == ["block_empty"]
-    assert [g.name for g in agent.bound_guardrails[Phase.OUTPUT]] == ["block_long"]
+    assert [g.name for g in shape_of(agent).guardrails[Phase.INPUT]] == ["block_empty"]
+    assert [g.name for g in shape_of(agent).guardrails[Phase.OUTPUT]] == ["block_long"]
 
 
 def test_async_predicate_is_awaited() -> None:

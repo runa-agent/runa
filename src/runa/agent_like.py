@@ -9,12 +9,12 @@ misspelled attribute is a type error rather than a `getattr` default that reads 
 satisfies it. Which names are settings at all is `Agent.__init__`'s signature to say; these are
 the resolved attributes a run reads, not a second way to configure an agent.
 
-Three names differ from their declaration: `guardrails` and `compact` resolve to
-`bound_guardrails` and `compactor`, and `memory`/`knowledge` keep their names while changing kind
-(`"auto"` becomes the object it built, `"llm"` a search tool and `None`).
+Each member has the name of the setting it comes from. `guardrails` and `compact` hold the
+setting as declared or passed; `memory`/`knowledge` change kind (`"auto"` becomes the object it
+built, `"llm"` a search tool and `None`).
 
-`Agent` is the one implementation, and the turn loop reads every setting through this protocol;
-what a run resolves from them (MCP tools, keyed handoffs and delegates, the model) is
+`Agent` is the one implementation. What a run resolves from these (MCP tools, keyed handoffs and
+delegates, guardrails by phase, the compactor, the model) is
 `runa.run_internal.agent_shape.AgentShape`'s.
 """
 
@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from runa._models import Model
 from runa._types import ModelSettings
 from runa.compact import Compactor
-from runa.guardrail import BoundGuardrail, Phase
+from runa.guardrail import GuardrailsList
 from runa.lifecycle import Hooks
 from runa.tool import FunctionTool
 
@@ -78,8 +78,8 @@ class AgentLike(Protocol):
         ...
 
     @property
-    def bound_guardrails(self) -> dict[Phase, list[BoundGuardrail]]:
-        """Its guardrails by the phase each one runs in: the resolved form of `guardrails`."""
+    def guardrails(self) -> GuardrailsList:
+        """Its guardrails, in the order they run."""
         ...
 
     @property
@@ -98,8 +98,8 @@ class AgentLike(Protocol):
         ...
 
     @property
-    def compactor(self) -> Compactor | None:
-        """What trims a long conversation, if anything: the resolved form of `compact`."""
+    def compact(self) -> bool | Compactor | None:
+        """What trims a long conversation: `True` for `default_compactor`, or its own."""
         ...
 
     @property

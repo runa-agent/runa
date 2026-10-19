@@ -328,7 +328,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             _check_token_budget(run_context.usage, max_tokens)
         await hooks.on_llm_end(run_context, agent, response)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
-        dropped = transcript.compact(agent.compactor, context_tokens)
+        dropped = transcript.compact(shape.compactor, context_tokens)
         _note_compaction(run.spans, context_tokens, dropped)
 
         if not response.output:
@@ -508,7 +508,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
 
     # The next call's history starts from the same cut compaction made mid-run.
     tokens = outcome.context_tokens
-    dropped = transcript.compact_history(run.start.agent.compactor, tokens)
+    dropped = transcript.compact_history(run.start.compactor, tokens)
     _note_compaction(run.spans, tokens, dropped)
     if frame.session is not None:
         if dropped is None:

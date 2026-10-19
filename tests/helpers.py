@@ -7,6 +7,7 @@ from typing import Any
 from runa._types import ModelResponse, Usage
 from runa.agent import Agent
 from runa.run import Run
+from runa.run_internal.agent_shape import AgentShape
 from runa.tracing import Trace
 
 
@@ -92,15 +93,20 @@ def stand_in_agent(**attributes: Any) -> Agent:
     """A real `Agent` with `attributes` set on it, for a test that drives the turn loop directly.
 
     Only for what `Agent.run` cannot reach, such as an input list that doesn't end on the user's
-    message; everything else goes through `scripted_agent` and `agent.run`. `attributes` use the
-    resolved names (`bound_guardrails`, `compactor`, `handoffs`, `mcp_servers`). A name the agent
-    has no attribute for is refused rather than set and never read.
+    message; everything else goes through `scripted_agent` and `agent.run`. `attributes`
+    use the names an `Agent` stores its settings under (`handoffs`, `mcp_servers`). A name the
+    agent has no attribute for is refused rather than set and never read.
     """
     agent = _TestAgent()
     for name, value in attributes.items():
         assert hasattr(agent, name), f"Agent has no attribute {name!r}"
         setattr(agent, name, value)
     return agent
+
+
+def shape_of(agent: Agent) -> AgentShape:
+    """`agent` as a run resolves it: its guardrails by phase, its compactor, its MCP tools."""
+    return asyncio.run(AgentShape.of(agent))
 
 
 def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides: Any) -> Run:

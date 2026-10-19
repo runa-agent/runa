@@ -1,9 +1,10 @@
 """agent_shape.py: `AgentShape`, what a run resolves about an agent once it starts running.
 
 Its tools, including the ones its MCP servers list; its handoffs and delegates, keyed by the tool
-name that triggers each; the schema of every callable the model is offered; and its model, through
-the one process-wide `ModelProvider`. Each is worked out once per agent per run and shared by the
-whole turn loop. The agent's declared settings themselves are read through `AgentLike`.
+name that triggers each; the schema of every callable the model is offered; its guardrails by
+phase and its compactor; and its model, through the one process-wide `ModelProvider`. Each is
+worked out once per agent per run and shared by the whole turn loop. Every other setting is read
+off the agent through `AgentLike`.
 
 Only `run_internal` imports this module.
 """
@@ -12,6 +13,8 @@ from dataclasses import dataclass
 
 from runa._models import Model, ModelProvider, ToolSchema
 from runa.agent_like import AgentLike
+from runa.compact import Compactor, resolve_compactor
+from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
 from runa.handoff import Delegate, Handoff
 from runa.tool import FunctionTool
 
@@ -31,6 +34,10 @@ class AgentShape:
     delegates: dict[str, Delegate]
     offered: list[ToolSchema]
     """Every tool, delegate and handoff, in the order the model is offered them."""
+    guardrails: dict[Phase, list[BoundGuardrail]]
+    """`agent.guardrails` by the phase each one runs in, each phase's in list order."""
+    compactor: Compactor | None
+    """What `agent.compact` runs, or `None` when nothing trims the conversation."""
 
     @classmethod
     async def of(cls, agent: AgentLike) -> AgentShape:
@@ -65,6 +72,8 @@ class AgentShape:
             handoffs={handoff.tool_name: handoff for handoff in agent.handoffs},
             delegates={delegate.tool_name: delegate for delegate in agent.delegates},
             offered=offered,
+            guardrails=flatten_guardrails(agent.guardrails),
+            compactor=resolve_compactor(agent.compact),
         )
 
     def find_tool(self, name: str) -> FunctionTool | None:

@@ -12,6 +12,7 @@ the same cut.
 from typing import Protocol
 
 from runa._items import ConversationItem, latest_user_index
+from runa.exceptions import UserError
 
 DEFAULT_COMPACTION_TOKENS = 200_000
 
@@ -64,4 +65,21 @@ def default_compactor(
     return items[cut:]
 
 
-__all__ = ["Compactor", "DEFAULT_COMPACTION_TOKENS", "default_compactor"]
+def resolve_compactor(compact: bool | Compactor | None) -> Compactor | None:
+    """The `Compactor` a `compact=` setting runs, or `None` for off.
+
+    Any other value is a `UserError`.
+    """
+    if compact is None or compact is False:
+        return None
+    if compact is True:
+        return default_compactor
+    if callable(compact):
+        return compact
+    raise UserError(
+        f"compact must be True, False, a (items, usage_tokens) -> items|None callable, "
+        f"or None, got {compact!r}"
+    )
+
+
+__all__ = ["Compactor", "DEFAULT_COMPACTION_TOKENS", "default_compactor", "resolve_compactor"]

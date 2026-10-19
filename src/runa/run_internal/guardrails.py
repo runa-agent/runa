@@ -32,7 +32,7 @@ async def _run_guardrails(
     tool phase also passes `spans`, so its guardrails hang under the call they guard rather than
     under the run.
     """
-    entries = (run.shape.agent.bound_guardrails if tool is None else tool.guardrails).get(phase, ())
+    entries = (run.shape.guardrails if tool is None else tool.guardrails).get(phase, ())
     if not entries:
         return
     scope = run.spans if spans is None else spans
