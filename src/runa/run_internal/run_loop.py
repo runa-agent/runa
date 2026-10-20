@@ -401,25 +401,19 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
 
     for _turn in range(max_turns):
         shape = run.shape
-        model = shape.resolve_model()
         items = list(transcript.items)
-        with metered(str(shape.model), input=items) as charge:
-            system_instructions = await _resolve_instructions(shape, run_context)
-            await run.fire("on_llm_start", system_instructions, items)
-            request = ModelRequest(
-                input=items,
-                system_instructions=system_instructions,
-                model_settings=shape.model_settings,
-                tools=shape.offered,
-                output_schema=shape.output_type,
-            )
-            if run.frame.emit is None:
-                response = await model.get_response(request)
-            else:
-                response = await _stream_response(model, request, run.frame.emit)
-            charge(response.usage)
-            _check_token_budget(run_context.usage, max_tokens)
-        await run.fire("on_llm_end", response)
+        request = ModelRequest(
+            input=items,
+            system_instructions=await _resolve_instructions(shape, run_context),
+            model_settings=shape.model_settings,
+            tools=shape.offered,
+            output_schema=shape.output_type,
+        )
+        model = _RunModel(run, shape, max_tokens)
+        if run.frame.emit is None:
+            response = await model.get_response(request)
+        else:
+            response = await _stream_response(model, request, run.frame.emit)
         context_tokens = response.usage.input_tokens + response.usage.output_tokens
         dropped = transcript.compact(shape.compactor, context_tokens)
         _note_compaction(run.spans, context_tokens, dropped)
@@ -563,45 +557,48 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
             beside.span(name, "custom", input=query) as span,
             _fails_open(span, f"{name} after_turn", run.start.name),
         ):
-            model = _SourceModel(run)
+            model = _RunModel(run, run.start)
             kept = await source.after_turn(query, final_output, run.run_context, model)
             span.output = {"stored": len(kept)}
 
 
 @dataclass(frozen=True)
-class _SourceModel:
-    """The starting agent's model as a context source is handed it, each call one of the run's.
+class _RunModel:
+    """An agent's model as the run calls it, each call one of the run's.
 
-    A call is an `"llm"` span under the source's own, fires the hooks the loop's calls fire, and
-    is counted in the run's usage, but isn't held to the run's `max_tokens`: a source calls it
-    once the answer is in, and a finished answer isn't failed for what was spent after it.
+    A call is an `"llm"` span in the run's trace, fires `on_llm_start` and `on_llm_end`, and is
+    counted in the run's usage. With `max_tokens`, a call that takes the run over it ends its span
+    in error and raises; without, the call is never held to a budget.
     """
 
     run: _Run
+    shape: AgentShape
+    max_tokens: int | None = None
 
     async def get_response(self, request: ModelRequest) -> ModelResponse:
         """One call to the agent's model, charged to the run."""
-        start = self.run.start
-        with metered(str(start.model), input=list(request.input)) as charge:
+        with metered(str(self.shape.model), input=list(request.input)) as charge:
             await self._fire("on_llm_start", request.system_instructions, list(request.input))
-            response = await start.resolve_model().get_response(request)
+            response = await self.shape.resolve_model().get_response(request)
             charge(response.usage)
+            _check_token_budget(self.run.run_context.usage, self.max_tokens)
         await self._fire("on_llm_end", response)
         return response
 
     async def stream_response(self, request: ModelRequest) -> AsyncIterator[StreamDelta]:
         """One streamed call to the agent's model, charged to the run once the stream ends."""
-        start, assembly = self.run.start, _Assembly()
-        with metered(str(start.model), input=list(request.input)) as charge:
+        assembly = _Assembly()
+        with metered(str(self.shape.model), input=list(request.input)) as charge:
             await self._fire("on_llm_start", request.system_instructions, list(request.input))
-            async for delta in start.resolve_model().stream_response(request):
+            async for delta in self.shape.resolve_model().stream_response(request):
                 assembly.add(delta)
                 yield delta
             charge(assembly.usage)
+            _check_token_budget(self.run.run_context.usage, self.max_tokens)
         await self._fire("on_llm_end", assembly.response())
 
     async def _fire(self, event: str, *args: Any) -> None:
-        await self.run.fire(event, *args, agent=self.run.start.agent)
+        await self.run.fire(event, *args, agent=self.shape.agent)
 
 
 async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
