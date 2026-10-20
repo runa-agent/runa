@@ -122,13 +122,13 @@ def _add_to_evals(trace: Trace, *, root: Path) -> str:
     )
 
 
-def render_detail(trace_id: str, *, root: Path) -> str:
+async def render_detail(trace_id: str, *, root: Path) -> str:
     """Render `/traces/{trace_id}`: that trace's header, its span waterfall, and "Add to evals".
 
     No nav tab is active here: this page is reached from a session's trace card ("open trace"), an
     evaluation case, or a direct link, not browsed from a list, so nothing in `NAV_ITEMS` does.
     """
-    trace = require_trace(db.traces(), trace_id)
+    trace = await require_trace(db.traces(), trace_id)
     status = "ok" if trace.status == "ok" else "error"
     session_link = (
         f' · session <a href="{session_path(trace.session_id)}">{escape(trace.session_id)}</a>'

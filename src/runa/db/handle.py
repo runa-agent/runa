@@ -14,14 +14,13 @@ not a parameter, but the SQLite rewrite cannot tell, so a literal never contains
 A call outside `transaction()` is its own transaction. Reads never create anything: a database
 that isn't there yet answers a `fetch` with no rows, and the first write is what makes it.
 
-`run_sync` and `sync` are how a synchronous caller (`TraceExporter.export`, `runa traces`, `runa
-ui`) reaches a method written against this handle.
+`run_sync` is how a synchronous caller (`TraceExporter.export`, `runa traces`) awaits a method
+written against this handle.
 """
 
 import asyncio
-import functools
 import threading
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Coroutine, Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
 
@@ -78,8 +77,8 @@ _loop_lock = threading.Lock()
 def _background_loop() -> asyncio.AbstractEventLoop:
     """A daemon event loop for the synchronous callers that still need a `Database`.
 
-    `TraceExporter.export` and the whole `runa traces`/`runa ui` read path are synchronous, so
-    they have no loop of their own to await on. One long-lived loop on its own thread serves them
+    `TraceExporter.export` and the `runa traces`/`runa chat` commands are synchronous, so they
+    have no loop of their own to await on. One long-lived loop on its own thread serves them
     all, and `LoopCache` gives it its own pool, as it would any other loop -- which is the point:
     `asyncio.run()` per call would open and close a loop, and so a pool, per query.
     """
@@ -106,19 +105,4 @@ def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
     return future.result(timeout)
 
 
-def sync[**P, T](method: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
-    """Expose an `async def` store method as the synchronous method its callers actually call.
-
-    A `TraceStore`/`EvalStore`/`SessionStore` is a synchronous interface (`runa traces`,
-    `runa ui` and `TraceExporter.export` reach it from a thread with no loop on it) while a
-    `Database` is not; this pairs each async body with `run_sync`.
-    """
-
-    @functools.wraps(method)
-    def synchronous(*args: P.args, **kwargs: P.kwargs) -> T:
-        return run_sync(method(*args, **kwargs))
-
-    return synchronous
-
-
-__all__ = ["Database", "Queries", "Row", "run_sync", "sync"]
+__all__ = ["Database", "Queries", "Row", "run_sync"]

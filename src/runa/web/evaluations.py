@@ -83,9 +83,9 @@ def _case_card(case: EvalCaseRow, *, regressed: bool) -> str:
 </div>"""
 
 
-def render_list() -> str:
+async def render_list() -> str:
     """Render `/evaluations`: the most recent `agent.evaluate()` runs, newest first."""
-    runs = db.evals().list(limit=100)
+    runs = await db.evals().list(limit=100)
     if not runs:
         body = empty_hint("no evaluation runs yet, run", "runa eval")
     else:
@@ -104,13 +104,13 @@ def render_list() -> str:
     )
 
 
-def render_detail(run_id: int) -> str:
+async def render_detail(run_id: int) -> str:
     """Render `/evaluations/{run_id}`: that run's summary plus every case it graded."""
     store = db.evals()
-    run: EvalRun | None = store.get(run_id)
+    run: EvalRun | None = await store.get(run_id)
     if run is None:
         raise EvalRunNotFound(f"no eval run found with id {run_id!r}")
-    baseline = store.baseline(run.agent_name, before=run.id) or {}
+    baseline = await store.baseline(run.agent_name, before=run.id) or {}
     last_run = f" · last run {sum(baseline.values())}/{len(baseline)} passed" if baseline else ""
     header = (
         f"<h1>{escape(run.agent_name)}</h1>"

@@ -83,15 +83,15 @@ class TraceStore(Protocol):
     callers pass `status="error"` instead.
     """
 
-    def save(self, trace: Trace) -> None:
+    async def save(self, trace: Trace) -> None:
         """Persist `trace` and every span in it, replacing any existing one with the same id."""
         ...
 
-    def get(self, trace_id: str) -> Trace | None:
+    async def get(self, trace_id: str) -> Trace | None:
         """Look up one trace by id, with every span it has, or `None` if this store has none."""
         ...
 
-    def list(
+    async def list(
         self,
         *,
         limit: int = 50,
@@ -111,13 +111,13 @@ class TraceStore(Protocol):
         ...
 
 
-def require_trace(store: TraceStore, trace_id: str) -> Trace:
+async def require_trace(store: TraceStore, trace_id: str) -> Trace:
     """Look `trace_id` up in `store`, raising `TraceNotFound` when it has no such trace.
 
     The raising form of `get`, which is the only form the three surfaces above a store want, so
     the message is worded once. `get` stays, since "is it there" is still a question worth asking.
     """
-    trace = store.get(trace_id)
+    trace = await store.get(trace_id)
     if trace is None:
         raise TraceNotFound(f"no trace found with id {trace_id!r}")
     return trace

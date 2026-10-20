@@ -13,7 +13,7 @@ The two tables, the row marshalling and the listing's filter-order-cap clause ar
 import builtins
 from typing import Any
 
-from runa.db.handle import Database, sync
+from runa.db.handle import Database
 from runa.tracing.store import (
     SPANS,
     TRACES,
@@ -36,7 +36,6 @@ class DatabaseTraceStore:
         """Store the database this history lives in; its tables are created on the first `save`."""
         self.database = database
 
-    @sync
     async def save(self, trace: Trace) -> None:
         """Persist `trace` and every span in it, replacing any existing one with the same id."""
         async with self.database.transaction() as tx:
@@ -54,7 +53,6 @@ class DatabaseTraceStore:
                     [span_values(span) for span in trace.spans],
                 )
 
-    @sync
     async def get(self, trace_id: str) -> Trace | None:
         """Look up one trace by id, with every span it has, or `None` if this database has none."""
         row = await self.database.fetchrow(f"SELECT * FROM {TRACES.name} WHERE id = $1", trace_id)
@@ -65,7 +63,6 @@ class DatabaseTraceStore:
         )
         return to_trace(row, spans)
 
-    @sync
     async def list(
         self,
         *,

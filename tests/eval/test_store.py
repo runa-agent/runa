@@ -9,6 +9,7 @@ created by whichever replica connects first and has always had the column, where
 predate it.
 """
 
+import asyncio
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -18,6 +19,7 @@ from contracts.eval import CONTRACT, Check
 from helpers import finished_run
 
 from runa import db
+from runa.db.handle import run_sync
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
@@ -41,7 +43,7 @@ def store(
 @pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
 def test_eval_store_contract(store: EvalStore, check: Check) -> None:
     """Every local backend answers the `EvalStore` contract the same way."""
-    check(store, "SupportAgent")
+    asyncio.run(check(store, "SupportAgent"))
 
 
 def test_baseline_clause_orders_caps_and_binds_before_exclusively() -> None:
@@ -74,6 +76,6 @@ def test_adds_trace_id_to_an_older_local_file(tmp_path: Path) -> None:
 
     use(tmp_path)
     store = db.evals()
-    store.save(Report("A", [graded]))
+    run_sync(store.save(Report("A", [graded])))
 
-    assert store.baseline("A") == {"hi": True}
+    assert run_sync(store.baseline("A")) == {"hi": True}

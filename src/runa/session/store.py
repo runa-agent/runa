@@ -82,7 +82,7 @@ class SessionStore(Protocol):
     every adapter satisfies this by matching shape, the same escape hatch as `Cache`'s.
     """
 
-    def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
+    async def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this deployment's sessions, most recently updated first.
 
         `agent` keeps only the sessions whose `agent_name` is `agent`, the agent whose run first
@@ -93,7 +93,7 @@ class SessionStore(Protocol):
         """
         ...
 
-    def messages(self, session_id: str) -> list[SessionMessage]:
+    async def messages(self, session_id: str) -> list[SessionMessage]:
         """Return `session_id`'s messages, oldest first.
 
         Raises `SessionNotFound` if this deployment has no session row for `session_id`, rather

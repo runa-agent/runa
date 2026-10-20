@@ -68,20 +68,20 @@ def create_app(root: Path) -> FastAPI:
         return agents_page.render(root=root)
 
     @app.get("/sessions", response_class=HTMLResponse, include_in_schema=False)
-    def sessions_list() -> str:
-        return sessions_page.render_list()
+    async def sessions_list() -> str:
+        return await sessions_page.render_list()
 
     @app.get("/sessions/{session_id:path}", response_class=HTMLResponse, include_in_schema=False)
-    def session_detail(session_id: str) -> HTMLResponse:
+    async def session_detail(session_id: str) -> HTMLResponse:
         try:
-            return HTMLResponse(sessions_page.render_detail(session_id))
+            return HTMLResponse(await sessions_page.render_detail(session_id))
         except sessions_page.SessionNotFound:
             return HTMLResponse(_error_page("Sessions", "Session not found."), status_code=404)
 
     @app.get("/traces/{trace_id:path}", response_class=HTMLResponse, include_in_schema=False)
-    def trace_detail(trace_id: str) -> HTMLResponse:
+    async def trace_detail(trace_id: str) -> HTMLResponse:
         try:
-            return HTMLResponse(traces_page.render_detail(trace_id, root=root))
+            return HTMLResponse(await traces_page.render_detail(trace_id, root=root))
         except TraceNotFound:
             return HTMLResponse(_error_page("", "Trace not found."), status_code=404)
 
@@ -92,7 +92,7 @@ def create_app(root: Path) -> FastAPI:
         form = parse_qs((await request.body()).decode())
         expected = form.get("expected", [""])[0].strip() or None
         try:
-            add_trace_to_evals(trace_id, root=root, expected=expected)
+            await add_trace_to_evals(trace_id, root=root, expected=expected)
         except CaseAlreadyInEvals:
             pass  # e.g. a double submit: the trace page already shows where the case is
         except TraceNotFound, TraceHasNoInput:
@@ -100,13 +100,13 @@ def create_app(root: Path) -> FastAPI:
         return RedirectResponse(trace_path(trace_id), status_code=303)
 
     @app.get("/evaluations", response_class=HTMLResponse, include_in_schema=False)
-    def evaluations_list() -> str:
-        return evaluations_page.render_list()
+    async def evaluations_list() -> str:
+        return await evaluations_page.render_list()
 
     @app.get("/evaluations/{run_id}", response_class=HTMLResponse, include_in_schema=False)
-    def evaluation_detail(run_id: int) -> HTMLResponse:
+    async def evaluation_detail(run_id: int) -> HTMLResponse:
         try:
-            return HTMLResponse(evaluations_page.render_detail(run_id))
+            return HTMLResponse(await evaluations_page.render_detail(run_id))
         except evaluations_page.EvalRunNotFound:
             return HTMLResponse(
                 _error_page("Evaluations", "Evaluation run not found."), status_code=404

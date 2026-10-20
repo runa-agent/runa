@@ -53,7 +53,7 @@ def has_case(eval_file: Path, input: str) -> bool:
     return eval_file.exists() and any(case.input == input for case in Dataset.from_jsonl(eval_file))
 
 
-def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None) -> Path:
+async def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None) -> Path:
     """Append the traced run's input as a new case to `evals/<agent_name>.jsonl`.
 
     The agent is the trace's root agent span, the one the run started with. `expected` says what a
@@ -62,7 +62,7 @@ def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None = None
     An input already in the file raises `CaseAlreadyInEvals` rather than adding it twice.
     """
     evals_dir = require_evals_dir(root)
-    trace = require_trace(db.traces(), trace_id)
+    trace = await require_trace(db.traces(), trace_id)
     traced = traced_input(trace)
     if traced is None:
         raise TraceHasNoInput(f"trace {trace_id!r} recorded no user input to add as a case")

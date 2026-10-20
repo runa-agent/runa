@@ -21,6 +21,7 @@ from typing import Any, Protocol
 
 from runa import _app
 from runa._log import logger
+from runa.db.handle import run_sync
 from runa.tracing.store import TraceStore
 from runa.tracing.traces import Trace
 
@@ -31,7 +32,7 @@ class TraceExporter(Protocol):
     """Exports a finished `Trace` somewhere: SQLite, the console, or a caller's own backend.
 
     `export` is synchronous and may block: a finishing run's trace is exported on tracing's own
-    thread, and a synchronous caller (a `tracing.trace` block, `runa ui`) exports inline.
+    thread, and a synchronous caller (a `tracing.trace` block) exports inline.
     """
 
     def export(self, trace: Trace) -> None:
@@ -93,7 +94,7 @@ class StoreExporter:
 
     def export(self, trace: Trace) -> None:
         """Persist `trace`. Exceptions are caught by the caller; tracing never fails a run."""
-        self.store.save(trace)
+        run_sync(self.store.save(trace))
 
 
 class SQLiteExporter(StoreExporter):

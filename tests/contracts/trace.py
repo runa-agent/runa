@@ -9,12 +9,13 @@ session id it uses is derived from that tag, and every listing it asserts on is 
 them, so the same checks hold against a live Postgres whose tables already hold other runs' rows.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from runa.tracing import Span, Trace
 from runa.tracing.store import TraceStore
 
-Check = Callable[[TraceStore, str], None]
+Check = Callable[[TraceStore, str], Coroutine[Any, Any, None]]
 
 
 def _trace(
@@ -47,11 +48,11 @@ def _trace(
     )
 
 
-def check_save_then_get_round_trips_the_span(store: TraceStore, tag: str) -> None:
+async def check_save_then_get_round_trips_the_span(store: TraceStore, tag: str) -> None:
     """`get` returns a saved trace with its span's fields intact."""
-    store.save(_trace(f"{tag}-1", name=tag))
+    await store.save(_trace(f"{tag}-1", name=tag))
 
-    fetched = store.get(f"{tag}-1")
+    fetched = await store.get(f"{tag}-1")
 
     assert fetched is not None
     assert fetched.name == tag
@@ -60,33 +61,33 @@ def check_save_then_get_round_trips_the_span(store: TraceStore, tag: str) -> Non
     assert fetched.spans[0].name == tag
 
 
-def check_get_returns_none_for_an_unknown_id(store: TraceStore, tag: str) -> None:
+async def check_get_returns_none_for_an_unknown_id(store: TraceStore, tag: str) -> None:
     """Looking up a trace id that was never saved returns `None`, not an error."""
-    assert store.get(f"{tag}-never-saved") is None
+    assert await store.get(f"{tag}-never-saved") is None
 
 
-def check_save_replaces_a_trace_with_the_same_id(store: TraceStore, tag: str) -> None:
+async def check_save_replaces_a_trace_with_the_same_id(store: TraceStore, tag: str) -> None:
     """A second `save` of one id updates it rather than adding a duplicate trace or span."""
     trace = _trace(f"{tag}-1", name=f"{tag}-first")
-    store.save(trace)
+    await store.save(trace)
     trace.name = f"{tag}-second"
-    store.save(trace)
+    await store.save(trace)
 
-    assert store.list(agent=f"{tag}-first") == []
-    renamed = store.list(agent=f"{tag}-second")
+    assert await store.list(agent=f"{tag}-first") == []
+    renamed = await store.list(agent=f"{tag}-second")
     assert [found.id for found in renamed] == [f"{tag}-1"]
     assert len(renamed[0].spans) == 1
 
 
-def check_list_orders_newest_first_and_respects_limit(store: TraceStore, tag: str) -> None:
+async def check_list_orders_newest_first_and_respects_limit(store: TraceStore, tag: str) -> None:
     """`list` returns the most recently started traces first, capped at `limit`."""
     for index in range(3):
-        store.save(_trace(f"{tag}-{index}", name=tag, start_time=float(index)))
+        await store.save(_trace(f"{tag}-{index}", name=tag, start_time=float(index)))
 
-    assert [found.id for found in store.list(agent=tag, limit=2)] == [f"{tag}-2", f"{tag}-1"]
+    assert [found.id for found in await store.list(agent=tag, limit=2)] == [f"{tag}-2", f"{tag}-1"]
 
 
-def check_list_breaks_a_start_time_tie_on_the_trace_id(store: TraceStore, tag: str) -> None:
+async def check_list_breaks_a_start_time_tie_on_the_trace_id(store: TraceStore, tag: str) -> None:
     """Two traces that started in the same instant list in one order, in every backend.
 
     `start_time` alone leaves the order to whatever each backend happens to return, which is how
@@ -95,38 +96,38 @@ def check_list_breaks_a_start_time_tie_on_the_trace_id(store: TraceStore, tag: s
     dialects render it.
     """
     for suffix in ("b", "a", "c"):
-        store.save(_trace(f"{tag}-{suffix}", name=tag, start_time=1.0))
+        await store.save(_trace(f"{tag}-{suffix}", name=tag, start_time=1.0))
 
-    listed = [found.id for found in store.list(agent=tag)]
+    listed = [found.id for found in await store.list(agent=tag)]
 
     assert listed == [f"{tag}-c", f"{tag}-b", f"{tag}-a"]
 
 
-def check_list_filters_by_agent_and_status(store: TraceStore, tag: str) -> None:
+async def check_list_filters_by_agent_and_status(store: TraceStore, tag: str) -> None:
     """`list(agent=..., status=...)` filters on `Trace.name`/`Trace.status`."""
-    store.save(_trace(f"{tag}-1", name=tag, start_time=0.0))
-    store.save(_trace(f"{tag}-2", name=tag, status="error", start_time=1.0))
-    store.save(_trace(f"{tag}-3", name=f"{tag}-other", start_time=2.0))
+    await store.save(_trace(f"{tag}-1", name=tag, start_time=0.0))
+    await store.save(_trace(f"{tag}-2", name=tag, status="error", start_time=1.0))
+    await store.save(_trace(f"{tag}-3", name=f"{tag}-other", start_time=2.0))
 
-    assert [found.id for found in store.list(agent=tag)] == [f"{tag}-2", f"{tag}-1"]
-    assert [found.id for found in store.list(agent=tag, status="error")] == [f"{tag}-2"]
+    assert [found.id for found in await store.list(agent=tag)] == [f"{tag}-2", f"{tag}-1"]
+    assert [found.id for found in await store.list(agent=tag, status="error")] == [f"{tag}-2"]
 
 
-def check_session_id_round_trips_and_filters_list(store: TraceStore, tag: str) -> None:
+async def check_session_id_round_trips_and_filters_list(store: TraceStore, tag: str) -> None:
     """`Trace.session_id` survives a save/get round trip and filters `list`."""
-    store.save(_trace(f"{tag}-1", name=tag, session_id=f"{tag}-s1"))
-    store.save(_trace(f"{tag}-2", name=tag, start_time=1.0, session_id=f"{tag}-s2"))
-    store.save(_trace(f"{tag}-3", name=tag, start_time=2.0))
+    await store.save(_trace(f"{tag}-1", name=tag, session_id=f"{tag}-s1"))
+    await store.save(_trace(f"{tag}-2", name=tag, start_time=1.0, session_id=f"{tag}-s2"))
+    await store.save(_trace(f"{tag}-3", name=tag, start_time=2.0))
 
-    first = store.get(f"{tag}-1")
-    third = store.get(f"{tag}-3")
+    first = await store.get(f"{tag}-1")
+    third = await store.get(f"{tag}-3")
 
     assert first is not None and first.session_id == f"{tag}-s1"
     assert third is not None and third.session_id is None
-    assert [found.id for found in store.list(session_id=f"{tag}-s1")] == [f"{tag}-1"]
+    assert [found.id for found in await store.list(session_id=f"{tag}-s1")] == [f"{tag}-1"]
 
 
-def check_structured_span_input_comes_back_as_text(store: TraceStore, tag: str) -> None:
+async def check_structured_span_input_comes_back_as_text(store: TraceStore, tag: str) -> None:
     """A span's dict `input` is stored as JSON text, identically in every backend.
 
     A store keeps marshalled rows rather than the `Trace` it was handed, so a caller cannot get a
@@ -135,43 +136,45 @@ def check_structured_span_input_comes_back_as_text(store: TraceStore, tag: str) 
     trace = _trace(f"{tag}-1", name=tag)
     trace.spans[0].input = {"city": "Paris"}
 
-    store.save(trace)
-    fetched = store.get(f"{tag}-1")
+    await store.save(trace)
+    fetched = await store.get(f"{tag}-1")
 
     assert fetched is not None
     assert fetched.spans[0].input == '{"city": "Paris"}'
 
 
-def check_each_listed_trace_carries_only_its_own_spans(store: TraceStore, tag: str) -> None:
+async def check_each_listed_trace_carries_only_its_own_spans(store: TraceStore, tag: str) -> None:
     """A listing never cross-assigns spans, however the backend fetches them.
 
     Postgres fetches every listed trace's spans in one query where SQLite fetches them per trace,
     which is exactly the kind of difference a shared contract is for.
     """
-    store.save(_trace(f"{tag}-1", name=tag, start_time=0.0))
-    store.save(_trace(f"{tag}-2", name=tag, start_time=1.0))
+    await store.save(_trace(f"{tag}-1", name=tag, start_time=0.0))
+    await store.save(_trace(f"{tag}-2", name=tag, start_time=1.0))
 
-    found = store.list(agent=tag)
+    found = await store.list(agent=tag)
 
     assert len(found) == 2
     for trace in found:
         assert [span.trace_id for span in trace.spans] == [trace.id]
 
 
-def check_an_empty_listing_is_an_empty_list(store: TraceStore, tag: str) -> None:
+async def check_an_empty_listing_is_an_empty_list(store: TraceStore, tag: str) -> None:
     """No traces for an agent is an empty list, not an error or a fetch for nothing."""
-    assert store.list(agent=f"{tag}-never-ran") == []
+    assert await store.list(agent=f"{tag}-never-ran") == []
 
 
-def check_a_trace_a_caller_mutates_does_not_change_the_history(store: TraceStore, tag: str) -> None:
+async def check_a_trace_a_caller_mutates_does_not_change_the_history(
+    store: TraceStore, tag: str
+) -> None:
     """Editing a `Trace` that came out of `get` leaves the stored one alone."""
-    store.save(_trace(f"{tag}-1", name=tag))
+    await store.save(_trace(f"{tag}-1", name=tag))
 
-    fetched = store.get(f"{tag}-1")
+    fetched = await store.get(f"{tag}-1")
     assert fetched is not None
     fetched.name = "Mutated"
 
-    again = store.get(f"{tag}-1")
+    again = await store.get(f"{tag}-1")
     assert again is not None
     assert again.name == tag
 

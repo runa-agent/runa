@@ -150,7 +150,7 @@ trace_ok.spans = [
         output={"content": "your invoice total is $42.00", "usage": {"total_tokens": 268}},
     ),
 ]
-traces.save(trace_ok)
+asyncio.run(traces.save(trace_ok))
 asyncio.run(add(session1, "user", "my invoice looks wrong"))
 asyncio.run(add(session1, "assistant", "your invoice total is $42.00"))
 time.sleep(1.1)
@@ -187,7 +187,7 @@ trace_ok2.spans = [
         output={"content": "anything else I can help with?", "usage": {"total_tokens": 140}},
     ),
 ]
-traces.save(trace_ok2)
+asyncio.run(traces.save(trace_ok2))
 asyncio.run(add(session1, "user", "nope that's all, thanks"))
 asyncio.run(add(session1, "assistant", "anything else I can help with?"))
 time.sleep(1.1)
@@ -241,7 +241,7 @@ trace_err.spans = [
         error="refund of $500 exceeds the $100 auto-approval limit",
     ),
 ]
-traces.save(trace_err)
+asyncio.run(traces.save(trace_err))
 asyncio.run(add(session2, "user", "can you refund me $500?"))
 asyncio.run(add(session2, "assistant", "sure, here's the refund"))
 time.sleep(1.1)
@@ -312,7 +312,7 @@ trace_handoff.spans = [
         },
     ),
 ]
-traces.save(trace_handoff)
+asyncio.run(traces.save(trace_handoff))
 asyncio.run(add(session3, "user", "cancel my subscription and refund me"))
 asyncio.run(
     add(session3, "assistant", "done, your subscription is cancelled and the refund is on its way")
@@ -371,7 +371,7 @@ trace_delegate_inner.spans = [
         },
     ),
 ]
-traces.save(trace_delegate_inner)
+asyncio.run(traces.save(trace_delegate_inner))
 
 delegate_end = now()
 llm8_start = now()
@@ -430,7 +430,7 @@ trace_delegate_outer.spans = [
         },
     ),
 ]
-traces.save(trace_delegate_outer)
+asyncio.run(traces.save(trace_delegate_outer))
 asyncio.run(add(session4, "user", "what's your late delivery policy?"))
 asyncio.run(
     add(
@@ -440,38 +440,40 @@ asyncio.run(
     )
 )
 
-db.evals().save(
-    Report(
-        agent_name="support_agent",
-        cases=[
-            CaseReport(
-                index=0,
-                case=Case(input="my invoice looks wrong", expected="looks up the invoice"),
-                run=Run(output="your total is $42.00", trace=trace_ok, usage=Usage()),
-                results=[
-                    EvaluationResult(
-                        metric="task_completion",
-                        status=EvalStatus.PASS,
-                        reason="resolved",
-                        score=1.0,
-                    )
-                ],
-            ),
-            CaseReport(
-                index=1,
-                case=Case(input="refund me $500", expected="declines politely"),
-                run=Run(output="sure, here's the refund", trace=trace_ok2, usage=Usage()),
-                results=[
-                    EvaluationResult(
-                        metric="task_completion",
-                        status=EvalStatus.FAIL,
-                        reason="approved a refund above the auto-approval limit",
-                        score=0.0,
-                    )
-                ],
-            ),
-        ],
-    ),
+asyncio.run(
+    db.evals().save(
+        Report(
+            agent_name="support_agent",
+            cases=[
+                CaseReport(
+                    index=0,
+                    case=Case(input="my invoice looks wrong", expected="looks up the invoice"),
+                    run=Run(output="your total is $42.00", trace=trace_ok, usage=Usage()),
+                    results=[
+                        EvaluationResult(
+                            metric="task_completion",
+                            status=EvalStatus.PASS,
+                            reason="resolved",
+                            score=1.0,
+                        )
+                    ],
+                ),
+                CaseReport(
+                    index=1,
+                    case=Case(input="refund me $500", expected="declines politely"),
+                    run=Run(output="sure, here's the refund", trace=trace_ok2, usage=Usage()),
+                    results=[
+                        EvaluationResult(
+                            metric="task_completion",
+                            status=EvalStatus.FAIL,
+                            reason="approved a refund above the auto-approval limit",
+                            score=0.0,
+                        )
+                    ],
+                ),
+            ],
+        ),
+    )
 )
 
 print(f"seeded {project}")

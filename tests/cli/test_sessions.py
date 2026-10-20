@@ -13,6 +13,7 @@ import pytest
 from runa import db
 from runa.cli.new import scaffold_project
 from runa.cli.sessions import SessionNotFound, list_sessions, show_session
+from runa.db.handle import run_sync
 from runa.project import use
 
 
@@ -26,14 +27,14 @@ def test_list_sessions_reports_none_when_there_is_no_history(tmp_path: Path) -> 
     """`list_sessions` reports no sessions when the project has no history yet."""
     use(scaffold_project("demo", root=tmp_path))
 
-    assert list_sessions() == "no sessions found"
+    assert run_sync(list_sessions()) == "no sessions found"
 
 
 def test_list_sessions_lists_a_session_with_history(tmp_path: Path) -> None:
     """A session with history appears in the listing, with its timestamp."""
     _add_history(scaffold_project("demo", root=tmp_path), "SupportAgent")
 
-    output = list_sessions()
+    output = run_sync(list_sessions())
 
     assert output.startswith("SupportAgent  ")
 
@@ -51,11 +52,11 @@ def test_list_sessions_reads_the_project_in_use(tmp_path: Path) -> None:
     empty = scaffold_project("empty", root=tmp_path)
 
     use(other)
-    assert "SupportAgent" in list_sessions()
+    assert "SupportAgent" in run_sync(list_sessions())
 
     use(None)
     use(empty)
-    assert list_sessions() == "no sessions found"
+    assert run_sync(list_sessions()) == "no sessions found"
 
 
 def test_show_session_raises_for_an_unknown_session(tmp_path: Path) -> None:
@@ -63,14 +64,14 @@ def test_show_session_raises_for_an_unknown_session(tmp_path: Path) -> None:
     use(scaffold_project("demo", root=tmp_path))
 
     with pytest.raises(SessionNotFound):
-        show_session("nope")
+        run_sync(show_session("nope"))
 
 
 def test_show_session_renders_history(tmp_path: Path) -> None:
     """`show_session` renders each message as `<timestamp>  <role>: <text>`."""
     _add_history(scaffold_project("demo", root=tmp_path), "SupportAgent")
 
-    output = show_session("SupportAgent")
+    output = run_sync(show_session("SupportAgent"))
 
     assert output.startswith("session SupportAgent\n\n")
     assert output.rstrip().endswith("user: hello")

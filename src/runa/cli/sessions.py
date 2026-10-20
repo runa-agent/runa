@@ -13,17 +13,17 @@ from runa.session.store import SessionNotFound
 __all__ = ["SessionNotFound", "list_sessions", "show_session"]
 
 
-def list_sessions() -> str:
+async def list_sessions() -> str:
     """List every session id this deployment has conversation history for, newest first."""
-    sessions = db.sessions().listing()
+    sessions = await db.sessions().listing()
     if not sessions:
         return "no sessions found"
     return "\n".join(f"{session.id}  {session.updated_at}" for session in sessions)
 
 
-def show_session(session_id: str) -> str:
+async def show_session(session_id: str) -> str:
     """Render a session's message history."""
-    messages = db.sessions().messages(session_id)
+    messages = await db.sessions().messages(session_id)
     lines = [f"session {session_id}", ""]
     for message in messages:
         lines.append(f"{message.created_at}  {message.role}: {message.text}")

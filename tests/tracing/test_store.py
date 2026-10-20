@@ -10,6 +10,7 @@ against.
 one backend that needs a server to be running.
 """
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ def store(
 @pytest.mark.parametrize("check", CONTRACT, ids=lambda check: check.__name__)
 def test_trace_store_contract(store: TraceStore, check: Check) -> None:
     """Every local backend answers the `TraceStore` contract the same way."""
-    check(store, "t")
+    asyncio.run(check(store, "t"))
 
 
 def test_listing_clause_numbers_the_limit_after_the_filters() -> None:

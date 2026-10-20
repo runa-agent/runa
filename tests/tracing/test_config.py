@@ -8,6 +8,7 @@ from helpers import ScriptedModel, scripted_agent
 
 from runa import db
 from runa._types import ModelResponse, Usage
+from runa.db.handle import run_sync
 from runa.tool import ToolCall, tool
 from runa.tracing import ConsoleExporter, Trace, config, observe
 
@@ -277,7 +278,7 @@ def test_the_exporter_writes_to_the_store_it_was_resolved_with(
     exporter.export(Trace(id="t1", name="A", start_time=0.0))
 
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
-    assert [trace.id for trace in db.traces().list()] == ["t1"]
+    assert [trace.id for trace in run_sync(db.traces().list())] == ["t1"]
 
 
 def test_add_exporter_appends_without_replacing_the_active_ones() -> None:

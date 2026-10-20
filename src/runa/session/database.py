@@ -12,7 +12,7 @@ The two tables are declared once in `session/store.py` and rendered per dialect 
 import json
 
 from runa._items import ConversationItem
-from runa.db.handle import Database, Queries, sync
+from runa.db.handle import Database, Queries
 from runa.session import Session
 from runa.session.store import (
     MESSAGES,
@@ -103,7 +103,6 @@ class DatabaseSessionStore:
         """Store the database this history lives in."""
         self.database = database
 
-    @sync
     async def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
         """Return this database's sessions, most recently updated first."""
         clause, params = listing_clause(agent)
@@ -115,7 +114,6 @@ class DatabaseSessionStore:
             for row in rows
         ]
 
-    @sync
     async def messages(self, session_id: str) -> list[SessionMessage]:
         """Return `session_id`'s messages, oldest first."""
         exists = await self.database.fetchval(

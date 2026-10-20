@@ -15,22 +15,22 @@ def _summary(trace: Trace) -> str:
     return f"{trace.id}  {trace.name:<24} {trace.status:<6} {duration}"
 
 
-def list_traces_cli(*, limit: int = 50) -> str:
+async def list_traces_cli(*, limit: int = 50) -> str:
     """List the most recent `limit` traces, newest first."""
-    traces = db.traces().list(limit=limit)
+    traces = await db.traces().list(limit=limit)
     if not traces:
         return "no traces found"
     return "\n".join(_summary(trace) for trace in traces)
 
 
-def show_trace(trace_id: str) -> str:
+async def show_trace(trace_id: str) -> str:
     """Render one trace's full span tree."""
-    return str(require_trace(db.traces(), trace_id))
+    return str(await require_trace(db.traces(), trace_id))
 
 
-def list_errors_cli(*, limit: int = 50) -> str:
+async def list_errors_cli(*, limit: int = 50) -> str:
     """List the most recent `limit` traces that errored, newest first."""
-    traces = db.traces().list(limit=limit, status="error")
+    traces = await db.traces().list(limit=limit, status="error")
     if not traces:
         return "no errors found"
     return "\n".join(_summary(trace) for trace in traces)

@@ -69,7 +69,7 @@ def unique_id() -> str:
 @pytest.mark.parametrize("check", trace_contract.CONTRACT, ids=lambda check: check.__name__)
 def test_trace_store_contract(unique_id: str, check: trace_contract.Check) -> None:
     """A trace store over Postgres answers the same `TraceStore` contract the local backends do."""
-    check(_traces(), unique_id)
+    run(check(_traces(), unique_id))
 
 
 @pytest.mark.parametrize("check", eval_contract.CONTRACT, ids=lambda check: check.__name__)
@@ -78,7 +78,7 @@ def test_eval_store_contract(unique_id: str, check: eval_contract.Check) -> None
 
     A shared baseline is why it exists: CI and a laptop must grade against the same run.
     """
-    check(DatabaseEvalStore(PostgresDatabase(_DSN, RUNS, CASES)), unique_id)
+    run(check(DatabaseEvalStore(PostgresDatabase(_DSN, RUNS, CASES)), unique_id))
 
 
 def _traces() -> DatabaseTraceStore:
@@ -124,9 +124,9 @@ def test_the_shared_dsn_env_var_routes_traces_to_postgres(
     monkeypatch.setenv(db.DATABASE_URL_ENV, _DSN)
     trace = _trace(unique_id)
 
-    db.traces().save(trace)  # no path, no dsn: the env var decides
+    run(db.traces().save(trace))  # no path, no dsn: the env var decides
 
-    assert db.traces().get(trace.id) is not None
+    assert run(db.traces().get(trace.id)) is not None
 
 
 def test_without_the_env_var_traces_stay_in_sqlite(
@@ -137,10 +137,10 @@ def test_without_the_env_var_traces_stay_in_sqlite(
     trace = _trace(unique_id)
 
     use(tmp_path)
-    db.traces().save(trace)
+    run(db.traces().save(trace))
 
     assert (tmp_path / "db" / "runa.db").exists()
-    assert db.traces().get(trace.id) is not None
+    assert run(db.traces().get(trace.id)) is not None
 
 
 def test_sessions_are_readable_from_the_shared_database(
@@ -157,8 +157,8 @@ def test_sessions_are_readable_from_the_shared_database(
 
     store = db.sessions()
 
-    assert unique_id in [summary.id for summary in store.listing()]
-    assert [message.text for message in store.messages(unique_id)] == ["hello"]
+    assert unique_id in [summary.id for summary in run(store.listing())]
+    assert [message.text for message in run(store.messages(unique_id))] == ["hello"]
     run(session.clear_session())
 
 
@@ -168,6 +168,6 @@ def test_evals_are_readable_from_the_shared_database(
     """`runa eval` and the Evaluations page follow the variable the same way."""
     monkeypatch.setenv(db.DATABASE_URL_ENV, _DSN)
 
-    run_id = db.evals().save(eval_contract.report(unique_id))
+    run_id = run(db.evals().save(eval_contract.report(unique_id)))
 
-    assert db.evals().get(run_id) is not None
+    assert run(db.evals().get(run_id)) is not None

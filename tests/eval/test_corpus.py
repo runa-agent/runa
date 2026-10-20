@@ -6,6 +6,7 @@ import pytest
 
 from runa import db
 from runa.cli.new import scaffold_project
+from runa.db.handle import run_sync
 from runa.eval import Case, Dataset
 from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
 from runa.project import use
@@ -27,7 +28,7 @@ def _save_agent_trace(project_dir: Path, trace_id: str, input: str | None) -> No
         )
     ]
     use(project_dir)
-    db.traces().save(trace)
+    run_sync(db.traces().save(trace))
 
 
 def test_add_trace_to_evals_appends_the_run_s_input_to_its_agent_s_dataset(
@@ -39,7 +40,7 @@ def test_add_trace_to_evals_appends_the_run_s_input_to_its_agent_s_dataset(
     eval_file.write_text('"an existing case"')  # no trailing newline
     _save_agent_trace(project_dir, "t1", "Where is my order?")
 
-    assert add_trace_to_evals("t1", root=project_dir, expected="Looks it up") == eval_file
+    assert run_sync(add_trace_to_evals("t1", root=project_dir, expected="Looks it up")) == eval_file
 
     assert [case.input for case in Dataset.from_jsonl(eval_file)] == [
         "an existing case",
@@ -49,7 +50,7 @@ def test_add_trace_to_evals_appends_the_run_s_input_to_its_agent_s_dataset(
         input="Where is my order?", expected="Looks it up", metadata={"trace_id": "t1"}
     )
     with pytest.raises(CaseAlreadyInEvals):
-        add_trace_to_evals("t1", root=project_dir)
+        run_sync(add_trace_to_evals("t1", root=project_dir))
     assert len(Dataset.from_jsonl(eval_file)) == 2
 
 
@@ -61,7 +62,7 @@ def test_add_trace_to_evals_rejects_an_unknown_trace_or_one_without_input(
     _save_agent_trace(project_dir, "t1", None)
 
     with pytest.raises(TraceNotFound):
-        add_trace_to_evals("nope", root=project_dir)
+        run_sync(add_trace_to_evals("nope", root=project_dir))
     with pytest.raises(TraceHasNoInput):
-        add_trace_to_evals("t1", root=project_dir)
+        run_sync(add_trace_to_evals("t1", root=project_dir))
     assert not (project_dir / "evals" / "support_agent.jsonl").exists()

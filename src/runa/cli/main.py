@@ -22,6 +22,7 @@ from pathlib import Path
 
 from runa import project
 from runa._models import DEFAULT_MODEL
+from runa.db.handle import run_sync
 from runa.exceptions import OperatorError
 from runa.project import AppLoadError
 
@@ -346,12 +347,12 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
         if args.list:
             from runa.cli.sessions import list_sessions
 
-            print(list_sessions())
+            print(run_sync(list_sessions()))
             return 0
         if args.show is not None:
             from runa.cli.sessions import show_session
 
-            print(show_session(args.show))
+            print(run_sync(show_session(args.show)))
             return 0
         if args.agent_name is None:
             print("error: runa chat needs an agent name, or --list/--show", file=sys.stderr)
@@ -372,7 +373,7 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
     if args.command == "eval" and args.add is not None:
         from runa.eval.corpus import add_trace_to_evals
 
-        eval_file = add_trace_to_evals(args.add, root=cwd, expected=args.expected)
+        eval_file = run_sync(add_trace_to_evals(args.add, root=cwd, expected=args.expected))
         print(f"added trace {args.add} to {eval_file}")
         if args.expected is None:
             print('\nnext: give it an "expected" answer in that file, then\n  runa eval')
@@ -419,13 +420,13 @@ def _dispatch(args: argparse.Namespace, cwd: Path) -> int:
     if args.traces_action == "list":
         from runa.cli.traces import list_traces_cli
 
-        print(list_traces_cli())
+        print(run_sync(list_traces_cli()))
     elif args.traces_action == "show":
         from runa.cli.traces import show_trace
 
-        print(show_trace(args.trace_id))
+        print(run_sync(show_trace(args.trace_id)))
     else:
         from runa.cli.traces import list_errors_cli
 
-        print(list_errors_cli())
+        print(run_sync(list_errors_cli()))
     return 0

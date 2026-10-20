@@ -5,10 +5,9 @@ A session has two halves in Runa: `Session`, which a run appends to, and `Sessio
 only useful as a pair -- a run writes through one and an operator reads through the other -- so
 one contract covers both, and a check gets a `SessionPair` rather than a single store.
 
-Every check is a coroutine: the write side is async in every backend, while the read side is sync
-and simply called inside it. Each check takes its ids from `SessionPair.id`, which prefixes them
-with a tag unique to that check, so the same checks hold against a live Postgres whose
-`agent_sessions` table already holds other runs' rows.
+Every check is a coroutine: both sides are async in every backend. Each check takes its ids from
+`SessionPair.id`, which prefixes them with a tag unique to that check, so the same checks hold
+against a live Postgres whose `agent_sessions` table already holds other runs' rows.
 
 The one rule deliberately left out is how ties on `updated_at` break. Every backend orders a
 listing by `updated_at` descending and breaks ties on session id descending, but only a
@@ -107,7 +106,7 @@ async def check_listing_returns_each_written_session_once(pair: SessionPair) -> 
     await _write(pair, "-a", "hi")
     await _write(pair, "-b", "hi")
 
-    listed = pair.read.listing(agent=pair.tag)
+    listed = await pair.read.listing(agent=pair.tag)
 
     assert sorted(summary.id for summary in listed) == [pair.id("-a"), pair.id("-b")]
     assert all(summary.updated_at for summary in listed)
@@ -115,7 +114,7 @@ async def check_listing_returns_each_written_session_once(pair: SessionPair) -> 
 
 async def check_listing_is_empty_for_an_agent_with_no_history(pair: SessionPair) -> None:
     """`listing(agent=...)` returns an empty list rather than failing when nothing matches."""
-    assert pair.read.listing(agent=pair.id("-never-chatted")) == []
+    assert await pair.read.listing(agent=pair.id("-never-chatted")) == []
 
 
 async def check_listing_renders_updated_at_the_same_way_in_every_backend(
@@ -128,7 +127,7 @@ async def check_listing_renders_updated_at_the_same_way_in_every_backend(
     """
     await _write(pair, "", "hi")
 
-    updated_at = pair.read.listing(agent=pair.tag)[0].updated_at
+    updated_at = (await pair.read.listing(agent=pair.tag))[0].updated_at
 
     assert len(updated_at) == len("2026-10-04 10:08:03")
     assert updated_at[4] == updated_at[7] == "-"
@@ -144,7 +143,7 @@ async def check_listing_by_agent_matches_the_recorded_agent_whatever_the_id(
     other = pair.session("-escalation", pair.id("-escalation"))
     await other.add_items([{"role": "user", "content": "hi"}])
 
-    listed = pair.read.listing(agent=pair.tag)
+    listed = await pair.read.listing(agent=pair.tag)
 
     assert [summary.id for summary in listed] == [pair.id("-user-42")]
 
@@ -152,7 +151,7 @@ async def check_listing_by_agent_matches_the_recorded_agent_whatever_the_id(
 async def check_the_first_agent_to_write_keeps_the_session(pair: SessionPair) -> None:
     """A session seeded with no agent takes the first one that writes, and keeps it."""
     await pair.session().add_items([{"role": "user", "content": "seeded"}])
-    unowned = pair.read.listing(agent=pair.tag)
+    unowned = await pair.read.listing(agent=pair.tag)
 
     await pair.session(agent=pair.tag).add_items([{"role": "user", "content": "first run"}])
     await pair.session(agent=pair.id("-other")).set_items(
@@ -160,8 +159,8 @@ async def check_the_first_agent_to_write_keeps_the_session(pair: SessionPair) ->
     )
 
     assert unowned == []
-    assert [summary.id for summary in pair.read.listing(agent=pair.tag)] == [pair.id()]
-    assert pair.read.listing(agent=pair.id("-other")) == []
+    assert [summary.id for summary in await pair.read.listing(agent=pair.tag)] == [pair.id()]
+    assert await pair.read.listing(agent=pair.id("-other")) == []
 
 
 async def check_messages_raises_for_an_unknown_session(pair: SessionPair) -> None:
@@ -171,14 +170,14 @@ async def check_messages_raises_for_an_unknown_session(pair: SessionPair) -> Non
     `runa chat --show` prints different things for them.
     """
     with pytest.raises(SessionNotFound):
-        pair.read.messages(pair.id("-never-written"))
+        await pair.read.messages(pair.id("-never-written"))
 
 
 async def check_messages_splits_each_message_into_role_and_text(pair: SessionPair) -> None:
     """`messages` flattens a stored item into the `(role, text)` a transcript shows."""
     await _write(pair, "", "hello")
 
-    messages = pair.read.messages(pair.id())
+    messages = await pair.read.messages(pair.id())
 
     assert [(message.role, message.text) for message in messages] == [("user", "hello")]
     assert messages[0].created_at
@@ -191,7 +190,7 @@ async def check_messages_are_oldest_first(pair: SessionPair) -> None:
         [{"role": "user", "content": "first"}, {"role": "assistant", "content": "second"}]
     )
 
-    messages = pair.read.messages(pair.id())
+    messages = await pair.read.messages(pair.id())
 
     assert [message.text for message in messages] == ["first", "second"]
 
@@ -201,7 +200,7 @@ async def check_messages_flattens_a_list_shaped_content(pair: SessionPair) -> No
     session = pair.session()
     await session.add_items([{"role": "assistant", "content": [{"text": "one "}, {"text": "two"}]}])
 
-    assert pair.read.messages(pair.id())[0].text == "one two"
+    assert (await pair.read.messages(pair.id()))[0].text == "one two"
 
 
 CONTRACT: list[Check] = [

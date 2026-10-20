@@ -9,6 +9,7 @@ from helpers import ScriptedModel, finished_run
 from runa import db
 from runa._types import Usage
 from runa.agent import Agent
+from runa.db.handle import run_sync
 from runa.eval.case import Case
 from runa.eval.evaluate import evaluate_agent
 from runa.eval.evaluation.core import EvalStatus, EvaluationResult
@@ -257,9 +258,9 @@ def test_evaluate_agent_persists_the_report(monkeypatch: pytest.MonkeyPatch) -> 
 
     report = asyncio.run(evaluate_agent(_AGENT, [Case(input="hi")]))
 
-    stored = db.evals().list()
+    stored = run_sync(db.evals().list())
     assert [run.agent_name for run in stored] == [report.agent_name]
-    saved = db.evals().get(stored[0].id)
+    saved = run_sync(db.evals().get(stored[0].id))
     assert saved is not None
     assert [case.input for case in saved.cases] == ["hi"]
 

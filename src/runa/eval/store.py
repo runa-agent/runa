@@ -80,19 +80,21 @@ class EvalStore(Protocol):
     No inheritance required, every adapter satisfies this by matching shape.
     """
 
-    def save(self, report: Report) -> int:
+    async def save(self, report: Report) -> int:
         """Persist `report` as one run plus one row per case, returning the new run's id."""
         ...
 
-    def get(self, run_id: int) -> EvalRun | None:
+    async def get(self, run_id: int) -> EvalRun | None:
         """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
         ...
 
-    def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
+    async def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
         ...
 
-    def baseline(self, agent_name: str, *, before: int | None = None) -> dict[str, bool] | None:
+    async def baseline(
+        self, agent_name: str, *, before: int | None = None
+    ) -> dict[str, bool] | None:
         """Map each input of `agent_name`'s latest run to whether it passed.
 
         `before` looks at the latest run older than that run id instead, the baseline a past run

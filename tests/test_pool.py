@@ -13,39 +13,25 @@ from typing import Any
 import pytest
 
 
-def test_sync_reaches_an_async_body_from_inside_a_running_loop() -> None:
-    """The case `asyncio.run` can't serve: a synchronous store method called mid-run."""
-    from runa.db.handle import sync
+def test_run_sync_reaches_an_async_body_from_inside_a_running_loop() -> None:
+    """The case `asyncio.run` can't serve: a synchronous exporter called mid-run."""
+    from runa.db.handle import run_sync
 
-    class Store:
-        def __init__(self) -> None:
-            self.saved: list[str] = []
+    saved: list[str] = []
 
-        @sync
-        async def save(self, item: str) -> str:
-            """Record `item`, as a `TraceExporter` would."""
-            self.saved.append(item)
-            return "saved"
-
-    store = Store()
+    async def save(item: str) -> str:
+        """Record `item`, as a `TraceStore` would."""
+        saved.append(item)
+        return "saved"
 
     async def mid_run() -> str:
         # Where `TraceExporter.export` is called from: a finishing run, so a loop is already
         # running on this thread, which is exactly what `asyncio.run` refuses to nest into.
-        return store.save("trace-1")
+        return run_sync(save("trace-1"))
 
     assert asyncio.run(mid_run()) == "saved"
-    assert store.save("trace-2") == "saved"  # and from no loop at all, as `runa traces` does
-    assert store.saved == ["trace-1", "trace-2"]
-
-
-def test_sync_keeps_the_async_bodys_name_and_docstring() -> None:
-    """The decorated method is still the documented one: `runa ui`'s help and docs read it."""
-    from runa.eval.database import DatabaseEvalStore
-
-    assert DatabaseEvalStore.save.__name__ == "save"
-    assert DatabaseEvalStore.baseline.__doc__ is not None
-    assert "latest run" in DatabaseEvalStore.baseline.__doc__
+    assert run_sync(save("trace-2")) == "saved"  # and from no loop at all, as `runa traces` does
+    assert saved == ["trace-1", "trace-2"]
 
 
 def test_a_shared_store_connects_to_its_own_url_with_its_own_tables(

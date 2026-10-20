@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from runa import db
 from runa.agent import Agent
+from runa.db.handle import run_sync
 from runa.project import find_agent_class, loaded_app, require_agents_dir
 from runa.session import Session
 
@@ -31,7 +32,7 @@ def _pick_session(agent_name: str) -> str:
 
     Falls back to starting a new session when there's no history to pick from.
     """
-    sessions = db.sessions().listing(agent=agent_name)
+    sessions = run_sync(db.sessions().listing(agent=agent_name))
     if not sessions:
         print(f"no previous session for {agent_name!r}, starting a new one")
         return _new_session_id(agent_name)
@@ -64,7 +65,7 @@ def _resolve_session_id(
     if session_id is not None:
         return session_id
     if continue_last:
-        sessions = db.sessions().listing(agent=agent_name)
+        sessions = run_sync(db.sessions().listing(agent=agent_name))
         if sessions:
             return sessions[0].id
         print(f"no previous session for {agent_name!r}, starting a new one")

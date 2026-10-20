@@ -20,6 +20,7 @@ from contracts.session import CONTRACT, Check, SessionPair
 from helpers import ScriptedModel, scripted_agent, text_response
 
 from runa import db
+from runa.db.handle import run_sync
 from runa.project import use
 from runa.session.store import listing_clause
 
@@ -57,7 +58,7 @@ def test_listing_is_empty_before_anything_is_written(project: None) -> None:
     Outside the contract because it is an assertion about an untouched deployment, which a shared
     database running the same checks is not.
     """
-    assert db.sessions().listing() == []
+    assert run_sync(db.sessions().listing()) == []
 
 
 def test_listing_breaks_updated_at_ties_by_session_id_descending(project: None) -> None:
@@ -73,7 +74,7 @@ def test_listing_breaks_updated_at_ties_by_session_id_descending(project: None) 
         session = pair.session(suffix, pair.tag)
         asyncio.run(session.add_items([{"role": "user", "content": "hi"}]))
 
-    listed = pair.read.listing(agent=pair.tag)
+    listed = run_sync(pair.read.listing(agent=pair.tag))
 
     assert [summary.id for summary in listed] == [pair.id("-c"), pair.id("-b"), pair.id("-a")]
 
@@ -100,4 +101,6 @@ def test_a_session_id_lists_under_the_agent_that_ran_it(project: None) -> None:
 
     agent.run_sync("hello", session="user-42")
 
-    assert [summary.id for summary in db.sessions().listing(agent="support")] == ["user-42"]
+    assert [summary.id for summary in run_sync(db.sessions().listing(agent="support"))] == [
+        "user-42"
+    ]

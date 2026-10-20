@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from runa import db
+from runa.db.handle import run_sync
 from runa.exceptions import UserError
 from runa.knowledge import Knowledge
 from runa.memory import Memory
@@ -299,8 +300,8 @@ def test_the_in_memory_database_takes_concurrent_writers(monkeypatch: pytest.Mon
 
     asyncio.run(write_all())
 
-    assert len(db.sessions().listing()) == 8
-    assert all(len(db.sessions().messages(f"s{index}")) == 10 for index in range(8))
+    assert len(run_sync(db.sessions().listing())) == 8
+    assert all(len(run_sync(db.sessions().messages(f"s{index}"))) == 10 for index in range(8))
 
 
 def test_reset_ephemeral_empties_every_store(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -310,14 +311,14 @@ def test_reset_ephemeral_empties_every_store(monkeypatch: pytest.MonkeyPatch) ->
     from runa.tracing import Trace
 
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
-    db.traces().save(Trace(id="t1", name="A", start_time=0.0))
+    run_sync(db.traces().save(Trace(id="t1", name="A", start_time=0.0)))
     asyncio.run(db.session("s").add_items([{"role": "user", "content": "hi"}]))
     asyncio.run(db.cache().set("k", "v"))
 
     db.reset_ephemeral()
 
-    assert db.traces().list() == []
-    assert db.sessions().listing() == []
+    assert run_sync(db.traces().list()) == []
+    assert run_sync(db.sessions().listing()) == []
     assert asyncio.run(db.cache().get("k")) is None
 
 
@@ -478,11 +479,11 @@ def test_a_local_read_leaves_no_file_behind(
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
     use(tmp_path)
 
-    assert db.sessions().listing() == []
-    assert db.traces().list() == []
-    assert db.traces().get("t1") is None
-    assert db.evals().list() == []
-    assert db.evals().baseline("support_agent") is None
+    assert run_sync(db.sessions().listing()) == []
+    assert run_sync(db.traces().list()) == []
+    assert run_sync(db.traces().get("t1")) is None
+    assert run_sync(db.evals().list()) == []
+    assert run_sync(db.evals().baseline("support_agent")) is None
     assert asyncio.run(db.cache().get("k")) is None
 
     assert list(tmp_path.iterdir()) == []
@@ -510,14 +511,14 @@ def test_a_local_read_answers_no_rows_only_for_a_table_that_is_absent(tmp_path: 
     db_path = tmp_path / "db" / "runa.db"
     asyncio.run(SQLiteSession("conv-1", db_path).add_items([{"role": "user", "content": "hi"}]))
     store = DatabaseSessionStore(SQLiteDatabase(db_path, SESSIONS, MESSAGES))
-    assert [summary.id for summary in store.listing()] == ["conv-1"]
+    assert [summary.id for summary in run_sync(store.listing())] == ["conv-1"]
 
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute("ALTER TABLE agent_sessions RENAME COLUMN updated_at TO touched_at")
         conn.commit()
 
     with pytest.raises(SchemaOutOfDate, match="agent_sessions table has no updated_at column"):
-        store.listing()
+        run_sync(store.listing())
 
 
 def test_a_local_read_grows_a_file_that_predates_a_column(tmp_path: Path) -> None:
@@ -559,9 +560,9 @@ def test_a_local_read_of_another_concerns_file_is_no_rows(tmp_path: Path) -> Non
     from runa.tracing import Trace
 
     use(tmp_path)
-    db.traces().save(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[]))
+    run_sync(db.traces().save(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[])))
 
-    assert db.sessions().listing() == []
+    assert run_sync(db.sessions().listing()) == []
     with read(tmp_path / "db" / "runa.db", SESSIONS, MESSAGES) as conn:
         assert conn is None
 
@@ -585,7 +586,7 @@ def test_deleting_a_trace_takes_its_spans(tmp_path: Path) -> None:
         status="ok",
     )
     use(tmp_path)
-    db.traces().save(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[span]))
+    run_sync(db.traces().save(Trace(id="t1", name="SupportAgent", start_time=0.0, spans=[span])))
 
     from runa.db.sqlite import connect
 

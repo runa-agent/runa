@@ -11,6 +11,7 @@ from helpers import finished_run
 from runa import db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
+from runa.db.handle import run_sync
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
@@ -63,7 +64,7 @@ def project(tmp_path: Path) -> Path:
             end_time=1.0,
         ),
     ]
-    db.traces().save(trace)
+    run_sync(db.traces().save(trace))
 
     trace2 = Trace(
         id="trace_2",
@@ -83,23 +84,28 @@ def project(tmp_path: Path) -> Path:
             end_time=2.5,
         )
     ]
-    db.traces().save(trace2)
+    run_sync(db.traces().save(trace2))
 
-    db.evals().save(
-        Report(
-            agent_name="support_agent",
-            cases=[
-                CaseReport(
-                    index=0,
-                    case=Case(input="hi", expected="hi"),
-                    run=finished_run("hi"),
-                    results=[
-                        EvaluationResult(
-                            metric="task_completion", status=EvalStatus.PASS, reason="ok", score=1.0
-                        )
-                    ],
-                )
-            ],
+    run_sync(
+        db.evals().save(
+            Report(
+                agent_name="support_agent",
+                cases=[
+                    CaseReport(
+                        index=0,
+                        case=Case(input="hi", expected="hi"),
+                        run=finished_run("hi"),
+                        results=[
+                            EvaluationResult(
+                                metric="task_completion",
+                                status=EvalStatus.PASS,
+                                reason="ok",
+                                score=1.0,
+                            )
+                        ],
+                    )
+                ],
+            )
         )
     )
     return project_dir
@@ -291,7 +297,7 @@ def test_evaluation_detail_links_cases_to_traces_and_flags_regressions(
         run=finished_run("no", trace=Trace(id="trace_1", name="support_agent", start_time=0.0)),
         results=[EvaluationResult(metric="task_completion", status=EvalStatus.FAIL, reason="bad")],
     )
-    run_id = db.evals().save(Report(agent_name="support_agent", cases=[failing]))
+    run_id = run_sync(db.evals().save(Report(agent_name="support_agent", cases=[failing])))
 
     detail = client.get(f"/evaluations/{run_id}").text
 

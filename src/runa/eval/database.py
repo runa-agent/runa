@@ -12,7 +12,7 @@ The two tables, the row marshalling and the clause selecting a baseline run are 
 import builtins
 from datetime import UTC, datetime
 
-from runa.db.handle import Database, sync
+from runa.db.handle import Database
 from runa.eval.report import Report
 from runa.eval.store import CASES, RUNS, EvalRun, baseline_clause, case_values, to_run
 
@@ -24,7 +24,6 @@ class DatabaseEvalStore:
         """Store the database this history lives in; its tables are created on the first `save`."""
         self.database = database
 
-    @sync
     async def save(self, report: Report) -> int:
         """Persist `report` as one run plus one row per case, returning the new run's id."""
         created_at = datetime.now(UTC).isoformat()
@@ -45,7 +44,6 @@ class DatabaseEvalStore:
                 )
         return run_id
 
-    @sync
     async def get(self, run_id: int) -> EvalRun | None:
         """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
         row = await self.database.fetchrow(f"SELECT * FROM {RUNS.name} WHERE id = $1", run_id)
@@ -56,7 +54,6 @@ class DatabaseEvalStore:
         )
         return to_run(row, cases)
 
-    @sync
     async def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
         rows = await self.database.fetch(
@@ -64,7 +61,6 @@ class DatabaseEvalStore:
         )
         return [to_run(row, []) for row in rows]
 
-    @sync
     async def baseline(
         self, agent_name: str, *, before: int | None = None
     ) -> dict[str, bool] | None:
