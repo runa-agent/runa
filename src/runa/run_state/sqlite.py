@@ -8,13 +8,11 @@ deployment's state is local.
 import json
 import sqlite3
 import uuid
-from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from runa.db import sqlite_database
-from runa.db.sqlite import connect as _connect_db
-from runa.db.sqlite import read as _read_db
+from runa.db.sqlite import run, run_read
 from runa.run_state.store import PAUSED_RUNS
 
 
@@ -28,39 +26,47 @@ class SQLitePausedRunStore:
         """
         self.db_path = Path(db_path) if db_path is not None else sqlite_database()
 
-    def _connect(self) -> sqlite3.Connection:
-        return _connect_db(self.db_path, PAUSED_RUNS)
-
     async def save(self, agent: str, state: dict[str, Any]) -> str:
         """Keep `state`, paused on `agent`, and return the new `run_id` it is found by."""
         run_id = uuid.uuid4().hex
-        with closing(self._connect()) as conn:
+        encoded = json.dumps(state)
+
+        def body(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"INSERT INTO {PAUSED_RUNS.name} (run_id, agent, state) VALUES (?, ?, ?)",
-                (run_id, agent, json.dumps(state)),
+                (run_id, agent, encoded),
             )
             conn.commit()
+
+        await run(self.db_path, (PAUSED_RUNS,), body)
         return run_id
 
     async def load(self, agent: str, run_id: str) -> dict[str, Any] | None:
         """The state saved under `run_id` for `agent`; `None` if there is none or it was claimed."""
-        with _read_db(self.db_path, PAUSED_RUNS) as conn:
+
+        def body(conn: sqlite3.Connection | None) -> str | None:
             if conn is None:
                 return None
             row = conn.execute(
                 f"SELECT state FROM {PAUSED_RUNS.name} WHERE run_id = ? AND agent = ?",
                 (run_id, agent),
             ).fetchone()
-        return json.loads(row["state"]) if row is not None else None
+            return row["state"] if row is not None else None
+
+        state = await run_read(self.db_path, (PAUSED_RUNS,), body)
+        return json.loads(state) if state is not None else None
 
     async def claim(self, agent: str, run_id: str) -> bool:
         """Take `run_id` off the store to resume it; `False` if it was already gone."""
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> bool:
             cursor = conn.execute(
                 f"DELETE FROM {PAUSED_RUNS.name} WHERE run_id = ? AND agent = ?", (run_id, agent)
             )
             conn.commit()
-        return cursor.rowcount == 1
+            return cursor.rowcount == 1
+
+        return await run(self.db_path, (PAUSED_RUNS,), body)
 
 
 __all__ = ["SQLitePausedRunStore"]

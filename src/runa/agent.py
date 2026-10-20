@@ -13,8 +13,6 @@ import inspect
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -26,10 +24,10 @@ from runa._types import MessageContent, ModelSettings, Usage
 from runa.compact import Compactor
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailsList
-from runa.handoff import Delegate, Handoff, Mode
-from runa.knowledge import Knowledge, KnowledgeLike
+from runa.handoff import Mode, Subagent
+from runa.knowledge import KnowledgeLike
 from runa.lifecycle import Hooks
-from runa.memory import Memory, MemoryLike
+from runa.memory import MemoryLike
 from runa.run import Run, RunStream
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.run_loop import _run_async
@@ -155,50 +153,6 @@ def _load_prompt(cls: type, name: str) -> str | None:
 SubagentsList = list["type[Agent] | Subagent"]
 
 
-def _subagents(subagents: SubagentsList) -> SubagentsList:
-    """The `subagents` declaration as a list: each entry bare (auto) or `.handoff`/`.delegate`.
-
-    Anything but a list (a dict grouping entries by mode, say) is a `UserError`.
-    """
-    if not isinstance(subagents, list | tuple):
-        raise UserError(
-            f"subagents must be a list, e.g. [Billing.handoff, Researcher.delegate, Helper], "
-            f"got {type(subagents).__name__}"
-        )
-    return list(subagents)
-
-
-_under_construction: ContextVar[dict[type[Agent], Agent] | None] = ContextVar(
-    "_under_construction", default=None
-)
-
-
-@contextmanager
-def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
-    """Yield the one way `agent`'s `__init__` builds a subagent: each class once per graph.
-
-    A class listed twice below one root is built once, and a cycle (a specialist handing back to
-    triage) closes onto the agent still being built. Construction stays eager, so a broken
-    subagent declaration fails when the root is built. An agent is found again by its `name`
-    when a paused run resumes, so two classes in one graph sharing a name is a `UserError`.
-    """
-    built = _under_construction.get()
-    token = _under_construction.set(built := {}) if built is None else None
-    try:
-        for other in built.values():
-            if other.name == agent.name:
-                raise UserError(
-                    f"{type(other).__name__} and {type(agent).__name__} are both named "
-                    f"{agent.name!r} in one agent graph, so a paused run could resume the "
-                    f"wrong one. Give each agent a name of its own."
-                )
-        built[type(agent)] = agent
-        yield lambda cls: built[cls] if cls in built else cls()
-    finally:
-        if token is not None:
-            _under_construction.reset(token)
-
-
 def _is_code(value: Any) -> bool:
     """Is this class-body entry code (a method, a property, a nested class) rather than config?
 
@@ -256,26 +210,20 @@ def _settings(cls: type[Agent], passed: dict[str, Any]) -> dict[str, Any]:
     return resolved
 
 
-def _resolve_retrieval_setting(
-    setting: Any, cls: type[Memory] | type[Knowledge]
-) -> tuple[Any, list[FunctionTool]]:
-    """Resolve a `memory=`/`knowledge=` setting to the source a run consults and the model's tools.
+_LIST_SETTINGS = frozenset({"tools", "subagents", "guardrails", "mcp"})
 
-    `"auto"` builds a default instance, `"llm"` is no source but a search tool for the model, and
-    any non-string (`None`, or a `MemoryLike`/`KnowledgeLike` object) is the source itself. Any
-    other string is a `UserError`.
+
+def _stored(name: str, value: Any) -> Any:
+    """`value` as the agent holds its `name` setting: a list setting's list as a tuple.
+
+    `None` for a list setting is the empty tuple. Anything but a list stays as given, for the
+    shape to refuse by name.
     """
-    name = cls.__name__.lower()
-    if setting is None or not isinstance(setting, str):
-        return setting, []
-    if setting == "auto":
-        return cls(), []
-    if setting == "llm":
-        return None, [cls()._as_tool()]
-    raise UserError(
-        f"{name} must be 'auto', 'llm', a {cls.__name__}(...)-shaped object, or None, "
-        f"got {setting!r}"
-    )
+    if name not in _LIST_SETTINGS:
+        return value
+    if value is None:
+        return ()
+    return tuple(value) if isinstance(value, list) else value
 
 
 class _Mode:
@@ -346,9 +294,9 @@ class Agent:
 
         These parameters are the closed set of settings: each can be declared on the subclass or
         passed here, the argument winning. An unknown name is a `TypeError` here, and a
-        `UserError` naming the likely setting when declared in a class body.
-
-        `mcp` lists the agent's MCP servers; `self.mcp_servers` is what it resolved to.
+        `UserError` naming the likely setting when declared in a class body. Each is held under its
+        own name as declared (`agent.memory` is `"auto"`, not the `Memory` it resolves to), and
+        translated into what a run uses only by the shape the agent builds from them.
 
         `memory` opts this agent into long-term memory, one of:
           - `"auto"` (or a `Memory(...)` instance, or any object shaped like `runa.memory`'s
@@ -395,47 +343,17 @@ class Agent:
         if instructions is _UNSET:
             instructions = _load_prompt(cls, name)
 
-        # Before the subagents: one that lists this agent back wraps it as a tool named after it.
         self.name: str = name
-
-        handoffs: list[Handoff] = []
-        delegates: list[Delegate] = []
-        tools = list(setting["tools"] or [])
-        with _agent_graph(self) as build:
-            for sub in _subagents(setting["subagents"] or []):
-                if isinstance(sub, Subagent):
-                    agent = build(sub.agent)
-                    if sub.mode == "handoff":
-                        handoffs.append(
-                            Handoff.from_agent(agent, sub.tool_name, sub.tool_description)
-                        )
-                    else:
-                        delegates.append(
-                            Delegate.from_agent(agent, sub.tool_name, sub.tool_description)
-                        )
-                else:
-                    agent = build(sub)
-                    handoffs.append(Handoff.from_agent(agent))
-                    delegates.append(Delegate.from_agent(agent))
-
-        # Unannotated: a subclass declares these as the setting, `"auto"` say, not as the source.
-        self.memory, memory_tools = _resolve_retrieval_setting(setting["memory"], Memory)
-        self.knowledge, knowledge_tools = _resolve_retrieval_setting(
-            setting["knowledge"], Knowledge
-        )
-
         self.instructions: str | Callable[..., Any] | None = instructions
         self.model: str | Any = setting["model"]
-        self.model_settings: ModelSettings = setting["model_settings"] or ModelSettings()
-        self.tools: Sequence[FunctionTool] = (*tools, *memory_tools, *knowledge_tools)
-        self.handoffs: Sequence[Handoff] = tuple(handoffs)
-        self.delegates: Sequence[Delegate] = tuple(delegates)
-        self.mcp_servers: Sequence[Any] = tuple(setting["mcp"] or ())
-        declared = setting["guardrails"] or ()
-        # Anything but a list stays as declared, for the shape to refuse by name.
-        self.guardrails: GuardrailsList = (
-            tuple(declared) if isinstance(declared, list) else declared
-        )
+        self.model_settings: ModelSettings | None = setting["model_settings"]
+        self.tools: Sequence[FunctionTool] = setting["tools"]
+        self.subagents: Sequence[type[Agent] | Subagent] = setting["subagents"]
+        self.guardrails: GuardrailsList = setting["guardrails"]
+        self.mcp: Sequence[Any] = setting["mcp"]
+        # Unannotated: a subclass declares these as the setting, `"auto"` say, not as the source.
+        self.memory = setting["memory"]
+        self.knowledge = setting["knowledge"]
         self.output_type: type | None = setting["output_type"]
         self.hooks: Hooks[Any] | None = setting["hooks"]
         self.compact: bool | Compactor | None = setting["compact"]
@@ -450,10 +368,16 @@ class Agent:
         self._shape = AgentShape.of(self)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        """Set an attribute, rebuilding the shape a run reads when it is one of the settings."""
-        super().__setattr__(name, value)
-        if not name.startswith("_") and name not in _PER_RUN_STATE and "_shape" in vars(self):
-            self._shape = AgentShape.of(self)
+        """Set an attribute, rebuilding the shape a run reads when it is one of the settings.
+
+        Only reassigning `subagents` builds the agents below this one again.
+        """
+        if name not in _AGENT_FIELDS:
+            super().__setattr__(name, value)
+            return
+        super().__setattr__(name, _stored(name, value))
+        if "_shape" in vars(self):
+            self._shape = AgentShape.of(self, None if name == "subagents" else self._shape)
 
     @property
     def graph(self) -> Digraph:
@@ -488,7 +412,7 @@ class Agent:
         clone.usage = Usage()
         clone.last_usage = Usage()
         clone._in_flight = 0
-        clone._shape = AgentShape.of(clone)
+        clone._shape = AgentShape.of(clone, self._shape)
         return clone
 
     @contextmanager
@@ -675,25 +599,5 @@ class Agent:
 
 _AGENT_FIELDS = tuple(inspect.signature(Agent.__init__).parameters)[1:]
 """Every name that configures an Agent: `Agent.__init__`'s keyword-only parameters."""
-
-_PER_RUN_STATE = frozenset({"history", "usage", "last_usage"})
-"""The public attributes a run records into rather than reads: setting one leaves the shape be."""
-
-
-@dataclass(frozen=True)
-class Subagent:
-    """A wired-up subagent, attached as a handoff or a delegate tool."""
-
-    agent: type[Agent]
-    mode: Mode
-    tool_name: str | None = None
-    tool_description: str | None = None
-
-    def __call__(
-        self, *, tool_name: str | None = None, tool_description: str | None = None
-    ) -> Subagent:
-        """Return a copy with the tool name/description overridden."""
-        return replace(self, tool_name=tool_name, tool_description=tool_description)
-
 
 __all__ = ["Agent", "Run", "RunState", "Subagent"]

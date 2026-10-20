@@ -11,18 +11,24 @@ connections the adapters open.
 That database is a `Database`: a file, or the `MemoryDatabase` `memory://` keeps in this
 process. The two are the same SQL through the same adapters; only where the pages live differs.
 
+`run` and `run_read` are how an adapter's `async def` reaches `sqlite3`, which blocks: the body runs
+on a worker thread, with a connection opened and closed there, so no adapter decides for itself
+whether to keep the event loop free. SQLite has one writer per file, so concurrent writers wait on
+its busy timeout in a worker thread instead of on the loop.
+
 `read` serves queries that only read: it never creates the file or a table, so a listing over a
 database that doesn't exist yet is empty rather than a side effect.
 
 Which database a deployment has is `runa.db.sqlite_database`'s answer, not this module's.
 """
 
+import asyncio
 import sqlite3
 import struct
 import threading
 import uuid
-from collections.abc import Hashable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Hashable, Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from runa.db.schema import SQLITE, Declaration, Table, ddl, reconcile
@@ -100,6 +106,40 @@ def connect(db_path: Database, *tables: Declaration, load_vec: bool = False) -> 
         conn.commit()
         _remember(db_path, tables)
     return conn
+
+
+async def run[T](
+    db_path: Database,
+    tables: tuple[Declaration, ...],
+    body: Callable[[sqlite3.Connection], T],
+    *,
+    load_vec: bool = False,
+) -> T:
+    """Run `body` on a worker thread with a `connect`ed connection, and return what it returns.
+
+    The connection is opened and closed on that thread, so no `sqlite3` object is touched from
+    two. `body` commits for itself. A thread hop costs a few hundred microseconds against a local
+    file's millisecond; awaiting a body that never yields would make one turn's `fsync` every
+    concurrent turn's latency.
+    """
+
+    def work() -> T:
+        with closing(connect(db_path, *tables, load_vec=load_vec)) as conn:
+            return body(conn)
+
+    return await asyncio.to_thread(work)
+
+
+async def run_read[T](
+    db_path: Database, tables: tuple[Table, ...], body: Callable[[sqlite3.Connection | None], T]
+) -> T:
+    """`run` for `read`: `body` gets the connection `read` yields, or `None` when absent."""
+
+    def work() -> T:
+        with read(db_path, *tables) as conn:
+            return body(conn)
+
+    return await asyncio.to_thread(work)
 
 
 @contextmanager

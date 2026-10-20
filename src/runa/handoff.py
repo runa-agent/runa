@@ -4,13 +4,14 @@ Both wrap a sub-`Agent` as something the model can call, differing in what happe
 `Handoff`'s tool switches `run_internal`'s current agent for the rest of the run (`Agent.subagents`'
 `.handoff` mode); calling a `Delegate`'s tool runs the sub-agent to completion, as a nested run of
 the caller's, and hands its output back to the *calling* agent, which keeps going (`.delegate`
-mode). See `runa.agent.Subagent` for how a class wires either mode up from its `subagents` list.
+mode). A `Subagent` is one entry of an agent's `subagents` list: a class and the mode it is wired
+up in.
 
 The two modes are the only edges between agents, so this module also names them (`Mode`) and walks
 them: `subagent_edges` is one agent's outgoing edges and `reachable` the whole graph below it. A
-module that needs "everything reachable from this agent" asks here rather than re-reading
-`handoffs` and `delegates` itself, which is what keeps a third mode from being a change in five
-places.
+module that needs "everything reachable from this agent" asks here rather than re-reading an
+agent's handoffs and delegates itself, which is what keeps a third mode from being a change in
+five places.
 
 An agent is read here, never built: `Agent` is a type-only import, so the runtime dependency
 still points from `runa.agent` to this module.
@@ -18,7 +19,7 @@ still points from `runa.agent` to this module.
 
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -30,6 +31,22 @@ Mode = Literal["handoff", "delegate"]
 Named here, beside both of them, rather than in `runa.agent`: a declaration spells the mode and
 `Subagent` carries it, but what each one *means* is this module's.
 """
+
+
+@dataclass(frozen=True)
+class Subagent:
+    """A wired-up subagent, attached as a handoff or a delegate tool."""
+
+    agent: type[Agent]
+    mode: Mode
+    tool_name: str | None = None
+    tool_description: str | None = None
+
+    def __call__(
+        self, *, tool_name: str | None = None, tool_description: str | None = None
+    ) -> Subagent:
+        """Return a copy with the tool name/description overridden."""
+        return replace(self, tool_name=tool_name, tool_description=tool_description)
 
 
 def _slugify(name: str) -> str:
@@ -103,9 +120,10 @@ def subagent_edges(agent: Agent) -> Iterator[tuple[Mode, Agent]]:
     Reading both lists lives here and not in each module that needs the graph: `run_state`
     resolves a paused run's agent by name, `Agent.graph` draws the edges.
     """
-    for handoff in agent.handoffs:
+    shape = agent._shape
+    for handoff in shape.handoffs.values():
         yield "handoff", handoff.agent
-    for delegate in agent.delegates:
+    for delegate in shape.delegates.values():
         yield "delegate", delegate.agent
 
 
@@ -126,4 +144,4 @@ def reachable(agent: Agent) -> Iterator[Agent]:
         queue.extend(target for _, target in subagent_edges(candidate))
 
 
-__all__ = ["Delegate", "Handoff", "Mode", "reachable", "subagent_edges"]
+__all__ = ["Delegate", "Handoff", "Mode", "Subagent", "reachable", "subagent_edges"]

@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from runa.db import sqlite as db_sqlite
 from runa.session import Session, SQLiteSession
 
 
@@ -52,14 +53,14 @@ def test_a_session_call_leaves_the_event_loop_free(
     """
     loop_thread = threading.get_ident()
     bodies: list[int] = []
-    original = SQLiteSession._connect
+    original = db_sqlite.connect
 
-    def slow_connect(self: SQLiteSession) -> sqlite3.Connection:
+    def slow_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
         bodies.append(threading.get_ident())
         time.sleep(0.05)
-        return original(self)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(SQLiteSession, "_connect", slow_connect)
+    monkeypatch.setattr(db_sqlite, "connect", slow_connect)
     session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
 
     async def _run() -> int:

@@ -1,9 +1,12 @@
 """agent_shape.py: `AgentShape`, an agent as the runtime reads it.
 
-An `Agent` builds its shape when it is constructed, and again whenever one of its settings is
-reassigned, so the two always agree and a bad value is a `UserError` at the line that set it. The
-turn loop reads an agent's settings from its shape and nowhere else: `shape.agent` is the identity
-handed to user code (a hook, an `instructions` callable, a pause), never read for a setting.
+An `Agent` holds its settings as declared (`subagents`, `mcp`, `memory = "auto"`), and its shape
+is the one place they are translated into what a run uses: the subagent graph built, `memory` and
+`knowledge` resolved to a source and the model's search tools. The agent builds its shape when it
+is constructed, and again whenever one of its settings is reassigned, so the two always agree and
+a bad value is a `UserError` at the line that set it. The turn loop reads an agent's settings
+from its shape and nowhere else: `shape.agent` is the identity handed to user code (a hook, an
+`instructions` callable, a pause), never read for a setting.
 
 Two things wait for a run: the tools an agent's MCP servers list (`with_mcp_tools`, which may
 start a subprocess) and the model client (`resolve_model`, which needs the provider's API key).
@@ -11,7 +14,9 @@ start a subprocess) and the model client (`resolve_model`, which needs the provi
 
 import inspect
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
@@ -21,15 +26,94 @@ from runa._types import ModelSettings, RunContext
 from runa.compact import Compactor, resolve_compactor
 from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
-from runa.handoff import Delegate, Handoff
+from runa.handoff import Delegate, Handoff, Subagent
+from runa.knowledge import Knowledge, KnowledgeLike
+from runa.memory import Memory, MemoryLike
 from runa.tool import FunctionTool
 
 if TYPE_CHECKING:
     from runa.agent import Agent
-    from runa.knowledge import KnowledgeLike
-    from runa.memory import MemoryLike
 
 _MODEL_PROVIDER = ModelProvider()
+
+_under_construction: ContextVar[dict[type[Agent], Agent] | None] = ContextVar(
+    "_under_construction", default=None
+)
+
+
+@contextmanager
+def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
+    """Yield the one way `agent`'s shape builds a subagent: each class once per graph.
+
+    A class listed twice below one root is built once, and a cycle (a specialist handing back to
+    triage) closes onto `agent` itself. Construction is eager, so a broken subagent declaration
+    fails where `subagents` is set. An agent is found again by its `name` when a paused run
+    resumes, so two classes in one graph sharing a name is a `UserError`.
+    """
+    built = _under_construction.get()
+    token = _under_construction.set(built := {}) if built is None else None
+    try:
+        for other in built.values():
+            if other is not agent and other.name == agent.name:
+                raise UserError(
+                    f"{type(other).__name__} and {type(agent).__name__} are both named "
+                    f"{agent.name!r} in one agent graph, so a paused run could resume the "
+                    f"wrong one. Give each agent a name of its own."
+                )
+        built[type(agent)] = agent
+        yield lambda cls: built[cls] if cls in built else cls()
+    finally:
+        if token is not None:
+            _under_construction.reset(token)
+
+
+def _subagent_graph(agent: Agent) -> tuple[list[Handoff], list[Delegate]]:
+    """`agent.subagents` built: each entry bare (auto, so both modes) or `.handoff`/`.delegate`.
+
+    Anything but a list (a dict grouping entries by mode, say) is a `UserError`.
+    """
+    declared = agent.subagents
+    if not isinstance(declared, list | tuple):
+        raise UserError(
+            f"subagents must be a list, e.g. [Billing.handoff, Researcher.delegate, Helper], "
+            f"got {type(declared).__name__}"
+        )
+    handoffs: list[Handoff] = []
+    delegates: list[Delegate] = []
+    with _agent_graph(agent) as build:
+        for sub in declared:
+            if isinstance(sub, Subagent):
+                target = build(sub.agent)
+                if sub.mode == "handoff":
+                    handoffs.append(Handoff.from_agent(target, sub.tool_name, sub.tool_description))
+                else:
+                    delegates.append(
+                        Delegate.from_agent(target, sub.tool_name, sub.tool_description)
+                    )
+            else:
+                target = build(sub)
+                handoffs.append(Handoff.from_agent(target))
+                delegates.append(Delegate.from_agent(target))
+    return handoffs, delegates
+
+
+def _retrieval(setting: Any, cls: type[Memory] | type[Knowledge]) -> tuple[Any, list[FunctionTool]]:
+    """Resolve a `memory`/`knowledge` setting to the source a run consults and the model's tools.
+
+    `"auto"` builds a default instance, `"llm"` is no source but a search tool for the model, and
+    any non-string (`None`, or a `MemoryLike`/`KnowledgeLike` object) is the source itself. Any
+    other string is a `UserError`.
+    """
+    if not isinstance(setting, str):
+        return setting, []
+    if setting == "auto":
+        return cls(), []
+    if setting == "llm":
+        return None, [cls()._as_tool()]
+    raise UserError(
+        f"{cls.__name__.lower()} must be 'auto', 'llm', a {cls.__name__}(...)-shaped object, "
+        f"or None, got {setting!r}"
+    )
 
 
 def _adapt_instructions(instructions: Any) -> Any:
@@ -95,29 +179,45 @@ class AgentShape:
     tools: tuple[FunctionTool, ...]
     """Its `@tool`s and memory's or knowledge's search; `with_mcp_tools` adds its servers'."""
     mcp_servers: tuple[Any, ...]
+    """Its `mcp` setting."""
     handoffs: dict[str, Handoff]
-    """Keyed by the tool name that triggers each."""
+    """Its `subagents` wired up as handoffs, keyed by the tool name that triggers each."""
     delegates: dict[str, Delegate]
-    """Keyed by the tool name that triggers each."""
+    """Its `subagents` wired up as delegates, keyed by the tool name that triggers each."""
     guardrails: dict[Phase, list[BoundGuardrail]]
     """By the phase each one runs in, each phase's in list order."""
     compactor: Compactor | None
     """What trims the conversation, or `None` when nothing does."""
     memory: MemoryLike | None
+    """The source a run consults before each turn: `None` for `"llm"`, whose search is a tool."""
     knowledge: KnowledgeLike | None
+    """The same as `memory`, for the `knowledge` setting."""
     max_turns: int
     max_tokens: int | None
     timeout: float | None
 
     @classmethod
-    def of(cls, agent: Agent) -> AgentShape:
-        """`agent`'s shape, read off its attributes; a value no run could use is a `UserError`."""
+    def of(cls, agent: Agent, previous: AgentShape | None = None) -> AgentShape:
+        """`agent`'s shape, translated from its settings; a value no run could use is a `UserError`.
+
+        `previous` is a shape of the same agent graph whose subagents are kept rather than built
+        again, given when `subagents` isn't what changed, so the agents below this one keep their
+        identity.
+        """
+        handoffs, delegates = (
+            _subagent_graph(agent)
+            if previous is None
+            else ([*previous.handoffs.values()], [*previous.delegates.values()])
+        )
+        memory, memory_tools = _retrieval(agent.memory, Memory)
+        knowledge, knowledge_tools = _retrieval(agent.knowledge, Knowledge)
+        tools = (*agent.tools, *memory_tools, *knowledge_tools)
         _checked_unique(
             agent.name,
             (
-                *(tool.name for tool in agent.tools),
-                *(delegate.tool_name for delegate in agent.delegates),
-                *(handoff.tool_name for handoff in agent.handoffs),
+                *(tool.name for tool in tools),
+                *(delegate.tool_name for delegate in delegates),
+                *(handoff.tool_name for handoff in handoffs),
             ),
         )
         return cls(
@@ -125,16 +225,16 @@ class AgentShape:
             name=agent.name,
             instructions=_adapt_instructions(agent.instructions),
             model=_checked_model(agent.model),
-            model_settings=agent.model_settings,
+            model_settings=agent.model_settings or ModelSettings(),
             output_type=agent.output_type,
-            tools=tuple(agent.tools),
-            mcp_servers=tuple(agent.mcp_servers),
-            handoffs={handoff.tool_name: handoff for handoff in agent.handoffs},
-            delegates={delegate.tool_name: delegate for delegate in agent.delegates},
+            tools=tools,
+            mcp_servers=tuple(agent.mcp),
+            handoffs={handoff.tool_name: handoff for handoff in handoffs},
+            delegates={delegate.tool_name: delegate for delegate in delegates},
             guardrails=flatten_guardrails(agent.guardrails),
             compactor=resolve_compactor(agent.compact),
-            memory=agent.memory,
-            knowledge=agent.knowledge,
+            memory=memory,
+            knowledge=knowledge,
             max_turns=agent.max_turns,
             max_tokens=agent.max_tokens,
             timeout=agent.timeout,

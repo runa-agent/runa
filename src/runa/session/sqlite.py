@@ -10,27 +10,23 @@ so it skips the thread-local connections, WAL mode, and cross-process file locki
 multi-process-safe store would need. That store is `session/postgres.py`, and `runa.db` picks it
 when the environment says to.
 
-Thin, but not on the event loop: `sqlite3` is blocking, and `Session`'s methods are `async def`
-because a run awaits them. `_off_loop` below is where the two meet.
+Thin, but not on the event loop: `db/sqlite.py`'s `run` is where `sqlite3`'s blocking meets
+`Session`'s `async def`.
 
 The two tables are declared once in `session/store.py` and rendered here by `db/schema.py`;
 this module's own code is the SQLite query shapes, nothing about the schema.
 """
 
-import asyncio
-import functools
 import json
 import sqlite3
-from collections.abc import Callable, Coroutine
-from contextlib import closing
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 from runa._items import ConversationItem
 from runa.db import sqlite_database
 from runa.db.schema import SQLITE
-from runa.db.sqlite import connect as _connect_db
 from runa.db.sqlite import read as _read_db
+from runa.db.sqlite import run as _run_db
 from runa.session import Session
 from runa.session.store import (
     MESSAGES,
@@ -44,35 +40,11 @@ from runa.session.store import (
 )
 
 
-def _off_loop[**P, T](method: Callable[P, T]) -> Callable[P, Coroutine[Any, Any, T]]:
-    """Turn one synchronous `sqlite3` method into the `async def` `Session` declares.
-
-    Off the event loop, like a sync `@tool` and a sync `@guardrail`: these bodies are file I/O, a
-    session-backed turn runs three of them (a read, then a read and a write to save the turn), and
-    `runa serve`'s default deployment is this backend on the loop that is also serving every other
-    request. Awaiting something that never yields is how one turn's `fsync` becomes every concurrent
-    turn's latency.
-
-    A thread hop costs a few hundred microseconds against a local file's millisecond, and it is
-    what makes the `await` honest. What it does not buy is parallel writes: SQLite has one writer
-    per file, so concurrent turns now wait on its lock (`sqlite3`'s five-second busy timeout)
-    instead of on the loop -- the waiting moves off the thread that has other work to do, which is
-    the whole point. A deployment that needs genuine write concurrency is on `session/postgres.py`.
-    """
-
-    @functools.wraps(method)
-    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        return await asyncio.to_thread(method, *args, **kwargs)
-
-    return wrapper
-
-
 class SQLiteSession(Session):
     """Conversation history for one `session_id`, persisted to the local `db/runa.db`.
 
-    Every method here is `_off_loop`: a plain synchronous body, handed to a worker thread to
-    satisfy `Session`'s `async def`. Each opens its own short-lived connection, so no `sqlite3`
-    object is ever touched from two threads.
+    Every method hands its body to `db/sqlite.py`'s `run`, which opens a short-lived connection on
+    a worker thread, so no `sqlite3` object is ever touched from two threads.
     """
 
     def __init__(
@@ -89,25 +61,24 @@ class SQLiteSession(Session):
         self.session_id = session_id
         self.db_path = Path(db_path) if db_path is not None else sqlite_database()
 
-    def _connect(self) -> sqlite3.Connection:
-        return _connect_db(self.db_path, SESSIONS, MESSAGES)
-
-    @_off_loop
-    def get_items(self) -> list[ConversationItem]:
+    async def get_items(self) -> list[ConversationItem]:
         """Return this session's items, oldest first."""
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> list[ConversationItem]:
             rows = conn.execute(
                 f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = ? ORDER BY id",
                 (self.session_id,),
             ).fetchall()
-        return [json.loads(row[0]) for row in rows]
+            return [json.loads(row[0]) for row in rows]
 
-    @_off_loop
-    def add_items(self, items: list[ConversationItem]) -> None:
+        return await self._run(body)
+
+    async def add_items(self, items: list[ConversationItem]) -> None:
         """Append `items`, creating the session row on first write."""
         if not items:
             return
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> None:
             conn.execute(
                 f"INSERT OR IGNORE INTO {SESSIONS.name} (session_id) VALUES (?)",
                 (self.session_id,),
@@ -116,17 +87,15 @@ class SQLiteSession(Session):
                 f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES (?, ?)",
                 [(self.session_id, json.dumps(item)) for item in items],
             )
-            conn.execute(
-                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP, "
-                "agent_name = COALESCE(agent_name, ?) WHERE session_id = ?",
-                (self.agent_name, self.session_id),
-            )
+            self._touch(conn)
             conn.commit()
 
-    @_off_loop
-    def set_items(self, items: list[ConversationItem]) -> None:
+        await self._run(body)
+
+    async def set_items(self, items: list[ConversationItem]) -> None:
         """Replace this session's entire history with `items`, in one transaction."""
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> None:
             conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
             if items:
                 conn.execute(
@@ -137,20 +106,30 @@ class SQLiteSession(Session):
                     f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES (?, ?)",
                     [(self.session_id, json.dumps(item)) for item in items],
                 )
-            conn.execute(
-                f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP, "
-                "agent_name = COALESCE(agent_name, ?) WHERE session_id = ?",
-                (self.agent_name, self.session_id),
-            )
+            self._touch(conn)
             conn.commit()
 
-    @_off_loop
-    def clear_session(self) -> None:
+        await self._run(body)
+
+    async def clear_session(self) -> None:
         """Delete this session's history and its `agent_sessions` row, in one transaction."""
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> None:
             conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
             conn.execute(f"DELETE FROM {SESSIONS.name} WHERE session_id = ?", (self.session_id,))
             conn.commit()
+
+        await self._run(body)
+
+    def _touch(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP, "
+            "agent_name = COALESCE(agent_name, ?) WHERE session_id = ?",
+            (self.agent_name, self.session_id),
+        )
+
+    async def _run[T](self, body: Callable[[sqlite3.Connection], T]) -> T:
+        return await _run_db(self.db_path, (SESSIONS, MESSAGES), body)
 
 
 class SQLiteSessionStore:

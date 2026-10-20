@@ -35,12 +35,12 @@ def _add_agent(dot: Digraph, agent: Agent, seen: set[int]) -> None:
     node_id = _agent_node_id(agent)
     dot.node(node_id, agent.name, shape="ellipse", style="filled", fillcolor="lightblue")
 
-    for tool in agent.tools:
+    for tool in agent._shape.tools:
         tool_id = f"tool_{id(tool)}"
         dot.node(tool_id, tool.name, shape="box", style="filled", fillcolor="lightyellow")
         dot.edge(node_id, tool_id)
 
-    for server in agent.mcp_servers:
+    for server in agent._shape.mcp_servers:
         server_id = f"mcp_{id(server)}"
         dot.node(
             server_id,

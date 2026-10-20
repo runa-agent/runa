@@ -12,11 +12,10 @@ Which database that is is `runa.db.sqlite_database`'s answer, not this module's.
 """
 
 import sqlite3
-from contextlib import closing
+from collections.abc import Callable
 from typing import Any
 
-from runa.db.sqlite import Database
-from runa.db.sqlite import connect as _connect
+from runa.db.sqlite import Database, run
 from runa.db.sqlite import pack_vector as pack
 from runa.db.vectors import VectorMatch, VectorSpec
 
@@ -65,8 +64,8 @@ class SQLiteVectorStore:
             + f"CREATE TABLE IF NOT EXISTS {self.meta} (\n    version TEXT NOT NULL\n);\n"
         )
 
-    def _connect(self) -> sqlite3.Connection:
-        return _connect(self.db_path, self.ddl, load_vec=True)
+    async def _run[T](self, body: Callable[[sqlite3.Connection], T]) -> T:
+        return await run(self.db_path, (self.ddl,), body, load_vec=True)
 
     async def add(self, *, payload: dict[str, Any], embedding: list[float]) -> int:
         """Store one payload row and its embedding, returning the new row's id.
@@ -78,7 +77,8 @@ class SQLiteVectorStore:
         values = self.spec.encode(payload)
         columns = ", ".join(values)
         placeholders = ", ".join("?" for _ in values)
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> int:
             cursor = conn.execute(
                 f"INSERT INTO {self.items} ({columns}) VALUES ({placeholders})",
                 tuple(values.values()),
@@ -97,7 +97,9 @@ class SQLiteVectorStore:
                     (item_id, payload[self.spec.partition_by], pack(embedding)),
                 )
             conn.commit()
-        return item_id
+            return item_id
+
+        return await self._run(body)
 
     async def nearest(
         self, *, embedding: list[float], k: int, partition: str | None = None
@@ -113,8 +115,9 @@ class SQLiteVectorStore:
         params: list[Any] = [pack(embedding), k]
         if self.spec.partition_by:
             params.append(partition)
-        with closing(self._connect()) as conn:
-            rows = conn.execute(
+
+        def body(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+            return conn.execute(
                 f"""
                 SELECT items.id, {selected}, vectors.distance
                 FROM {self.vectors} AS vectors
@@ -124,13 +127,14 @@ class SQLiteVectorStore:
                 """,
                 tuple(params),
             ).fetchall()
+
         return [
             VectorMatch(
                 id=row[0],
                 payload=self.spec.decode(dict(zip(names, row[1:-1], strict=True))),
                 distance=row[-1],
             )
-            for row in rows
+            for row in await self._run(body)
         ]
 
     async def delete(self, *, item_id: int, partition: str | None = None) -> None:
@@ -139,10 +143,13 @@ class SQLiteVectorStore:
         params: list[Any] = [item_id]
         if self.spec.partition_by:
             params.append(partition)
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> None:
             conn.execute(f"DELETE FROM {self.vectors} WHERE rowid = ? {scope}", tuple(params))
             conn.execute(f"DELETE FROM {self.items} WHERE id = ? {scope}", tuple(params))
             conn.commit()
+
+        await self._run(body)
 
     async def reset(self) -> None:
         """Delete every row, embedding and version, in one commit.
@@ -151,27 +158,36 @@ class SQLiteVectorStore:
         emptiness: an unversioned store is one `Knowledge` re-ingests, where a versioned empty one
         is a corpus it would wrongly believe in.
         """
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> None:
             conn.execute(f"DELETE FROM {self.vectors}")
             conn.execute(f"DELETE FROM {self.items}")
             conn.execute(f"DELETE FROM {self.meta}")
             conn.commit()
+
+        await self._run(body)
 
     async def stamp(self, version: str) -> None:
         """Record `version` as what the store now holds, replacing any earlier one.
 
         Delete and insert in one commit, since `{name}_meta` holds at most one row.
         """
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> None:
             conn.execute(f"DELETE FROM {self.meta}")
             conn.execute(f"INSERT INTO {self.meta} (version) VALUES (?)", (version,))
             conn.commit()
 
+        await self._run(body)
+
     async def version(self) -> str | None:
         """What the last `stamp` recorded, or `None` if nothing has been stamped since a `reset`."""
-        with closing(self._connect()) as conn:
+
+        def body(conn: sqlite3.Connection) -> str | None:
             row = conn.execute(f"SELECT version FROM {self.meta} LIMIT 1").fetchone()
-        return row[0] if row is not None else None
+            return row[0] if row is not None else None
+
+        return await self._run(body)
 
 
 __all__ = ["SQLiteVectorStore"]
