@@ -96,3 +96,51 @@ def test_every_concern_hands_its_database_its_own_tables(monkeypatch: pytest.Mon
     vectors = PostgresVectorStore(spec(4), url)
     assert "memory_items" in script(vectors)
     assert "vector(4)" in script(vectors)
+
+
+def test_a_shared_database_applies_its_tables_once_and_a_read_creates_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Writes apply `(url, tables)` once per process; a read of absent tables answers empty."""
+    pytest.importorskip("asyncpg")
+    from runa.db import pool
+    from runa.db.schema import Column, Table
+
+    notes = Table("notes", columns=(Column("id", "text", primary_key=True),))
+    applied: list[str] = []
+    present: list[tuple[str, str]] = []
+
+    class Conn:
+        async def execute(self, sql: str) -> None:
+            applied.append(sql)
+
+        async def fetch(self, sql: str) -> list[tuple[str, str]]:
+            return present
+
+    class Acquire:
+        async def __aenter__(self) -> Conn:
+            return Conn()
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    class Pool:
+        def acquire(self) -> Acquire:
+            return Acquire()
+
+    async def _get_pool(url: str) -> Pool:
+        return Pool()
+
+    monkeypatch.setattr(pool, "get_pool", _get_pool)
+    monkeypatch.setattr(pool, "_applied", set())
+    url = "postgresql://example/db"
+
+    async def scenario() -> None:
+        assert await pool.connect_to_read(url, notes) is None
+        assert applied == []  # a read created nothing
+        await pool.connect(url, notes)
+        await pool.connect(url, notes)
+        assert len(applied) == 1  # and the second write applied nothing
+        assert await pool.connect_to_read(url, notes) is not None  # remembered
+
+    asyncio.run(scenario())

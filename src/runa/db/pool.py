@@ -13,7 +13,8 @@ to the loop that opened them; that lifetime rule is `runa._loop.LoopCache`, shar
 three resources in Runa that have it.
 """
 
-from collections.abc import AsyncIterator, Sequence
+import threading
+from collections.abc import AsyncIterator, Hashable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -21,9 +22,12 @@ import asyncpg
 
 from runa._loop import LoopCache
 from runa.db.handle import Queries, Row
-from runa.db.schema import POSTGRES, Declaration, ddl, reconcile
+from runa.db.schema import POSTGRES, Declaration, Table, ddl, reconcile
 
 _pools: LoopCache[str, asyncpg.Pool] = LoopCache()
+_applied: set[tuple[Hashable, tuple[Declaration, ...]]] = set()
+"""The `(url, declarations)` pairs this process already brought up to date; see `connect`."""
+_applied_lock = threading.Lock()
 
 
 async def _create_pool(url: str) -> asyncpg.Pool:
@@ -61,28 +65,63 @@ async def close_pool(url: str) -> None:
 
 
 async def connect(url: str, *tables: Declaration) -> asyncpg.Pool:
-    """Return `url`'s shared pool, with `tables` created and reconciled (idempotent) first.
+    """Return `url`'s shared pool, with `tables` created and reconciled first, once per process.
 
     `db/sqlite.py`'s `connect` applied to the shared side: `db/schema.py`'s `ddl` creates what's
     missing, then `reconcile` adds the columns a declaration has grown since this database was
-    created. A Postgres is usually created by whichever replica connects first and so is already
-    current, but "usually" is not the same promise as asking it.
+    created. Whether a database predates a release cannot change while a process runs, so the
+    `(url, tables)` pair is remembered once applied and later calls only return the pool. A pair
+    is remembered after the statements succeed, since `reconcile` can raise `SchemaOutOfDate`.
+    Two tasks may both apply it; every statement is `IF NOT EXISTS` or adds a missing column.
     """
     pool = await get_pool(url)
+    if _is_applied(url, tables):
+        return pool
     async with pool.acquire() as conn:
-        await conn.execute(ddl(POSTGRES, *tables))
-        for statement in reconcile(POSTGRES, await conn.fetch(POSTGRES.columns_query), *tables):
-            await conn.execute(statement)
+        await _apply(conn, tables)
+    with _applied_lock:
+        _applied.add((url, tables))
     return pool
+
+
+async def connect_to_read(url: str, *tables: Table) -> asyncpg.Pool | None:
+    """Return `url`'s shared pool if `tables` are already there to be read, else `None`.
+
+    `connect` for a query that only reads: it creates no table, so a listing over a database
+    nothing has written to yet is empty rather than a side effect. A database that does have the
+    tables is brought up to its declaration once, like any other connection.
+    """
+    pool = await get_pool(url)
+    if _is_applied(url, tables):
+        return pool
+    async with pool.acquire() as conn:
+        present = {row[0] for row in await conn.fetch(POSTGRES.columns_query)}
+        if not {table.name for table in tables} <= present:
+            return None
+        await _apply(conn, tables)
+    with _applied_lock:
+        _applied.add((url, tables))
+    return pool
+
+
+def _is_applied(url: str, tables: tuple[Declaration, ...]) -> bool:
+    with _applied_lock:
+        return (url, tables) in _applied
+
+
+async def _apply(conn: asyncpg.pool.PoolConnectionProxy, tables: tuple[Declaration, ...]) -> None:
+    await conn.execute(ddl(POSTGRES, *tables))
+    for statement in reconcile(POSTGRES, await conn.fetch(POSTGRES.columns_query), *tables):
+        await conn.execute(statement)
 
 
 class Shared:
     """A store that lives in the shared Postgres: which database it's in, and its own tables.
 
     What every Postgres adapter needs and all it needs: the URL it was built with, and its tables
-    applied once before its first query. Subclassing this is what keeps the lifetime rule above
-    (one pool per URL per loop, tables created on first use) a fact of this module instead of
-    something each adapter rediscovers -- five of them had, in twelve places.
+    applied once per process before its first write. Subclassing this is what keeps the lifetime
+    rule above (one pool per URL per loop, tables created on first write) a fact of this module
+    instead of something each adapter rediscovers.
     """
 
     def __init__(self, url: str, *tables: Declaration) -> None:
@@ -101,17 +140,23 @@ class _Statements:
     async def _target(self) -> asyncpg.Pool | asyncpg.pool.PoolConnectionProxy:
         raise NotImplementedError
 
+    async def _read_target(self) -> asyncpg.Pool | asyncpg.pool.PoolConnectionProxy | None:
+        return await self._target()
+
     async def fetch(self, sql: str, *args: Any) -> list[Row]:
-        """Every row `sql` selects."""
-        return list(await (await self._target()).fetch(sql, *args))
+        """Every row `sql` selects; none when the tables don't exist yet."""
+        target = await self._read_target()
+        return list(await target.fetch(sql, *args)) if target is not None else []
 
     async def fetchrow(self, sql: str, *args: Any) -> Row | None:
         """The first row `sql` selects, or `None`."""
-        return await (await self._target()).fetchrow(sql, *args)
+        target = await self._read_target()
+        return await target.fetchrow(sql, *args) if target is not None else None
 
     async def fetchval(self, sql: str, *args: Any) -> Any:
         """The first column of the first row `sql` selects, or `None`."""
-        return await (await self._target()).fetchval(sql, *args)
+        target = await self._read_target()
+        return await target.fetchval(sql, *args) if target is not None else None
 
     async def execute(self, sql: str, *args: Any) -> int:
         """Run `sql` and return how many rows it changed.
@@ -143,6 +188,12 @@ class PostgresDatabase(_Statements, Shared):
     async def _target(self) -> asyncpg.Pool:
         return await self._pool()
 
+    async def _read_target(self) -> asyncpg.Pool | None:
+        return await connect_to_read(self.url, *self._declared())
+
+    def _declared(self) -> tuple[Table, ...]:
+        return tuple(table for table in self.tables if isinstance(table, Table))
+
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[Queries]:
         """One pooled connection inside `BEGIN ... COMMIT`, rolled back if the block raises."""
@@ -151,4 +202,4 @@ class PostgresDatabase(_Statements, Shared):
             yield _Transaction(conn)
 
 
-__all__ = ["PostgresDatabase", "Shared", "close_pool", "connect", "get_pool"]
+__all__ = ["PostgresDatabase", "Shared", "close_pool", "connect", "connect_to_read", "get_pool"]

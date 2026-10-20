@@ -170,9 +170,8 @@ def read(db_path: Location, *tables: Table) -> Iterator[sqlite3.Connection | Non
     underneath a live process into the operator error above instead of a bare `no such column`.
     Rows come back as `sqlite3.Row`, which is what every read path above wants.
 
-    Reading is a local question only. A shared Postgres has no file to leave behind, and
-    `db/pool.py` creates its schema once per process rather than per query. A `MemoryDatabase`
-    has no file either, so for it only the tables are asked about.
+    A `MemoryDatabase` has no file, so for it only the tables are asked about. A shared Postgres
+    answers the same question through `db/pool.py`'s `connect_to_read`.
     """
     if isinstance(db_path, MemoryDatabase):
         conn = sqlite3.connect(db_path.uri, uri=True)

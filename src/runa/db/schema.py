@@ -226,7 +226,7 @@ def ddl(dialect: Dialect, *tables: Declaration) -> str:
     """The `CREATE TABLE`/`CREATE INDEX` script for `tables`, in `dialect`.
 
     Idempotent (every statement is `IF NOT EXISTS`), which is what lets both `db/sqlite.py` and
-    `db/pool.py` apply it on every connect instead of tracking whether a database is new.
+    `db/pool.py` apply it without tracking whether a database is new.
     Declaration order is creation order, so a table referencing another is declared after it.
 
     Creation only: what this leaves for `reconcile` is a table that already exists and whose

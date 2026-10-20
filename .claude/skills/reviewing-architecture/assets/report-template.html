@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<!--
+  Report template for the reviewing-architecture skill.
+  Replace every {{PLACEHOLDER}} and repeat the marked blocks as needed.
+  Keep it standalone: no external scripts, fonts or stylesheets.
+  Severity classes: sev-critical, sev-high, sev-medium, sev-low.
+  Score classes: score-strong, score-good, score-mixed, score-weak, score-poor.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture review: {{REPO_NAME}}</title>
+<style>
+  :root {
+    --fg: #1f2328; --muted: #59636e; --bg: #ffffff; --panel: #f6f8fa; --border: #d1d9e0;
+    --critical: #b42318; --high: #c4320a; --medium: #9a6700; --low: #57606a;
+    --strong: #1a7f37; --good: #4c9a2a; --mixed: #9a6700; --weak: #c4320a; --poor: #b42318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e6edf3; --muted: #9198a1; --bg: #0d1117; --panel: #151b23; --border: #3d444d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 48px 0 16px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 16px; margin: 0 0 12px; }
+  .meta { color: var(--muted); margin: 0 0 32px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 0 0 16px; }
+  .verdict dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 12px 0 0; }
+  .verdict dt { font-weight: 600; }
+  .verdict dd { margin: 0; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 600; text-transform: uppercase;
+           letter-spacing: .04em; padding: 2px 8px; border-radius: 999px; color: #fff; margin-right: 8px; vertical-align: 2px; }
+  .sev-critical { background: var(--critical); } .sev-high { background: var(--high); }
+  .sev-medium { background: var(--medium); } .sev-low { background: var(--low); }
+  .finding dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 0; }
+  .finding dt { color: var(--muted); font-weight: 600; }
+  .finding dd { margin: 0; }
+  pre, code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; margin: 6px 0; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .score-strong { color: var(--strong); font-weight: 600; } .score-good { color: var(--good); font-weight: 600; }
+  .score-mixed { color: var(--mixed); font-weight: 600; } .score-weak { color: var(--weak); font-weight: 600; }
+  .score-poor { color: var(--poor); font-weight: 600; }
+  .prio { font-weight: 700; margin-right: 6px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Architecture review: {{REPO_NAME}}</h1>
+<p class="meta">{{DATE}} &middot; scope: {{SCOPE}} &middot; commit <code>{{COMMIT}}</code></p>
+
+<section class="verdict panel">
+  <h3>Verdict: {{OVERALL}}</h3>
+  <p>{{VERDICT_SUMMARY}}</p>
+  <dl>
+    <dt>Biggest strength</dt><dd>{{STRENGTH}}</dd>
+    <dt>Biggest weakness</dt><dd>{{WEAKNESS}}</dd>
+    <dt>Highest-leverage redesign</dt><dd>{{REDESIGN}}</dd>
+    <dt>Biggest risk</dt><dd>{{RISK}}</dd>
+    <dt>Confidence</dt><dd>{{CONFIDENCE}}</dd>
+  </dl>
+</section>
+
+<h2>Architecture at a glance</h2>
+<pre>{{DIAGRAM}}</pre>
+
+<h2>Findings</h2>
+<!-- repeat per finding, highest impact first -->
+<article class="finding panel">
+  <h3><span class="badge sev-{{SEVERITY_CLASS}}">{{SEVERITY}}</span>{{FINDING_TITLE}}</h3>
+  <dl>
+    <dt>Principle</dt><dd>{{PRINCIPLE}}</dd>
+    <dt>Location</dt><dd><code>{{PATH_LINE}}</code></dd>
+    <dt>Evidence</dt><dd>{{EVIDENCE_TEXT}}<pre>{{QUOTED_CODE}}</pre></dd>
+    <dt>Why it matters</dt><dd>{{IMPACT}}</dd>
+    <dt>Alternative</dt><dd>{{ALTERNATIVE}}</dd>
+    <dt>Trade-off</dt><dd>{{TRADE_OFF}}</dd>
+    <dt>Confidence</dt><dd>{{FINDING_CONFIDENCE}}</dd>
+  </dl>
+</article>
+<!-- end repeat -->
+
+<h2>What works</h2>
+<!-- repeat per strength -->
+<article class="panel">
+  <h3>{{STRENGTH_TITLE}}</h3>
+  <p><strong>Principle:</strong> {{STRENGTH_PRINCIPLE}}</p>
+  <p><strong>Evidence:</strong> <code>{{STRENGTH_PATH_LINE}}</code> {{STRENGTH_EVIDENCE}}</p>
+  <p><strong>Why it works:</strong> {{STRENGTH_WHY}}</p>
+</article>
+<!-- end repeat -->
+
+<h2>Change-amplification hotspots</h2>
+<table>
+  <thead><tr><th>Change</th><th>Touched now</th><th>Cause</th><th>Better boundary</th><th>Touched after</th></tr></thead>
+  <tbody>
+    <!-- repeat per scenario -->
+    <tr><td>{{CHANGE}}</td><td>{{NOW}}</td><td>{{CAUSE}}</td><td>{{BOUNDARY}}</td><td>{{AFTER}}</td></tr>
+  </tbody>
+</table>
+
+<h2>Redesign priorities</h2>
+<!-- repeat per recommendation, P0 first -->
+<div class="panel">
+  <p><span class="prio">{{PRIORITY}}</span><strong>{{RECOMMENDATION}}</strong></p>
+  <p>Complexity that disappears: {{WHAT_DISAPPEARS}}</p>
+</div>
+<!-- end repeat -->
+
+<h2>What not to change</h2>
+<ul>
+  <!-- repeat -->
+  <li>{{KEEP}}</li>
+</ul>
+
+<h2>Scorecard</h2>
+<table>
+  <thead><tr><th>Dimension</th><th>Assessment</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>Complexity management</td><td class="score-{{S1_CLASS}}">{{S1}}</td><td>{{S1_NOTE}}</td></tr>
+    <tr><td>Module depth</td><td class="score-{{S2_CLASS}}">{{S2}}</td><td>{{S2_NOTE}}</td></tr>
+    <tr><td>Information hiding</td><td class="score-{{S3_CLASS}}">{{S3}}</td><td>{{S3_NOTE}}</td></tr>
+    <tr><td>Abstraction quality</td><td class="score-{{S4_CLASS}}">{{S4}}</td><td>{{S4_NOTE}}</td></tr>
+    <tr><td>Layering</td><td class="score-{{S5_CLASS}}">{{S5}}</td><td>{{S5_NOTE}}</td></tr>
+    <tr><td>Dependency direction</td><td class="score-{{S6_CLASS}}">{{S6}}</td><td>{{S6_NOTE}}</td></tr>
+    <tr><td>Change amplification</td><td class="score-{{S7_CLASS}}">{{S7}}</td><td>{{S7_NOTE}}</td></tr>
+    <tr><td>Error complexity</td><td class="score-{{S8_CLASS}}">{{S8}}</td><td>{{S8_NOTE}}</td></tr>
+    <tr><td>Consistency</td><td class="score-{{S9_CLASS}}">{{S9}}</td><td>{{S9_NOTE}}</td></tr>
+    <tr><td>Obviousness</td><td class="score-{{S10_CLASS}}">{{S10}}</td><td>{{S10_NOTE}}</td></tr>
+  </tbody>
+</table>
+
+</main>
+</body>
+</html>
