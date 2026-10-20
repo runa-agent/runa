@@ -26,10 +26,15 @@ import pytest
 from contracts import eval as eval_contract
 from contracts import trace as trace_contract
 
-import runa.db.pool as pool_module
 from runa import db
+from runa.db.handle import run_sync
+from runa.db.pool import PostgresDatabase
+from runa.eval.database import DatabaseEvalStore
+from runa.eval.store import CASES, RUNS
 from runa.project import use
+from runa.tracing.database import DatabaseTraceStore
 from runa.tracing.spans import Span
+from runa.tracing.store import SPANS, TRACES
 from runa.tracing.traces import Trace
 
 _DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", "postgresql://runa:runa@localhost:5432/runa")
@@ -52,7 +57,7 @@ pytestmark = pytest.mark.skipif(not _reachable(), reason=f"no Postgres reachable
 
 def run[T](coro: Coroutine[Any, Any, T]) -> T:
     """Run `coro` on the same background loop the synchronous backends use."""
-    return pool_module.run_sync(coro)
+    return run_sync(coro)
 
 
 @pytest.fixture
@@ -63,21 +68,22 @@ def unique_id() -> str:
 
 @pytest.mark.parametrize("check", trace_contract.CONTRACT, ids=lambda check: check.__name__)
 def test_trace_store_contract(unique_id: str, check: trace_contract.Check) -> None:
-    """`PostgresTraceStore` answers the same `TraceStore` contract the local backends do."""
-    from runa.tracing.postgres import PostgresTraceStore
-
-    check(PostgresTraceStore(_DSN), unique_id)
+    """A trace store over Postgres answers the same `TraceStore` contract the local backends do."""
+    check(_traces(), unique_id)
 
 
 @pytest.mark.parametrize("check", eval_contract.CONTRACT, ids=lambda check: check.__name__)
 def test_eval_store_contract(unique_id: str, check: eval_contract.Check) -> None:
-    """`PostgresEvalStore` answers the same `EvalStore` contract the local backends do.
+    """An eval store over Postgres answers the same `EvalStore` contract the local backends do.
 
     A shared baseline is why it exists: CI and a laptop must grade against the same run.
     """
-    from runa.eval.postgres import PostgresEvalStore
+    check(DatabaseEvalStore(PostgresDatabase(_DSN, RUNS, CASES)), unique_id)
 
-    check(PostgresEvalStore(_DSN), unique_id)
+
+def _traces() -> DatabaseTraceStore:
+    """A trace store over the test database, built directly rather than through `runa.db`."""
+    return DatabaseTraceStore(PostgresDatabase(_DSN, TRACES, SPANS))
 
 
 def _trace(name: str) -> Trace:
@@ -103,12 +109,12 @@ def _trace(name: str) -> Trace:
 
 def test_the_exporter_persists_a_finished_trace(unique_id: str) -> None:
     """`PostgresExporter` is a `StoreExporter` over this store; it must actually write."""
-    from runa.tracing.postgres import PostgresExporter, PostgresTraceStore
+    from runa.tracing.postgres import PostgresExporter
 
     trace = _trace(unique_id)
     PostgresExporter(_DSN).export(trace)
 
-    assert PostgresTraceStore(_DSN).get(trace.id) is not None
+    assert _traces().get(trace.id) is not None
 
 
 def test_the_shared_dsn_env_var_routes_traces_to_postgres(

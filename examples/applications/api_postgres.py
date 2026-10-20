@@ -14,7 +14,7 @@ you want on a laptop. The sessions, memories and knowledge chunks all move toget
 replica can end up reading history another one wrote somewhere else.
 
 `RedisCache` is the one thing still chosen by hand, and deliberately so. A shared deployment
-already has a cache (`db.cache()` returns a `PostgresCache` over the same database), so Redis is
+already has a cache (`db.cache()` returns a cache over a table in the same database), so Redis is
 worth naming only when you want hot keys off the query path. `Cache` is also plain
 application-level caching that `Agent.run` never touches by itself, so `lookup_order_status`
 calls it the way any tool's own code would.

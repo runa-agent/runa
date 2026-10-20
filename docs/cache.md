@@ -53,13 +53,13 @@ lists, strings, numbers, booleans, `None`) can be cached.
 ## Shared across processes
 
 A deployment that sets `RUNA_DATABASE_URL` already has a shared cache: `runa.db.cache()` returns
-a `PostgresCache` over a `cache_entries` table in that same database, so there is no second
+a cache over a `cache_entries` table in that same database, so there is no second
 service to run.
 
 ```python
 from runa import db
 
-cache = db.cache()  # SQLiteCache locally, PostgresCache when the URL is shared
+cache = db.cache()  # a table in the local file, or in the shared database when the URL is set
 ```
 
 For hot keys you want off the database's query path, ask for Redis by name (the

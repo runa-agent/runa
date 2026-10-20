@@ -1,4 +1,4 @@
-"""The `TraceStore` contract, run against every adapter that needs no server.
+"""The `TraceStore` contract, run against every backend that needs no server.
 
 The checks live in `tests/contracts/trace.py` and are driven here over the backends `runa.db` can
 resolve without a live Postgres. That is the point of the seam: a trace saved through a
@@ -6,10 +6,8 @@ resolve without a live Postgres. That is the point of the seam: a trace saved th
 exporter cannot be looking at a history that behaves differently from the one they were tested
 against.
 
-`tests/test_postgres_observability.py` runs the same checks against `PostgresTraceStore`, which is
-the one adapter that needs a server to be running. `listing_clause` is asserted per dialect rather
-than per adapter for that reason: both SQL adapters bind what it returns, and only one of them can
-be run here.
+`tests/test_postgres_observability.py` runs the same checks over a shared Postgres, which is the
+one backend that needs a server to be running.
 """
 
 from pathlib import Path
@@ -18,7 +16,6 @@ import pytest
 from contracts.trace import CONTRACT, Check
 
 from runa import db
-from runa.db.schema import POSTGRES, SQLITE, Dialect
 from runa.project import use
 from runa.tracing.store import TraceStore, listing_clause
 
@@ -46,28 +43,23 @@ def test_trace_store_contract(store: TraceStore, check: Check) -> None:
     check(store, "t")
 
 
-@pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
-def test_listing_clause_numbers_the_limit_after_the_filters(dialect: Dialect) -> None:
+def test_listing_clause_numbers_the_limit_after_the_filters() -> None:
     """The cap is bound last, which is why the clause carries it rather than leaving it out.
 
-    An adapter handed the `WHERE` alone would have to count the filters that went into it to
+    A caller handed the `WHERE` alone would have to count the filters that went into it to
     number its own `LIMIT`, and that arithmetic is the thing worth writing once.
     """
-    clause, params = listing_clause(
-        limit=5, agent="SupportAgent", session_id="user-42", dialect=dialect
-    )
+    clause, params = listing_clause(limit=5, agent="SupportAgent", session_id="user-42")
 
     assert clause == (
-        f"WHERE name = {dialect.placeholder(1)} AND session_id = {dialect.placeholder(2)} "
-        f"ORDER BY start_time DESC, id DESC LIMIT {dialect.placeholder(3)}"
+        "WHERE name = $1 AND session_id = $2 ORDER BY start_time DESC, id DESC LIMIT $3"
     )
     assert params == ("SupportAgent", "user-42", 5)
 
 
-@pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
-def test_listing_clause_with_no_filters_is_still_a_whole_tail(dialect: Dialect) -> None:
+def test_listing_clause_with_no_filters_is_still_a_whole_tail() -> None:
     """No filter is no `WHERE`, so a listing composes the same string either way."""
-    clause, params = listing_clause(limit=50, dialect=dialect)
+    clause, params = listing_clause(limit=50)
 
-    assert clause == f"ORDER BY start_time DESC, id DESC LIMIT {dialect.placeholder(1)}"
+    assert clause == "ORDER BY start_time DESC, id DESC LIMIT $1"
     assert params == (50,)

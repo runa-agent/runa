@@ -1,30 +1,28 @@
 """tracing/store.py: `TraceStore`, where finished traces go and where `runa ui` reads them from.
 
-One interface, two adapters: `tracing/sqlite.py` and `tracing/postgres.py`. Which one a caller
-gets is `runa.db.traces(...)`'s decision, asked once, which is what lets `runa traces`, `runa ui`
-and the exporter stay backend-agnostic: they hold a `TraceStore` and get whichever history the
-deployment actually has.
+One interface, one implementation over `db/handle.py`'s `Database`: `tracing/database.py`. Which
+database it queries is `runa.db.traces(...)`'s decision, asked once, which is what lets `runa
+traces`, `runa ui` and the exporter stay backend-agnostic: they hold a `TraceStore` and get
+whichever history the deployment actually has.
 
 Asked once is the point: the exporter a deployment installs and the store its traces land in
 can't disagree.
 
 The two tables live here too, and so does the marshalling: `TRACES`/`SPANS` state what a row is
-(`db/schema.py` renders them for whichever dialect an adapter speaks) and
+(`db/schema.py` renders them for whichever dialect the database speaks) and
 `to_trace`/`trace_values`/`span_values` are the one mapping between such a row and a `Trace`, so
 a column read out of order or a `json.dumps` left off is a mistake there is only one place to
 make.
 
-So does the one query every adapter has to phrase identically: `listing_clause` is the whole of
-`list`'s filter, order and cap, rendered in either dialect. Which column `agent` means and how
-ties break are this module's rule, not each backend's. What stays each adapter's own is what
-genuinely differs -- the upsert, and whether spans are fetched per trace or in one batch.
+So does the one query a listing is built from: `listing_clause` is the whole of `list`'s filter,
+order and cap. Which column `agent` means and how ties break are this module's rule.
 """
 
 import builtins
 import json
 from typing import Any, Protocol
 
-from runa.db.schema import Column, Dialect, Index, Table
+from runa.db.schema import Column, Index, Table
 from runa.exceptions import OperatorError
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -131,7 +129,6 @@ def listing_clause(
     agent: str | None = None,
     status: str | None = None,
     session_id: str | None = None,
-    dialect: Dialect,
 ) -> tuple[str, tuple[Any, ...]]:
     """Everything after `SELECT ... FROM traces` for `TraceStore.list`, and the values it binds.
 
@@ -141,19 +138,18 @@ def listing_clause(
     `ORDER BY` names `start_time` alone.
 
     The whole tail rather than the `WHERE` alone, because a numbered placeholder counts every
-    value bound before it: an adapter handed the filter and left to append `LIMIT` has to know
-    how many filters went in to number it, which is exactly the arithmetic this hoists. Its
-    placeholders are the `dialect`'s, like `Table.placeholders`.
+    value bound before it: a caller handed the filter and left to append `LIMIT` has to know how
+    many filters went in to number it, which is exactly the arithmetic this hoists.
     """
     clauses: list[str] = []
     params: list[Any] = []
     for column, value in (("name", agent), ("status", status), ("session_id", session_id)):
         if value is not None:
             params.append(value)
-            clauses.append(f"{column} = {dialect.placeholder(len(params))}")
+            clauses.append(f"{column} = ${len(params)}")
     where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
     params.append(limit)
-    order = f"ORDER BY start_time DESC, id DESC LIMIT {dialect.placeholder(len(params))}"
+    order = f"ORDER BY start_time DESC, id DESC LIMIT ${len(params)}"
     return f"{where}{order}", tuple(params)
 
 

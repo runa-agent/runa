@@ -1,182 +1,30 @@
-"""session/sqlite.py: the local session backend, both sides of it.
+"""session/sqlite.py: `SQLiteSession`, the session store pointed at one specific local file.
 
-`db/runa.db`'s `agent_sessions`/`agent_messages` tables, in the same
-connect-and-create-if-missing file every other local adapter writes to (`db/sqlite.py`).
-`SQLiteSession` is the write side a run appends to, `SQLiteSessionStore` the read side
-`runa sessions` and `runa ui` query. Same file, same two tables, so they live together.
-
-`SQLiteSession` is a thin wrapper over `sqlite3`: the local backend is one process by definition,
-so it skips the thread-local connections, WAL mode, and cross-process file locking a
-multi-process-safe store would need. That store is `session/postgres.py`, and `runa.db` picks it
-when the environment says to.
-
-Thin, but not on the event loop: `db/sqlite.py`'s `run` is where `sqlite3`'s blocking meets
-`Session`'s `async def`.
-
-The two tables are declared once in `session/store.py` and rendered here by `db/schema.py`;
-this module's own code is the SQLite query shapes, nothing about the schema.
+`runa.db.session(...)` already answers every ordinary question about where a session lives; this
+is for the run that needs a particular `db/runa.db`-shaped file, which is what `db_path` names.
+The queries are `session/database.py`'s.
 """
 
-import json
-import sqlite3
-from collections.abc import Callable
 from pathlib import Path
 
-from runa._items import ConversationItem
 from runa.db import sqlite_database
-from runa.db.schema import SQLITE
-from runa.db.sqlite import read as _read_db
-from runa.db.sqlite import run as _run_db
-from runa.session import Session
-from runa.session.store import (
-    MESSAGES,
-    SESSIONS,
-    SessionMessage,
-    SessionNotFound,
-    SessionSummary,
-    as_timestamp,
-    listing_clause,
-    to_message,
-)
+from runa.db.sqlite import SQLiteDatabase
+from runa.session.database import DatabaseSession
+from runa.session.store import MESSAGES, SESSIONS
 
 
-class SQLiteSession(Session):
-    """Conversation history for one `session_id`, persisted to the local `db/runa.db`.
+class SQLiteSession(DatabaseSession):
+    """Conversation history for one `session_id`, persisted to a local SQLite file."""
 
-    Every method hands its body to `db/sqlite.py`'s `run`, which opens a short-lived connection on
-    a worker thread, so no `sqlite3` object is ever touched from two threads.
-    """
-
-    def __init__(
-        self,
-        session_id: str,
-        db_path: str | Path | None = None,
-    ) -> None:
-        """Store `session_id` and where in `runa.db` its history lives.
+    def __init__(self, session_id: str, db_path: str | Path | None = None) -> None:
+        """Store `session_id` and which SQLite database its history lives in.
 
         `db_path` defaults to `runa.db.sqlite_database()`, so this history lands in the same local
         database as every other concern's -- including when `RUNA_DATABASE_URL` relocates it or
         keeps it in memory. Pass one to point at some other file.
         """
-        self.session_id = session_id
-        self.db_path = Path(db_path) if db_path is not None else sqlite_database()
-
-    async def get_items(self) -> list[ConversationItem]:
-        """Return this session's items, oldest first."""
-
-        def body(conn: sqlite3.Connection) -> list[ConversationItem]:
-            rows = conn.execute(
-                f"SELECT message_data FROM {MESSAGES.name} WHERE session_id = ? ORDER BY id",
-                (self.session_id,),
-            ).fetchall()
-            return [json.loads(row[0]) for row in rows]
-
-        return await self._run(body)
-
-    async def add_items(self, items: list[ConversationItem]) -> None:
-        """Append `items`, creating the session row on first write."""
-        if not items:
-            return
-
-        def body(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                f"INSERT OR IGNORE INTO {SESSIONS.name} (session_id) VALUES (?)",
-                (self.session_id,),
-            )
-            conn.executemany(
-                f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES (?, ?)",
-                [(self.session_id, json.dumps(item)) for item in items],
-            )
-            self._touch(conn)
-            conn.commit()
-
-        await self._run(body)
-
-    async def set_items(self, items: list[ConversationItem]) -> None:
-        """Replace this session's entire history with `items`, in one transaction."""
-
-        def body(conn: sqlite3.Connection) -> None:
-            conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
-            if items:
-                conn.execute(
-                    f"INSERT OR IGNORE INTO {SESSIONS.name} (session_id) VALUES (?)",
-                    (self.session_id,),
-                )
-                conn.executemany(
-                    f"INSERT INTO {MESSAGES.name} (session_id, message_data) VALUES (?, ?)",
-                    [(self.session_id, json.dumps(item)) for item in items],
-                )
-            self._touch(conn)
-            conn.commit()
-
-        await self._run(body)
-
-    async def clear_session(self) -> None:
-        """Delete this session's history and its `agent_sessions` row, in one transaction."""
-
-        def body(conn: sqlite3.Connection) -> None:
-            conn.execute(f"DELETE FROM {MESSAGES.name} WHERE session_id = ?", (self.session_id,))
-            conn.execute(f"DELETE FROM {SESSIONS.name} WHERE session_id = ?", (self.session_id,))
-            conn.commit()
-
-        await self._run(body)
-
-    def _touch(self, conn: sqlite3.Connection) -> None:
-        conn.execute(
-            f"UPDATE {SESSIONS.name} SET updated_at = CURRENT_TIMESTAMP, "
-            "agent_name = COALESCE(agent_name, ?) WHERE session_id = ?",
-            (self.agent_name, self.session_id),
-        )
-
-    async def _run[T](self, body: Callable[[sqlite3.Connection], T]) -> T:
-        return await _run_db(self.db_path, (SESSIONS, MESSAGES), body)
+        location = Path(db_path) if db_path is not None else sqlite_database()
+        super().__init__(session_id, SQLiteDatabase(location, SESSIONS, MESSAGES))
 
 
-class SQLiteSessionStore:
-    """The local `SessionStore`: the read side of `db/runa.db`'s session tables.
-
-    Queries through `db/sqlite.py`'s `read`, like every other local read side, so a listing on a
-    project that has never run an agent finds no tables rather than creating them: `runa chat
-    --list` doesn't leave a `db/runa.db` behind as a side effect of answering "no sessions found".
-    """
-
-    def __init__(self, db_path: str | Path | None = None) -> None:
-        """Store which SQLite database this history lives in: `db.sqlite_database()` by default."""
-        self.db_path = Path(db_path) if db_path is not None else sqlite_database()
-
-    def listing(self, *, agent: str | None = None) -> list[SessionSummary]:
-        """Return this file's sessions, most recently updated first."""
-        clause, params = listing_clause(agent, SQLITE)
-        rows = self._query(f"SELECT session_id, updated_at FROM {SESSIONS.name} {clause}", params)
-        return [
-            SessionSummary(id=row["session_id"], updated_at=as_timestamp(row["updated_at"]))
-            for row in rows
-        ]
-
-    def messages(self, session_id: str) -> list[SessionMessage]:
-        """Return `session_id`'s messages, oldest first."""
-        if not self._query(f"SELECT 1 FROM {SESSIONS.name} WHERE session_id = ?", (session_id,)):
-            raise SessionNotFound(f"no session found with id {session_id!r}")
-        rows = self._query(
-            f"SELECT created_at, message_data FROM {MESSAGES.name} WHERE session_id = ? "
-            "ORDER BY id",
-            (session_id,),
-        )
-        return [to_message(row["created_at"], row["message_data"]) for row in rows]
-
-    def _query(self, sql: str, params: tuple[object, ...]) -> list[sqlite3.Row]:
-        """Run `sql`, treating a file or table that isn't there yet as no rows.
-
-        A deployment's first read can legitimately come before its first write, and "this app has
-        no history" is the answer then, not an error about a missing table. That absence is the
-        only thing answered with no rows, and `read` tests it; every other way a query can fail
-        raises, here as in the three read sides next door.
-        """
-        with _read_db(self.db_path, SESSIONS, MESSAGES) as conn:
-            return conn.execute(sql, params).fetchall() if conn is not None else []
-
-
-__all__ = [
-    "SQLiteSession",
-    "SQLiteSessionStore",
-]
+__all__ = ["SQLiteSession"]

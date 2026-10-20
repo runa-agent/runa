@@ -4,20 +4,20 @@ Deliberately standalone: nothing here imports `agent.py`, `memory/` or `session/
 those wires a `Cache` in automatically. It's plain application-level caching, not a Runa primitive
 with an `"auto"`/`"llm"` opt-in story like `Memory`.
 
-Four backends behind one protocol. `MemoryCache` (`cache/memory.py`) is an in-process dict, gone
-when the process exits. The other three are persistent, and `runa.db.cache()` picks between two
-of them the same way it picks a session store: `PostgresCache` when `RUNA_DATABASE_URL` is a
-`postgresql://` one, `SQLiteCache` otherwise (in the in-memory database under `memory://`, where
-nothing else is persisted either). `RedisCache` (`cache/redis.py`) is the explicit opt-in for a
+Three backends behind one protocol. `MemoryCache` (`cache/memory.py`) is an in-process dict, gone
+when the process exits. `DatabaseCache` (`cache/database.py`) is persistent, and `runa.db.cache()`
+builds it the way it builds a session store: a table in the shared Postgres when
+`RUNA_DATABASE_URL` is a `postgresql://` one, in the local SQLite file otherwise (the in-memory
+database under `memory://`, where nothing else is persisted either). `SQLiteCache` is that same
+cache pointed at one specific file. `RedisCache` (`cache/redis.py`) is the explicit opt-in for a
 deployment that wants its hot keys off the database's query path.
 
 Values round-trip through `json.dumps`/`json.loads`, not `pickle`, in every persistent backend:
 safe to load from a store another process may have written, at the cost of only
 JSON-serializable values being cacheable.
 
-`ENTRIES` below is the one table the two SQL backends keep, declared here beside the protocol
-they both answer and rendered per dialect by `db/schema.py`, rather than written out once in
-each of them.
+`ENTRIES` below is the one table the SQL backends keep, declared here beside the protocol they
+answer and rendered per dialect by `db/schema.py`.
 """
 
 from typing import Any, Protocol
@@ -64,7 +64,7 @@ class Cache(Protocol):
 
 
 # Below `Cache`, for symmetry with the other concern packages. Both local backends are always
-# importable; `PostgresCache` and `RedisCache` need their extras, so they stay explicit imports.
+# importable; `RedisCache` needs its extra, so it stays an explicit import.
 from runa.cache.memory import MemoryCache  # noqa: E402
 from runa.cache.sqlite import SQLiteCache  # noqa: E402
 

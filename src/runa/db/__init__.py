@@ -8,14 +8,15 @@ replica needs. `memory://` persists nothing: the stores live and die with the pr
 suite wants. Every concern follows the variable together.
 
 The factories below are how every call site asks, one per concern, each returning a store
-object, so nothing above this module names a backend, a URL or a path. Each factory branches on
-the closed set of three backends itself; a new concern is one function here.
+object, so nothing above this module names a backend, a URL or a path. A concern is one class over
+the `Database` that `database` hands out, so the closed set of three backends is decided in that
+one function and a new concern is a new factory here and no new adapter.
 
 `runa.project.use(root)` points the process at an app's directory (the cwd by default), and every
 factory resolves against it: the local SQLite file, and files an app keeps as state rather than
 rows (`Knowledge`'s source directory, via `project_path`). A shared database ignores the root.
 
-Every adapter import is deferred into the function that needs it, so an app without the
+Every backend import is deferred into the function that needs it, so an app without the
 `postgres` extra still gets the SQLite answer.
 """
 
@@ -28,7 +29,9 @@ from runa.exceptions import OperatorError
 
 if TYPE_CHECKING:
     from runa.cache import Cache
-    from runa.db.sqlite import Database
+    from runa.db.handle import Database
+    from runa.db.schema import Table
+    from runa.db.sqlite import Location
     from runa.db.vectors import VectorSpec, VersionedVectorStore
     from runa.eval.store import EvalStore
     from runa.run_state.store import PausedRunStore
@@ -123,7 +126,7 @@ def sqlite_path() -> Path:
     return project_path(path)
 
 
-def sqlite_database() -> Database:
+def sqlite_database() -> Location:
     """The SQLite database this deployment's local state lives in.
 
     The file at `sqlite_path()`, or under `memory://` this process's one `MemoryDatabase`, which
@@ -137,55 +140,59 @@ def sqlite_database() -> Database:
     return _app.held(_app.MEMORY_DATABASE, MemoryDatabase)
 
 
+def database(*tables: Table) -> Database:
+    """The database `tables` live in: this deployment's shared Postgres, or its local SQLite.
+
+    The one place a concern's backend is decided. Each concern below is a single class over what
+    this returns, so it never learns which engine answered.
+    """
+    if (url := shared_url()) is not None:
+        from runa.db.pool import PostgresDatabase
+
+        return PostgresDatabase(url, *tables)
+    from runa.db.sqlite import SQLiteDatabase
+
+    return SQLiteDatabase(sqlite_database(), *tables)
+
+
 def session(session_id: str) -> Session:
     """This deployment's session store for `session_id`."""
-    if (url := shared_url()) is not None:
-        from runa.session.postgres import PostgresSession
+    from runa.session.database import DatabaseSession
+    from runa.session.store import MESSAGES, SESSIONS
 
-        return PostgresSession(session_id, url)
-    from runa.session.sqlite import SQLiteSession
-
-    return SQLiteSession(session_id)
+    return DatabaseSession(session_id, database(SESSIONS, MESSAGES))
 
 
 def sessions() -> SessionStore:
     """This deployment's `SessionStore`: the read side of its conversation history."""
-    if (url := shared_url()) is not None:
-        from runa.session.postgres import PostgresSessionStore
+    from runa.session.database import DatabaseSessionStore
+    from runa.session.store import MESSAGES, SESSIONS
 
-        return PostgresSessionStore(url)
-    from runa.session.sqlite import SQLiteSessionStore
-
-    return SQLiteSessionStore()
+    return DatabaseSessionStore(database(SESSIONS, MESSAGES))
 
 
 def traces() -> TraceStore:
     """This deployment's `TraceStore`: where finished traces are written and read back."""
-    if (url := shared_url()) is not None:
-        from runa.tracing.postgres import PostgresTraceStore
+    from runa.tracing.database import DatabaseTraceStore
+    from runa.tracing.store import SPANS, TRACES
 
-        return PostgresTraceStore(url)
-    from runa.tracing.sqlite import SQLiteTraceStore
-
-    return SQLiteTraceStore()
+    return DatabaseTraceStore(database(TRACES, SPANS))
 
 
 def evals() -> EvalStore:
     """This deployment's `EvalStore`: every `agent.evaluate()` run and its baseline."""
-    if (url := shared_url()) is not None:
-        from runa.eval.postgres import PostgresEvalStore
+    from runa.eval.database import DatabaseEvalStore
+    from runa.eval.store import CASES, RUNS
 
-        return PostgresEvalStore(url)
-    from runa.eval.sqlite import SQLiteEvalStore
-
-    return SQLiteEvalStore()
+    return DatabaseEvalStore(database(RUNS, CASES))
 
 
 def vector_store(spec: VectorSpec) -> VersionedVectorStore:
     """This deployment's vector storage for `spec`: what a bare `Memory()` or `Knowledge()` holds.
 
     Each of the two passes its own spec, so one call serves both concerns and each gets its own
-    tables.
+    tables. The one concern that stays two adapters: `vec0` and `pgvector` are different query
+    languages, not two spellings of one.
     """
     if (url := shared_url()) is not None:
         from runa.db.vectors.postgres import PostgresVectorStore
@@ -205,24 +212,18 @@ def cache() -> Cache:
     everything else persists, and `RedisCache(url)` for a deployment that wants its hot keys off
     the query path.
     """
-    if (url := shared_url()) is not None:
-        from runa.cache.postgres import PostgresCache
+    from runa.cache import ENTRIES
+    from runa.cache.database import DatabaseCache
 
-        return PostgresCache(url)
-    from runa.cache.sqlite import SQLiteCache
-
-    return SQLiteCache()
+    return DatabaseCache(database(ENTRIES))
 
 
 def paused_runs() -> PausedRunStore:
     """This deployment's `PausedRunStore`: the runs `runa serve` paused, held until resumed."""
-    if (url := shared_url()) is not None:
-        from runa.run_state.postgres import PostgresPausedRunStore
+    from runa.run_state.database import DatabasePausedRunStore
+    from runa.run_state.store import PAUSED_RUNS
 
-        return PostgresPausedRunStore(url)
-    from runa.run_state.sqlite import SQLitePausedRunStore
-
-    return SQLitePausedRunStore()
+    return DatabasePausedRunStore(database(PAUSED_RUNS))
 
 
 def reset_ephemeral() -> None:
@@ -242,6 +243,7 @@ __all__ = [
     "DATABASE_URL_ENV",
     "InvalidDatabaseURL",
     "cache",
+    "database",
     "ephemeral",
     "evals",
     "paused_runs",

@@ -6,10 +6,10 @@ once, beside the code that turns a row into an object, and `ddl(dialect, *tables
 so a column added to a declaration appears in both backends or in neither. The whole difference
 between the dialects is the substitutions in `SQLITE` and `POSTGRES`.
 
-This is not a query builder: adapters write their own SQL, where they genuinely differ. The only
-query fragments here are `Dialect.placeholder` and `Table.placeholders` (`?` against `$1`). A
-predicate both adapters must phrase identically lives beside its concern's tables as a function
-of the values and the `Dialect` (`listing_clause`, `baseline_clause`).
+This is not a query builder: a concern writes its own SQL, once, against `db/handle.py`'s
+`Database`. The only query fragment here is `Table.placeholders`, one numbered placeholder per
+column. A predicate the concern's stores share lives beside its tables as a function of the values
+(`listing_clause`, `baseline_clause`).
 
 `db/runa.db` outlives installs, so a column added to a declaration has to reach databases that
 already exist, which `CREATE TABLE IF NOT EXISTS` doesn't do. `reconcile` diffs the declaration
@@ -33,7 +33,7 @@ one type that renders as a whole column definition rather than a type name.
 
 @dataclass(frozen=True)
 class Dialect:
-    """One backend's answers to the only questions the two renderings disagree on.
+    """One backend's answers to the only questions the two renderings of a table disagree on.
 
     Adding a backend that speaks SQL means adding one of these, not another copy of every
     `CREATE TABLE`.
@@ -45,24 +45,12 @@ class Dialect:
     """The whole definition of a `serial` column, primary key included."""
     now: str
     """The expression a `default_now` column defaults to."""
-    numbered_placeholders: bool
-    """`$1, $2, ...` rather than `?, ?, ...`."""
     columns_query: str
     """Every column this database actually has, as `(table, column)` rows, for `reconcile`.
 
     One query for the whole database rather than one per table: both backends can answer it that
     way, and it keeps the only connection-aware step in `reconcile`'s plumbing to a single fetch.
     """
-
-    def placeholder(self, index: int) -> str:
-        """The bind placeholder for a statement's `index`th value, counting from 1.
-
-        `?` ignores the index; `$1, $2, ...` is the whole reason a fragment has to be told how
-        many values were bound before it. Every predicate written for both dialects needs this
-        one substitution and nothing else of a dialect, so it lives here rather than as a
-        `numbered_placeholders` branch in each of them.
-        """
-        return f"${index}" if self.numbered_placeholders else "?"
 
 
 SQLITE = Dialect(
@@ -78,7 +66,6 @@ SQLITE = Dialect(
     },
     serial="INTEGER PRIMARY KEY AUTOINCREMENT",
     now="CURRENT_TIMESTAMP",
-    numbered_placeholders=False,
     columns_query=(
         "SELECT m.name, p.name FROM sqlite_master AS m "
         "JOIN pragma_table_info(m.name) AS p WHERE m.type = 'table'"
@@ -98,7 +85,6 @@ POSTGRES = Dialect(
     },
     serial="BIGSERIAL PRIMARY KEY",
     now="now()",
-    numbered_placeholders=True,
     columns_query=(
         "SELECT table_name, column_name FROM information_schema.columns "
         "WHERE table_schema = current_schema()"
@@ -187,9 +173,9 @@ class Table:
         """Every column, in declaration order, which is also the order rows are written in."""
         return tuple(column.name for column in self.columns)
 
-    def placeholders(self, dialect: Dialect) -> str:
-        """The bind placeholders for one whole row: `?, ?, ...` or `$1, $2, ...`."""
-        return ", ".join(dialect.placeholder(index) for index in range(1, len(self.columns) + 1))
+    def placeholders(self) -> str:
+        """The bind placeholders for one whole row: `$1, $2, ...`."""
+        return ", ".join(f"${index}" for index in range(1, len(self.columns) + 1))
 
     def _ddl(self, dialect: Dialect) -> str:
         definitions = [column.sql(dialect) for column in self.columns]

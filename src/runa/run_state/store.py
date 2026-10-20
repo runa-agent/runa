@@ -5,9 +5,9 @@ running twice and records who approved what. Handed to a client, that record is 
 replay or edit. Kept here, a client holds only a `run_id`, and resuming one is a `claim`: an
 atomic delete, so of two requests resuming the same pause exactly one gets it.
 
-One interface, two adapters: `run_state/sqlite.py` and `run_state/postgres.py`. Which one a
-caller gets is `runa.db.paused_runs()`'s decision. Nothing in this module touches a database: it
-holds the table both adapters create and the contract they answer.
+One interface, one implementation over `db/handle.py`'s `Database`: `run_state/database.py`.
+Which database it queries is `runa.db.paused_runs()`'s decision. Nothing in this module touches a
+database: it holds the table and the contract.
 
 A row is written once and never updated: a resumed run that pauses again is a new row with a new
 id. A pause nobody resumes stays until an operator prunes it by `created_at`.

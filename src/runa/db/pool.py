@@ -1,9 +1,9 @@
 """db/pool.py: connect-and-create-if-missing plumbing for a shared Postgres.
 
 `db/sqlite.py`'s counterpart for the other side of `runa.db`'s one decision. Every Postgres
-adapter (`session/postgres.py`, `db/vectors/postgres.py`, `cache/postgres.py`,
-`tracing/postgres.py`, `eval/postgres.py`, `run_state/postgres.py`) owns a different set of
-tables in the same database; this only hands out the pool and applies each caller's tables.
+user (each concern through `PostgresDatabase` below, and `db/vectors/postgres.py`) owns a
+different set of tables in the same database; this only hands out the pool and applies each
+caller's tables.
 
 One pool per URL, cached at module level and shared by every adapter built from it, so a session,
 a memory store and an exporter on the same database reuse one pool instead of each opening their
@@ -13,66 +13,15 @@ to the loop that opened them; that lifetime rule is `runa._loop.LoopCache`, shar
 three resources in Runa that have it.
 """
 
-import asyncio
-import functools
-import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from typing import Any
 
 import asyncpg
 
 from runa._loop import LoopCache
+from runa.db.handle import Queries, Row
 from runa.db.schema import POSTGRES, Declaration, ddl, reconcile
-
-_loop: asyncio.AbstractEventLoop | None = None
-_loop_lock = threading.Lock()
-
-
-def _background_loop() -> asyncio.AbstractEventLoop:
-    """A daemon event loop for the synchronous callers that still need `asyncpg`.
-
-    `TraceExporter.export` and the whole `runa traces`/`runa ui` read path are synchronous, so
-    they have no loop of their own to await on. One long-lived loop on its own thread serves them
-    all, and `LoopCache` gives it its own pool, as it would any other loop -- which is the point:
-    `asyncio.run()` per call would open and close a loop, and so a pool, per query.
-    """
-    global _loop
-    if _loop is not None and not _loop.is_closed():
-        return _loop
-    with _loop_lock:
-        if _loop is None or _loop.is_closed():
-            _loop = asyncio.new_event_loop()
-            threading.Thread(target=_loop.run_forever, name="runa-postgres", daemon=True).start()
-    return _loop
-
-
-def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
-    """Run `coro` on the background loop and wait for it, for a synchronous caller.
-
-    This blocks the calling thread, so call it from a thread that has nothing better to do: a CLI
-    command, or tracing's own export thread. Calling it from a thread running an event loop
-    (`runa serve`'s) does not deadlock -- the work happens on a different loop entirely -- but it
-    stalls every task on that loop for the duration, which is what `export_trace_later` and
-    `evaluate_agent`'s `asyncio.to_thread` exist to prevent.
-    """
-    future = asyncio.run_coroutine_threadsafe(coro, _background_loop())
-    return future.result(timeout)
-
-
-def sync[**P, T](method: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
-    """Expose an `async def` store method as the synchronous method its callers actually call.
-
-    A `TraceStore`/`EvalStore`/`SessionStore` is a synchronous interface (`runa traces`,
-    `runa ui` and `TraceExporter.export` reach it from a thread with no loop on it) while
-    `asyncpg` is not; this pairs each async body with `run_sync`.
-    """
-
-    @functools.wraps(method)
-    def synchronous(*args: P.args, **kwargs: P.kwargs) -> T:
-        return run_sync(method(*args, **kwargs))
-
-    return synchronous
-
 
 _pools: LoopCache[str, asyncpg.Pool] = LoopCache()
 
@@ -146,4 +95,60 @@ class Shared:
         return await connect(self.url, *self.tables)
 
 
-__all__ = ["Shared", "close_pool", "connect", "get_pool", "run_sync", "sync"]
+class _Statements:
+    """`Database`'s five statements over whatever asyncpg object `_target` names."""
+
+    async def _target(self) -> asyncpg.Pool | asyncpg.pool.PoolConnectionProxy:
+        raise NotImplementedError
+
+    async def fetch(self, sql: str, *args: Any) -> list[Row]:
+        """Every row `sql` selects."""
+        return list(await (await self._target()).fetch(sql, *args))
+
+    async def fetchrow(self, sql: str, *args: Any) -> Row | None:
+        """The first row `sql` selects, or `None`."""
+        return await (await self._target()).fetchrow(sql, *args)
+
+    async def fetchval(self, sql: str, *args: Any) -> Any:
+        """The first column of the first row `sql` selects, or `None`."""
+        return await (await self._target()).fetchval(sql, *args)
+
+    async def execute(self, sql: str, *args: Any) -> int:
+        """Run `sql` and return how many rows it changed.
+
+        asyncpg reports it as a status tag, `DELETE 1` or `INSERT 0 3`: the count is the last word.
+        """
+        status: str = await (await self._target()).execute(sql, *args)
+        count = status.rsplit(" ", 1)[-1]
+        return int(count) if count.isdigit() else 0
+
+    async def executemany(self, sql: str, rows: Sequence[Sequence[Any]]) -> None:
+        """Run `sql` once per row of `rows`."""
+        await (await self._target()).executemany(sql, rows)
+
+
+class _Transaction(_Statements):
+    """The statements of one `PostgresDatabase.transaction`, on its one connection."""
+
+    def __init__(self, conn: asyncpg.pool.PoolConnectionProxy) -> None:
+        self._conn = conn
+
+    async def _target(self) -> asyncpg.pool.PoolConnectionProxy:
+        return self._conn
+
+
+class PostgresDatabase(_Statements, Shared):
+    """`Database` over this deployment's shared Postgres: the pool, with `tables` applied first."""
+
+    async def _target(self) -> asyncpg.Pool:
+        return await self._pool()
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[Queries]:
+        """One pooled connection inside `BEGIN ... COMMIT`, rolled back if the block raises."""
+        pool = await self._pool()
+        async with pool.acquire() as conn, conn.transaction():
+            yield _Transaction(conn)
+
+
+__all__ = ["PostgresDatabase", "Shared", "close_pool", "connect", "get_pool"]

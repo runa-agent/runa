@@ -15,7 +15,7 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
-from runa.db.sqlite import Database, run
+from runa.db.sqlite import Location, run
 from runa.db.sqlite import pack_vector as pack
 from runa.db.vectors import VectorMatch, VectorSpec
 
@@ -23,7 +23,7 @@ from runa.db.vectors import VectorMatch, VectorSpec
 class SQLiteVectorStore:
     """The local `VectorStore`: a `vec0` table and its payload table in `db/runa.db`."""
 
-    def __init__(self, spec: VectorSpec, db_path: Database) -> None:
+    def __init__(self, spec: VectorSpec, db_path: Location) -> None:
         """Name this store's two tables, from `spec.name`, and the database they live in."""
         self.spec = spec
         self.db_path = db_path

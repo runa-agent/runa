@@ -208,7 +208,7 @@ def test_default_exporters_is_the_store_only_without_langfuse_env_vars(
     exporters = config._default_exporters()
 
     assert [type(e).__name__ for e in exporters] == ["StoreExporter"]
-    assert type(exporters[0].store).__name__ == "SQLiteTraceStore"  # type: ignore[attr-defined]
+    assert type(exporters[0].store.database).__name__ == "SQLiteDatabase"  # type: ignore[attr-defined]
 
 
 def test_default_exporters_adds_langfuse_once_its_env_vars_are_set(
@@ -236,7 +236,7 @@ def test_the_local_exporter_follows_the_database_url(monkeypatch: pytest.MonkeyP
 
     exporter = config._local_exporter()
 
-    assert type(exporter.store).__name__ == "PostgresTraceStore"  # type: ignore[attr-defined]
+    assert type(exporter.store.database).__name__ == "PostgresDatabase"  # type: ignore[attr-defined]
 
 
 def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
@@ -257,7 +257,7 @@ def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
     exporters = config.exporters()
 
     assert [type(e).__name__ for e in exporters] == ["StoreExporter"]
-    assert type(exporters[0].store).__name__ == "PostgresTraceStore"  # type: ignore[attr-defined]
+    assert type(exporters[0].store.database).__name__ == "PostgresDatabase"  # type: ignore[attr-defined]
 
 
 def test_the_exporter_writes_to_the_store_it_was_resolved_with(

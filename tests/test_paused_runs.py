@@ -1,7 +1,7 @@
-"""Tests for the local `PausedRunStore` backends: `SQLitePausedRunStore` and `memory://`'s.
+"""Tests for the local `PausedRunStore` backends: a SQLite file and `memory://`'s.
 
 The contract itself lives in `tests/contracts/paused_run.py` and is driven here over every backend
-a plain `make test` can reach. `PostgresPausedRunStore` is held to the same checks in
+a plain `make test` can reach. A shared Postgres is held to the same checks in
 `test_postgres.py`, which needs a live database.
 """
 
@@ -13,11 +13,18 @@ import pytest
 from contracts.paused_run import CONTRACT, Check
 
 from runa import db
-from runa.run_state.sqlite import SQLitePausedRunStore
-from runa.run_state.store import PausedRunStore
+from runa.db.sqlite import SQLiteDatabase
+from runa.run_state.database import DatabasePausedRunStore
+from runa.run_state.store import PAUSED_RUNS, PausedRunStore
+
+
+def _store_at(db_path: Path) -> DatabasePausedRunStore:
+    """A paused-run store over one specific SQLite file."""
+    return DatabasePausedRunStore(SQLiteDatabase(db_path, PAUSED_RUNS))
+
 
 _BACKENDS: dict[str, Callable[[Path], PausedRunStore]] = {
-    "sqlite": lambda tmp_path: SQLitePausedRunStore(tmp_path / "runa.db"),
+    "sqlite": lambda tmp_path: _store_at(tmp_path / "runa.db"),
     "shared": lambda tmp_path: db.paused_runs(),
 }
 
@@ -38,7 +45,7 @@ def test_loading_from_a_project_with_no_database_creates_none(tmp_path: Path) ->
     """A miss is a read, so it doesn't leave a `db/runa.db` behind."""
     db_path = tmp_path / "db" / "runa.db"
 
-    assert asyncio.run(SQLitePausedRunStore(db_path).load("refund_agent", "nope")) is None
+    assert asyncio.run(_store_at(db_path).load("refund_agent", "nope")) is None
     assert not db_path.exists()
 
 
@@ -47,7 +54,7 @@ def test_a_pause_survives_the_store_that_saved_it(tmp_path: Path) -> None:
     db_path = tmp_path / "runa.db"
 
     async def _run():
-        run_id = await SQLitePausedRunStore(db_path).save("refund_agent", {"a": 1})
-        return await SQLitePausedRunStore(db_path).load("refund_agent", run_id)
+        run_id = await _store_at(db_path).save("refund_agent", {"a": 1})
+        return await _store_at(db_path).load("refund_agent", run_id)
 
     assert asyncio.run(_run()) == {"a": 1}

@@ -175,7 +175,7 @@ def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
 
     create_app(project, api_key="secret-token")
 
-    assert db.sessions().db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
+    assert db.sessions().database.location == project / "db" / "runa.db"  # type: ignore[attr-defined]
     assert Memory(dimensions=4)._store.db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
 
 

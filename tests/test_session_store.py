@@ -1,4 +1,4 @@
-"""The session contract, both sides of it, run against every adapter that needs no server.
+"""The session contract, both sides of it, run against every backend that needs no server.
 
 The checks live in `tests/contracts/session.py` and are driven here over the backends `runa.db` can
 resolve without a live Postgres. Both halves are resolved the way an app's would be -- the write
@@ -19,7 +19,6 @@ import pytest
 from contracts.session import CONTRACT, Check, SessionPair
 
 from runa import db
-from runa.db.schema import POSTGRES, SQLITE, Dialect
 from runa.project import use
 from runa.session.store import listing_clause
 
@@ -79,23 +78,17 @@ def test_listing_breaks_updated_at_ties_by_session_id_descending(project: None) 
     assert [summary.id for summary in listed] == [pair.id("-c"), pair.id("-b"), pair.id("-a")]
 
 
-@pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
-def test_listing_clause_filters_on_the_recorded_agent_in_every_dialect(dialect: Dialect) -> None:
+def test_listing_clause_filters_on_the_recorded_agent() -> None:
     """The agent is matched as a value of its own column, never as a pattern over session ids."""
-    clause, params = listing_clause("a_b", dialect)
+    clause, params = listing_clause("a_b")
 
-    assert clause.startswith(f"WHERE agent_name = {dialect.placeholder(1)} ")
+    assert clause.startswith("WHERE agent_name = $1 ")
     assert params == ("a_b",)
 
 
-@pytest.mark.parametrize("dialect", [SQLITE, POSTGRES], ids=lambda dialect: dialect.name)
-def test_listing_clause_orders_the_same_way_with_or_without_an_agent(dialect: Dialect) -> None:
-    """The tie-break rides along with the filter, so no adapter appends an `ORDER BY` of its own.
-
-    It used to: both of them did, and one broke ties on `rowid` where the other broke them on
-    `session_id`.
-    """
+def test_listing_clause_orders_the_same_way_with_or_without_an_agent() -> None:
+    """The tie-break rides along with the filter, so no caller appends an `ORDER BY` of its own."""
     order = "ORDER BY updated_at DESC, session_id DESC"
 
-    assert listing_clause(None, dialect) == (order, ())
-    assert listing_clause("SupportAgent", dialect)[0].endswith(f" {order}")
+    assert listing_clause(None) == (order, ())
+    assert listing_clause("SupportAgent")[0].endswith(f" {order}")

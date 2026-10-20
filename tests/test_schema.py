@@ -72,22 +72,10 @@ def test_a_composite_primary_key_is_a_table_constraint() -> None:
         assert "PRIMARY KEY (left, right)\n);" in ddl(dialect, table)
 
 
-def test_placeholders_follow_the_dialect_and_the_column_count() -> None:
-    """`?` locally, `$1`-numbered on Postgres, one per column of a whole row."""
-    assert _EVERY_KIND.placeholders(SQLITE) == ", ".join("?" * 8)
-    assert _EVERY_KIND.placeholders(POSTGRES) == "$1, $2, $3, $4, $5, $6, $7, $8"
+def test_placeholders_are_numbered_one_per_column() -> None:
+    """`$1`-numbered, one per column of a whole row; the SQLite handle renumbers them for itself."""
+    assert _EVERY_KIND.placeholders() == "$1, $2, $3, $4, $5, $6, $7, $8"
     assert _EVERY_KIND.column_names[:2] == ("id", "name")
-
-
-def test_one_placeholder_is_the_whole_of_what_a_predicate_needs_of_a_dialect() -> None:
-    """The substitution the three shared `WHERE` fragments are written against, and the only one.
-
-    `session/store.py`'s and `tracing/store.py`'s `listing_clause` and `eval/store.py`'s
-    `baseline_clause` each ask for a numbered placeholder and nothing else, so none of them
-    branches on `numbered_placeholders` itself.
-    """
-    assert (SQLITE.placeholder(1), SQLITE.placeholder(3)) == ("?", "?")
-    assert (POSTGRES.placeholder(1), POSTGRES.placeholder(3)) == ("$1", "$3")
 
 
 def test_the_rendered_script_is_executable_and_idempotent() -> None:

@@ -34,11 +34,16 @@ from contracts import session as session_contract
 from contracts import vector as vector_contract
 
 import runa.db.pool as pool_module
-from runa.cache.postgres import PostgresCache
+from runa.cache import ENTRIES
+from runa.cache.database import DatabaseCache
+from runa.db.pool import PostgresDatabase
 from runa.db.vectors import VectorSpec
 from runa.db.vectors.postgres import PostgresVectorStore
-from runa.run_state.postgres import PostgresPausedRunStore
-from runa.session.postgres import PostgresSession, PostgresSessionStore
+from runa.run_state.database import DatabasePausedRunStore
+from runa.run_state.store import PAUSED_RUNS
+from runa.session.database import DatabaseSessionStore
+from runa.session.postgres import PostgresSession
+from runa.session.store import MESSAGES, SESSIONS
 
 _DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", "postgresql://runa:runa@localhost:5432/runa")
 
@@ -88,7 +93,7 @@ def test_session_contract(unique_id: str, check: session_contract.Check) -> None
     """
     pair = session_contract.SessionPair(
         write=lambda session_id: PostgresSession(session_id, _DSN),
-        read=PostgresSessionStore(_DSN),
+        read=DatabaseSessionStore(PostgresDatabase(_DSN, SESSIONS, MESSAGES)),
         tag=unique_id,
     )
 
@@ -112,18 +117,18 @@ def test_vector_store_contract(unique_id: str, check: vector_contract.Check) -> 
 
 @pytest.mark.parametrize("check", cache_contract.CONTRACT, ids=lambda check: check.__name__)
 def test_cache_contract(unique_id: str, check: cache_contract.Check) -> None:
-    """`PostgresCache` answers the same `Cache` contract the local backends do.
+    """A cache over Postgres answers the same `Cache` contract the local backends do.
 
     Its lazy expiry, its `ON CONFLICT` upsert and its `clear` are only ever exercised here, so a
     plain `make test` without a live Postgres does not cover them and CI does.
     """
-    run(check(PostgresCache(_DSN), unique_id))
+    run(check(DatabaseCache(PostgresDatabase(_DSN, ENTRIES)), unique_id))
 
 
 @pytest.mark.parametrize("check", paused_run_contract.CONTRACT, ids=lambda check: check.__name__)
 def test_paused_run_store_contract(unique_id: str, check: paused_run_contract.Check) -> None:
-    """`PostgresPausedRunStore` answers the same `PausedRunStore` contract the local backend does.
+    """A paused-run store over Postgres answers the same contract the local backend does.
 
     Its concurrent claims race across real pooled connections only here.
     """
-    run(check(PostgresPausedRunStore(_DSN), unique_id))
+    run(check(DatabasePausedRunStore(PostgresDatabase(_DSN, PAUSED_RUNS)), unique_id))

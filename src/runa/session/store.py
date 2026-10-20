@@ -3,16 +3,16 @@
 What `runa sessions`, `runa chat --list/--continue/--resume` and `runa ui`'s Sessions pages read.
 The write side is `Session` itself; this is the transcript view over whatever it wrote.
 
-One interface, two adapters: `session/sqlite.py` and `session/postgres.py`.
-Which one a caller gets is `runa.db.sessions(...)`'s decision, asked once, so no reader here or
+One interface, one implementation over `db/handle.py`'s `Database`: `session/database.py`.
+Which database it queries is `runa.db.sessions(...)`'s decision, asked once, so no reader here or
 in `web/` branches on a backend or names a file. Nothing in this module touches a database: it
-holds the two tables both adapters create (`db/schema.py` renders them per dialect), the
-contract, the two objects a row becomes, and the rules the adapters have to agree on -- which
-agent a session belongs to, how a listing is ordered, and how a timestamp is rendered. What a
+holds the two tables (`db/schema.py` renders them per dialect), the contract, the two objects a
+row becomes, and the rules a listing follows -- which agent a session belongs to, how it is
+ordered, and how a timestamp is rendered. What a
 stored message's `role` and `text` are is `runa._items`'s rule, applied here by `to_message`.
 
-The first two are `listing_clause`, rendered in either dialect, which is the whole reason it is
-here rather than in the adapters that call it.
+The first two are `listing_clause`, which is the whole reason it is here rather than in the store
+that calls it.
 """
 
 import json
@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 from runa._items import role_and_text
-from runa.db.schema import Column, Dialect, Index, Table
+from runa.db.schema import Column, Index, Table
 from runa.exceptions import OperatorError
 
 SESSIONS = Table(
@@ -118,18 +118,17 @@ def as_timestamp(value: str | datetime) -> str:
 _ORDER = "ORDER BY updated_at DESC, session_id DESC"
 
 
-def listing_clause(agent: str | None, dialect: Dialect) -> tuple[str, tuple[str, ...]]:
+def listing_clause(agent: str | None) -> tuple[str, tuple[str, ...]]:
     """Everything after `SELECT ... FROM agent_sessions` for `listing`, and the values it binds.
 
     One sentence of policy: keep the sessions whose `agent_name` is `agent`, if one was named,
     most recently updated first, ties broken on the session id. `agent=None` filters nothing, so a
-    listing composes the same string either way. Placeholders are the `dialect`'s, like
-    `Table.placeholders`. The whole tail rather than the filter alone, so the tie-break is one
-    rule rather than one per adapter.
+    listing composes the same string either way. The whole tail rather than the filter alone, so
+    the tie-break is one rule rather than one per caller.
     """
     if agent is None:
         return _ORDER, ()
-    return f"WHERE agent_name = {dialect.placeholder(1)} {_ORDER}", (agent,)
+    return f"WHERE agent_name = $1 {_ORDER}", (agent,)
 
 
 def to_message(created_at: str | datetime, message_data: str) -> SessionMessage:

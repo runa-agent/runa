@@ -63,48 +63,31 @@ def test_an_unknown_scheme_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
         db.shared_url()
 
 
-def test_local_factories_return_the_sqlite_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_local_factories_return_stores_over_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every concern resolves local, so nothing needs the `postgres` extra installed."""
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
-    from runa.cache.sqlite import SQLiteCache
+    from runa.db.sqlite import SQLiteDatabase
     from runa.db.vectors.sqlite import SQLiteVectorStore
-    from runa.eval.sqlite import SQLiteEvalStore
-    from runa.session.sqlite import SQLiteSession, SQLiteSessionStore
-    from runa.tracing.sqlite import SQLiteTraceStore
 
-    assert isinstance(db.session("s"), SQLiteSession)
-    assert isinstance(db.sessions(), SQLiteSessionStore)
-    assert isinstance(db.traces(), SQLiteTraceStore)
-    assert isinstance(db.evals(), SQLiteEvalStore)
+    for store in (db.session("s"), db.sessions(), db.traces(), db.evals(), db.cache()):
+        assert isinstance(store.database, SQLiteDatabase)  # type: ignore[attr-defined]
     assert isinstance(Memory(dimensions=4)._store, SQLiteVectorStore)
     assert isinstance(Knowledge(dimensions=4)._store, SQLiteVectorStore)
-    assert isinstance(db.cache(), SQLiteCache)
 
 
-def test_shared_factories_return_the_postgres_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The whole point: one variable moves every concern, with no call site changed.
-
-    Sessions, memory and knowledge used to need an explicit `PostgresX(...)` while traces and
-    eval history followed the variable, so a deployment could read its own traces from Postgres
-    and its sessions from a file no other replica had.
-    """
+def test_shared_factories_return_stores_over_postgres(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point: one variable moves every concern, with no call site changed."""
     pytest.importorskip("asyncpg")
     monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
 
-    from runa.cache.postgres import PostgresCache
+    from runa.db.pool import PostgresDatabase
     from runa.db.vectors.postgres import PostgresVectorStore
-    from runa.eval.postgres import PostgresEvalStore
-    from runa.session.postgres import PostgresSession, PostgresSessionStore
-    from runa.tracing.postgres import PostgresTraceStore
 
-    assert isinstance(db.session("s"), PostgresSession)
-    assert isinstance(db.sessions(), PostgresSessionStore)
-    assert isinstance(db.traces(), PostgresTraceStore)
-    assert isinstance(db.evals(), PostgresEvalStore)
+    for store in (db.session("s"), db.sessions(), db.traces(), db.evals(), db.cache()):
+        assert isinstance(store.database, PostgresDatabase)  # type: ignore[attr-defined]
     assert isinstance(Memory(dimensions=4)._store, PostgresVectorStore)
     assert isinstance(Knowledge(dimensions=4)._store, PostgresVectorStore)
-    assert isinstance(db.cache(), PostgresCache)
 
 
 def test_a_shared_deployment_ignores_the_project(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,13 +95,13 @@ def test_a_shared_deployment_ignores_the_project(monkeypatch: pytest.MonkeyPatch
     pytest.importorskip("asyncpg")
     monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
 
-    from runa.session.postgres import PostgresSession
+    from runa.db.pool import PostgresDatabase
 
     use(Path("/somewhere/else"))
     session = db.session("s")
 
-    assert isinstance(session, PostgresSession)
-    assert session.url == _URL
+    assert isinstance(session.database, PostgresDatabase)  # type: ignore[attr-defined]
+    assert session.database.url == _URL  # type: ignore[attr-defined]
 
 
 def test_a_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,13 +120,13 @@ def test_a_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) ->
     use(root)
 
     assert db.sqlite_path() == expected
-    assert db.session("s").db_path == expected  # type: ignore[attr-defined]
-    assert db.sessions().db_path == expected  # type: ignore[attr-defined]
-    assert db.traces().db_path == expected  # type: ignore[attr-defined]
-    assert db.evals().db_path == expected  # type: ignore[attr-defined]
+    assert db.session("s").database.location == expected  # type: ignore[attr-defined]
+    assert db.sessions().database.location == expected  # type: ignore[attr-defined]
+    assert db.traces().database.location == expected  # type: ignore[attr-defined]
+    assert db.evals().database.location == expected  # type: ignore[attr-defined]
     assert Memory(dimensions=4)._store.db_path == expected  # type: ignore[attr-defined]
     assert Knowledge(dimensions=4)._store.db_path == expected  # type: ignore[attr-defined]
-    assert db.cache().db_path == expected  # type: ignore[attr-defined]
+    assert db.cache().database.location == expected  # type: ignore[attr-defined]
 
 
 def test_no_project_is_the_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -241,16 +224,13 @@ def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.Monk
     monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:///data/runa.db")
 
     from runa.cache.sqlite import SQLiteCache
-    from runa.eval.sqlite import SQLiteEvalStore
-    from runa.session.sqlite import SQLiteSession, SQLiteSessionStore
-    from runa.tracing.sqlite import SQLiteTraceStore
+    from runa.session.sqlite import SQLiteSession
+    from runa.tracing.config import SQLiteExporter
 
     expected = Path("data/runa.db")
-    assert SQLiteSession("user-42").db_path == expected
-    assert SQLiteSessionStore().db_path == expected
-    assert SQLiteTraceStore().db_path == expected
-    assert SQLiteEvalStore().db_path == expected
-    assert SQLiteCache().db_path == expected
+    assert SQLiteSession("user-42").database.location == expected  # type: ignore[attr-defined]
+    assert SQLiteExporter().store.database.location == expected  # type: ignore[attr-defined]
+    assert SQLiteCache().database.location == expected  # type: ignore[attr-defined]
     assert Memory(dimensions=3)._store.db_path == expected  # type: ignore[attr-defined]
     assert Knowledge(dimensions=3)._store.db_path == expected  # type: ignore[attr-defined]
 
@@ -261,7 +241,9 @@ def test_an_explicit_db_path_still_wins(monkeypatch: pytest.MonkeyPatch) -> None
 
     from runa.session.sqlite import SQLiteSession
 
-    assert SQLiteSession("user-42", "other/runa.db").db_path == Path("other/runa.db")
+    session = SQLiteSession("user-42", "other/runa.db")
+
+    assert session.database.location == Path("other/runa.db")  # type: ignore[attr-defined]
 
 
 def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -280,11 +262,8 @@ def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.Monkey
     assert db.ephemeral() is True
     assert db.shared_url() is None
     assert isinstance(database, MemoryDatabase)
-    assert db.session("s").db_path is database  # type: ignore[attr-defined]
-    assert db.sessions().db_path is database  # type: ignore[attr-defined]
-    assert db.traces().db_path is database  # type: ignore[attr-defined]
-    assert db.evals().db_path is database  # type: ignore[attr-defined]
-    assert db.cache().db_path is database  # type: ignore[attr-defined]
+    for store in (db.session("s"), db.sessions(), db.traces(), db.evals(), db.cache()):
+        assert store.database.location is database  # type: ignore[attr-defined]
     assert Memory(dimensions=4)._store.db_path is database  # type: ignore[attr-defined]
     assert Knowledge(dimensions=4)._store.db_path is database  # type: ignore[attr-defined]
 
@@ -523,11 +502,14 @@ def test_a_local_read_answers_no_rows_only_for_a_table_that_is_absent(tmp_path: 
     from contextlib import closing
 
     from runa.db.schema import SchemaOutOfDate
-    from runa.session.sqlite import SQLiteSession, SQLiteSessionStore
+    from runa.db.sqlite import SQLiteDatabase
+    from runa.session.database import DatabaseSessionStore
+    from runa.session.sqlite import SQLiteSession
+    from runa.session.store import MESSAGES, SESSIONS
 
     db_path = tmp_path / "db" / "runa.db"
     asyncio.run(SQLiteSession("conv-1", db_path).add_items([{"role": "user", "content": "hi"}]))
-    store = SQLiteSessionStore(db_path)
+    store = DatabaseSessionStore(SQLiteDatabase(db_path, SESSIONS, MESSAGES))
     assert [summary.id for summary in store.listing()] == ["conv-1"]
 
     with closing(sqlite3.connect(db_path)) as conn:

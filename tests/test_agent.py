@@ -29,6 +29,7 @@ from runa.mcp import _Connection, _MCPServerBase
 from runa.memory import Memory
 from runa.run import Run
 from runa.run_state import RunState
+from runa.session.database import DatabaseSession
 from runa.session.sqlite import SQLiteSession
 from runa.tool import FunctionTool, tool
 from runa.transcript import Transcript
@@ -1628,7 +1629,7 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
 def test_a_session_id_string_resolves_through_db(monkeypatch: pytest.MonkeyPatch) -> None:
     """`session="user-42"` is the sanctioned shape: the id is the app's, the backend is `db`'s.
 
-    Under `memory://` that means a `SQLiteSession` on the in-memory database, with no store named
+    Under `memory://` that means a `DatabaseSession` on the in-memory database, with no store named
     at the call site -- the same string on a Postgres deployment resolves there instead.
     """
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
@@ -1642,8 +1643,8 @@ def test_a_session_id_string_resolves_through_db(monkeypatch: pytest.MonkeyPatch
 
     Researcher().run_sync("hi", session="user-42")
 
-    assert isinstance(captured["session"], SQLiteSession)
-    assert isinstance(captured["session"].db_path, MemoryDatabase)
+    assert isinstance(captured["session"], DatabaseSession)
+    assert isinstance(captured["session"].database.location, MemoryDatabase)  # type: ignore[attr-defined]
     assert captured["session"].session_id == "user-42"
 
 
@@ -1665,8 +1666,8 @@ def test_run_streamed_resolves_a_session_id_string_too(monkeypatch: pytest.Monke
 
     asyncio.run(_consume())
 
-    assert isinstance(captured["session"], SQLiteSession)
-    assert isinstance(captured["session"].db_path, MemoryDatabase)
+    assert isinstance(captured["session"], DatabaseSession)
+    assert isinstance(captured["session"].database.location, MemoryDatabase)  # type: ignore[attr-defined]
     assert captured["session"].session_id == "user-42"
 
 

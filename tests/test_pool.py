@@ -1,4 +1,4 @@
-"""Tests for `db/pool.py`'s two pairings, neither of which needs a live database.
+"""Tests for the pairings `db/handle.py` and `db/pool.py` make, none of which needs a live database.
 
 `tests/test_postgres.py` and `tests/test_postgres_observability.py` drive the adapters built on
 these against a real Postgres, and skip wholesale when there isn't one. What is checked here is
@@ -8,14 +8,14 @@ tables rather than another concern's.
 """
 
 import asyncio
+from typing import Any
 
 import pytest
 
 
 def test_sync_reaches_an_async_body_from_inside_a_running_loop() -> None:
     """The case `asyncio.run` can't serve: a synchronous store method called mid-run."""
-    pytest.importorskip("asyncpg")
-    from runa.db.pool import sync
+    from runa.db.handle import sync
 
     class Store:
         def __init__(self) -> None:
@@ -41,12 +41,11 @@ def test_sync_reaches_an_async_body_from_inside_a_running_loop() -> None:
 
 def test_sync_keeps_the_async_bodys_name_and_docstring() -> None:
     """The decorated method is still the documented one: `runa ui`'s help and docs read it."""
-    pytest.importorskip("asyncpg")
-    from runa.eval.postgres import PostgresEvalStore
+    from runa.eval.database import DatabaseEvalStore
 
-    assert PostgresEvalStore.save.__name__ == "save"
-    assert PostgresEvalStore.baseline.__doc__ is not None
-    assert "latest run" in PostgresEvalStore.baseline.__doc__
+    assert DatabaseEvalStore.save.__name__ == "save"
+    assert DatabaseEvalStore.baseline.__doc__ is not None
+    assert "latest run" in DatabaseEvalStore.baseline.__doc__
 
 
 def test_a_shared_store_connects_to_its_own_url_with_its_own_tables(
@@ -70,28 +69,28 @@ def test_a_shared_store_connects_to_its_own_url_with_its_own_tables(
     assert calls == [("postgresql://example/db", ("CREATE TABLE IF NOT EXISTS mine ()",))]
 
 
-def test_every_postgres_adapter_brings_its_own_tables() -> None:
-    """Each adapter hands up the tables it owns, five concerns in one database."""
+def test_every_concern_hands_its_database_its_own_tables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each concern declares the tables it owns, five concerns in one database."""
     pytest.importorskip("asyncpg")
-    from runa.cache.postgres import PostgresCache
+    from runa import db
     from runa.db.schema import POSTGRES, ddl
     from runa.db.vectors.postgres import PostgresVectorStore
-    from runa.eval.postgres import PostgresEvalStore
     from runa.memory import _spec as spec
-    from runa.session.postgres import PostgresSession, PostgresSessionStore
-    from runa.tracing.postgres import PostgresTraceStore
+    from runa.session.postgres import PostgresSession
 
     url = "postgresql://example/db"
+    monkeypatch.setenv(db.DATABASE_URL_ENV, url)
 
-    def script(store: object) -> str:
-        return ddl(POSTGRES, *store.tables)  # type: ignore[attr-defined]
+    def script(store: Any) -> str:
+        return ddl(POSTGRES, *store.tables)
 
-    assert "cache_entries" in script(PostgresCache(url))
-    assert "eval_runs" in script(PostgresEvalStore(url))
-    assert "spans" in script(PostgresTraceStore(url))
-    assert "agent_messages" in script(PostgresSessionStore(url))
-    # Both sides of the session pair reach the same two tables, from different base `__init__`s.
-    assert PostgresSession("s", url).tables == PostgresSessionStore(url).tables
+    assert "cache_entries" in script(db.cache().database)  # type: ignore[attr-defined]
+    assert "eval_runs" in script(db.evals().database)  # type: ignore[attr-defined]
+    assert "spans" in script(db.traces().database)  # type: ignore[attr-defined]
+    assert "paused_runs" in script(db.paused_runs().database)  # type: ignore[attr-defined]
+    assert "agent_messages" in script(db.sessions().database)  # type: ignore[attr-defined]
+    # Both sides of the session pair reach the same two tables.
+    assert PostgresSession("s", url).database.tables == db.sessions().database.tables  # type: ignore[attr-defined]
     # The vector store's DDL is computed from its spec, so it can only be handed over once the
     # spec is stored: a store built before that would create a table named `_items`.
     vectors = PostgresVectorStore(spec(4), url)

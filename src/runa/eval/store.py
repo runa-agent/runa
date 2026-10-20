@@ -1,19 +1,18 @@
 """eval/store.py: `EvalStore`, the history every `agent.evaluate()` run is graded against.
 
-One interface, two adapters: `eval/sqlite.py` and `eval/postgres.py`. Which one a caller gets is
-`runa.db.evals(...)`'s decision, asked once, so a CI job and a laptop compare against the
-baseline their deployment actually shares rather than whichever file each happened to open.
+One interface, one implementation over `db/handle.py`'s `Database`: `eval/database.py`. Which
+database it queries is `runa.db.evals(...)`'s decision, asked once, so a CI job and a laptop
+compare against the baseline their deployment actually shares rather than whichever file each
+happened to open.
 
-`RUNS`/`CASES` are the two tables both adapters create, declared once here and rendered per
-dialect by `db/schema.py`. `EvalRun`/`EvalCaseRow` are what a row becomes, declared here rather
-than in an adapter: both
-backends read the same two objects back, and `web/evaluations.py` renders them without knowing
-which one it got. `case_values`/`to_case`/`to_run` are that mapping in both directions, written
-once, so `passed` cannot come back as SQLite's `0`/`1` from one store and a `bool` from the other.
+`RUNS`/`CASES` are the two tables, declared once here and rendered per dialect by `db/schema.py`.
+`EvalRun`/`EvalCaseRow` are what a row becomes, and `web/evaluations.py` renders them without
+knowing which database it got. `case_values`/`to_case`/`to_run` are that mapping in both
+directions, written once, so `passed` cannot come back as SQLite's `0`/`1` from one database and a
+`bool` from the other.
 
-`baseline_clause` is here for the same reason: which run is "the baseline" is this module's rule,
-not each backend's, so both adapters select it with one clause rather than two phrasings of one
-sentence. It decides what `runa eval` calls a regression, so a laptop and CI have to agree on it.
+`baseline_clause` is here for the same reason: which run is "the baseline" is this module's rule.
+It decides what `runa eval` calls a regression, so a laptop and CI have to agree on it.
 """
 
 import builtins
@@ -21,7 +20,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
-from runa.db.schema import Column, Dialect, Index, Table
+from runa.db.schema import Column, Index, Table
 from runa.eval.report import CaseReport, Report
 
 RUNS = Table(
@@ -104,23 +103,21 @@ class EvalStore(Protocol):
         ...
 
 
-def baseline_clause(
-    agent_name: str, before: int | None, dialect: Dialect
-) -> tuple[str, tuple[Any, ...]]:
+def baseline_clause(agent_name: str, before: int | None) -> tuple[str, tuple[Any, ...]]:
     """Everything after `SELECT id FROM eval_runs` for `EvalStore.baseline`, and its values.
 
     One sentence of policy: the newest run of `agent_name`, strictly older than `before` when
     there is one. `before=None` drops the comparison rather than widening it to a sentinel, so
-    both adapters render the rule the same way.
+    the rule reads the same either way.
 
     The whole tail rather than the `WHERE` alone, for the reason `tracing/store.py`'s
     `listing_clause` is: the `ORDER BY ... LIMIT 1` is what makes it "the latest", and a numbered
-    placeholder has to count the values bound before it. Its placeholders are the `dialect`'s.
+    placeholder has to count the values bound before it.
     """
-    clause = f"WHERE agent_name = {dialect.placeholder(1)}"
+    clause = "WHERE agent_name = $1"
     params: tuple[Any, ...] = (agent_name,)
     if before is not None:
-        clause += f" AND id < {dialect.placeholder(2)}"
+        clause += " AND id < $2"
         params += (before,)
     return f"{clause} ORDER BY id DESC LIMIT 1", params
 

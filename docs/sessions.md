@@ -73,14 +73,14 @@ conversations; `set_items` replaces its history instead. Both are `async`, hence
 
 ## Writing Your Own Backend
 
-Runa ships one implementation per backend `RUNA_DATABASE_URL` understands, and `db.session`
-picks between them. A custom store subclasses `Session` and implements its three abstract
+Runa ships one implementation, over whichever database `RUNA_DATABASE_URL` names, and
+`db.session` builds it. A custom store subclasses `Session` and implements its three abstract
 methods, `get_items`, `add_items` and `set_items`: everything a run calls. `clear_session` comes
 for free as `set_items([])`; override it if deleting a session means more than emptying it.
 
 All of them are `async def`, and a run awaits them on the event loop that `runa serve` is answering
 every other request on. If your store talks to something with a blocking client, hand the body
-to `asyncio.to_thread` the way a sync `@tool` is handed to it -- the shipped `SQLiteSession` does
+to `asyncio.to_thread` the way a sync `@tool` is handed to it -- the shipped SQLite database does
 exactly that with `sqlite3`.
 
 For a deployment where multiple processes share one store, set `RUNA_DATABASE_URL` and change

@@ -97,13 +97,17 @@ class StoreExporter:
 
 
 class SQLiteExporter(StoreExporter):
-    """The local exporter: persists every finished trace to `db/runa.db` (`tracing/sqlite.py`)."""
+    """The local exporter: persists every finished trace to `db/runa.db`."""
 
     def __init__(self, path: Path | None = None) -> None:
         """Export to `path`, or to wherever `runa.db` says this deployment's local file is."""
-        from runa.tracing.sqlite import SQLiteTraceStore
+        from runa.db import sqlite_database
+        from runa.db.sqlite import SQLiteDatabase
+        from runa.tracing.database import DatabaseTraceStore
+        from runa.tracing.store import SPANS, TRACES
 
-        super().__init__(SQLiteTraceStore(path))
+        location = path if path is not None else sqlite_database()
+        super().__init__(DatabaseTraceStore(SQLiteDatabase(location, TRACES, SPANS)))
 
 
 class ConsoleExporter:
