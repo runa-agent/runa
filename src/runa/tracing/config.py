@@ -176,7 +176,7 @@ class Policy:
     """
 
 
-_DEFAULT = "tracing.policy"
+_default_policy: Policy | None = None
 
 _scoped: ContextVar[Policy | None] = ContextVar("runa_tracing_policy", default=None)
 """The `observe.scoped(...)` policy for the current task, or `None` to fall back to `_default`."""
@@ -200,14 +200,26 @@ def _merge(base: Policy, updates: dict[str, Any]) -> Policy:
 def _default() -> Policy:
     """The process-wide policy, which is what an `observe(...)` call and `add_exporter` write.
 
-    It is a process fact held in `runa._app`, so whatever resets the process also resets this.
+    It is process state, so `runa._app.reset` forgets it with the app.
     """
-    return _app.held(_DEFAULT, Policy)
+    global _default_policy
+    if _default_policy is None:
+        _default_policy = Policy()
+    return _default_policy
 
 
 def _set_default(default: Policy) -> None:
     """Install `default` as the process-wide policy."""
-    _app.hold(_DEFAULT, default)
+    global _default_policy
+    _default_policy = default
+
+
+def _forget_default() -> None:
+    global _default_policy
+    _default_policy = None
+
+
+_app.on_reset(_forget_default)
 
 
 def _redact_dict(value: dict[str, Any], redact: list[str]) -> dict[str, Any]:

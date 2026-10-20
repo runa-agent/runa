@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from runa import db
+from runa import _app, db
 from runa._items import ConversationItem, system_message
 from runa._log import logger
 from runa._loop import LoopCache
@@ -207,7 +207,7 @@ class Knowledge:
         its corpus and writes its vectors in one place. Absolute paths are left alone, which is
         how app code that means a directory somewhere else says so.
         """
-        self.directory = db.project_path(directory)
+        self.directory = _app.project_path(directory)
         self.model = model
         self.dimensions: int = resolve_dimensions(model, dimensions)
         self._store: VersionedVectorStore = store or db.vector_store(_spec(self.dimensions))

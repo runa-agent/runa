@@ -13,8 +13,7 @@ the `Database` that `database` hands out, so the closed set of three backends is
 one function and a new concern is a new factory here and no new adapter.
 
 `runa.project.use(root)` points the process at an app's directory (the cwd by default), and every
-factory resolves against it: the local SQLite file, and files an app keeps as state rather than
-rows (`Knowledge`'s source directory, via `project_path`). A shared database ignores the root.
+factory resolves against it: the local SQLite file. A shared database ignores the root.
 
 Every backend import is deferred into the function that needs it, so an app without the
 `postgres` extra still gets the SQLite answer.
@@ -89,22 +88,6 @@ def ephemeral() -> bool:
     return url is not None and url.startswith(_MEMORY_SCHEME)
 
 
-def project_path(path: str | Path) -> Path:
-    """Resolve a relative `path` against the project `project.use` named; absolute ones unchanged.
-
-    The non-database half of `sqlite_path` below, for the state an app keeps as files rather than
-    as rows: `app/knowledge/` is this application's state exactly as much as `db/runa.db` is, and
-    a corpus read from the cwd while its vectors are written under the project root is the same
-    split-in-two failure, one directory further out. Whoever would otherwise resolve it --
-    `Knowledge.__init__`, reached through `Agent.__init__` -- is precisely the call site with no
-    root to resolve against, which is why the answer lives here.
-    """
-    path = Path(path)
-    if _app.root is None or path.is_absolute():
-        return path
-    return _app.root / path
-
-
 def sqlite_path() -> Path:
     """Where the local SQLite file lives: `RUNA_DATABASE_URL`'s path, or `db/runa.db`.
 
@@ -123,7 +106,7 @@ def sqlite_path() -> Path:
     else:
         tail = url.removeprefix(_SQLITE_SCHEME)
         path = Path(tail[1:]) if tail.startswith("//") else Path(tail.lstrip("/"))
-    return project_path(path)
+    return _app.project_path(path)
 
 
 def sqlite_database() -> Location:
@@ -234,7 +217,7 @@ def reset_ephemeral() -> None:
     the whole backend a no-op. That makes emptying it an explicit step, and this is it. One call
     covers every concern, because they share the one database: this drops it, and the next
     store to ask gets a new, empty one (`runa._app` closes the old one as it forgets it). Only
-    the database is emptied: the app this process reads and its tracing policy stay as they were.
+    the database is emptied: the app this process reads stays as it was.
     """
     _app.forget(_app.MEMORY_DATABASE)
 
@@ -247,7 +230,6 @@ __all__ = [
     "ephemeral",
     "evals",
     "paused_runs",
-    "project_path",
     "reset_ephemeral",
     "session",
     "sessions",

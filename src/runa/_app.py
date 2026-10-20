@@ -1,18 +1,18 @@
 """`runa._app`: the facts this process holds once, and the one `reset` that forgets them all.
 
-A process runs one app, the way a Rails process has one `Rails.root`. The things that app
-resolves are held here as well: tracing's default policy and the `memory://` database. Each one
-is held under a name and resolved the first time something reads it (`held`), never at import,
-so the environment that decides it is whatever the app's `main.py` has set up by then. A module
-that needs new process state holds it here instead of in a global of its own, and `reset`
-forgets it with everything else.
+A process runs one app, the way a Rails process has one `Rails.root`. What `runa.db` and
+`runa.project` share about it is held here: the root, and the `memory://` database, resolved the
+first time something reads it (`held`), never at import, so the environment that decides it is
+whatever the app's `main.py` has set up by then. A module whose own process state must be
+forgotten with the app's registers a callback with `on_reset`.
 
 This module is a leaf: it imports nothing from Runa but its exceptions, so any module can hold a
 fact here without an import cycle. A fact's type belongs to the module that owns it, which passes
 in the `factory` that builds it.
 
-Which app is the first fact, and it has two readers. `runa.db` resolves the app's state against
-its root, and `runa.project` imports its `main.py` from there. It is held here, in a leaf both of
+Which app is the first fact, and it has three readers. `runa.db` resolves the app's state against
+its root, `project_path` resolves the files it keeps against it, and `runa.project` imports its
+`main.py` from there. It is held here, in a leaf both of
 them import, because `runa.db` cannot import `runa.project` (the dependency runs the other way),
 and one value means the two can never name different apps. `runa.project.use` is the public way
 to say it; this module is the state it writes.
@@ -46,6 +46,8 @@ tearing down the other's half-imported `app.*` modules.
 _MODULE_NAMES = ("main", "app", "tests", "evals")
 
 _held: dict[str, Any] = {}
+
+_reset_callbacks: list[Callable[[], None]] = []
 
 MEMORY_DATABASE = "memory://"
 """The name the `memory://` database is held under: emptying it is one `forget(MEMORY_DATABASE)`."""
@@ -95,9 +97,25 @@ def held[T](name: str, factory: Callable[[], T]) -> T:
     return cast("T", _held[name])
 
 
-def hold(name: str, value: object) -> None:
-    """Replace the fact held as `name` with `value`."""
-    _held[name] = value
+def on_reset(callback: Callable[[], None]) -> None:
+    """Call `callback` whenever `reset` returns the process to how it started.
+
+    For process state a module keeps itself because its type or lifetime is its own, so it is
+    forgotten with the app's rather than surviving into the next one.
+    """
+    _reset_callbacks.append(callback)
+
+
+def project_path(path: str | Path) -> Path:
+    """Resolve a relative `path` against the app `use` named; absolute ones unchanged.
+
+    For the state an app keeps as files rather than rows, such as `app/knowledge/`: it is read
+    from the same root the app's database is written under, or the two split in two.
+    """
+    path = Path(path)
+    if root is None or path.is_absolute():
+        return path
+    return root / path
 
 
 def forget(prefix: str) -> None:
@@ -120,6 +138,8 @@ def reset() -> None:
     """
     use(None)
     forget("")
+    for callback in _reset_callbacks:
+        callback()
 
 
 def import_path(app_root: Path) -> str:

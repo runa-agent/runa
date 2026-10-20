@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from runa import db
+from runa import _app, db
 from runa.db.handle import run_sync
 from runa.exceptions import UserError
 from runa.knowledge import Knowledge
@@ -193,17 +193,16 @@ def test_a_project_leaves_an_absolute_sqlite_url_alone(monkeypatch: pytest.Monke
 
 
 def test_a_project_moves_a_file_path_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`project_path` answers the same question for state an app keeps as files, not rows.
+    """`_app.project_path` answers the same question for state an app keeps as files, not rows.
 
-    `Knowledge`'s source directory was the last concern resolving against the cwd while its
-    vectors followed the root -- the same split-in-two failure, one directory further out.
+    `Knowledge`'s source directory follows the root as its vectors do.
     """
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
     use(Path("other/project"))
 
-    assert db.project_path("app/knowledge") == Path("other/project/app/knowledge")
-    assert db.project_path(Path("/srv/corpus")) == Path("/srv/corpus")
+    assert _app.project_path("app/knowledge") == Path("other/project/app/knowledge")
+    assert _app.project_path(Path("/srv/corpus")) == Path("/srv/corpus")
 
 
 def test_a_shared_deployment_still_places_a_file_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,7 +211,7 @@ def test_a_shared_deployment_still_places_a_file_path(monkeypatch: pytest.Monkey
 
     use(Path("other/project"))
 
-    assert db.project_path("app/knowledge") == Path("other/project/app/knowledge")
+    assert _app.project_path("app/knowledge") == Path("other/project/app/knowledge")
 
 
 def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,7 +333,7 @@ def test_reset_ephemeral_empties_the_database_and_nothing_else(
 
     db.reset_ephemeral()
 
-    assert db.project_path("app") == tmp_path / "app"
+    assert _app.project_path("app") == tmp_path / "app"
     assert config.policy().capture_inputs is False
 
 
@@ -344,7 +343,6 @@ def test_a_process_reset_forgets_every_fact(
     """The app, the tracing policy and the `memory://` tables go together, in one call."""
     import asyncio
 
-    from runa import _app
     from runa.tracing import config, observe
 
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
@@ -354,7 +352,7 @@ def test_a_process_reset_forgets_every_fact(
 
     _app.reset()
 
-    assert db.project_path("app") == Path("app")
+    assert _app.project_path("app") == Path("app")
     assert config.policy().capture_inputs is True
     assert asyncio.run(db.cache().get("k")) is None
 
