@@ -39,6 +39,7 @@ from runa._log import logger
 from runa.agent import Agent, declared_name
 from runa.exceptions import OperatorError, UserError
 from runa.run import Run
+from runa.run_internal.agent_shape import shape_of
 from runa.run_state import RunState
 from runa.stream_events import TextDelta
 from runa.tracing.config import flush_exports
@@ -349,7 +350,7 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
     lands on a tool call the model chose, not on every turn.
     """
     for agent_cls in agent_classes:
-        knowledge = agent_cls()._shape.knowledge
+        knowledge = shape_of(agent_cls()).knowledge
         if knowledge is None:
             continue
         chunks = await knowledge.ingest()

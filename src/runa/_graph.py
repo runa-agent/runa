@@ -5,14 +5,15 @@ delegates and handoffs (recursively) as a Graphviz digraph, since that's all `Ag
 promised. A delegate is drawn as the agent it wraps (dotted edge), not as a plain tool box; a
 handoff gets a dashed edge.
 
-Which agents those are comes from `runa.handoff.subagent_edges`, the same walk `run_state` resumes
+Which agents those are comes from `subagent_edges`, the same walk `run_state` resumes
 a paused run through; only the recursion stays here, because drawing needs each agent's tools and
 MCP servers too, which a walk over agents alone doesn't carry.
 """
 
 from typing import TYPE_CHECKING
 
-from runa.handoff import Mode, subagent_edges
+from runa.handoff import Mode
+from runa.run_internal.agent_shape import shape_of, subagent_edges
 
 if TYPE_CHECKING:
     from graphviz import Digraph
@@ -35,12 +36,12 @@ def _add_agent(dot: Digraph, agent: Agent, seen: set[int]) -> None:
     node_id = _agent_node_id(agent)
     dot.node(node_id, agent.name, shape="ellipse", style="filled", fillcolor="lightblue")
 
-    for tool in agent._shape.tools:
+    for tool in shape_of(agent).tools:
         tool_id = f"tool_{id(tool)}"
         dot.node(tool_id, tool.name, shape="box", style="filled", fillcolor="lightyellow")
         dot.edge(node_id, tool_id)
 
-    for server in agent._shape.mcp_servers:
+    for server in shape_of(agent).mcp_servers:
         server_id = f"mcp_{id(server)}"
         dot.node(
             server_id,

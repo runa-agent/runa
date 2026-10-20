@@ -4,7 +4,7 @@ import asyncio
 import importlib.util
 import json
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -28,6 +28,7 @@ from runa.lifecycle import Hooks, LoggingHooks
 from runa.mcp import _Connection, _MCPServerBase
 from runa.memory import Memory
 from runa.run import Run
+from runa.run_internal.agent_shape import shape_of as built_shape
 from runa.run_state import RunState
 from runa.session.database import DatabaseSession
 from runa.session.sqlite import SQLiteSession
@@ -37,17 +38,17 @@ from runa.transcript import Transcript
 
 def _handoff_names(agent: Agent) -> list[str]:
     """Names of the agents an agent hands off to."""
-    return [handoff.agent.name for handoff in agent.handoffs]
+    return [handoff.agent.name for handoff in built_shape(agent).handoffs.values()]
 
 
 def _tool_names(agent: Agent) -> list[str]:
-    """Names of an agent's tools, narrowed away from the raw `Tool` union members."""
-    return [t.name for t in agent.tools if isinstance(t, FunctionTool)]
+    """Names of the tools an agent offers: its own plus memory's and knowledge's search."""
+    return [t.name for t in built_shape(agent).tools if isinstance(t, FunctionTool)]
 
 
 def _delegate_names(agent: Agent) -> list[str]:
     """The tool names an agent's delegates are called by."""
-    return [delegate.tool_name for delegate in agent.delegates]
+    return [delegate.tool_name for delegate in built_shape(agent).delegates.values()]
 
 
 class Researcher(Agent):
@@ -196,7 +197,7 @@ def test_delegate_adds_only_to_tools() -> None:
 
     agent = Main()
 
-    assert agent.handoffs == ()
+    assert built_shape(agent).handoffs == {}
     assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool_name]
 
 
@@ -220,7 +221,7 @@ def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
     class Triage(Agent):
         name = "Triage"
         instructions = "triage"
-        subagents: list[Any] = []  # filled in below, once `Billing` exists
+        subagents: Sequence[type[Agent] | Subagent] = ()  # filled in below, once `Billing` exists
 
     class Billing(Agent):
         name = "Billing"
@@ -231,9 +232,9 @@ def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
 
     triage = Triage()
 
-    (billing,) = [delegate.agent for delegate in triage.delegates]
+    (billing,) = [delegate.agent for delegate in built_shape(triage).delegates.values()]
     assert billing is not None
-    assert [handoff.agent for handoff in billing.handoffs] == [triage]
+    assert [handoff.agent for handoff in built_shape(billing).handoffs.values()] == [triage]
 
 
 def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
@@ -254,10 +255,13 @@ def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
         instructions = "main"
         subagents = [Left.delegate, Right.delegate]
 
-    left, right = [delegate.agent for delegate in Main().delegates]
+    left, right = [delegate.agent for delegate in built_shape(Main()).delegates.values()]
 
     assert left is not None and right is not None
-    assert left.delegates[0].agent is right.delegates[0].agent
+    assert (
+        next(iter(built_shape(left).delegates.values())).agent
+        is next(iter(built_shape(right).delegates.values())).agent
+    )
 
 
 def test_two_classes_sharing_a_name_in_one_graph_is_a_user_error() -> None:
@@ -305,7 +309,7 @@ def test_delegate_tool_name_and_description_override() -> None:
 
     agent = Main()
 
-    (delegate,) = agent.delegates
+    (delegate,) = built_shape(agent).delegates.values()
     assert delegate.tool_name == "do_research"
     assert delegate.tool_description == "Look into it."
     assert agent.tools == ()
@@ -348,7 +352,7 @@ def test_no_subagents_leaves_handoffs_and_tools_empty() -> None:
 
     agent = Main()
 
-    assert agent.handoffs == ()
+    assert built_shape(agent).handoffs == {}
     assert agent.tools == ()
 
 
@@ -410,7 +414,7 @@ def test_memory_defaults_to_none() -> None:
     """Without `memory=`, an agent behaves exactly as if `runa.memory` didn't exist."""
     agent = Researcher()
 
-    assert agent.memory is None
+    assert built_shape(agent).memory is None
     assert "search_memory" not in _tool_names(agent)
 
 
@@ -428,7 +432,7 @@ def test_memory_auto_gives_a_default_memory_instance_and_no_tool() -> None:
 
     agent = AutoMemory()
 
-    assert isinstance(agent.memory, Memory)
+    assert isinstance(built_shape(agent).memory, Memory)
     assert "search_memory" not in _tool_names(agent)
 
 
@@ -442,7 +446,7 @@ def test_memory_llm_adds_a_tool_and_leaves_self_memory_none() -> None:
 
     agent = LLMMemory()
 
-    assert agent.memory is None
+    assert built_shape(agent).memory is None
     assert "search_memory" in _tool_names(agent)
 
 
@@ -495,7 +499,7 @@ def test_memory_kwarg_also_works_as_a_constructor_argument() -> None:
 
     agent = WithMemory(memory="auto")
 
-    assert isinstance(agent.memory, Memory)
+    assert isinstance(built_shape(agent).memory, Memory)
 
 
 def test_memory_rejects_an_unknown_string() -> None:
@@ -515,7 +519,7 @@ def test_knowledge_defaults_to_none() -> None:
     """Without `knowledge=`, an agent behaves exactly as if `runa.knowledge` didn't exist."""
     agent = Researcher()
 
-    assert agent.knowledge is None
+    assert built_shape(agent).knowledge is None
     assert "search_knowledge" not in _tool_names(agent)
 
 
@@ -533,7 +537,7 @@ def test_knowledge_auto_gives_a_default_knowledge_instance_and_no_tool() -> None
 
     agent = AutoKnowledge()
 
-    assert isinstance(agent.knowledge, Knowledge)
+    assert isinstance(built_shape(agent).knowledge, Knowledge)
     assert "search_knowledge" not in _tool_names(agent)
 
 
@@ -550,7 +554,7 @@ def test_knowledge_llm_adds_a_tool_and_leaves_self_knowledge_none() -> None:
 
     agent = LLMKnowledge()
 
-    assert agent.knowledge is None
+    assert built_shape(agent).knowledge is None
     assert "search_knowledge" in _tool_names(agent)
 
 
@@ -606,7 +610,7 @@ def test_knowledge_kwarg_also_works_as_a_constructor_argument() -> None:
 
     agent = WithKnowledge(knowledge="auto")
 
-    assert isinstance(agent.knowledge, Knowledge)
+    assert isinstance(built_shape(agent).knowledge, Knowledge)
 
 
 def test_knowledge_rejects_an_unknown_string() -> None:
@@ -840,7 +844,12 @@ def test_the_shape_holds_every_setting_the_agent_stores() -> None:
 
     agent = _every_setting_agent()
     stored = {name for name in vars(agent) if not name.startswith("_")} - _PER_RUN_STATE
-    read = {field.name for field in fields(AgentShape)} - {"agent", "compactor"} | {"compact"}
+    translated = {"agent", "compactor", "mcp_servers", "handoffs", "delegates"}
+    read = {field.name for field in fields(AgentShape)} - translated | {
+        "compact",
+        "mcp",
+        "subagents",
+    }
 
     assert stored - {"hooks"} == read, f"stored but read by no run: {sorted(stored - read)}"
 
@@ -849,11 +858,11 @@ def test_with_mcp_tools_adds_the_servers_tools_for_one_run() -> None:
     """A run's shape lists the MCP servers' tools after the agent's own, leaving the agent's be."""
     agent = _every_setting_agent()
 
-    shape = asyncio.run(agent._shape.with_mcp_tools())
+    shape = asyncio.run(built_shape(agent).with_mcp_tools())
 
     assert shape.agent is agent
     assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
-    assert [t.name for t in agent._shape.tools] == _tool_names(agent)
+    assert [t.name for t in built_shape(agent).tools] == _tool_names(agent)
     assert set(shape.handoffs) == {"transfer_to_researcher"}
 
 
@@ -872,18 +881,18 @@ def test_an_mcp_tool_named_like_the_agents_own_is_a_user_error() -> None:
     agent = scripted_agent(_ScriptedModel([]), tools=[ping], mcp=[_Server()])
 
     with pytest.raises(UserError, match="more than one tool named 'ping'"):
-        asyncio.run(agent._shape.with_mcp_tools())
+        asyncio.run(built_shape(agent).with_mcp_tools())
 
 
 def test_a_run_reuses_the_shape_built_at_construction() -> None:
     """Recording a run's history and usage leaves the shape be: it is built once, not per run."""
     agent = scripted_agent(_ScriptedModel([_final_message("one"), _final_message("two")]))
-    shape = agent._shape
+    shape = built_shape(agent)
 
     agent.run_sync("hi")
     agent.run_sync("again")
 
-    assert agent._shape is shape
+    assert built_shape(agent) is shape
 
 
 def test_reassigning_a_setting_rebuilds_the_shape_a_run_reads() -> None:
@@ -892,7 +901,7 @@ def test_reassigning_a_setting_rebuilds_the_shape_a_run_reads() -> None:
 
     agent.max_turns = 3
 
-    assert agent._shape.max_turns == 3
+    assert built_shape(agent).max_turns == 3
     with pytest.raises(UserError, match="compact must be"):
         agent.compact = cast(Any, "yes")
 
@@ -966,11 +975,11 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert _tool_names(agent) == ["ping"]
     assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
     assert agent.guardrails == tuple(passed["guardrails"])
-    assert agent.mcp_servers == tuple(passed["mcp"])
+    assert built_shape(agent).mcp_servers == tuple(passed["mcp"])
     assert agent.output_type is Answer
     assert agent.hooks is hooks
-    assert isinstance(agent.memory, Memory)
-    assert isinstance(agent.knowledge, Knowledge)
+    assert isinstance(built_shape(agent).memory, Memory)
+    assert isinstance(built_shape(agent).knowledge, Knowledge)
     assert agent.compact is True
     assert (agent.max_turns, agent.max_tokens, agent.timeout) == (3, 100, 5.0)
 
@@ -1116,7 +1125,7 @@ async def _prompt_of(agent: Any, label: str) -> str | None:
     """`agent.instructions` as the loop resolves it."""
     from runa.run_internal.run_loop import _resolve_instructions
 
-    return await _resolve_instructions(agent._shape, RunContext(context=_Ctx(label=label)))
+    return await _resolve_instructions(built_shape(agent), RunContext(context=_Ctx(label=label)))
 
 
 def test_single_arg_instructions_resolves_from_run_context() -> None:
@@ -1305,7 +1314,7 @@ def test_run_sync_closes_every_mcp_server_the_turn_reached(
     subagent = Translator(mcp=[server])
 
     async def reach_the_subagents_server(*args: Any, **kwargs: Any) -> Run:
-        await subagent.mcp_servers[0].list_tools()
+        await built_shape(subagent).mcp_servers[0].list_tools()
         return _loop_run()
 
     monkeypatch.setattr("runa.agent._run_async", reach_the_subagents_server)
@@ -1986,7 +1995,7 @@ def _parent_with_paused_delegate(calls: list[float]) -> Agent:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
     )
-    child = parent.delegates[0].agent
+    child = next(iter(built_shape(parent).delegates.values())).agent
     child.tools = [_refund_tool(calls)]
     child.model = _ScriptedModel(
         [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
@@ -2049,14 +2058,14 @@ def _parent_with_a_paused_grandchild(calls: list[float]) -> Agent:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
     )
-    child = parent.delegates[0].agent
+    child = next(iter(built_shape(parent).delegates.values())).agent
     child.model = _ScriptedModel(
         [
             _tool_call_message("grandchild", '{"input": "refund $5"}', "mid_1"),
             _final_message("passed on"),
         ]
     )
-    grandchild = child.delegates[0].agent
+    grandchild = next(iter(built_shape(child).delegates.values())).agent
     grandchild.tools = [_refund_tool(calls)]
     grandchild.model = _ScriptedModel(
         [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
@@ -2227,7 +2236,7 @@ def test_a_delegates_guardrails_show_up_on_its_callers_run() -> None:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "find A1"}', "outer_1"), _final_message("ok")]
     )
-    child = parent.delegates[0].agent
+    child = next(iter(built_shape(parent).delegates.values())).agent
     child.tools = [lookup]
     child.model = _ScriptedModel(
         [_tool_call_message("lookup", '{"order_id": "A1"}', "inner_1"), _final_message("shipped")]

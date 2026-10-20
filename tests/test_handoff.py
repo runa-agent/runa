@@ -5,13 +5,14 @@ trace), what the caller's `Run` records of it, and the walk every module needing
 here" shares (`reachable`/`subagent_edges`).
 """
 
+from collections.abc import Sequence
 from typing import Any
 
-from runa import Trace, handoff
+from runa import Trace
 from runa._types import ModelResponse, RunContext, Usage
-from runa.agent import Agent
-from runa.handoff import reachable, subagent_edges
+from runa.agent import Agent, Subagent
 from runa.lifecycle import Hooks
+from runa.run_internal.agent_shape import reachable, subagent_edges
 from runa.tool import ToolCall, tool
 from runa.tracing import observe
 
@@ -43,16 +44,14 @@ class _ScriptedModel:
         )
 
 
-def _lead(delegate: Agent, script: list[dict[str, Any]], **settings: Any) -> Agent:
+def _lead(delegate: type[Agent], script: list[dict[str, Any]], **settings: Any) -> Agent:
     """A caller whose model follows `script`, with `delegate` among its tools."""
 
     class Lead(Agent):
         name = "Lead"
         model = _ScriptedModel(script)
 
-    lead = Lead(**settings)
-    lead.delegates = [*lead.delegates, handoff.Delegate.from_agent(delegate)]
-    return lead
+    return Lead(subagents=[delegate.delegate], **settings)
 
 
 def test_a_sticky_approval_on_the_caller_covers_the_delegates_matching_tool() -> None:
@@ -77,7 +76,7 @@ def test_a_sticky_approval_on_the_caller_covers_the_delegates_matching_tool() ->
         )
 
     lead = _lead(
-        Delegate(),
+        Delegate,
         [
             _tool_call_message("dangerous", "{}", "c1"),
             _tool_call_message("delegate", '{"input": "go"}', "c2"),
@@ -104,7 +103,7 @@ def test_a_delegates_usage_is_merged_into_its_callers() -> None:
         model = _ScriptedModel([_final_message("delegate done")])
 
     lead = _lead(
-        Delegate(),
+        Delegate,
         [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
     )
 
@@ -131,7 +130,7 @@ def test_a_delegate_sees_the_same_context_object_as_its_caller() -> None:
         )
 
     lead = _lead(
-        Delegate(),
+        Delegate,
         [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
     )
     marker = object()
@@ -160,7 +159,7 @@ def test_the_runs_hooks_fire_for_the_delegate_too() -> None:
         model = _ScriptedModel([_final_message("delegate done")])
 
     lead = _lead(
-        Delegate(),
+        Delegate,
         [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
     )
 
@@ -190,7 +189,7 @@ def test_a_delegates_spans_are_in_its_callers_trace_under_the_call() -> None:
         model = _ScriptedModel([_final_message("delegate done")])
 
     lead = _lead(
-        Delegate(),
+        Delegate,
         [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
     )
 
@@ -221,7 +220,7 @@ def test_a_delegate_call_is_on_its_callers_tool_calls_with_the_delegates_own_ben
         )
 
     lead = _lead(
-        Delegate(),
+        Delegate,
         [_tool_call_message("delegate", '{"input": "where is 4821?"}'), _final_message("done")],
     )
 
@@ -245,7 +244,7 @@ def test_a_delegate_called_with_malformed_arguments_answers_an_error_and_runs_no
         name = "Delegate"
         model = _ScriptedModel([])  # never called: the delegate doesn't start
 
-    lead = _lead(Delegate(), [_tool_call_message("delegate", "not json"), _final_message("ok")])
+    lead = _lead(Delegate, [_tool_call_message("delegate", "not json"), _final_message("ok")])
 
     run = lead.run_sync("go")
 
@@ -260,14 +259,15 @@ def test_reachable_names_every_agent_once_even_through_a_cycle() -> None:
     class First(Agent):
         name = "first"
         instructions = "First."
+        subagents: Sequence[type[Agent] | Subagent] = ()  # filled in below, once `Second` exists
 
     class Second(Agent):
         name = "second"
         instructions = "Second."
+        subagents = [First.handoff]  # a back-edge the walk must not follow
 
-    first, second = First(), Second()
-    first.handoffs = (handoff.Handoff.from_agent(second),)
-    second.handoffs = (handoff.Handoff.from_agent(first),)  # a back-edge the walk must not follow
+    First.subagents = [Second.handoff]
+    first = First()
 
     assert [agent.name for agent in reachable(first)] == ["first", "second"]
 

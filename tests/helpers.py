@@ -8,6 +8,7 @@ from runa._types import ModelResponse, Usage
 from runa.agent import Agent
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.agent_shape import shape_of as shape_of_agent
 from runa.tracing import Trace
 
 
@@ -106,7 +107,7 @@ def stand_in_agent(**attributes: Any) -> Agent:
 
 def shape_of(agent: Agent) -> AgentShape:
     """`agent` as a run resolves it: its guardrails by phase, its compactor, its MCP tools."""
-    return asyncio.run(agent._shape.with_mcp_tools())
+    return asyncio.run(shape_of_agent(agent).with_mcp_tools())
 
 
 def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides: Any) -> Run:

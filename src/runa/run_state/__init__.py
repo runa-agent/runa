@@ -24,7 +24,7 @@ from runa._types import RunContext
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
-from runa.handoff import reachable
+from runa.run_internal.agent_shape import reachable
 from runa.tracing.traces import Trace
 from runa.transcript import Transcript
 

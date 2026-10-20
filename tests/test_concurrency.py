@@ -15,7 +15,7 @@ from runa import Agent
 from runa._models import StreamDelta
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
-from runa.handoff import Delegate
+from runa.run_internal.agent_shape import shape_of as built_shape
 from runa.session import SQLiteSession
 from runa.tool import tool
 
@@ -286,8 +286,6 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
         name = "Worker"
         instructions = "Work."
 
-    worker = Worker()
-
     class _RecordingModel:
         def __init__(self, messages: list[dict[str, Any]]) -> None:
             self._messages = list(messages)
@@ -296,11 +294,12 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
             seen.append(len(request.input))  # how many items this nested run was handed
             return ModelResponse(output=[self._messages.pop(0)], usage=Usage(total_tokens=1))
 
-    worker.model = _RecordingModel([_final_message("x"), _final_message("y")])
+    Worker.model = _RecordingModel([_final_message("x"), _final_message("y")])
 
     class Boss(Agent):
         name = "Boss"
         instructions = "Delegate."
+        subagents = [Worker.delegate]
         model = _YieldingModel(
             [
                 _tool_call_message("c1", "worker", '{"input": "first"}'),
@@ -310,7 +309,8 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
         )
 
     boss = Boss()
-    boss.delegates = [*boss.delegates, Delegate.from_agent(worker)]
+    (delegate,) = built_shape(boss).delegates.values()
+    worker = delegate.agent
     run = boss.run_sync("go")
 
     assert run.status == "completed"

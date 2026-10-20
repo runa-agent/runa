@@ -8,6 +8,9 @@ a bad value is a `UserError` at the line that set it. The turn loop reads an age
 from its shape and nowhere else: `shape.agent` is the identity handed to user code (a hook, an
 `instructions` callable, a pause), never read for a setting.
 
+`shape_of` is how anything outside the agent reads one, and `subagent_edges`/`reachable` walk the
+graph the shape builds, so a third subagent mode is a change in this module alone.
+
 Two things wait for a run: the tools an agent's MCP servers list (`with_mcp_tools`, which may
 start a subprocess) and the model client (`resolve_model`, which needs the provider's API key).
 """
@@ -26,7 +29,7 @@ from runa._types import ModelSettings, RunContext
 from runa.compact import Compactor, resolve_compactor
 from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
-from runa.handoff import Delegate, Handoff, Subagent
+from runa.handoff import Delegate, Handoff, Mode, Subagent
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.memory import Memory, MemoryLike
 from runa.tool import FunctionTool
@@ -291,4 +294,40 @@ class AgentShape:
         return _MODEL_PROVIDER.get_model(model) if isinstance(model, str) else model
 
 
-__all__ = ["AgentShape"]
+def shape_of(agent: Agent) -> AgentShape:
+    """`agent`'s shape as resolved when it was built or last had a setting reassigned."""
+    return agent._shape
+
+
+def subagent_edges(agent: Agent) -> Iterator[tuple[Mode, Agent]]:
+    """`agent`'s outgoing edges in the agent graph: one `(mode, target)` per subagent of it.
+
+    Handoffs first, then delegates, each in declaration order. An `auto`-mode subagent is wired
+    up as both, so it is yielded twice, once per mode -- which is what it is: two tools the model
+    picks between.
+    """
+    shape = shape_of(agent)
+    for handoff in shape.handoffs.values():
+        yield "handoff", handoff.agent
+    for delegate in shape.delegates.values():
+        yield "delegate", delegate.agent
+
+
+def reachable(agent: Agent) -> Iterator[Agent]:
+    """`agent`, then every agent reachable from it through handoffs and delegates, breadth-first.
+
+    Each agent once, by identity, so a cycle (two agents listing each other, an agent listing
+    itself) terminates rather than recursing forever.
+    """
+    seen: set[int] = set()
+    queue: list[Agent] = [agent]
+    while queue:
+        candidate = queue.pop(0)
+        if id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        yield candidate
+        queue.extend(target for _, target in subagent_edges(candidate))
+
+
+__all__ = ["AgentShape", "reachable", "shape_of", "subagent_edges"]

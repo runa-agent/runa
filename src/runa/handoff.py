@@ -7,18 +7,14 @@ the caller's, and hands its output back to the *calling* agent, which keeps goin
 mode). A `Subagent` is one entry of an agent's `subagents` list: a class and the mode it is wired
 up in.
 
-The two modes are the only edges between agents, so this module also names them (`Mode`) and walks
-them: `subagent_edges` is one agent's outgoing edges and `reachable` the whole graph below it. A
-module that needs "everything reachable from this agent" asks here rather than re-reading an
-agent's handoffs and delegates itself, which is what keeps a third mode from being a change in
-five places.
+The two modes are the only edges between agents, so this module names them (`Mode`); walking them
+is `runa.run_internal.agent_shape`'s, which builds the edges.
 
-An agent is read here, never built: `Agent` is a type-only import, so the runtime dependency
-still points from `runa.agent` to this module.
+`Agent` is a type-only import, so the runtime dependency still points from `runa.agent` to this
+module.
 """
 
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -110,38 +106,4 @@ class Delegate:
         )
 
 
-def subagent_edges(agent: Agent) -> Iterator[tuple[Mode, Agent]]:
-    """`agent`'s outgoing edges in the agent graph: one `(mode, target)` per subagent of it.
-
-    Handoffs first, then delegates, each in declaration order. An `auto`-mode subagent is wired
-    up as both, so it is yielded twice, once per mode -- which is what it is: two tools the model
-    picks between.
-
-    Reading both lists lives here and not in each module that needs the graph: `run_state`
-    resolves a paused run's agent by name, `Agent.graph` draws the edges.
-    """
-    shape = agent._shape
-    for handoff in shape.handoffs.values():
-        yield "handoff", handoff.agent
-    for delegate in shape.delegates.values():
-        yield "delegate", delegate.agent
-
-
-def reachable(agent: Agent) -> Iterator[Agent]:
-    """`agent`, then every agent reachable from it through handoffs and delegates, breadth-first.
-
-    Each agent once, by identity, so a cycle (two agents listing each other, an agent listing
-    itself) terminates rather than recursing forever.
-    """
-    seen: set[int] = set()
-    queue: list[Agent] = [agent]
-    while queue:
-        candidate = queue.pop(0)
-        if id(candidate) in seen:
-            continue
-        seen.add(id(candidate))
-        yield candidate
-        queue.extend(target for _, target in subagent_edges(candidate))
-
-
-__all__ = ["Delegate", "Handoff", "Mode", "Subagent", "reachable", "subagent_edges"]
+__all__ = ["Delegate", "Handoff", "Mode", "Subagent"]

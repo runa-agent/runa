@@ -43,7 +43,7 @@ from runa.guardrail import GuardrailResult, GuardrailResults, Phase
 from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
-from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.agent_shape import AgentShape, shape_of
 from runa.run_internal.spans import _close_span, _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
 from runa.run_internal.tool_execution import (
@@ -129,7 +129,7 @@ class _Run:
 
     async def hand_off(self, agent: Agent) -> None:
         """Make `agent` the one running now, its MCP tools listed."""
-        self.shape = await agent._shape.with_mcp_tools()
+        self.shape = await shape_of(agent).with_mcp_tools()
         self.record.agent = agent
 
     @property
@@ -245,7 +245,7 @@ class _Run:
             message = input
         else:
             record, message = paused.resumed(), None
-        shape = record.agent._shape
+        shape = shape_of(record.agent)
         nested = replace(
             frame,
             shape=shape,
@@ -704,7 +704,7 @@ async def _run_async(
     if group_id is not None:
         trace.metadata = {"group_id": group_id}
 
-    shape = agent._shape
+    shape = shape_of(agent)
     frame = _Frame(
         shape=shape,
         record=_RunRecord(agent=agent, run_context=RunContext(context=context, user_id=user_id)),
@@ -728,7 +728,7 @@ async def _resume(
     emit: Emit | None = None,
 ) -> Run:
     """Continue a paused run once its interruptions are resolved, on a copy of its record."""
-    shape = state.agent._shape
+    shape = shape_of(state.agent)
     frame = _Frame(
         shape=shape,
         record=state._record.resumed(),
