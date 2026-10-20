@@ -280,7 +280,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         (and the same `session_id`) resumes it here.
         """
         agent = _build(agent_name)
-        session = db.session(body.session_id) if body.session_id else None
+        session = db.session(body.session_id, agent_name) if body.session_id else None
         turn = await _turn(agent, agent_name, body)
         run = await agent.run(turn, session=session, user_id=body.user_id)
         return await _run_payload(run, agent_name)
@@ -301,7 +301,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         `status="error"` is one wire shape for a turn that answered and one that didn't.
         """
         agent = _build(agent_name)
-        session = db.session(body.session_id) if body.session_id else None
+        session = db.session(body.session_id, agent_name) if body.session_id else None
         turn = await _turn(agent, agent_name, body)
 
         async def events() -> AsyncIterator[str]:

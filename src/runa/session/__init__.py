@@ -23,12 +23,6 @@ class Session(ABC):
     """
 
     session_id: str
-    agent_name: str | None = None
-    """The agent whose conversation this is, which a run sets to its own name before it saves.
-
-    A shipped store records it with the first write that carries one, so `SessionStore.listing`
-    can find a session by agent whatever its id. A custom store may ignore it.
-    """
 
     @abstractmethod
     async def get_items(self) -> list[ConversationItem]:

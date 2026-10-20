@@ -36,7 +36,7 @@ class SessionPair:
     and `runa.db.session(...)` is how an app gets each of them.
     """
 
-    write: Callable[[str], Session]
+    write: Callable[[str, str | None], Session]
     read: SessionStore
     tag: str
 
@@ -44,9 +44,9 @@ class SessionPair:
         """One session id of this check's own, unique to it."""
         return f"{self.tag}{suffix}"
 
-    def session(self, suffix: str = "") -> Session:
-        """The write side for one of this check's session ids."""
-        return self.write(self.id(suffix))
+    def session(self, suffix: str = "", agent: str | None = None) -> Session:
+        """The write side for one of this check's session ids, belonging to `agent`."""
+        return self.write(self.id(suffix), agent)
 
 
 Check = Callable[[SessionPair], Coroutine[Any, Any, None]]
@@ -54,8 +54,7 @@ Check = Callable[[SessionPair], Coroutine[Any, Any, None]]
 
 async def _write(pair: SessionPair, suffix: str, *texts: str) -> Session:
     """One session with one user message per text, saved the way a run saves it: as `pair.tag`."""
-    session = pair.session(suffix)
-    session.agent_name = pair.tag
+    session = pair.session(suffix, pair.tag)
     await session.add_items([{"role": "user", "content": text} for text in texts])
     return session
 
@@ -142,8 +141,7 @@ async def check_listing_by_agent_matches_the_recorded_agent_whatever_the_id(
 ) -> None:
     """`listing(agent=...)` finds a session by the agent that wrote it, not by its id's shape."""
     await _write(pair, "-user-42", "hi")
-    other = pair.session("-escalation")
-    other.agent_name = pair.id("-escalation")
+    other = pair.session("-escalation", pair.id("-escalation"))
     await other.add_items([{"role": "user", "content": "hi"}])
 
     listed = pair.read.listing(agent=pair.tag)
@@ -153,14 +151,13 @@ async def check_listing_by_agent_matches_the_recorded_agent_whatever_the_id(
 
 async def check_the_first_agent_to_write_keeps_the_session(pair: SessionPair) -> None:
     """A session seeded with no agent takes the first one that writes, and keeps it."""
-    session = pair.session()
-    await session.add_items([{"role": "user", "content": "seeded"}])
+    await pair.session().add_items([{"role": "user", "content": "seeded"}])
     unowned = pair.read.listing(agent=pair.tag)
 
-    session.agent_name = pair.tag
-    await session.add_items([{"role": "user", "content": "first run"}])
-    session.agent_name = pair.id("-other")
-    await session.set_items([{"role": "user", "content": "second run"}])
+    await pair.session(agent=pair.tag).add_items([{"role": "user", "content": "first run"}])
+    await pair.session(agent=pair.id("-other")).set_items(
+        [{"role": "user", "content": "second run"}]
+    )
 
     assert unowned == []
     assert [summary.id for summary in pair.read.listing(agent=pair.tag)] == [pair.id()]

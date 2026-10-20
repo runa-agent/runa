@@ -1181,22 +1181,6 @@ def test_stream_persists_the_turn_to_the_session(tmp_path: Any) -> None:
     ]
 
 
-def test_a_saved_turn_lists_the_session_under_the_agent_that_ran_it(tmp_path: Any) -> None:
-    """A session's agent is whoever ran it, so an app's own id lists under that agent."""
-    from runa.db.sqlite import SQLiteDatabase
-    from runa.session import SQLiteSession
-    from runa.session.database import DatabaseSessionStore
-    from runa.session.store import MESSAGES, SESSIONS
-
-    session = SQLiteSession("user-42", db_path=tmp_path / "runa.db")
-    agent = scripted_agent(model=ScriptedModel([text_response("Hi")]), name="support")
-
-    agent.run_sync("hello", session=session)
-
-    store = DatabaseSessionStore(SQLiteDatabase(tmp_path / "runa.db", SESSIONS, MESSAGES))
-    assert [summary.id for summary in store.listing(agent="support")] == ["user-42"]
-
-
 def test_stopping_a_stream_early_cancels_the_run() -> None:
     """Breaking out of the iterator cancels the underlying run instead of leaving it running."""
     cancelled = asyncio.Event()

@@ -92,7 +92,7 @@ def test_session_contract(unique_id: str, check: session_contract.Check) -> None
     rather than the resolution: `test_postgres_observability.py` covers the routing itself.
     """
     pair = session_contract.SessionPair(
-        write=lambda session_id: PostgresSession(session_id, _DSN),
+        write=lambda session_id, agent=None: PostgresSession(session_id, _DSN, agent),
         read=DatabaseSessionStore(PostgresDatabase(_DSN, SESSIONS, MESSAGES)),
         tag=unique_id,
     )

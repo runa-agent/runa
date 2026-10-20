@@ -51,8 +51,8 @@ Typed `Any` so every parameter keeps its own annotation.
 """
 
 
-def _resolve_session(session: Session | str | None) -> Session | None:
-    """Turn a `session_id` into this deployment's session for it, passing an object through.
+def _resolve_session(session: Session | str | None, agent: str) -> Session | None:
+    """Turn a `session_id` into this deployment's session for `agent`, passing an object through.
 
     A string is resolved through `runa.db.session`, so the backend follows `RUNA_DATABASE_URL`;
     a `Session` object is passed straight through.
@@ -60,7 +60,7 @@ def _resolve_session(session: Session | str | None) -> Session | None:
     if isinstance(session, str):
         from runa import db
 
-        return db.session(session)
+        return db.session(session, agent)
     return session
 
 
@@ -484,7 +484,7 @@ class Agent:
         **One instance runs one conversation at a time**: two overlapping session-less runs raise
         `UserError`. Give each run its own `session`, or its own `Agent`.
         """
-        session = _resolve_session(session)
+        session = _resolve_session(session, self.name)
         turn_input = _turn_input(message, self.history, session, context, user_id)
         with self._exclusive(session):
             # A run's own failure comes back as an `"error"` `Run`; only an `OperatorError` or a
@@ -538,7 +538,7 @@ class Agent:
         starting to consume a second session-less stream on the same instance while one is in
         flight raises `UserError` rather than interleaving the two histories.
         """
-        session = _resolve_session(session)
+        session = _resolve_session(session, self.name)
         turn_input = _turn_input(message, self.history, session, context, user_id)
 
         async def events() -> AsyncIterator[StreamEvent]:

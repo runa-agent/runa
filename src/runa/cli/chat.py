@@ -150,7 +150,7 @@ def run_agent_repl(
             continue_last=continue_last,
             resume=resume,
         )
-        session = db.session(resolved_session_id)
+        session = db.session(resolved_session_id, agent.name)
 
         if message is not None:
             if message.strip():

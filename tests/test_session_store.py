@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from contracts.session import CONTRACT, Check, SessionPair
+from helpers import ScriptedModel, scripted_agent, text_response
 
 from runa import db
 from runa.project import use
@@ -69,8 +70,7 @@ def test_listing_breaks_updated_at_ties_by_session_id_descending(project: None) 
     """
     pair = _pair()
     for suffix in ("-a", "-c", "-b"):
-        session = pair.session(suffix)
-        session.agent_name = pair.tag
+        session = pair.session(suffix, pair.tag)
         asyncio.run(session.add_items([{"role": "user", "content": "hi"}]))
 
     listed = pair.read.listing(agent=pair.tag)
@@ -92,3 +92,12 @@ def test_listing_clause_orders_the_same_way_with_or_without_an_agent() -> None:
 
     assert listing_clause(None) == (order, ())
     assert listing_clause("SupportAgent")[0].endswith(f" {order}")
+
+
+def test_a_session_id_lists_under_the_agent_that_ran_it(project: None) -> None:
+    """A session id a run resolves belongs to that agent, so an app's own id lists under it."""
+    agent = scripted_agent(model=ScriptedModel([text_response("Hi")]), name="support")
+
+    agent.run_sync("hello", session="user-42")
+
+    assert [summary.id for summary in db.sessions().listing(agent="support")] == ["user-42"]

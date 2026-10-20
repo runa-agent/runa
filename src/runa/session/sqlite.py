@@ -16,7 +16,9 @@ from runa.session.store import MESSAGES, SESSIONS
 class SQLiteSession(DatabaseSession):
     """Conversation history for one `session_id`, persisted to a local SQLite file."""
 
-    def __init__(self, session_id: str, db_path: str | Path | None = None) -> None:
+    def __init__(
+        self, session_id: str, db_path: str | Path | None = None, agent: str | None = None
+    ) -> None:
         """Store `session_id` and which SQLite database its history lives in.
 
         `db_path` defaults to `runa.db.sqlite_database()`, so this history lands in the same local
@@ -24,7 +26,7 @@ class SQLiteSession(DatabaseSession):
         keeps it in memory. Pass one to point at some other file.
         """
         location = Path(db_path) if db_path is not None else sqlite_database()
-        super().__init__(session_id, SQLiteDatabase(location, SESSIONS, MESSAGES))
+        super().__init__(session_id, SQLiteDatabase(location, SESSIONS, MESSAGES), agent)
 
 
 __all__ = ["SQLiteSession"]

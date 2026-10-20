@@ -14,9 +14,9 @@ from runa.session.store import MESSAGES, SESSIONS
 class PostgresSession(DatabaseSession):
     """Conversation history for one `session_id`, persisted to a Postgres database."""
 
-    def __init__(self, session_id: str, url: str) -> None:
-        """Store `session_id` and which Postgres database its history lives in."""
-        super().__init__(session_id, PostgresDatabase(url, SESSIONS, MESSAGES))
+    def __init__(self, session_id: str, url: str, agent: str | None = None) -> None:
+        """Store `session_id`, which Postgres database its history lives in and its agent."""
+        super().__init__(session_id, PostgresDatabase(url, SESSIONS, MESSAGES), agent)
 
 
 __all__ = ["PostgresSession"]

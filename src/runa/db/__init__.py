@@ -155,12 +155,12 @@ def database(*tables: Table) -> Database:
     return SQLiteDatabase(sqlite_database(), *tables)
 
 
-def session(session_id: str) -> Session:
-    """This deployment's session store for `session_id`."""
+def session(session_id: str, agent: str | None = None) -> Session:
+    """This deployment's session store for `session_id`, the conversation of `agent` if named."""
     from runa.session.database import DatabaseSession
     from runa.session.store import MESSAGES, SESSIONS
 
-    return DatabaseSession(session_id, database(SESSIONS, MESSAGES))
+    return DatabaseSession(session_id, database(SESSIONS, MESSAGES), agent)
 
 
 def sessions() -> SessionStore:
