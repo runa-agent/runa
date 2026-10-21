@@ -13,10 +13,11 @@ import inspect
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from runa import _loop, content
+from runa import _app, _loop, content
 from runa._items import ConversationItem, user_message
 from runa._log import logger
 from runa._models import DEFAULT_MODEL, Model
@@ -129,6 +130,20 @@ def prompt_path(app_dir: Path, name: str) -> Path:
 
 
 _NO_SOURCE_FILE = (TypeError, OSError)
+
+_PROMPTS = "agent prompts"
+"""The `_app` fact holding each class's prompt as read, so a reset forgets them with the app."""
+
+
+def _prompt(cls: type, name: str) -> str | None:
+    """`cls`'s instructions from `<name>.md`, read the first time an instance asks in this process.
+
+    Like the code beside it, an edited prompt is picked up by a new process.
+    """
+    prompts = _app.held(_PROMPTS, dict[tuple[type, str], str | None])
+    if (cls, name) not in prompts:
+        prompts.setdefault((cls, name), _load_prompt(cls, name))
+    return prompts[(cls, name)]
 
 
 def _load_prompt(cls: type, name: str) -> str | None:
@@ -340,14 +355,16 @@ class Agent:
             raise UserError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
         _reject_unknown_settings(cls)
 
-        setting = _settings(cls, locals())
+        passed = locals()
+        declared = all(passed[name] is _UNSET for name in _AGENT_FIELDS)
+        setting = _settings(cls, passed)
 
         name = setting["name"]
         if name is _UNSET:
             raise UserError(f"{cls.__name__}(...) is missing the required 'name'")
         instructions = setting["instructions"]
         if instructions is _UNSET:
-            instructions = _load_prompt(cls, name)
+            instructions = _prompt(cls, name)
 
         self.name: str = name
         self.instructions: str | Callable[..., Any] | None = instructions
@@ -371,7 +388,7 @@ class Agent:
         self.usage = Usage()
         self.last_usage = Usage()
         self._in_flight = 0
-        self._shape = AgentShape.of(self)
+        self._shape = AgentShape.declared(self) if declared else AgentShape.of(self)
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Set an attribute, rebuilding the shape a run reads when it is one of the settings.
@@ -409,7 +426,7 @@ class Agent:
         return run
 
     def _fresh(self) -> Agent:
-        """A copy of this agent with empty per-run state, sharing its config.
+        """A copy of this agent with empty per-run state, sharing its config and subagents.
 
         For runs that must not share a conversation, such as an eval's concurrent cases.
         """
@@ -418,7 +435,7 @@ class Agent:
         clone.usage = Usage()
         clone.last_usage = Usage()
         clone._in_flight = 0
-        clone._shape = AgentShape.of(clone, self._shape)
+        clone._shape = replace(self._shape, agent=clone)
         return clone
 
     @contextmanager

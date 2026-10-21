@@ -4,8 +4,10 @@ An `Agent` holds its settings as declared (`subagents`, `mcp`, `memory = "auto"`
 is the one place they are translated into what a run uses: the subagent graph built, `memory` and
 `knowledge` resolved to a source and the model's search tools. The agent builds its shape when it
 is constructed, and again whenever one of its settings is reassigned, so the two always agree and
-a bad value is a `UserError` at the line that set it. The turn loop reads an agent's settings
-from its shape and nowhere else: `shape.agent` is the identity handed to user code (a hook, an
+a bad value is a `UserError` at the line that set it. What a class declares is translated once per
+process and shared by every instance built without overrides, so building one costs only its
+subagent graph, whose agents are still its own. The turn loop reads an agent's settings from its
+shape and nowhere else: `shape.agent` is the identity handed to user code (a hook, an
 `instructions` callable, a pause), never read for a setting.
 
 `shape_of` is how anything outside the agent reads one, and `subagent_edges`/`reachable` walk the
@@ -20,10 +22,11 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
+from runa import _app
 from runa._models import Model, ModelProvider, ToolSchema, check_model_name
 from runa._types import ModelSettings, RunContext
 from runa.compact import Compactor, resolve_compactor
@@ -165,14 +168,12 @@ def _checked_unique(agent_name: str, names: Iterable[str]) -> None:
 
 
 @dataclass(frozen=True)
-class AgentShape:
-    """One agent's settings, each in the form the turn loop uses it.
+class _Resolved:
+    """Every setting of an agent but `subagents`, each in the form the turn loop uses it.
 
-    Every tool, delegate and handoff it offers has a name no other one has: a shape where two
-    would share one is a `UserError` instead.
+    Holds no agent, so every instance of a class that declares the same settings shares one.
     """
 
-    agent: Agent
     name: str
     instructions: str | Callable[[RunContext[Any], Agent], Any] | None
     """A string, or a callable the loop calls with `(run_context, agent)`."""
@@ -183,10 +184,6 @@ class AgentShape:
     """Its `@tool`s and memory's or knowledge's search; `with_mcp_tools` adds its servers'."""
     mcp_servers: tuple[Any, ...]
     """Its `mcp` setting."""
-    handoffs: dict[str, Handoff]
-    """Its `subagents` wired up as handoffs, keyed by the tool name that triggers each."""
-    delegates: dict[str, Delegate]
-    """Its `subagents` wired up as delegates, keyed by the tool name that triggers each."""
     guardrails: dict[Phase, list[BoundGuardrail]]
     """By the phase each one runs in, each phase's in list order."""
     compactor: Compactor | None
@@ -199,6 +196,56 @@ class AgentShape:
     max_tokens: int | None
     timeout: float | None
 
+
+def _resolve(agent: Agent) -> _Resolved:
+    """`agent`'s settings translated; a value no run could use is a `UserError`."""
+    memory, memory_tools = _retrieval(agent.memory, Memory)
+    knowledge, knowledge_tools = _retrieval(agent.knowledge, Knowledge)
+    return _Resolved(
+        name=agent.name,
+        instructions=_adapt_instructions(agent.instructions),
+        model=_checked_model(agent.model),
+        model_settings=agent.model_settings or ModelSettings(),
+        output_type=agent.output_type,
+        tools=(*agent.tools, *memory_tools, *knowledge_tools),
+        mcp_servers=tuple(agent.mcp),
+        guardrails=flatten_guardrails(agent.guardrails),
+        compactor=resolve_compactor(agent.compact),
+        memory=memory,
+        knowledge=knowledge,
+        max_turns=agent.max_turns,
+        max_tokens=agent.max_tokens,
+        timeout=agent.timeout,
+    )
+
+
+_DECLARED = "agent declarations"
+"""The `_app` fact holding each class's resolved declaration, so a reset forgets them."""
+
+
+def _declared(agent: Agent) -> _Resolved:
+    """What `agent`'s class declares, resolved the first time an instance asks in this process."""
+    declared = _app.held(_DECLARED, dict[type, _Resolved])
+    resolved = declared.get(type(agent))
+    if resolved is None:
+        resolved = declared.setdefault(type(agent), _resolve(agent))
+    return resolved
+
+
+@dataclass(frozen=True)
+class AgentShape(_Resolved):
+    """One agent's settings as the turn loop uses them, wired into its agent graph.
+
+    Every tool, delegate and handoff it offers has a name no other one has: a shape where two
+    would share one is a `UserError` instead.
+    """
+
+    agent: Agent
+    handoffs: dict[str, Handoff]
+    """Its `subagents` wired up as handoffs, keyed by the tool name that triggers each."""
+    delegates: dict[str, Delegate]
+    """Its `subagents` wired up as delegates, keyed by the tool name that triggers each."""
+
     @classmethod
     def of(cls, agent: Agent, previous: AgentShape | None = None) -> AgentShape:
         """`agent`'s shape, translated from its settings; a value no run could use is a `UserError`.
@@ -207,40 +254,40 @@ class AgentShape:
         again, given when `subagents` isn't what changed, so the agents below this one keep their
         identity.
         """
+        return cls._wired(agent, _resolve(agent), previous)
+
+    @classmethod
+    def declared(cls, agent: Agent) -> AgentShape:
+        """`agent`'s shape when it holds exactly what its class declares, its subagents built.
+
+        The settings are translated once per class per process and shared by every such
+        instance, so building one costs its subagent graph and no I/O.
+        """
+        return cls._wired(agent, _declared(agent))
+
+    @classmethod
+    def _wired(
+        cls, agent: Agent, resolved: _Resolved, previous: AgentShape | None = None
+    ) -> AgentShape:
+        """`resolved` for `agent`, with `previous`'s subagents, or its own built when none."""
         handoffs, delegates = (
             _subagent_graph(agent)
             if previous is None
             else ([*previous.handoffs.values()], [*previous.delegates.values()])
         )
-        memory, memory_tools = _retrieval(agent.memory, Memory)
-        knowledge, knowledge_tools = _retrieval(agent.knowledge, Knowledge)
-        tools = (*agent.tools, *memory_tools, *knowledge_tools)
         _checked_unique(
             agent.name,
             (
-                *(tool.name for tool in tools),
+                *(tool.name for tool in resolved.tools),
                 *(delegate.tool_name for delegate in delegates),
                 *(handoff.tool_name for handoff in handoffs),
             ),
         )
         return cls(
+            **{field.name: getattr(resolved, field.name) for field in fields(_Resolved)},
             agent=agent,
-            name=agent.name,
-            instructions=_adapt_instructions(agent.instructions),
-            model=_checked_model(agent.model),
-            model_settings=agent.model_settings or ModelSettings(),
-            output_type=agent.output_type,
-            tools=tools,
-            mcp_servers=tuple(agent.mcp),
             handoffs={handoff.tool_name: handoff for handoff in handoffs},
             delegates={delegate.tool_name: delegate for delegate in delegates},
-            guardrails=flatten_guardrails(agent.guardrails),
-            compactor=resolve_compactor(agent.compact),
-            memory=memory,
-            knowledge=knowledge,
-            max_turns=agent.max_turns,
-            max_tokens=agent.max_tokens,
-            timeout=agent.timeout,
         )
 
     async def with_mcp_tools(self) -> AgentShape:

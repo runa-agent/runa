@@ -8,11 +8,11 @@ Unlike `Memory`, `Knowledge` is application-scoped rather than `user_id`-scoped,
 of truth is a directory of files on disk (`app/knowledge/` by default), not calls to `remember`.
 
 Whether the corpus has been ingested is the store's answer (`reset`/`stamp`/`version`), never
-state on the `Knowledge` object: a fresh one is built per agent, and `runa serve` builds an agent
-per request. `ingest` is idempotent; `search` calls it, and so does `serve.create_app` at startup.
-Two pieces of process-local state remain: `_digests`, a cache of what the files on disk would
-write (an empty one costs a re-read, never a re-embed), and `_ingest_locks`, which keeps one
-process from embedding one corpus twice at once.
+state on the `Knowledge` object: one is built per agent class declaring `knowledge = "auto"`,
+and an app may build more over the same corpus. `ingest` is idempotent; `search` calls it, and
+so does `serve.create_app` at startup. Two pieces of process-local state remain: `_digests`, a
+cache of what the files on disk would write (an empty one costs a re-read, never a re-embed), and
+`_ingest_locks`, which keeps one process from embedding one corpus twice at once.
 
 A run consults an agent's `knowledge` through `retrieve` before its first turn, so retrieval is
 automatic. `KnowledgeLike` is the contract a wholesale custom
@@ -101,18 +101,18 @@ def _discover(directory: Path) -> list[Path]:
     )
 
 
-# Per process, not per instance: a `Knowledge` is built per agent and an agent per request, so an
-# instance-scoped cache would never be read twice. Keyed by everything the digest is built from
-# besides the files, so two `Knowledge` objects over one directory with different `model=`s don't
-# read each other's entry.
+# Per process, not per instance: several `Knowledge` objects can stand over one corpus (one per
+# agent class declaring it, one per agent passed `knowledge=` itself). Keyed by everything the
+# digest is built from besides the files, so two `Knowledge` objects over one directory with
+# different `model=`s don't read each other's entry.
 _digests: dict[tuple[Path, str], tuple[_Stats, str]] = {}
 
-# One ingest of one corpus at a time. `Agent(knowledge="auto")` builds a `Knowledge` per agent and
-# `runa.serve` an agent per request, so two concurrent turns arriving at a cold store would
-# otherwise both rebuild it: paying for the whole corpus's embeddings twice, and -- since one's
-# `reset` can land between the other's last `add` and its `stamp` -- able to leave a version
-# standing over rows that were just wiped. Keyed like `_digests`, and per event loop because an
-# `asyncio.Lock` belongs to the loop that first awaits it (see `_loop.py`).
+# One ingest of one corpus at a time. Two concurrent turns arriving at a cold store, through one
+# `Knowledge` or two over the same corpus, would otherwise both rebuild it: paying for the whole
+# corpus's embeddings twice, and -- since one's `reset` can land between the other's last `add`
+# and its `stamp` -- able to leave a version standing over rows that were just wiped. Keyed like
+# `_digests`, and per event loop because an `asyncio.Lock` belongs to the loop that first awaits
+# it (see `_loop.py`).
 _ingest_locks: LoopCache[tuple[Path, str], asyncio.Lock] = LoopCache()
 
 

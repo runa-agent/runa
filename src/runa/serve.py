@@ -3,8 +3,10 @@
 What a deployment gets:
 
 * **An `Agent` is built per request, from a class resolved once at startup.** An instance carries
-  the conversation it is running, so one is never shared across requests. The app is imported
-  once, by `create_app`; picking up an edit to `app/agents/` takes a restart. Every declared
+  the conversation it is running, so one is never shared across requests; what its class
+  declares is resolved once per process, so building one reads nothing from disk. The app is
+  imported once, by `create_app`; picking up an edit to `app/agents/` or `app/prompts/` takes a
+  restart. Every declared
   agent's `knowledge=` corpus is ingested at startup too.
 * **Conversation state is a `session`, never `self.history`.** A `session_id` in the request body
   is the whole continuity mechanism, and `runa.db` decides where that history lives

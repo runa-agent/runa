@@ -125,6 +125,25 @@ def test_instructions_auto_load_from_a_sibling_prompts_file(tmp_path: Path) -> N
     assert module.GreeterAgent().instructions == "You greet warmly."
 
 
+def test_a_prompt_is_read_once_per_process(tmp_path: Path) -> None:
+    """An agent built per request reads nothing from disk: its class's prompt is already held."""
+    agents_dir = tmp_path / "app" / "agents"
+    prompts_dir = tmp_path / "app" / "prompts"
+    agents_dir.mkdir(parents=True)
+    prompts_dir.mkdir(parents=True)
+    (agents_dir / "greeter_agent.py").write_text(
+        "from runa import Agent\n\n\nclass GreeterAgent(Agent):\n    name = 'greeter_agent'\n"
+    )
+    prompt = prompts_dir / "greeter_agent.md"
+    prompt.write_text("You greet warmly.\n")
+    module = _import_module_from_file("greeter_agent_held", agents_dir / "greeter_agent.py")
+    module.GreeterAgent()
+
+    prompt.write_text("You greet coldly.\n")
+
+    assert module.GreeterAgent().instructions == "You greet warmly."
+
+
 def test_instructions_stay_empty_outside_an_agents_directory() -> None:
     """A class not defined under an `agents/` directory looks for no prompt file at all."""
 
@@ -881,6 +900,40 @@ def test_an_mcp_tool_named_like_the_agents_own_is_a_user_error() -> None:
 
     with pytest.raises(UserError, match="more than one tool named 'ping'"):
         asyncio.run(built_shape(agent).with_mcp_tools())
+
+
+class _Declared(Agent):
+    name = "declared"
+    memory = "auto"
+    knowledge = "auto"
+    subagents = [Researcher.handoff]
+
+
+def test_instances_of_a_class_share_what_it_declares_but_not_their_graph() -> None:
+    """Two plain instances share one `Memory` and `Knowledge`, each with subagents of its own."""
+    first, second = _Declared(), _Declared()
+
+    assert built_shape(first).memory is built_shape(second).memory
+    assert built_shape(first).knowledge is built_shape(second).knowledge
+    assert built_shape(first).agent is first
+    assert built_shape(second).agent is second
+    (first_researcher,) = [handoff.agent for handoff in built_shape(first).handoffs.values()]
+    (second_researcher,) = [handoff.agent for handoff in built_shape(second).handoffs.values()]
+    assert first_researcher is not second_researcher
+
+
+def test_an_override_resolves_on_its_own_instance_alone() -> None:
+    """A passed setting or a reassigned one changes that instance, never its class's others."""
+    plain = _Declared()
+    passed = _Declared(memory=None)
+    reassigned = _Declared()
+    reassigned.max_turns = 3
+
+    assert built_shape(passed).memory is None
+    assert built_shape(reassigned).max_turns == 3
+    assert built_shape(reassigned).memory is not built_shape(plain).memory
+    assert built_shape(_Declared()).memory is built_shape(plain).memory
+    assert built_shape(_Declared()).max_turns == 10
 
 
 def test_a_run_reuses_the_shape_built_at_construction() -> None:

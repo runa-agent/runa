@@ -28,7 +28,10 @@ class SupportAgent(Agent):
     guardrails = [...]
 ```
 
-`instructions` is loaded by default from `app/prompts/support_agent.md`.
+`instructions` is loaded by default from `app/prompts/support_agent.md`. What a class declares
+(its prompt included) is resolved once per process, so building an instance per request costs
+nothing but its own conversation; like the code beside it, an edited prompt is picked up by a new
+process.
 
 **The settings are a closed set.** A name that isn't one of them configures nothing, so it's an
 error rather than an agent that quietly runs on the default `model`. Enforced in code for the
