@@ -71,8 +71,9 @@ class MemoryLike(ContextSource, Protocol):
     `Memory` satisfies this already. Implement it yourself to replace Runa's embeddings-based
     memory entirely -- a different scoring method, a hosted memory service, keyword search,
     whatever -- rather than just swapping `Memory(store=...)`'s storage backend: `retrieve`
-    searches for the run's `user_id` and labels what it found, `after_turn` learns from the
-    exchange. No inheritance required; `Agent.__init__` accepts any object shaped like this.
+    searches for the run's `run_context.user_id` and labels what it found, `after_turn` learns
+    from the exchange. No inheritance required; `Agent.__init__` accepts any object shaped like
+    this.
     """
 
 

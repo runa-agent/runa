@@ -53,20 +53,20 @@ tripped guardrail, a model error and a bug in an app's own `Hooks`/`Session`/`Co
 (the last wrapped in `UnexpectedError`, its traceback logged), each with the trace around the
 failure. The two that still raise are `asyncio.CancelledError`, because a caller cancelling a run
 asked for it to stop rather than to fail, and `OperatorError`, which isn't a run's failure at all.
-Two more class attributes cover what a run needs:
+Four more class attributes cover what a run needs:
 
 * `output_type`: a dataclass, Pydantic model or `TypedDict` the final answer is parsed into.
   The model is asked for that JSON schema (on every provider) and a mismatch is an error `Run`.
 * `max_turns` (default 10): how many model calls one run may make.
 * `max_tokens` (default `None`): how many tokens one run may spend, in total. Not the same
   knob as `ModelSettings(max_tokens=...)`, which caps one response's length.
+* `timeout` (default `None`): how many wall-clock seconds one run may take.
 
 A run's `.usage`, `max_tokens` and trace count every call made on its behalf, not just the turn
 loop's: [memory](#7-memory) and [knowledge](#8-knowledge) embeddings (a lazy corpus ingest
 included) and memory's post-answer extraction call are each an `"llm"` span with its usage. The
 budget is checked after each of the loop's model calls, so the extraction call, made once the
 answer is in, is counted but never fails a finished run.
-* `timeout` (default `None`): how many wall-clock seconds one run may take.
 
 **One instance runs one conversation at a time.** An `Agent` holds `self.history`, so two
 overlapping session-less runs on the same instance raise `UserError` rather than interleaving.

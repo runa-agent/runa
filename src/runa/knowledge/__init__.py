@@ -77,7 +77,7 @@ class KnowledgeLike(ContextSource, Protocol):
     `Knowledge` satisfies this already. Implement it yourself to replace Runa's own
     discover-chunk-embed pipeline entirely (a hosted retrieval service, a differently-indexed
     document store, whatever) rather than just swapping `Knowledge(store=...)`'s storage
-    backend: `context` retrieves and labels what it found, `after_turn` is usually a no-op, and
+    backend: `retrieve` finds and labels what it found, `after_turn` is usually a no-op, and
     `ingest` prepares the corpus. No inheritance required.
     """
 

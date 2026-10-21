@@ -102,3 +102,60 @@ def test_prose_never_cites_another_modules_private_names() -> None:
                 if _foreign_private(citation, here, package, modules, own):
                     offenders.append(f"{path.relative_to(_SRC)}:{line_number}: `{citation}`")
     assert not offenders, "prose cites another module's private name:\n" + "\n".join(offenders)
+
+
+_MEMBER = re.compile(r"`([a-z_][a-z0-9_]*)`")
+
+
+def _protocols() -> dict[str, tuple[ast.ClassDef, Path, set[str]]]:
+    """Every `Protocol` class under `src/runa/` by name, with its path and its module's names."""
+    found: dict[str, tuple[ast.ClassDef, Path, set[str]]] = {}
+    for path in sorted(_SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        module = {
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        }
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and any(
+                ast.unparse(base) == "Protocol" for base in node.bases
+            ):
+                found[node.name] = (node, path, module)
+    return found
+
+
+def _members(name: str, protocols: dict[str, tuple[ast.ClassDef, Path, set[str]]]) -> set[str]:
+    """What a Protocol and the Protocols it extends declare: members and their parameters."""
+    node, _, _ = protocols[name]
+    names: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+            names.add(child.name)
+        elif isinstance(child, ast.AnnAssign | ast.Assign):
+            targets = [child.target] if isinstance(child, ast.AnnAssign) else child.targets
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+        elif isinstance(child, ast.arg):
+            names.add(child.arg)
+    for base in node.bases:
+        if ast.unparse(base) in protocols:
+            names |= _members(ast.unparse(base), protocols)
+    return names
+
+
+def test_protocol_docstrings_cite_only_their_own_members() -> None:
+    """A bare lowercase name a Protocol's docstring backticks is a member, parameter or module name.
+
+    A Protocol's docstring is what a custom implementation is written from, so a member it
+    names that the Protocol no longer declares sends that author after a method nothing calls.
+    """
+    protocols = _protocols()
+    offenders = [
+        f"{path.relative_to(_SRC)}: {name} cites `{citation}`"
+        for name, (node, path, module) in protocols.items()
+        for citation in _MEMBER.findall(ast.get_docstring(node) or "")
+        if citation not in _members(name, protocols) | module
+    ]
+    assert not offenders, "Protocol docstring cites a name it doesn't declare:\n" + "\n".join(
+        offenders
+    )

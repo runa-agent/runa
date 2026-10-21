@@ -79,8 +79,7 @@ class TraceStore(Protocol):
     """One deployment's trace history: write one, read one, read the recent ones.
 
     No inheritance required, every adapter satisfies this by matching shape. `list` is the only
-    query: `get_errors`-style convenience readers were a second shape over the same filter, so
-    callers pass `status="error"` instead.
+    query: a caller after failed runs passes `status="error"`.
     """
 
     async def save(self, trace: Trace) -> None:
