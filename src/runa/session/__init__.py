@@ -1,7 +1,7 @@
 """`runa.session`: `Session`, the conversation history a run reads and appends to.
 
 Which database a session lives in is `runa.db`'s decision, not the call site's. There is one
-implementation, `session/database.py`'s, over whichever database `RUNA_DATABASE_URL` names.
+implementation, `session/store.py`'s, over whichever database `RUNA_DATABASE_URL` names.
 `runa serve`, `runa chat` and `Agent.run` all take whatever `db.session(...)` hands them, so
 moving a deployment to Postgres is one environment variable rather than an edit, and
 `db.at(url).session(...)` is a session in some other database.

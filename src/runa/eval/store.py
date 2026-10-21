@@ -1,15 +1,15 @@
 """eval/store.py: `EvalStore`, the history every `agent.evaluate()` run is graded against.
 
-One interface, one implementation over `db/handle.py`'s `Database`: `eval/database.py`. Which
-database it queries is `runa.db.evals(...)`'s decision, asked once, so a CI job and a laptop
-compare against the baseline their deployment actually shares rather than whichever file each
-happened to open.
+The `eval_runs`/`eval_cases` tables in whichever database the deployment has, queried through
+`db/handle.py`'s `Database`. Every `agent.evaluate()` call writes one `eval_runs` row (one
+"experiment") and one `eval_cases` row per case. Which database it is is `runa.db.evals(...)`'s
+decision, asked once, so a CI job and a laptop compare against the baseline their deployment
+actually shares rather than whichever file each happened to open.
 
-`RUNS`/`CASES` are the two tables, declared once here and rendered per dialect by `db/schema.py`.
-`EvalRun`/`EvalCaseRow` are what a row becomes, and `web/evaluations.py` renders them without
-knowing which database it got. `case_values`/`to_case`/`to_run` are that mapping in both
-directions, written once, so `passed` cannot come back as SQLite's `0`/`1` from one database and a
-`bool` from the other.
+`RUNS`/`CASES` are the two tables, rendered per dialect by `db/schema.py`. `EvalRun`/`EvalCaseRow`
+are what a row becomes, and `web/evaluations.py` renders them without knowing which database it
+got; the marshalling below the store maps them in both directions, so `passed` cannot come back as
+SQLite's `0`/`1` from one database and a `bool` from the other.
 
 `baseline_clause` is here for the same reason: which run is "the baseline" is this module's rule.
 It decides what `runa eval` calls a regression, so a laptop and CI have to agree on it.
@@ -18,8 +18,10 @@ It decides what `runa eval` calls a regression, so a laptop and CI have to agree
 import builtins
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any, Protocol
+from datetime import UTC, datetime
+from typing import Any
 
+from runa.db.handle import Database, Row
 from runa.db.schema import Column, Index, Table
 from runa.eval.report import CaseReport, Report
 
@@ -74,23 +76,52 @@ class EvalRun:
     cases: list[EvalCaseRow] = field(default_factory=list)
 
 
-class EvalStore(Protocol):
+class EvalStore:
     """One deployment's eval history: every `agent.evaluate()` run and the cases it graded.
 
-    No inheritance required, every adapter satisfies this by matching shape.
+    The `eval_runs`/`eval_cases` tables of a `Database`, created on the first `save`.
     """
+
+    def __init__(self, database: Database) -> None:
+        """Store the database this history lives in."""
+        self.database = database
 
     async def save(self, report: Report) -> int:
         """Persist `report` as one run plus one row per case, returning the new run's id."""
-        ...
+        created_at = datetime.now(UTC).isoformat()
+        async with self.database.transaction() as tx:
+            run_id: int = await tx.fetchval(
+                f"INSERT INTO {RUNS.name} (agent_name, created_at, score, pass_rate) "
+                "VALUES ($1, $2, $3, $4) RETURNING id",
+                report.agent_name,
+                created_at,
+                report.score,
+                report.pass_rate,
+            )
+            if report.cases:
+                await tx.executemany(
+                    f"INSERT INTO {CASES.name} ({', '.join(CASES.column_names)}) "
+                    f"VALUES ({CASES.placeholders()})",
+                    [_case_values(run_id, case) for case in report.cases],
+                )
+        return run_id
 
     async def get(self, run_id: int) -> EvalRun | None:
         """Look up one run by id, with every case it graded, or `None` if it doesn't exist."""
-        ...
+        row = await self.database.fetchrow(f"SELECT * FROM {RUNS.name} WHERE id = $1", run_id)
+        if row is None:
+            return None
+        cases = await self.database.fetch(
+            f"SELECT * FROM {CASES.name} WHERE run_id = $1 ORDER BY case_index", run_id
+        )
+        return _to_run(row, cases)
 
     async def list(self, *, limit: int = 50) -> builtins.list[EvalRun]:
         """Return the most recent `limit` runs, newest first, without their cases."""
-        ...
+        rows = await self.database.fetch(
+            f"SELECT * FROM {RUNS.name} ORDER BY id DESC LIMIT $1", limit
+        )
+        return [_to_run(row, []) for row in rows]
 
     async def baseline(
         self, agent_name: str, *, before: int | None = None
@@ -102,7 +133,14 @@ class EvalStore(Protocol):
         there's no such run. Keyed by input rather than index, so reordering, adding, or removing
         cases between runs still lines the rest up.
         """
-        ...
+        clause, params = baseline_clause(agent_name, before)
+        row = await self.database.fetchrow(f"SELECT id FROM {RUNS.name} {clause}", *params)
+        if row is None:
+            return None
+        cases = await self.database.fetch(
+            f"SELECT input, passed FROM {CASES.name} WHERE run_id = $1", row["id"]
+        )
+        return {case["input"]: bool(case["passed"]) for case in cases}
 
 
 def baseline_clause(agent_name: str, before: int | None) -> tuple[str, tuple[Any, ...]]:
@@ -124,7 +162,7 @@ def baseline_clause(agent_name: str, before: int | None) -> tuple[str, tuple[Any
     return f"{clause} ORDER BY id DESC LIMIT 1", params
 
 
-def case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
+def _case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
     """One graded `case`'s column values, in `CASES.column_names` order."""
     return (
         run_id,
@@ -137,8 +175,8 @@ def case_values(run_id: int, case: CaseReport) -> tuple[Any, ...]:
     )
 
 
-def to_case(row: Any) -> EvalCaseRow:
-    """One `eval_cases` row as an `EvalCaseRow`. `row` is anything subscriptable by column name."""
+def _to_case(row: Row) -> EvalCaseRow:
+    """One `eval_cases` row as an `EvalCaseRow`."""
     return EvalCaseRow(
         index=row["case_index"],
         input=row["input"],
@@ -149,19 +187,15 @@ def to_case(row: Any) -> EvalCaseRow:
     )
 
 
-def to_run(row: Any, case_rows: list[Any]) -> EvalRun:
-    """One `eval_runs` row plus its `eval_cases` rows as an `EvalRun`.
-
-    `sqlite3.Row` and `asyncpg.Record` are both subscriptable by column name, which is the only
-    thing this needs of either, so the mapping is written once for both.
-    """
+def _to_run(row: Row, case_rows: list[Row]) -> EvalRun:
+    """One `eval_runs` row plus its `eval_cases` rows as an `EvalRun`."""
     return EvalRun(
         id=row["id"],
         agent_name=row["agent_name"],
         created_at=row["created_at"],
         score=row["score"],
         pass_rate=row["pass_rate"],
-        cases=[to_case(case_row) for case_row in case_rows],
+        cases=[_to_case(case_row) for case_row in case_rows],
     )
 
 
@@ -172,7 +206,4 @@ __all__ = [
     "EvalRun",
     "EvalStore",
     "baseline_clause",
-    "case_values",
-    "to_case",
-    "to_run",
 ]

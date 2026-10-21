@@ -30,7 +30,7 @@ from runa.memory import Memory
 from runa.run import Run
 from runa.run_internal.agent_shape import shape_of as built_shape
 from runa.run_state import RunState
-from runa.session.database import DatabaseSession
+from runa.session.store import DatabaseSession
 from runa.tool import FunctionTool, tool
 from runa.transcript import Transcript
 

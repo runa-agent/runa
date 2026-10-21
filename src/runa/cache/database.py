@@ -14,8 +14,17 @@ import json
 import time
 from typing import Any
 
-from runa.cache import ENTRIES
 from runa.db.handle import Database
+from runa.db.schema import Column, Table
+
+ENTRIES = Table(
+    "cache_entries",
+    columns=(
+        Column("key", "text", primary_key=True),
+        Column("value", "text"),
+        Column("expires_at", "float", null=True),
+    ),
+)
 
 
 class DatabaseCache:
@@ -64,4 +73,4 @@ class DatabaseCache:
         await self.database.execute(f"DELETE FROM {ENTRIES.name}")
 
 
-__all__ = ["DatabaseCache"]
+__all__ = ["ENTRIES", "DatabaseCache"]

@@ -133,31 +133,27 @@ class Place:
 
     def session(self, session_id: str, agent: str | None = None) -> Session:
         """The session store for `session_id`, the conversation of `agent` if named."""
-        from runa.session.database import DatabaseSession
-        from runa.session.store import MESSAGES, SESSIONS
+        from runa.session.store import MESSAGES, SESSIONS, DatabaseSession
 
         return DatabaseSession(session_id, self.database(SESSIONS, MESSAGES), agent)
 
     def sessions(self) -> SessionStore:
         """The `SessionStore`: the read side of the conversation history kept here."""
-        from runa.session.database import DatabaseSessionStore
-        from runa.session.store import MESSAGES, SESSIONS
+        from runa.session.store import MESSAGES, SESSIONS, SessionStore
 
-        return DatabaseSessionStore(self.database(SESSIONS, MESSAGES))
+        return SessionStore(self.database(SESSIONS, MESSAGES))
 
     def traces(self) -> TraceStore:
         """The `TraceStore`: where finished traces are written and read back."""
-        from runa.tracing.database import DatabaseTraceStore
-        from runa.tracing.store import SPANS, TRACES
+        from runa.tracing.store import SPANS, TRACES, TraceStore
 
-        return DatabaseTraceStore(self.database(TRACES, SPANS))
+        return TraceStore(self.database(TRACES, SPANS))
 
     def evals(self) -> EvalStore:
         """The `EvalStore`: every `agent.evaluate()` run and its baseline."""
-        from runa.eval.database import DatabaseEvalStore
-        from runa.eval.store import CASES, RUNS
+        from runa.eval.store import CASES, RUNS, EvalStore
 
-        return DatabaseEvalStore(self.database(RUNS, CASES))
+        return EvalStore(self.database(RUNS, CASES))
 
     def vector_store(self, spec: VectorSpec) -> VersionedVectorStore:
         """The vector storage for `spec`: what a bare `Memory()` or `Knowledge()` holds.
@@ -182,17 +178,15 @@ class Place:
         with the process while everything else persists, and `RedisCache(url)` for a deployment
         that wants its hot keys off the query path.
         """
-        from runa.cache import ENTRIES
-        from runa.cache.database import DatabaseCache
+        from runa.cache.database import ENTRIES, DatabaseCache
 
         return DatabaseCache(self.database(ENTRIES))
 
     def paused_runs(self) -> PausedRunStore:
         """The `PausedRunStore`: every paused run, held until it resumes."""
-        from runa.run_state.database import DatabasePausedRunStore
-        from runa.run_state.store import PAUSED_RUNS
+        from runa.run_state.store import PAUSED_RUNS, PausedRunStore
 
-        return DatabasePausedRunStore(self.database(PAUSED_RUNS))
+        return PausedRunStore(self.database(PAUSED_RUNS))
 
     def __repr__(self) -> str:
         """`Place('<url>')`, the URL it was built with."""

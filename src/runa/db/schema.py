@@ -1,14 +1,14 @@
 """db/schema.py: a table declared once, rendered in whichever dialect the adapter speaks.
 
 Five concerns keep rows in `runa.db`'s database -- sessions, traces, eval history, the cache and
-paused runs -- and each has a SQLite and a Postgres adapter. A concern declares its `Table`s
-once, beside the code that turns a row into an object, and `ddl(dialect, *tables)` renders them,
-so a column added to a declaration appears in both backends or in neither. The whole difference
-between the dialects is the substitutions in `SQLITE` and `POSTGRES`.
+paused runs -- and each may be a SQLite or a Postgres database. A concern declares its `Table`s
+once, in the module that queries them and turns a row into an object, and `ddl(dialect, *tables)`
+renders them, so a column added to a declaration appears in both engines or in neither. The whole
+difference between the dialects is the substitutions in `SQLITE` and `POSTGRES`.
 
 This is not a query builder: a concern writes its own SQL, once, against `db/handle.py`'s
 `Database`. The only query fragment here is `Table.placeholders`, one numbered placeholder per
-column. A predicate the concern's stores share lives beside its tables as a function of the values
+column. A predicate with a rule of its own lives beside its tables as a function of the values
 (`listing_clause`, `baseline_clause`).
 
 `db/runa.db` outlives installs, so a column added to a declaration has to reach databases that

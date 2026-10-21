@@ -14,13 +14,12 @@ from contracts.paused_run import CONTRACT, Check
 
 from runa import db
 from runa.db.sqlite import SQLiteDatabase
-from runa.run_state.database import DatabasePausedRunStore
 from runa.run_state.store import PAUSED_RUNS, PausedRunStore
 
 
-def _store_at(db_path: Path) -> DatabasePausedRunStore:
+def _store_at(db_path: Path) -> PausedRunStore:
     """A paused-run store over one specific SQLite file."""
-    return DatabasePausedRunStore(SQLiteDatabase(db_path, PAUSED_RUNS))
+    return PausedRunStore(SQLiteDatabase(db_path, PAUSED_RUNS))
 
 
 _BACKENDS: dict[str, Callable[[Path], PausedRunStore]] = {

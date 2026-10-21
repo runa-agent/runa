@@ -25,8 +25,7 @@ from runa._types import ModelResponse, Usage
 from runa.exceptions import OperatorError, UnexpectedError
 from runa.lifecycle import Hooks
 from runa.run import Run
-from runa.session.database import DatabaseSession
-from runa.session.store import MESSAGES, SESSIONS
+from runa.session.store import MESSAGES, SESSIONS, DatabaseSession
 from runa.tracing import Trace, add_exporter
 
 

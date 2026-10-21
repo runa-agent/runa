@@ -29,12 +29,10 @@ from contracts import trace as trace_contract
 from runa import db
 from runa._loop import run_sync
 from runa.db.pool import PostgresDatabase
-from runa.eval.database import DatabaseEvalStore
-from runa.eval.store import CASES, RUNS
+from runa.eval.store import CASES, RUNS, EvalStore
 from runa.project import use
-from runa.tracing.database import DatabaseTraceStore
 from runa.tracing.spans import Span
-from runa.tracing.store import SPANS, TRACES
+from runa.tracing.store import SPANS, TRACES, TraceStore
 from runa.tracing.traces import Trace
 
 _DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", "postgresql://runa:runa@localhost:5432/runa")
@@ -78,12 +76,12 @@ def test_eval_store_contract(unique_id: str, check: eval_contract.Check) -> None
 
     A shared baseline is why it exists: CI and a laptop must grade against the same run.
     """
-    run(check(DatabaseEvalStore(PostgresDatabase(_DSN, RUNS, CASES)), unique_id))
+    run(check(EvalStore(PostgresDatabase(_DSN, RUNS, CASES)), unique_id))
 
 
-def _traces() -> DatabaseTraceStore:
+def _traces() -> TraceStore:
     """A trace store over the test database, built directly rather than through `runa.db`."""
-    return DatabaseTraceStore(PostgresDatabase(_DSN, TRACES, SPANS))
+    return TraceStore(PostgresDatabase(_DSN, TRACES, SPANS))
 
 
 def _trace(name: str) -> Trace:

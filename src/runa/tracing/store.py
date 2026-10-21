@@ -1,27 +1,25 @@
 """tracing/store.py: `TraceStore`, where finished traces go and where `runa ui` reads them from.
 
-One interface, one implementation over `db/handle.py`'s `Database`: `tracing/database.py`. Which
-database it queries is `runa.db.traces(...)`'s decision, asked once, which is what lets `runa
-traces`, `runa ui` and the exporter stay backend-agnostic: they hold a `TraceStore` and get
-whichever history the deployment actually has.
+The `traces`/`spans` tables in whichever database the deployment has, queried through
+`db/handle.py`'s `Database`. Local, that is a `db/runa.db` beside the process: exactly right for
+one machine and wrong for a deployment, where three replicas keep three disjoint trace histories
+and `runa ui` can only ever show whichever one it happens to be looking at. Which database it is
+is `runa.db.traces(...)`'s decision, asked once, so `runa traces`, `runa ui` and the exporter hold
+a `TraceStore` and get whichever history the deployment actually has, and the exporter a
+deployment installs and the store its traces land in can't disagree.
 
-Asked once is the point: the exporter a deployment installs and the store its traces land in
-can't disagree.
-
-The two tables live here too, and so does the marshalling: `TRACES`/`SPANS` state what a row is
-(`db/schema.py` renders them for whichever dialect the database speaks) and
-`to_trace`/`trace_values`/`span_values` are the one mapping between such a row and a `Trace`, so
-a column read out of order or a `json.dumps` left off is a mistake there is only one place to
-make.
-
-So does the one query a listing is built from: `listing_clause` is the whole of `list`'s filter,
-order and cap. Which column `agent` means and how ties break are this module's rule.
+Everything a row is lives here: `TRACES`/`SPANS` state its columns (`db/schema.py` renders them
+for whichever dialect the database speaks), the store's SQL names them, and the marshalling below
+the store maps them to and from a `Trace`, in the column order those `INSERT`s depend on.
+`listing_clause` is the whole of `list`'s filter, order and cap: which column `agent` means and
+how ties break are this module's rule.
 """
 
 import builtins
 import json
-from typing import Any, Protocol
+from typing import Any
 
+from runa.db.handle import Database, Row
 from runa.db.schema import Column, Index, Table
 from runa.exceptions import OperatorError
 from runa.tracing.spans import Span
@@ -75,20 +73,33 @@ class TraceNotFound(OperatorError):
     """
 
 
-class TraceStore(Protocol):
+class TraceStore:
     """One deployment's trace history: write one, read one, read the recent ones.
 
-    No inheritance required, every adapter satisfies this by matching shape. `list` is the only
+    The `traces`/`spans` tables of a `Database`, created on the first `save`. `list` is the only
     query: a caller after failed runs passes `status="error"`.
     """
 
+    def __init__(self, database: Database) -> None:
+        """Store the database this history lives in."""
+        self.database = database
+
     async def save(self, trace: Trace) -> None:
         """Persist `trace` and every span in it, replacing any existing one with the same id."""
-        ...
+        async with self.database.transaction() as tx:
+            await tx.execute(_upsert(TRACES), *_trace_values(trace))
+            if trace.spans:
+                await tx.executemany(_upsert(SPANS), [_span_values(span) for span in trace.spans])
 
     async def get(self, trace_id: str) -> Trace | None:
         """Look up one trace by id, with every span it has, or `None` if this store has none."""
-        ...
+        row = await self.database.fetchrow(f"SELECT * FROM {TRACES.name} WHERE id = $1", trace_id)
+        if row is None:
+            return None
+        spans = await self.database.fetch(
+            f"SELECT * FROM {SPANS.name} WHERE trace_id = $1 ORDER BY start_time", trace_id
+        )
+        return _to_trace(row, spans)
 
     async def list(
         self,
@@ -104,10 +115,26 @@ class TraceStore(Protocol):
         name); `session_id` matches the `Session` a session-backed run was passed, when it was
         passed one; `status` is `"ok"` or `"error"`.
 
-        Ties on `start_time` break by trace id descending, in every adapter, so two traces that
-        started in the same instant list in one order whatever the deployment.
+        Ties on `start_time` break by trace id descending, whichever database answers, so two
+        traces that started in the same instant list in one order whatever the deployment.
         """
-        ...
+        clause, params = listing_clause(
+            limit=limit, agent=agent, status=status, session_id=session_id
+        )
+        rows = await self.database.fetch(f"SELECT * FROM {TRACES.name} {clause}", *params)
+        if not rows:
+            return []
+        # One query for every listed trace's spans rather than one per trace: against a shared
+        # database each is a network round trip.
+        ids = [row["id"] for row in rows]
+        marks = ", ".join(f"${index}" for index in range(1, len(ids) + 1))
+        spans = await self.database.fetch(
+            f"SELECT * FROM {SPANS.name} WHERE trace_id IN ({marks}) ORDER BY start_time", *ids
+        )
+        by_trace: dict[str, builtins.list[Row]] = {trace_id: [] for trace_id in ids}
+        for span in spans:
+            by_trace[span["trace_id"]].append(span)
+        return [_to_trace(row, by_trace[row["id"]]) for row in rows]
 
 
 async def require_trace(store: TraceStore, trace_id: str) -> Trace:
@@ -133,7 +160,7 @@ def listing_clause(
 
     One sentence of policy: keep the traces matching whichever of the three filters were given,
     newest first, at most `limit` of them. `agent` is `traces.name` -- the workflow name, not an
-    `agent` column. The tie-break is this clause's -- both backends leave it to chance when the
+    `agent` column. The tie-break is this clause's -- both engines leave it to chance when the
     `ORDER BY` names `start_time` alone.
 
     The whole tail rather than the `WHERE` alone, because a numbered placeholder counts every
@@ -152,19 +179,29 @@ def listing_clause(
     return f"{where}{order}", tuple(params)
 
 
-def as_text(value: object) -> str | None:
-    """Render a span's `input`/`output` as the single text column both backends store.
+def _upsert(table: Table) -> str:
+    """`INSERT` one row of `table`, replacing every column but `id` when that id is taken."""
+    assignments = ", ".join(
+        f"{column} = excluded.{column}" for column in table.column_names if column != "id"
+    )
+    return (
+        f"INSERT INTO {table.name} ({', '.join(table.column_names)}) "
+        f"VALUES ({table.placeholders()}) ON CONFLICT (id) DO UPDATE SET {assignments}"
+    )
+
+
+def _as_text(value: object) -> str | None:
+    """Render a span's `input`/`output` as the one text column it is stored in.
 
     A span's input can arrive as a string already or as the structured value a tool was called
-    with. Both stores keep one `TEXT` column, so this is where that choice is made -- once,
-    rather than in each adapter, where it had already been copied.
+    with; a string is stored as is, anything else as its JSON.
     """
     if value is None:
         return None
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
-def trace_values(trace: Trace) -> tuple[Any, ...]:
+def _trace_values(trace: Trace) -> tuple[Any, ...]:
     """`trace`'s column values, in `TRACES.column_names` order."""
     return (
         trace.id,
@@ -177,7 +214,7 @@ def trace_values(trace: Trace) -> tuple[Any, ...]:
     )
 
 
-def span_values(span: Span) -> tuple[Any, ...]:
+def _span_values(span: Span) -> tuple[Any, ...]:
     """`span`'s column values, in `SPANS.column_names` order."""
     return (
         span.id,
@@ -189,14 +226,14 @@ def span_values(span: Span) -> tuple[Any, ...]:
         span.end_time,
         span.status,
         json.dumps(span.attributes, default=str),
-        as_text(span.input),
-        as_text(span.output),
+        _as_text(span.input),
+        _as_text(span.output),
         span.error,
     )
 
 
-def to_span(row: Any) -> Span:
-    """One `spans` row as a `Span`. `row` is anything subscriptable by column name."""
+def _to_span(row: Row) -> Span:
+    """One `spans` row as a `Span`."""
     return Span(
         id=row["id"],
         trace_id=row["trace_id"],
@@ -213,19 +250,15 @@ def to_span(row: Any) -> Span:
     )
 
 
-def to_trace(row: Any, span_rows: list[Any]) -> Trace:
-    """One `traces` row plus its `spans` rows as a `Trace`.
-
-    `sqlite3.Row` and `asyncpg.Record` are both subscriptable by column name, which is the only
-    thing this needs of either, so the mapping is written once for both.
-    """
+def _to_trace(row: Row, span_rows: list[Row]) -> Trace:
+    """One `traces` row plus its `spans` rows as a `Trace`."""
     return Trace(
         id=row["id"],
         name=row["name"],
         start_time=row["start_time"],
         end_time=row["end_time"],
         session_id=row["session_id"],
-        spans=[to_span(span_row) for span_row in span_rows],
+        spans=[_to_span(span_row) for span_row in span_rows],
         metadata=json.loads(row["metadata_json"]),
     )
 
@@ -235,11 +268,6 @@ __all__ = [
     "TRACES",
     "TraceNotFound",
     "TraceStore",
-    "as_text",
     "listing_clause",
     "require_trace",
-    "span_values",
-    "to_span",
-    "to_trace",
-    "trace_values",
 ]

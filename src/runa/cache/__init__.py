@@ -15,23 +15,9 @@ deployment that wants its hot keys off the database's query path.
 Values round-trip through `json.dumps`/`json.loads`, not `pickle`, in every persistent backend:
 safe to load from a store another process may have written, at the cost of only
 JSON-serializable values being cacheable.
-
-`ENTRIES` below is the one table the SQL backends keep, declared here beside the protocol they
-answer and rendered per dialect by `db/schema.py`.
 """
 
 from typing import Any, Protocol
-
-from runa.db.schema import Column, Table
-
-ENTRIES = Table(
-    "cache_entries",
-    columns=(
-        Column("key", "text", primary_key=True),
-        Column("value", "text"),
-        Column("expires_at", "float", null=True),
-    ),
-)
 
 
 class Cache(Protocol):
