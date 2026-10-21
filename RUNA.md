@@ -263,7 +263,7 @@ prior turns come back from `runa.db` automatically, and `agent.history`
 is left untouched. Don't mix the two: pick session-backed or
 in-memory per agent instance, not both for the same conversation.
 
-**`message` is one turn, never a transcript** (enforced: a list of
+**`message` is one user message, never a transcript** (enforced: a list of
 `{"role": ..., "content": ...}` messages raises `TypeError`). Load an
 earlier conversation through the seam the chosen mode already has:
 `agent.history = [...]` in memory, `await session.add_items([...])`
@@ -337,7 +337,7 @@ class SupportAgent(Agent):
     knowledge = "auto"
 ```
 
-* `"auto"` (or a `Knowledge(...)` instance): the run searches it before every turn, injecting
+* `"auto"` (or a `Knowledge(...)` instance): the run searches it once, before its first model call, injecting
   matches as a labeled block -- no manual `.search` calls.
 * `"llm"`: the model gets a `search_knowledge` tool and decides itself when to call it.
 * `None`: the agent behaves exactly as if `runa.knowledge` didn't exist.

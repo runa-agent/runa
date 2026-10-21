@@ -332,8 +332,9 @@ class Agent:
         `knowledge` opts this agent into retrieval from application/domain documents, one of
         `"auto"`, `"llm"`, a `Knowledge(...)` (or `KnowledgeLike`-shaped) instance, or `None` (the
         default) -- the same four shapes as `memory`, with the same meaning: `"auto"`/an instance
-        searches automatically before every turn (no `tools=[...]` wiring needed); `"llm"` gives
-        the model a `search_knowledge` tool it calls itself; `None` leaves the agent unaffected.
+        searches automatically once per run, before its first model call (no `tools=[...]` wiring
+        needed); `"llm"` gives the model a `search_knowledge` tool it calls itself; `None` leaves
+        the agent unaffected.
         `"llm"` always uses a default `Knowledge()`; pass your own instance for a non-default
         `directory`/`model`/`store`, or a custom `KnowledgeLike` object.
 
@@ -467,7 +468,7 @@ class Agent:
         session: Session | str | None = None,
         user_id: str | None = None,
     ) -> Run:
-        """Run a turn asynchronously, appending it to the conversation history.
+        """Run one user message asynchronously, appending the exchange to the conversation history.
 
         `message` is plain text, or a list for a multimodal message: a bare string is text, or
         an image when it is an image URL or a `data:image/...` URI; a local image is a
@@ -476,7 +477,7 @@ class Agent:
         when a string doesn't have a recognizable image extension. It can also be the `RunState`
         of a paused `Run`, once its interruptions are approved or rejected, to resume that run.
 
-        It is always one user turn, never a transcript: a list of `{"role": ...}` messages raises
+        It is always one user message, never a transcript: a list of `{"role": ...}` messages raises
         `TypeError`. Start from an earlier conversation by setting `self.history` directly, or by
         seeding the `session` with `add_items` before the first run.
 
@@ -554,7 +555,7 @@ class Agent:
         session: Session | str | None = None,
         user_id: str | None = None,
     ) -> RunStream:
-        """Run a turn as a stream of events: the same run as `run`, with the same arguments.
+        """Run one user message as a stream of events: the same run as `run`, with its arguments.
 
         Iterate the returned `RunStream` for `StreamEvent`s (`TextDelta`, `ToolCalled`,
         `ToolOutput`, `AgentChanged`) as they arrive; once it ends,

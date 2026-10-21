@@ -177,8 +177,8 @@ class Knowledge:
     `Knowledge()` means `app/knowledge/`, OpenAI's `text-embedding-3-small`, and whichever
     database `runa.db` resolves: discovery, chunking, embeddings and vector storage are entirely
     internal, so callers only ever see a source directory in and `KnowledgeMatch`es out. Attach
-    an instance to `Agent(knowledge=...)` and `run`/`run_sync` search it automatically before
-    every turn; no `tools=[...]` wiring needed.
+    an instance to `Agent(knowledge=...)` and `run`/`run_sync` search it automatically once
+    per run, before its first model call; no `tools=[...]` wiring needed.
 
     `store=` swaps the storage for a custom `VersionedVectorStore`, which is handed unpartitioned
     payloads of `text` and `source`.
@@ -225,7 +225,7 @@ class Knowledge:
 
         The model, its dimensions and the chunk shape are hashed alongside the files' bytes, so
         changing `model=` invalidates the corpus the way editing a file does. Computed off the
-        event loop, since `search` runs this before every turn; `_digest` caches it per process,
+        event loop, since `search` runs this on every call; `_digest` caches it per process,
         so the usual answer costs one `stat` per file.
         """
         return await asyncio.to_thread(_digest, self.directory, self._header)
@@ -288,7 +288,7 @@ class Knowledge:
         (`Knowledge()` attached to an `Agent`) needs no manual `.ingest()` call, and an edited
         source file is picked up on the next search rather than on the next manual rebuild. That
         call is the safety net rather than the plan: a served deployment has already ingested at
-        startup (`serve.create_app`), so what a turn usually pays here is one `stat` per file and
+        startup (`serve.create_app`), so what a search usually pays here is one `stat` per file and
         one version read.
         """
         await self.ingest()
