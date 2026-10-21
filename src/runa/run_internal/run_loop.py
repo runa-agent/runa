@@ -652,7 +652,9 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             usage=run_context.usage,
             status="paused",
             interruptions=outcome.interruptions,
-            _state=RunState(record, frame.trace, frame.approvals, guardrail_results),
+            _state=RunState(
+                record, frame.trace, frame.approvals, guardrail_results, _session=frame.session
+            ),
             _transcript=transcript,
             guardrail_results=guardrail_results,
         )
@@ -718,12 +720,8 @@ async def _run_async(
     if isinstance(input, RunState):
         return await _resume(input, dispatch, session, emit)
 
-    trace = Trace(
-        id=gen_trace_id(),
-        name=agent.name,
-        start_time=time.time(),
-        session_id=session.session_id if session is not None else None,
-    )
+    session_id = session.session_id if session is not None else None
+    trace = Trace(id=gen_trace_id(), name=agent.name, start_time=time.time(), session_id=session_id)
     outer = current_trace()
     group_id = outer.id if outer is not None else trace.session_id
     if group_id is not None:
@@ -731,7 +729,10 @@ async def _run_async(
 
     frame = _Frame(
         record=_RunRecord(
-            start=agent, agent=agent, run_context=RunContext(context=context, user_id=user_id)
+            start=agent,
+            agent=agent,
+            run_context=RunContext(context=context, user_id=user_id),
+            session_id=session_id,
         ),
         trace=trace,
         agent_span=_Spans(trace).open(
@@ -756,6 +757,7 @@ async def _resume(
 
     The run claims the pause first, so a pause resumed already ends in `RunAlreadyResumed`. A
     pause the resumed run comes to is its own, kept under the agent the run started with.
+    `session` is the one the run started in (see `RunState`), never a caller's choice.
     """
     frame = _Frame(
         record=state._record.resumed(),

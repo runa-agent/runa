@@ -69,6 +69,7 @@ _SERIALIZED_AS = {"_record": "run", "trace": "trace", "_approvals": "approvals"}
 _NOT_SERIALIZED = {
     "guardrail_results": "every guardrail that ran is already a span in the run's trace",
     "run_id": "the row's key, not its content",
+    "_session": "a live object; the record carries its id",
 }
 """`RunState` fields deliberately left out of the stored blob, and why.
 
@@ -358,8 +359,38 @@ def test_a_restored_run_keeps_its_user_and_the_tool_calls_made_before_the_pause(
     restored.approve(restored.pending[0])
 
     assert restored.run_context.user_id == "u1"
-    resumed = fresh.run_sync(restored, session=db.session("s"))
+    resumed = fresh.run_sync(restored)
     assert [call.name for call in resumed.tool_calls] == ["safe", "dangerous"]
+
+
+def test_a_restored_run_saves_its_turn_to_the_session_it_paused_in() -> None:
+    """A worker resuming by `run_id` names no session, and the conversation still gets the turn."""
+    result, gated = _paused_after_a_safe_call()
+
+    fresh = gated()
+    restored = _load(fresh, result.run_id)
+    restored.approve(restored.pending[0])
+    resumed = fresh.run_sync(restored)
+
+    assert resumed.status == "completed"
+    assert restored.session_id == "s"
+    items = _loop.run_sync(db.session("s").get_items())
+    assert items[0] == {"role": "user", "content": "do it"}
+    assert items[-1]["content"] == "all done"
+    assert fresh.history == []
+
+
+@pytest.mark.parametrize("session", ["s", "other", "object of other"])
+def test_a_session_beside_a_restored_run_is_refused(session: str) -> None:
+    """The run's session comes back with it: an id, or another conversation's object, is refused."""
+    result, gated = _paused_after_a_safe_call()
+    passed = db.session("other") if session == "object of other" else session
+
+    fresh = gated()
+    restored = _load(fresh, result.run_id)
+
+    with pytest.raises(UserError, match="already carries the session"):
+        fresh.run_sync(restored, session=passed)
 
 
 def test_a_restored_trace_keeps_its_session_grouping() -> None:

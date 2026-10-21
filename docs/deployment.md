@@ -105,9 +105,9 @@ curl -X POST http://127.0.0.1:8000/agents/refund_agent/runs \
 The response is the same payload as any other run: completed, errored, or paused again if the
 agent asks for something else, under a new `run_id`. `run_id` and `message` stand for the same
 argument of `Agent.run`, so a body carrying both (or neither) is a `422`, and the streaming route
-takes the same body -- a client that streamed a run that paused resumes it streaming. Send the `session_id` the run paused
-on: a session-backed run persists nothing while paused, and the whole turn is saved once the
-resumed run finishes. An interruption you send no decision for pauses the run again rather than
+takes the same body -- a client that streamed a run that paused resumes it streaming. The paused run already
+knows the `session_id` it paused on, so a resume body never carries one (or a `user_id`); that's
+a `422`. The whole turn is saved to that session once the resumed run finishes. An interruption you send no decision for pauses the run again rather than
 being decided for you.
 
 The paused run itself stays on the server, in `runa.db` beside your sessions, so its context and

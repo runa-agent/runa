@@ -30,13 +30,14 @@ from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.run_internal.agent_shape import reachable
+from runa.session import Session
 from runa.tracing.traces import Trace
 from runa.transcript import Transcript
 
 if TYPE_CHECKING:
     from runa.agent import Agent
 
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 def _find_agent_by_name(root: Agent, name: str) -> Agent:
@@ -114,12 +115,14 @@ class _RunRecord(BaseModel):
     The turn loop works on one directly; a paused `RunState` holds it, and so does a paused
     delegate's entry in its caller's `delegates`. Every field is data or written as data (an
     agent by its name), so all of it is serialized. What only the call running it holds -- its
-    hooks, its session, its stream, its open span -- isn't here, and isn't resumed.
+    hooks, its `Session` object, its stream, its open span -- isn't here, and isn't resumed.
 
     * `start`: the agent the run began with. The run as a whole is its: the turn, token and time
       ceilings, the context sources, the compaction of history, and the key a pause is kept under.
     * `agent`: the agent running now, the same as `start` until a handoff.
     * `run_context`: what user code is told, its `context`, `user_id` and usage so far.
+    * `session_id`: the id of the session the run started in, which its turn is saved to once it
+      completes. `None` for a session-less run, and for every delegate's.
     * `turns`: the model calls the turn loop has made, across its resumes: what `max_turns` is
       measured against.
     * `elapsed`: the seconds the run has spent running, across its resumes: what its `timeout`
@@ -136,6 +139,7 @@ class _RunRecord(BaseModel):
     agent: _AgentRef
     transcript: Transcript = Field(default_factory=Transcript)
     run_context: RunContext[Any] = Field(default_factory=RunContext)
+    session_id: str | None = None
     turns: int = 0
     elapsed: float = 0.0
     pending: list[Interruption] = Field(default_factory=list)
@@ -165,10 +169,11 @@ class _RunStateSchema(BaseModel):
     """The JSON envelope a `RunState` is kept as: its record, and what its tree shares.
 
     The guardrail audit trail isn't serialized: each result is already a span in the trace. Nor
-    is `run_id`, the key the row is kept under beside the starting agent's name.
+    is `run_id`, the key the row is kept under beside the starting agent's name, nor the run's
+    `Session` object, whose id the record carries.
     """
 
-    schema_version: Literal[6]
+    schema_version: Literal[7]
     trace: _TraceRef
     approvals: ApprovalLedger
     run: _RunRecord
@@ -184,6 +189,10 @@ class RunState(GuardrailAudit):
     message that requested the `pending` calls. `run_context` is the paused run's `RunContext`,
     its `context`, user and usage so far.
 
+    It carries the session the run started in too, so resuming saves the turn there with no
+    `session=` passed: by id, resolved through `runa.db.session`, or, resumed in the process that
+    paused, as the very `Session` object the run was given.
+
     `run_id` is the handle the pause is kept under in `runa.db`, and a pause resumes once: the
     resumed run claims it, and resuming it again, from this object or from `load`, is an error
     `Run`. `load(agent, run_id)` is how another process, or a later request, gets it back.
@@ -194,6 +203,7 @@ class RunState(GuardrailAudit):
     _approvals: ApprovalLedger
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     run_id: str = ""
+    _session: Session | None = field(default=None, repr=False)
 
     @property
     def agent(self) -> Agent:
@@ -214,6 +224,11 @@ class RunState(GuardrailAudit):
     def run_context(self) -> RunContext[Any]:
         """The paused run's `context`, user and usage so far."""
         return self._record.run_context
+
+    @property
+    def session_id(self) -> str | None:
+        """The id of the session the run started in; `None` for a session-less run."""
+        return self._record.session_id
 
     @property
     def paused_message(self) -> ConversationItem:
@@ -288,6 +303,30 @@ class RunState(GuardrailAudit):
         from runa import db
 
         return await db.paused_runs().claim(self._record.start.name, self.run_id)
+
+    def _session_for(self, passed: Session | str | None) -> Session | None:
+        """The session to resume this run in: its own, or the `Session` object `passed` for it.
+
+        A `Session` object is accepted only for this run's own `session_id`: it names the store
+        a session lives in when `runa.db.session` doesn't reach it, an object a pause loaded in
+        another process doesn't have. Anything else is refused rather than used, since the turn
+        belongs to the conversation it paused in.
+        """
+        session_id = self._record.session_id
+        if passed is None:
+            if self._session is not None or session_id is None:
+                return self._session
+            from runa import db
+
+            return db.session(session_id, self._record.start.name)
+        if isinstance(passed, str) or passed.session_id != session_id:
+            given = passed if isinstance(passed, str) else passed.session_id
+            raise UserError(
+                f"a RunState already carries the session of the run it paused ({session_id!r}), "
+                f"so `session={given!r}` would save its turn somewhere else: resume it without "
+                "`session=`, or with the `Session` object of that same session."
+            )
+        return passed
 
     def _to_json(self) -> dict[str, Any]:
         """The row this pause is kept as: everything the run carries, agents by name.

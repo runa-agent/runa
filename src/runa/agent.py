@@ -51,12 +51,17 @@ Typed `Any` so every parameter keeps its own annotation.
 """
 
 
-def _resolve_session(session: Session | str | None, agent: str) -> Session | None:
-    """Turn a `session_id` into this deployment's session for `agent`, passing an object through.
+def _resolve_session(
+    message: MessageContent | RunState, session: Session | str | None, agent: str
+) -> Session | None:
+    """The session this turn runs in: `session`, or the one a paused `message` started in.
 
-    A string is resolved through `runa.db.session`, so the backend follows `RUNA_DATABASE_URL`;
-    a `Session` object is passed straight through.
+    A string is resolved through `runa.db.session` as `agent`'s, so the backend follows
+    `RUNA_DATABASE_URL`; a `Session` object is passed straight through. A `RunState` carries its
+    own session, so one passed beside it is refused unless it is that session's `Session` object.
     """
+    if isinstance(message, RunState):
+        return message._session_for(session)
     if isinstance(session, str):
         from runa import db
 
@@ -74,7 +79,8 @@ def _turn_input(
     """Build the `input` for the turn loop from this turn's `message`.
 
     A paused `RunState` passes through to be resumed; it carries its own `context` and
-    `user_id`, so either one alongside it is refused rather than dropped. A list `message` goes
+    `user_id`, so either one alongside it is refused rather than dropped (its session is
+    `_resolve_session`'s). A list `message` goes
     through `runa.content.parts`. With no `session`, the message joins `history`; with one, only
     the new turn is sent, a plain string as is and a multimodal one as a single user message.
     """
@@ -467,8 +473,8 @@ class Agent:
 
         Pass a `session` to persist conversation history there instead of on `self.history`; the
         session supplies prior turns automatically, so only the new `message` is sent as input,
-        and `self.history` is left untouched. Resume a paused run with the same `session` it
-        started with.
+        and `self.history` is left untouched. A paused run's `RunState` carries its session, so
+        it resumes there with no `session=`.
 
         A `session` is normally the conversation's id: `session="ticket-42"` persists to
         whichever backend `RUNA_DATABASE_URL` names, so an app moves to Postgres without naming
@@ -484,7 +490,7 @@ class Agent:
         **One instance runs one conversation at a time**: two overlapping session-less runs raise
         `UserError`. Give each run its own `session`, or its own `Agent`.
         """
-        session = _resolve_session(session, self.name)
+        session = _resolve_session(message, session, self.name)
         turn_input = _turn_input(message, self.history, session, context, user_id)
         with self._exclusive(session):
             # A run's own failure comes back as an `"error"` `Run`; only an `OperatorError` or a
@@ -543,7 +549,7 @@ class Agent:
         starting to consume a second session-less stream on the same instance while one is in
         flight raises `UserError` rather than interleaving the two histories.
         """
-        session = _resolve_session(session, self.name)
+        session = _resolve_session(message, session, self.name)
         turn_input = _turn_input(message, self.history, session, context, user_id)
 
         async def events() -> AsyncIterator[StreamEvent]:

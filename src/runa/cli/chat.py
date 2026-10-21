@@ -111,7 +111,7 @@ def _run_turn(agent: Agent, message: str, session: Session) -> None:
                 state.approve(item)
             else:
                 state.reject(item)
-        run = agent.run_sync(state, session=session)
+        run = agent.run_sync(state)
 
     print(run.output if run.status == "completed" else f"error: {run.error}")
 

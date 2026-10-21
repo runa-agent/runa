@@ -121,7 +121,7 @@ blob to hand a client instead, since every copy of a pause would be another chan
 Over HTTP this is already written: `runa serve` reports the `run_id`, and posting it back with a
 decision per interruption resumes it (see [Deployment](deployment.md#resuming-a-paused-run)).
 
-Everything the run carries comes back: its conversation, `context` and user, its usage, the
+Everything the run carries comes back: its conversation and session, `context` and user, its usage, the
 tool calls it already made and the time it has already spent against its `timeout`. A `context`
 that was a dataclass comes back as a plain dict, not its original class. The run's
 [guardrail audit trail](guardrails.md#audit-trail) and trace spans are not stored with the pause. Spans are

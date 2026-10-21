@@ -464,8 +464,7 @@ def test_a_streamed_run_pauses_and_resumes_on_its_own_route(pausing_client: Test
 def test_a_resume_carries_the_session_the_run_paused_on(pausing_client: TestClient) -> None:
     """A session-backed run saves nothing while paused: the whole turn lands on resume.
 
-    Which is why `session_id` belongs on a resume at all -- the same one the pause started with,
-    exactly as `Agent.run` wants it.
+    The resume names no `session_id`: the pause knows the one it started with.
     """
     first = pausing_client.post(
         "/agents/refund_agent/runs",
@@ -480,7 +479,6 @@ def test_a_resume_carries_the_session_the_run_paused_on(pausing_client: TestClie
         json={
             "run_id": first["run_id"],
             "decisions": [{"call_id": "call_1", "approve": True}],
-            "session_id": "conv-refund",
         },
         headers=_auth(),
     ).json()
@@ -648,6 +646,18 @@ def test_a_user_id_beside_a_paused_run_is_refused(client: TestClient) -> None:
 
     assert response.status_code == 422
     assert "user_id" in response.text
+
+
+def test_a_session_id_beside_a_paused_run_is_refused(client: TestClient) -> None:
+    """A paused run resumes in the session it paused in, so naming one is a `422`."""
+    response = client.post(
+        "/agents/support_agent/runs",
+        json={"run_id": "r1", "session_id": "c"},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 422
+    assert "session_id" in response.text
 
 
 @pytest.mark.usefixtures("project_database")

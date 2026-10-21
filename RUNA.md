@@ -137,8 +137,8 @@ def issue_refund(amount: float) -> str: ...
 **Pausing and resuming.** A call that needs approval doesn't run: it pauses the run, returned
 as `status="paused"` with `run.interruptions`. Resolve each one against `run.to_state()`, then
 resume by passing that `RunState` back into `run`/`run_sync`/`run_streamed` in place of a
-message. A session-backed run saves nothing while paused: pass the same `session=` when
-resuming, and the whole turn is saved once the run finishes.
+message. A session-backed run saves nothing while paused, and the whole turn is saved to the
+session it started in once the run finishes.
 
 ```python
 run = agent.run_sync("issue a $75 refund")
@@ -155,9 +155,11 @@ tool (by name, not just this one call id), such as an operator answering "always
 a custom `rejection_message`, fed back to the model instead of the default text; with
 `always=True` it's reused for every later rejected call to that tool too. **A pause resumes
 once**: resuming it a second time, from any copy of it in any process, is an error `Run`
-(`RunAlreadyResumed`) rather than a tool run twice. Enforced in code. A state carries the `context`
-and `user_id` of the run it paused, so passing either alongside one raises `UserError` instead of
-being dropped: pass them to the first run.
+(`RunAlreadyResumed`) rather than a tool run twice. Enforced in code. A state carries the `context`,
+`user_id` and session of the run it paused, so passing any of them alongside one raises
+`UserError` instead of being dropped or saving the turn elsewhere: pass them to the first run.
+The one exception is a `Session` object for that same session, when a pause loaded in another
+process needs to know which store a `db.at(url)` session lives in. Enforced in code.
 
 `run_streamed` pauses the same way: once the stream ends, its `.run` is the paused `Run`,
 resumed with `agent.run_streamed(state)` (or `run`/`run_sync`).
@@ -178,7 +180,7 @@ for item in state.pending:
 run = SupportAgent().run_sync(state)
 ```
 
-Everything the run carries comes back: its conversation, `context` and user, usage, the tool
+Everything the run carries comes back: its conversation and session, `context` and user, usage, the tool
 calls it already made, the model calls already spent against its `max_turns`, and the time
 already spent against its `timeout` (time paused doesn't count). After a handoff the run is
 still the starting agent's: its ceilings, memory, knowledge and compaction stay in force. Loading resolves no tools, so it never connects to an agent's MCP servers: the resumed

@@ -92,7 +92,10 @@ class RunRequest(BaseModel):
     )
     session_id: str | None = Field(
         default=None,
-        description="Continue (or start) this conversation. Omitted, the turn is stateless.",
+        description=(
+            "Continue (or start) this conversation. Omitted, the turn is stateless. A paused "
+            "run resumes in the conversation it paused in, so it is never sent beside `run_id`."
+        ),
     )
     user_id: str | None = Field(
         default=None,
@@ -103,15 +106,17 @@ class RunRequest(BaseModel):
     def _exactly_one_turn(self) -> Self:
         """Reject a body that is neither a turn nor a resume, tries to be both, or re-sends a user.
 
-        A paused run carries the `user_id` of the turn that paused, so one beside its `run_id` is
-        refused, as `Agent.run` refuses it, rather than dropped.
+        A paused run carries the `user_id` and `session_id` of the turn that paused, so either one
+        beside its `run_id` is refused, as `Agent.run` refuses it, rather than dropped.
         """
         if (self.message is None) == (self.run_id is None):
             raise ValueError("send either a `message` to run or the `run_id` of a paused run")
         if self.decisions and self.run_id is None:
             raise ValueError("`decisions` resolve a paused run, so they need its `run_id` too")
-        if self.user_id is not None and self.run_id is not None:
-            raise ValueError("a paused run already carries the `user_id` its turn was sent")
+        if self.run_id is not None:
+            for name in ("user_id", "session_id"):
+                if getattr(self, name) is not None:
+                    raise ValueError(f"a paused run already carries the `{name}` its turn was sent")
         return self
 
 
@@ -264,7 +269,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
 
         A `Run` that paused for approval comes back with `status="paused"`, its `interruptions`
         and the `run_id` that resolves them; posting that `run_id` back with a `decisions` list
-        (and the same `session_id`) resumes it here.
+        resumes it here, in the session it paused in.
         """
         agent = _build(agent_name)
         session = db.session(body.session_id, agent_name) if body.session_id else None

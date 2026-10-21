@@ -632,7 +632,7 @@ def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
 
     state = result.to_state()
     state.approve(result.interruptions[0])
-    agent.run_sync(state, session=session)
+    agent.run_sync(state)
 
     assert asyncio.run(session.get_items()) == [
         {"role": "user", "content": "go"},
@@ -644,7 +644,10 @@ def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
 
 
 def test_a_loaded_pause_keeps_the_session_turn(tmp_path: Any) -> None:
-    """The transcript's `session_input`/`generated` survive the stored pause and a restart."""
+    """The transcript's `session_input`/`generated` survive the stored pause and a restart.
+
+    The session is one `db.session` doesn't reach, so the resume is handed its object again.
+    """
     from runa.run_state import RunState
 
     session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
