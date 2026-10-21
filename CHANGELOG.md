@@ -2,6 +2,173 @@
 
 All notable changes to Runa are documented here.
 
+## [0.9.0] - 2026-10-21
+
+### Bug Fixes
+
+- Let an MCP server carry its tools' approval and guardrail policy ([10a3588](https://github.com/runa-agent/runa/commit/10a3588ce88ce5d737984edf2533ce18b53d6d0f))
+
+- Keep the content blocks an assistant turn's two slots can't hold ([71133bb](https://github.com/runa-agent/runa/commit/71133bb5ea0444f3fbc1293c585295caa87db2ac))
+
+- Ingest an agent's knowledge at startup, not inside a user's first turn ([906212e](https://github.com/runa-agent/runa/commit/906212e4c8ecaccd8a2172e540bd9e6783f6ce31))
+
+- Commit AgentLike and make CI import what HEAD ships ([39c4e22](https://github.com/runa-agent/runa/commit/39c4e22fcd89a7164e245b56622f05a3681a1fad))
+
+- Build each subagent class once per agent graph, so a cycle closes instead of recursing ([ee01a6f](https://github.com/runa-agent/runa/commit/ee01a6f9a03e30dbe96ec62e6a322fc3177f8259))
+
+- Close every run-internal span on the way out, so a failed step's span records its error ([6a86c5a](https://github.com/runa-agent/runa/commit/6a86c5a2a3088f7ce8292ecc6d95b945fe4fa8fd))
+
+- Raise UserError for every mistake in a declared value, keeping TypeError for what a signature raises ([c692a02](https://github.com/runa-agent/runa/commit/c692a02fbe48a2bff9ddaa791a6f8de6c7628a7f))
+
+- Run a delegate as a nested run of its caller's, sharing its hooks and trace, and drop governance from the tool signature ([ad02e90](https://github.com/runa-agent/runa/commit/ad02e906d7fd21ffc6d631399faceb7ac5f87244))
+
+- Close every closable per-loop resource in runa._loop.run, so run_sync also shuts down a subagent's MCP servers ([c462540](https://github.com/runa-agent/runa/commit/c462540b4b214fe376ae7b798c93e6655c52e175))
+
+- Hand the run's user to tools as RunContext.user_id, so memory=llm searches the same scope as auto ([a7a4d96](https://github.com/runa-agent/runa/commit/a7a4d9677a74848274ae8c376fa7c92f4e6f1fb9))
+
+- Queue a run's trace export instead of awaiting it, flushing in run_sync and at serve shutdown ([21e4a1c](https://github.com/runa-agent/runa/commit/21e4a1c44fbf5c38ee3a908186a335f9af4947a5))
+
+- Close the public surface's one-shape gaps: export Model, split RunStatus/EvalStatus, add Run.tool_calls, drop Run._governance, fix list-shadowed store annotations ([c49913b](https://github.com/runa-agent/runa/commit/c49913bf8b215771edd70cfc3e36767c942c145a))
+
+- Move the conversation's rules into Transcript, so compaction sees rewrites and the loop no longer keeps its invariants ([6ad8599](https://github.com/runa-agent/runa/commit/6ad8599b48ca3d4a95d3cadaedbff9cd9b57e8a5))
+
+- Close every run-internal span on the way out, so a failed step's span records its error ([360c222](https://github.com/runa-agent/runa/commit/360c22231f9f06e0bb29da2c1729894e80ebbe9c))
+
+- Join dashboard link ids with + so CodeQL sees they can't supply a redirect host ([fe3e4d6](https://github.com/runa-agent/runa/commit/fe3e4d6b53911d6048c1f952d1aab7bdb4be7479))
+
+- Give delegates their own Delegate value beside Handoff, and record each delegate call on the caller's Run.tool_calls with the nested calls as children ([4a26e6c](https://github.com/runa-agent/runa/commit/4a26e6c748ed398521c06e99ddc9b27ba576e5ee))
+
+- Build Handoffs in Agent.__init__ like Delegates, so a handoff's tool_name/tool_description override is honoured ([5e6d6c2](https://github.com/runa-agent/runa/commit/5e6d6c221623effe3bb95f2b74bb92ac0fcff4f3))
+
+- Stream Runa-owned TextDelta/ToolCalled/ToolOutput/AgentChanged events instead of a private provider delta ([197ac03](https://github.com/runa-agent/runa/commit/197ac03803a1b42bc47a5021c0c46b8229815d7d))
+
+- Raise UserError for an unknown embedding size, and cut rationale and history from docstrings ([40c4402](https://github.com/runa-agent/runa/commit/40c4402497a0d26f332fbda6f7f85c9911f7a900))
+
+- Keep guardrails and compact as declared on Agent, resolving them on AgentShape so one name has one meaning ([2e01c35](https://github.com/runa-agent/runa/commit/2e01c357e8c42308d5fd7fb95c7e27933dbf2ca2))
+
+- Ci ([eaf6d9b](https://github.com/runa-agent/runa/commit/eaf6d9ba7629ed898cad142c8fddb13634cbd00d))
+
+- Re-apply the schema to a recreated SQLite file even when Linux reuses its inode ([0f18215](https://github.com/runa-agent/runa/commit/0f182157dd5eb0bb1f262594adfad35683566dd9))
+
+- Make tool and agent names unique keys and prefix MCP tools with their server's name ([c1a533c](https://github.com/runa-agent/runa/commit/c1a533c1205fd8dfa01c5ece48dda977e30294e6))
+
+- Charge context sources' model and embedding calls to the run's usage and trace ([41bd93e](https://github.com/runa-agent/runa/commit/41bd93ebebac11e75276b99394dae8920e1a261d))
+
+- Add the untracked runa._metering module that HEAD already imports ([f97e2d3](https://github.com/runa-agent/runa/commit/f97e2d3230eebd036e7f9a5997261fd7b0873856))
+
+- Take user_id on Agent.run instead of Session so session-less runs scope memory per user ([6e668aa](https://github.com/runa-agent/runa/commit/6e668aa854d5bf5339521c95c8e30c9e22ca5203))
+
+- Keep paused runs in runa.db and resume them by a single-use run_id instead of a client-held state blob ([d413adf](https://github.com/runa-agent/runa/commit/d413adf9625a79d1c8505a0637ad1e178cb04e86))
+
+- Skip a context source only on ServiceUnavailable and end the run on anything else, a refused key included ([69c5cd0](https://github.com/runa-agent/runa/commit/69c5cd036844f3c7f59ada05831f6012bf43e3cc))
+
+- Record a session's agent on agent_sessions instead of matching it from the session id prefix ([303a0cf](https://github.com/runa-agent/runa/commit/303a0cf2220993ab6ad8db0f8cd4de4bf1c69228))
+
+- Rename ContextSource.context to retrieve and Case.context to passages, and pass a case's context to its run ([e1fccda](https://github.com/runa-agent/runa/commit/e1fccda25c565c9e1619ca11d3b30d950ad89b83))
+
+- Apply a shared Postgres's schema once per process and let a read create nothing ([5af3551](https://github.com/runa-agent/runa/commit/5af3551cbdb82275c074d82f96f1eee1cb92979b))
+
+- Run every sync call on one background loop so run_sync reuses connections across turns ([d7a09d9](https://github.com/runa-agent/runa/commit/d7a09d9e89b9efd4378af57da9a4894a5f17fee4))
+
+- Keep every pause in runa.db and claim it on resume, so a RunState resumes once in any process ([6715821](https://github.com/runa-agent/runa/commit/67158216c1de9dd6e12cb94d69ae2df96e06cf3a))
+
+- Dispatch hook events as typed Hooks methods so a misspelled event is a type error ([b3ab511](https://github.com/runa-agent/runa/commit/b3ab51179d3152065a1a9eafba6b3128c3f91f01))
+
+
+### Refactor
+
+- Give "an agent" one type instead of Any and a getattr default ([5bc2946](https://github.com/runa-agent/runa/commit/5bc2946517a76543234898147ec0832b27f1ef2f))
+
+- State each store's query policy twice in one file, not two ([9d7dcdb](https://github.com/runa-agent/runa/commit/9d7dcdb2391a140a3ff66dacdb1cafb3649d6373))
+
+- Hand a guardrail one value, whatever its phase ([3bd0022](https://github.com/runa-agent/runa/commit/3bd0022b592042fe56bc9ec163ca05eca7c23b95))
+
+- Hold which app this process reads in one leaf that db and project both read ([f13b58d](https://github.com/runa-agent/runa/commit/f13b58df30303ade43e1174ed4ac25ef2e7e5c90))
+
+- Close the dict forms of subagents/guardrails and mcp_servers=, one shape per declaration ([6518938](https://github.com/runa-agent/runa/commit/65189384cb5d9f79a8590bd28dc8b345ae200e15))
+
+- Hand each tool guardrail phase its raw value, dropping the input-named envelope ([0fda4c6](https://github.com/runa-agent/runa/commit/0fda4c66461d00cfb1c00205111e47beda6a34b9))
+
+- Hold one run's conversation in a single Transcript shared by _Run, RunState and Run ([f1f6eb7](https://github.com/runa-agent/runa/commit/f1f6eb79eaf50831b67c6453405aecf3fa6253e9))
+
+- Hand user code a RunContext of context and usage, keeping the run's governance internal ([369ac02](https://github.com/runa-agent/runa/commit/369ac02cf25facf9452ab3e83b89bf08a5a52234))
+
+- Hold every process fact in runa._app behind one reset, instead of five globals with their own ([1a76aed](https://github.com/runa-agent/runa/commit/1a76aed6690d39f00e4b73d69f7edbe5e4c1af71))
+
+- Build memory_store and knowledge_store on vector_store, so the vector backend is chosen once ([2813926](https://github.com/runa-agent/runa/commit/28139260fe4ea22549d01e736404e51a1ca414b2))
+
+- Reduce AgentShape to the agent plus its resolved tools, handoffs and model, so the loop reads settings through AgentLike ([aed593b](https://github.com/runa-agent/runa/commit/aed593bd052c5b2368a6f770ca922a9403259cb6))
+
+- Remove RunConfig, read run ceilings off AgentLike and resolve the provider in agent_shape ([10b2ba0](https://github.com/runa-agent/runa/commit/10b2ba022de3e989afa0e03c29567ca37ec51969))
+
+- Give each run a _Frame and one _within boundary, so run, resume and delegate only differ in how they build their frame ([2af05fa](https://github.com/runa-agent/runa/commit/2af05fadd50bf3fbd661d52433511a1e98533941))
+
+- Have Memory and Knowledge hold a VectorStore directly, deleting the MemoryStore/KnowledgeStore layers and their per-backend pairings ([1dc907a](https://github.com/runa-agent/runa/commit/1dc907aa2ab8e1784a5351f0af82a75643953953))
+
+- Keep per-call approval decisions on the shared ApprovalLedger, deleting PausedDelegates' ownership map ([0866f7e](https://github.com/runa-agent/runa/commit/0866f7e2e0c7ee8bbd8ba9241460dc4463941ef1))
+
+- Give Memory and Knowledge one ContextSource contract, so the turn loop keeps only the run's own retrieval policy ([f9be8b5](https://github.com/runa-agent/runa/commit/f9be8b5038020309bc130db5c755a2cca5528ada))
+
+- Have AgentShape compute the ToolSchemas a model is offered, so _models no longer knows what a delegate or handoff is ([0c14abc](https://github.com/runa-agent/runa/commit/0c14abc0724f43d022066dc81e86b3151f5fc3f3))
+
+- Give the runtime one resolved AgentShape built by Agent.__init__ and delete AgentLike ([e08884b](https://github.com/runa-agent/runa/commit/e08884bc668a450dcfb53d194b7d335f83d0689c))
+
+- Hold a run in one durable record the loop works on and RunState serializes as is ([1920dda](https://github.com/runa-agent/runa/commit/1920ddacc7db0838884da05012de7ea1237f4eef))
+
+- Give _Run intent-level methods so the tool helpers stop reaching through its frame ([ce14e20](https://github.com/runa-agent/runa/commit/ce14e202a94697c824b879d991ade02c42c073fd))
+
+- Run memory:// as in-memory SQLite through the SQLite adapters and delete the ephemeral backend ([ea3e473](https://github.com/runa-agent/runa/commit/ea3e473f2523a49a3baaaedad987c27818c5a6e5))
+
+- Narrow Session to get_items, add_items and set_items, and drop pop_item and get_items' limit ([2f0dca6](https://github.com/runa-agent/runa/commit/2f0dca61d39b2cad3c9c9fca20a89a01a770b64a))
+
+- Send embeddings through the model layer's HTTP transport so they share its client, timeout and retries ([bd9faa4](https://github.com/runa-agent/runa/commit/bd9faa4b7e5e6120198be31ed6fc89739836d95e))
+
+- Charge each model call to the innermost open span instead of six explicit meter sites ([171026f](https://github.com/runa-agent/runa/commit/171026f83c470bd8c48c8000dd06e94d55c0348b))
+
+- Put every SQL concern on one async Database handle instead of a SQLite and a Postgres adapter each ([1789711](https://github.com/runa-agent/runa/commit/1789711de16ff1b188e41e790d911e70d634a3b9))
+
+- Move subagent_edges and reachable into agent_shape and read an agent's shape through shape_of ([705a9e0](https://github.com/runa-agent/runa/commit/705a9e04cad4df97dcf37f1d6c6a92a9ef73df8b))
+
+- Give a session its agent when it is resolved instead of the run setting it before a save ([fd5af17](https://github.com/runa-agent/runa/commit/fd5af17d283b9a1b65cb8bb913988e24b077e7c2))
+
+- Make every store async and call run_sync at the sync edges instead of hiding it behind @sync ([56a8af3](https://github.com/runa-agent/runa/commit/56a8af3b1d05dacdd98573dac04b9251ab8bb7dc))
+
+- Move project_path to _app and keep tracing's default policy in tracing behind an on_reset hook ([828dcab](https://github.com/runa-agent/runa/commit/828dcab4ae53a20fbfc2b83df121b4a76c0383c6))
+
+- Replace backend-named Session/Exporter/Cache classes with db.at(url) ([2c473fd](https://github.com/runa-agent/runa/commit/2c473fd9a27b8d3acb34424eb9d5a7fa3e351636))
+
+
+### Documentation
+
+- Make docstrings state contracts, not history, and fix four that drifted from the code ([1629962](https://github.com/runa-agent/runa/commit/1629962d449511a5a979265bcfe7a24616943b16))
+
+- Fix docstrings and RUNA.md that describe designs the code has moved past ([4824a94](https://github.com/runa-agent/runa/commit/4824a94995501dffbe3aa5f9e3bbeb40a7f8e1df))
+
+
+### Testing
+
+- Pin that loaded_app refuses a second project on the way in ([fe9d4d8](https://github.com/runa-agent/runa/commit/fe9d4d8eac2fa2930f4eac10ea292a9a171cdbbf))
+
+- Drive the turn loop through Agent.run with a scripted model instead of _run_async] ([c921373](https://github.com/runa-agent/runa/commit/c92137318bdefd94c7fafd4368dfe422305956df))
+
+- Update tests and demo to the required Run.trace and the single mcp setting ([7099ad1](https://github.com/runa-agent/runa/commit/7099ad199be2f3fb3004532805855e9edaa09592))
+
+- Tracing ([495f359](https://github.com/runa-agent/runa/commit/495f359a2e2c72147829ca6cc47a3e2c5d21f4a3))
+
+
+### Other
+
+- *(deps)* Bump asyncpg from 0.31.0 to 0.32.0 ([341c2f5](https://github.com/runa-agent/runa/commit/341c2f5bce5b2e34a002fc5f0dfbc34217c72f39))
+
+- *(deps)* Bump opentelemetry-exporter-otlp-proto-http ([efd6fde](https://github.com/runa-agent/runa/commit/efd6fde712bad065f2d49a6c763d6c942936331d))
+
+- *(deps)* Bump fastapi from 0.142.2 to 0.143.0 ([80822ef](https://github.com/runa-agent/runa/commit/80822ef7d9d9776a4f81a921cd6863ea3a150662))
+
+- *(deps)* Bump opentelemetry-sdk from 1.45.0 to 1.45.1 ([235d451](https://github.com/runa-agent/runa/commit/235d451bee8fa45ca200e2cbc6aa30e35fc94106))
+
+- *(deps)* Bump anthropic from 1.7.0 to 1.13.0 ([28dbbc5](https://github.com/runa-agent/runa/commit/28dbbc523b7efe20621c64bcd0fea79b8bf15ab0))
+
+
 ## [0.8.0] - 2026-10-13
 
 ### Bug Fixes
