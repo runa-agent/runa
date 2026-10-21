@@ -110,6 +110,16 @@ def test_tool_call_then_final_text() -> None:
     assert agent_spans[0].name == "TestAgent"
 
 
+def test_trace_is_named_for_the_agents_declared_name() -> None:
+    """A run's trace answers to the agent's `name`, as its agent span does, not its class."""
+    agent = scripted_agent(ScriptedModel([text_response("hi")]), name="support_agent")
+
+    result = agent.run_sync("hello")
+
+    assert result.trace.name == "support_agent"
+    assert [s.name for s in result.trace.spans if s.type == "agent"] == ["support_agent"]
+
+
 def test_tool_error_is_fed_back_and_run_continues() -> None:
     """A tool that raises doesn't abort the run; its span records the error, the run completes."""
 

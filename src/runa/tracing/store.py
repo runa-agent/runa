@@ -111,8 +111,8 @@ class TraceStore:
     ) -> builtins.list[Trace]:
         """Return the most recent `limit` traces, newest first, optionally filtered.
 
-        `agent` matches `Trace.name` (the workflow name `Agent.run` sets to the agent's class
-        name); `session_id` matches the `Session` a session-backed run was passed, when it was
+        `agent` matches `Trace.name`, which `Agent.run` sets to the agent's declared `name`;
+        `session_id` matches the `Session` a session-backed run was passed, when it was
         passed one; `status` is `"ok"` or `"error"`.
 
         Ties on `start_time` break by trace id descending, whichever database answers, so two
@@ -159,9 +159,9 @@ def listing_clause(
     """Everything after `SELECT ... FROM traces` for `TraceStore.list`, and the values it binds.
 
     One sentence of policy: keep the traces matching whichever of the three filters were given,
-    newest first, at most `limit` of them. `agent` is `traces.name` -- the workflow name, not an
-    `agent` column. The tie-break is this clause's -- both engines leave it to chance when the
-    `ORDER BY` names `start_time` alone.
+    newest first, at most `limit` of them. `agent` is `traces.name` -- for a run's trace, the
+    agent's declared `name` -- not an `agent` column. The tie-break is this clause's -- both
+    engines leave it to chance when the `ORDER BY` names `start_time` alone.
 
     The whole tail rather than the `WHERE` alone, because a numbered placeholder counts every
     value bound before it: a caller handed the filter and left to append `LIMIT` has to know how

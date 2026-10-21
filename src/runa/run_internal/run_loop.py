@@ -710,8 +710,8 @@ async def _run_async(
 
     The run behind `Agent.run`: it owns its trace, approval ledger and guardrail audit trail,
     which a delegate's nested run shares with its caller instead (`_Run.delegate`). The trace is
-    named for `agent`'s class and grouped under an enclosing `tracing.trace` block, else under
-    `session`.
+    named for `agent`'s declared `name` and grouped under an enclosing `tracing.trace` block, else
+    under `session`.
     """
     dispatch = _Dispatch(hooks or LoggingHooks())
 
@@ -720,7 +720,7 @@ async def _run_async(
 
     trace = Trace(
         id=gen_trace_id(),
-        name=type(agent).__name__,
+        name=agent.name,
         start_time=time.time(),
         session_id=session.session_id if session is not None else None,
     )
