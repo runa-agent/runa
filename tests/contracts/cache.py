@@ -6,7 +6,7 @@ SQL: a miss returns `None`, a second `set` overwrites, an expired entry reads as
 
 Each check takes the cache and one key prefix it is free to write under. `test_cache.py` drives
 these over the local backends on every `make test`; `test_postgres.py` drives them over
-`PostgresCache` when a live database is reachable.
+the Postgres one when a live database is reachable.
 """
 
 from collections.abc import Callable, Coroutine

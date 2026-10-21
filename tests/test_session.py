@@ -1,4 +1,4 @@
-"""What `SQLiteSession` promises beyond the session contract every backend answers.
+"""What a session in a local SQLite file promises beyond the session contract every backend answers.
 
 The round-trip, `set_items`, `clear_session` and isolation behavior is
 `tests/contracts/session.py`, driven over this adapter (among others) by
@@ -18,14 +18,15 @@ from typing import Any
 
 import pytest
 
+from runa import db
 from runa.db import sqlite as db_sqlite
-from runa.session import Session, SQLiteSession
+from runa.session import Session
 
 
 def test_clear_session_drops_its_items_and_row(tmp_path: Path) -> None:
     """`clear_session` deletes the session's messages and its `agent_sessions` row."""
     db_path = tmp_path / "runa.db"
-    session = SQLiteSession("s1", db_path=db_path)
+    session = db.at(f"sqlite:///{db_path}").session("s1")
 
     async def _run():
         await session.add_items([{"role": "user", "content": "hi"}])
@@ -61,7 +62,7 @@ def test_a_session_call_leaves_the_event_loop_free(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(db_sqlite, "connect", slow_connect)
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
 
     async def _run() -> int:
         ticks = 0

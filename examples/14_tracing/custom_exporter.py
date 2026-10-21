@@ -1,4 +1,4 @@
-"""A custom `TraceExporter`, added alongside the default `SQLiteExporter`.
+"""A custom `TraceExporter`, added alongside the default store exporter.
 
 See RUNA.md #14 and docs/tracing.md ("Custom Exporters").
 

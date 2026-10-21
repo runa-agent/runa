@@ -20,12 +20,13 @@ from typing import Any
 
 import pytest
 
-from runa import Agent
+from runa import Agent, db
 from runa._types import ModelResponse, Usage
 from runa.exceptions import OperatorError, UnexpectedError
 from runa.lifecycle import Hooks
 from runa.run import Run
-from runa.session.sqlite import SQLiteSession
+from runa.session.database import DatabaseSession
+from runa.session.store import MESSAGES, SESSIONS
 from runa.tracing import Trace, observe
 
 
@@ -90,14 +91,21 @@ def _in_memory_database(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
 
 
-class _UnreadableSession(SQLiteSession):
+class _StoredSession(DatabaseSession):
+    """A session in this process's `memory://` database, for a subclass to break one method of."""
+
+    def __init__(self, session_id: str) -> None:
+        super().__init__(session_id, db.database(SESSIONS, MESSAGES))
+
+
+class _UnreadableSession(_StoredSession):
     """A `Session` whose backend doesn't answer: a locked SQLite file, a dropped connection."""
 
     async def get_items(self) -> list[Any]:
         raise OSError("database is locked")
 
 
-class _UnwritableSession(SQLiteSession):
+class _UnwritableSession(_StoredSession):
     """A `Session` that reads fine and fails on the write, after the turn already answered."""
 
     async def add_items(self, items: list[Any]) -> None:
@@ -231,7 +239,7 @@ def test_an_operator_error_is_not_reported_as_a_run_failure() -> None:
     as one line rather than a run that mysteriously errored. The trace is still closed out.
     """
 
-    class _MisconfiguredSession(SQLiteSession):
+    class _MisconfiguredSession(_StoredSession):
         async def get_items(self) -> list[Any]:
             raise OperatorError("could not parse RUNA_DATABASE_URL")
 
@@ -295,7 +303,7 @@ def test_a_streamed_run_reports_an_unexpected_failure_on_its_run() -> None:
 def test_a_streamed_operator_error_is_not_reported_as_a_run_failure() -> None:
     """The stream makes the same exception for the same reason `run` does, not a quieter one."""
 
-    class _MisconfiguredSession(SQLiteSession):
+    class _MisconfiguredSession(_StoredSession):
         async def get_items(self) -> list[Any]:
             raise OperatorError("could not parse RUNA_DATABASE_URL")
 

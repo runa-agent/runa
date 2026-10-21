@@ -1,7 +1,7 @@
 r"""Serving an Agent over HTTP across several replicas, backed by Postgres and `pgvector`.
 
 The multi-process-safe counterpart to `api.py`, and the point of this example is how little
-differs: not one import, class or call below names a backend. `api.py`'s `SQLiteSession` (and
+differs: not one import, class or call below names a backend. `api.py`'s local `runa.db` (and
 `sqlite-vec`-backed `Memory`/`Knowledge`) only tolerate one process touching `db/runa.db` at a
 time, so `runa.db` reads `RUNA_DATABASE_URL` and hands every concern a Postgres-backed store
 instead when it is set:

@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
+from runa import db
 from runa.agent import Agent
 from runa.cli.chat import run_agent_repl
 from runa.cli.new import scaffold_project
 from runa.project import NotARunaProject
 from runa.run_state import Interruption
-from runa.session import SQLiteSession
 
 
 def _write_agent(project_dir: Path, filename: str, source: str) -> None:
@@ -21,7 +21,7 @@ def _write_agent(project_dir: Path, filename: str, source: str) -> None:
 
 def _save_turn(db_path: Path, session_id: str, agent_name: str) -> None:
     """Save one turn to `session_id` the way `agent_name`'s run would."""
-    session = SQLiteSession(session_id, db_path=db_path, agent=agent_name)
+    session = db.at(f"sqlite:///{db_path}").session(session_id, agent_name)
     asyncio.run(session.add_items([{"role": "user", "content": "hi"}]))
 
 

@@ -13,7 +13,6 @@ queries traces names a file or a URL.
 from runa.tracing.config import observe
 from runa.tracing.export import (
     ConsoleExporter,
-    SQLiteExporter,
     StoreExporter,
     TraceExporter,
     add_exporter,
@@ -25,7 +24,6 @@ from runa.tracing.traces import SpanRow, Trace
 
 __all__ = [
     "ConsoleExporter",
-    "SQLiteExporter",
     "Span",
     "SpanRow",
     "SpanStatus",

@@ -15,7 +15,7 @@ import pytest
 from helpers import scripted_agent, shape_of
 from pydantic import BaseModel
 
-from runa import Agent, _loop, tracing
+from runa import Agent, _loop, db, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContext, Usage
 from runa.agent import _AGENT_FIELDS, Subagent
@@ -31,7 +31,6 @@ from runa.run import Run
 from runa.run_internal.agent_shape import shape_of as built_shape
 from runa.run_state import RunState
 from runa.session.database import DatabaseSession
-from runa.session.sqlite import SQLiteSession
 from runa.tool import FunctionTool, tool
 from runa.transcript import Transcript
 
@@ -1412,7 +1411,7 @@ def test_run_sync_wraps_multimodal_message_in_a_message_list_for_a_session(
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
     parts = [content.image("https://example.test/cat.png")]
-    Researcher().run_sync(parts, session=SQLiteSession("s", tmp_path / "runa.db"))
+    Researcher().run_sync(parts, session=db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s"))
 
     assert captured["turn_input"] == [{"role": "user", "content": parts}]
 
@@ -1627,7 +1626,7 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
     monkeypatch.setattr("runa.agent._run_async", fake_run)
     agent = Researcher()
     agent.history = [{"role": "user", "content": "earlier"}]
-    session = SQLiteSession("s", tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s")
 
     async def _consume() -> None:
         async for _ in agent.run_streamed("hi", session=session):
@@ -1696,7 +1695,7 @@ def test_a_session_object_is_passed_through_untouched(
 
     monkeypatch.setattr("runa.agent._run_async", _async(fake_run_sync))
 
-    session = SQLiteSession("s", tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s")
     Researcher().run_sync("hi", session=session)
 
     assert captured["session"] is session

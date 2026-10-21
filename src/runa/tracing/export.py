@@ -10,7 +10,6 @@ import contextvars
 import os
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, Token
-from pathlib import Path
 from typing import Protocol
 
 from runa import _app
@@ -21,7 +20,7 @@ from runa.tracing.traces import Trace
 
 
 class TraceExporter(Protocol):
-    """Exports a finished `Trace` somewhere: SQLite, the console, or a caller's own backend.
+    """Exports a finished `Trace` somewhere: a database, the console, or a caller's own backend.
 
     `export` is synchronous and may block: a finishing run's trace is exported on tracing's own
     thread, and a synchronous caller (a `tracing.trace` block) exports inline.
@@ -76,8 +75,8 @@ def flush_exports() -> None:
 class StoreExporter:
     """A `TraceExporter` that writes every finished trace to a `TraceStore`.
 
-    Every persistent exporter: `SQLiteExporter` and `PostgresExporter` are this class with a store
-    already chosen, and `_local_exporter` builds one over `runa.db.traces()`.
+    Every persistent exporter: the default is one over `runa.db.traces()`, and
+    `StoreExporter(db.at(url).traces())` exports to some other database.
     """
 
     def __init__(self, store: TraceStore) -> None:
@@ -87,20 +86,6 @@ class StoreExporter:
     def export(self, trace: Trace) -> None:
         """Persist `trace`. Exceptions are caught by the caller; tracing never fails a run."""
         run_sync(self.store.save(trace))
-
-
-class SQLiteExporter(StoreExporter):
-    """The local exporter: persists every finished trace to `db/runa.db`."""
-
-    def __init__(self, path: Path | None = None) -> None:
-        """Export to `path`, or to wherever `runa.db` says this deployment's local file is."""
-        from runa.db import sqlite_database
-        from runa.db.sqlite import SQLiteDatabase
-        from runa.tracing.database import DatabaseTraceStore
-        from runa.tracing.store import SPANS, TRACES
-
-        location = path if path is not None else sqlite_database()
-        super().__init__(DatabaseTraceStore(SQLiteDatabase(location, TRACES, SPANS)))
 
 
 class ConsoleExporter:

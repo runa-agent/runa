@@ -22,10 +22,9 @@ from runa import (
     Case,
     ConsoleExporter,
     Hooks,
-    SQLiteExporter,
+    add_exporter,
     approval,
     guardrail,
-    observe,
     tool,
 )
 
@@ -194,7 +193,7 @@ async def demo_eval() -> None:
 
 async def main() -> None:
     """Run every demo in turn."""
-    observe(exporter=[SQLiteExporter(), ConsoleExporter()])
+    add_exporter(ConsoleExporter())
     await demo_guardrail()
     await demo_tool_and_trace()
     await demo_delegate()

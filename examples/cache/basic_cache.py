@@ -13,21 +13,21 @@ Run it:
 
 import asyncio
 
-from runa import MemoryCache, SQLiteCache
+from runa import MemoryCache, db
 
 
 async def main() -> None:
-    """Exercise the same four async methods against both a `MemoryCache` and a `SQLiteCache`."""
+    """Exercise the same four async methods against both a `MemoryCache` and `db.cache()`."""
     memory_cache = MemoryCache()  # a plain dict, gone when the process exits
     await memory_cache.set("weather:paris", {"temp_c": 18}, ttl=300)
     print(await memory_cache.get("weather:paris"))
     await memory_cache.delete("weather:paris")
     print(await memory_cache.get("weather:paris"))  # None: deleted
 
-    sqlite_cache = SQLiteCache()  # persisted to db/runa.db, the same file Sessions/Memory use
-    await sqlite_cache.set("weather:tokyo", {"temp_c": 24}, ttl=300)
-    print(await sqlite_cache.get("weather:tokyo"))
-    await sqlite_cache.clear()  # every key, not just this one
+    cache = db.cache()  # persisted to db/runa.db, the same database Sessions/Memory use
+    await cache.set("weather:tokyo", {"temp_c": 24}, ttl=300)
+    print(await cache.get("weather:tokyo"))
+    await cache.clear()  # every key, not just this one
 
 
 asyncio.run(main())

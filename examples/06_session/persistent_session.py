@@ -1,4 +1,4 @@
-"""`SQLiteSession`: conversation history that survives past one `Agent` instance.
+"""`db.session`: conversation history that survives past one `Agent` instance.
 
 See RUNA.md #6 and docs/sessions.md.
 
@@ -7,12 +7,12 @@ back from `runa.db` automatically, and `agent.history` is left untouched.
 
 Run it:
 
-    uv run python examples/06_session/sqlite_session.py
+    uv run python examples/06_session/persistent_session.py
 """
 
 import asyncio
 
-from runa import Agent, SQLiteSession
+from runa import Agent, db
 
 
 class SupportAgent(Agent):
@@ -23,7 +23,7 @@ class SupportAgent(Agent):
 
 
 agent = SupportAgent()
-session = SQLiteSession("user-42")
+session = db.session("user-42")  # db/runa.db, or wherever RUNA_DATABASE_URL points
 
 agent.run_sync("My order hasn't arrived.", session=session)
 run = agent.run_sync("It's order #4821.", session=session)  # remembers the first message too
@@ -31,7 +31,7 @@ print(run.output)
 
 
 async def inspect() -> None:
-    """`SQLiteSession`'s extra async methods, beyond what `run`/`run_sync` call for you."""
+    """The session's own async methods, beyond what `run`/`run_sync` call for you."""
     items = await session.get_items()
     print(f"{len(items)} items stored for session {session.session_id!r}")
     await session.clear_session()

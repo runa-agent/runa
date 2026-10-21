@@ -1,12 +1,12 @@
 """`runa.session`: `Session`, the conversation history a run reads and appends to.
 
-Which implementation a deployment gets is `runa.db`'s decision, not the call site's:
-`session/sqlite.py` locally, `session/postgres.py` when `RUNA_DATABASE_URL` points at a shared
-database. `runa serve`, `runa chat` and `Agent.run` all take whatever `db.session(...)` hands
-them, so moving a deployment to Postgres is one environment variable rather than an edit.
+Which database a session lives in is `runa.db`'s decision, not the call site's. There is one
+implementation, `session/database.py`'s, over whichever database `RUNA_DATABASE_URL` names.
+`runa serve`, `runa chat` and `Agent.run` all take whatever `db.session(...)` hands them, so
+moving a deployment to Postgres is one environment variable rather than an edit, and
+`db.at(url).session(...)` is a session in some other database.
 
-`session/store.py` is the read side of the same tables, a `SessionStore` per backend, for
-`runa sessions` and `runa ui`. `runa.db.sessions(...)` resolves that one the same way.
+`db.sessions()` is the read side of the same tables, for `runa sessions` and `runa ui`.
 """
 
 from abc import ABC, abstractmethod
@@ -41,9 +41,4 @@ class Session(ABC):
         await self.set_items([])
 
 
-# Below `Session`, not above: `session/sqlite.py` subclasses it, so the name has to exist
-# first. Re-exported because the local adapter is always importable, where `PostgresSession`
-# needs the `postgres` extra and so stays an explicit `runa.session.postgres` import.
-from runa.session.sqlite import SQLiteSession  # noqa: E402
-
-__all__ = ["SQLiteSession", "Session"]
+__all__ = ["Session"]

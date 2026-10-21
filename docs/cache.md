@@ -35,16 +35,16 @@ from runa import MemoryCache
 cache = MemoryCache()
 ```
 
-## `SQLiteCache`: persistent
+## `db.cache()`: persistent
 
-Backed by the `cache_entries` table inside `runa.db`, the same file `SQLiteSession` and `Memory`
+Backed by the `cache_entries` table inside `runa.db`, the same database sessions and `Memory`
 use, created automatically on first use:
 
 ```python
-from runa import SQLiteCache
+from runa import db
 
-cache = SQLiteCache()  # db/runa.db by default
-cache = SQLiteCache("db/cache.db")  # or your own file
+cache = db.cache()  # db/runa.db by default
+cache = db.at("sqlite:///db/cache.db").cache()  # or your own file
 ```
 
 Values are serialized with `json.dumps`/`json.loads`, so only JSON-serializable values (dicts,
@@ -52,15 +52,9 @@ lists, strings, numbers, booleans, `None`) can be cached.
 
 ## Shared across processes
 
-A deployment that sets `RUNA_DATABASE_URL` already has a shared cache: `runa.db.cache()` returns
-a cache over a `cache_entries` table in that same database, so there is no second
-service to run.
-
-```python
-from runa import db
-
-cache = db.cache()  # a table in the local file, or in the shared database when the URL is set
-```
+A deployment that sets `RUNA_DATABASE_URL` already has a shared cache: `db.cache()` follows the
+variable like every other concern, a `cache_entries` table in that same database, so there is no
+second service to run.
 
 For hot keys you want off the database's query path, ask for Redis by name (the
 `runa-ai[redis]` extra):
@@ -71,7 +65,7 @@ from runa.cache.redis import RedisCache
 cache = RedisCache("redis://localhost:6379/0")
 ```
 
-Same shape and the same JSON-only values as `SQLiteCache`. One difference: expiry is Redis's
+Same shape and the same JSON-only values as `db.cache()`. One difference: expiry is Redis's
 own, so an expired key is simply gone rather than evicted on the next `get`.
 
 ## Writing Your Own Backend

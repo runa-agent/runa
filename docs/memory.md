@@ -57,7 +57,7 @@ matches = await memory.search("how should I contact this user?", user_id="user-4
 await memory.forget(matches[0].id, user_id="user-42")
 ```
 
-`Memory()` means `db/runa.db` (the same file `SQLiteSession` uses), `sqlite-vec`, and OpenAI's
+`Memory()` means `db/runa.db` (the same file sessions use), `sqlite-vec`, and OpenAI's
 `text-embedding-3-small`. Nothing to configure for the common case. Every memory is scoped by
 `user_id`, so one user's facts never surface in another's search.
 

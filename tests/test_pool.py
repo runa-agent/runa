@@ -62,7 +62,6 @@ def test_every_concern_hands_its_database_its_own_tables(monkeypatch: pytest.Mon
     from runa.db.schema import POSTGRES, ddl
     from runa.db.vectors.postgres import PostgresVectorStore
     from runa.memory import _spec as spec
-    from runa.session.postgres import PostgresSession
 
     url = "postgresql://example/db"
     monkeypatch.setenv(db.DATABASE_URL_ENV, url)
@@ -76,7 +75,7 @@ def test_every_concern_hands_its_database_its_own_tables(monkeypatch: pytest.Mon
     assert "paused_runs" in script(db.paused_runs().database)  # type: ignore[attr-defined]
     assert "agent_messages" in script(db.sessions().database)  # type: ignore[attr-defined]
     # Both sides of the session pair reach the same two tables.
-    assert PostgresSession("s", url).database.tables == db.sessions().database.tables  # type: ignore[attr-defined]
+    assert db.at(url).session("s").database.tables == db.sessions().database.tables  # type: ignore[attr-defined]
     # The vector store's DDL is computed from its spec, so it can only be handed over once the
     # spec is stored: a store built before that would create a table named `_items`.
     vectors = PostgresVectorStore(spec(4), url)

@@ -34,8 +34,6 @@ signature-level reference.
 
 ## Session
 
-::: runa.SQLiteSession
-
 ::: runa.session.Session
 
 ## Memory
@@ -55,8 +53,6 @@ signature-level reference.
 ::: runa.Cache
 
 ::: runa.MemoryCache
-
-::: runa.SQLiteCache
 
 ## MCP Server
 
@@ -156,13 +152,15 @@ signature-level reference.
 
 ::: runa.ConsoleExporter
 
-::: runa.SQLiteExporter
-
 ::: runa.StoreExporter
 
 ::: runa.tracing.TraceStore
 
 ## Storage
+
+::: runa.db.at
+
+::: runa.db.Place
 
 ::: runa.db.traces
 

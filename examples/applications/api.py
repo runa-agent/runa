@@ -1,7 +1,7 @@
 r"""Serving an Agent over HTTP with FastAPI, deployed as a single-worker process.
 
 FastAPI/uvicorn aren't Runa dependencies -- they belong to the app, added via
-`uv add fastapi uvicorn`. One process, one worker: `SQLiteSession`/`runa.db`
+`uv add fastapi uvicorn`. One process, one worker: a local `runa.db`
 skip cross-process locking (see `session.py`), so scale by running more
 single-worker containers (each with their own `db/runa.db`), not more
 workers in one.
@@ -20,7 +20,7 @@ Try it:
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from runa import Agent, SQLiteSession
+from runa import Agent, db
 
 
 class SupportAgent(Agent):
@@ -52,7 +52,7 @@ class ChatResponse(BaseModel):
 @app.post("/chat")
 async def chat(request: ChatRequest) -> ChatResponse:
     """Run one turn for `request.session_id`, resuming its history from `runa.db`."""
-    session = SQLiteSession(request.session_id)
+    session = db.session(request.session_id)
     run = await agent.run(request.message, session=session)
     return ChatResponse(output=run.output, status=run.status, error=run.error)
 

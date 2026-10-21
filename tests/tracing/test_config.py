@@ -266,10 +266,8 @@ def test_the_exporter_writes_to_the_store_it_was_resolved_with(
 ) -> None:
     """One decision per exporter, not one per write.
 
-    `SQLiteExporter.export` used to call a module-level `save_trace` that asked `runa.db` for the
-    backend all over again, so the store a deployment had installed and the store its traces
-    landed in were two separate answers to the same question. Changing the environment after an
-    exporter exists must not move its traces.
+    Changing the environment after an exporter exists must not move its traces: the store a
+    deployment installed and the store its traces land in are one answer, not two.
     """
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
     exporter = export._local_exporter()

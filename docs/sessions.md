@@ -92,19 +92,19 @@ uv add "runa-ai[postgres]"
 export RUNA_DATABASE_URL=postgresql://runa:runa@localhost:5432/runa
 ```
 
-Constructing one by hand is the escape hatch for a store that is not this deployment's own:
+`db.at(url)` is the escape hatch for a store that is not this deployment's own. It takes the
+forms `RUNA_DATABASE_URL` does and hands back the same factories, bound to that URL:
 
 ```python
-from runa import SQLiteSession
-from runa.session.postgres import PostgresSession
+from runa import db
 
-SQLiteSession("user-42", "other/runa.db")  # one specific file
-PostgresSession("user-42", "postgresql://runa:runa@localhost:5432/runa")  # another database
+db.at("sqlite:///other/runa.db").session("user-42")  # one specific file
+db.at("postgresql://runa:runa@localhost:5432/runa").session("user-42")  # another database
 ```
 
-Both implement the same interface, so either can be passed as `session=`. Naming one is the
-exception, not the default: it opts that conversation out of `RUNA_DATABASE_URL`, which is why
-`session="user-42"` is the shape to reach for first.
+Either can be passed as `session=`. Naming a database is the exception, not the default: it opts
+that conversation out of `RUNA_DATABASE_URL`, which is why `session="user-42"` is the shape to
+reach for first.
 
 ## `runa chat`
 
@@ -153,7 +153,7 @@ with nothing in it.
 ## Example
 
 ```python
---8<--"examples/06_session/sqlite_session.py"
+--8<--"examples/06_session/persistent_session.py"
 ```
 
 ```python

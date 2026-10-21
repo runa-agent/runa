@@ -246,7 +246,9 @@ resolved through `db.session(...)`, so one call persists to a local
 file, a shared Postgres, or nothing at all, according to
 `RUNA_DATABASE_URL` -- a backend is never named at the call site. Pass a
 `Session` instead only when a run needs a specific store:
-`SQLiteSession(id, "other/runa.db")` to point at one specific file. A
+`db.at("sqlite:///other/runa.db").session(id)` to point at one specific file.
+`db.at(url)` is the one escape hatch every concern shares (`.cache()`,
+`.traces()`, ...), so no store has a backend-named class of its own. A
 session is where turns live, never who the run is for: that's
 `user_id=` on the run (see [Memory](#7-memory)).
 
@@ -285,7 +287,7 @@ class SupportAgent(Agent):
 `"llm"` always uses a default `Memory()`; pass your own instance for
 `"auto"` mode if you need a non-default `model`/`store`.
 `Memory` is durable, semantic, `user_id`-scoped facts backed by the same
-`db/runa.db` (`sqlite-vec`) `SQLiteSession` uses: `remember`/`search`/
+`db/runa.db` (`sqlite-vec`) sessions use: `remember`/`search`/
 `forget`, nothing lower. This is long-term memory *across* conversations;
 for one conversation's own turns, see [Session](#6-session).
 
@@ -503,7 +505,7 @@ with tracing.trace("nightly-batch") as t:
         ...
 ```
 
-Add a `TraceExporter` (`ConsoleExporter`, `SQLiteExporter`, or your own)
+Add a `TraceExporter` (`ConsoleExporter`, `StoreExporter(db.at(url).traces())`, or your own)
 to change *where* traces go; never change *whether* they're captured.
 There is no flag for that.
 

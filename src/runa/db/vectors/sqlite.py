@@ -8,7 +8,7 @@ store is two tables joined by rowid: one `add` is two inserts that have to agree
 one search is a `MATCH`/`k` query against the virtual table joined back for the payload. That
 pairing is what both concerns had identical, down to the `ORDER BY vectors.distance`.
 
-Which database that is is `runa.db.sqlite_database`'s answer, not this module's.
+Which database that is is `runa.db`'s answer, not this module's.
 """
 
 import sqlite3

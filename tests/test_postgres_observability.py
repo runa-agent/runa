@@ -8,7 +8,7 @@ they are indistinguishable from the others through the interface, and this backe
 mechanisms -- the `ON CONFLICT` upsert, the batched span fetch -- are checks in those lists rather
 than assertions written twice.
 
-What is left here is what no other backend has: the `PostgresExporter`, and `RUNA_DATABASE_URL`
+What is left here is what no other backend has: a `StoreExporter` over it, and `RUNA_DATABASE_URL`
 routing, which is the promise that moving a deployment is one environment variable.
 
 Needs a live Postgres at `RUNA_TEST_POSTGRES_DSN` (defaults to a local one); skipped wholesale when
@@ -108,11 +108,11 @@ def _trace(name: str) -> Trace:
 
 
 def test_the_exporter_persists_a_finished_trace(unique_id: str) -> None:
-    """`PostgresExporter` is a `StoreExporter` over this store; it must actually write."""
-    from runa.tracing.postgres import PostgresExporter
+    """A `StoreExporter` over this store must actually write."""
+    from runa.tracing import StoreExporter
 
     trace = _trace(unique_id)
-    PostgresExporter(_DSN).export(trace)
+    StoreExporter(db.at(_DSN).traces()).export(trace)
 
     assert _traces().get(trace.id) is not None
 

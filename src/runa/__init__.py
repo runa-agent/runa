@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from runa._models import Model, OpenAICompatibleModel
     from runa._types import ModelSettings, RunContext, Usage
     from runa.agent import Agent
-    from runa.cache import Cache, MemoryCache, SQLiteCache
+    from runa.cache import Cache, MemoryCache
     from runa.eval import (
         DEFAULT_THRESHOLDS,
         Case,
@@ -52,7 +52,6 @@ if TYPE_CHECKING:
     from runa.memory import Memory, MemoryMatch
     from runa.run import Run, RunStatus, RunStream
     from runa.run_state import Interruption, RunState
-    from runa.session import SQLiteSession
     from runa.stream_events import (
         AgentChanged,
         StreamEvent,
@@ -64,7 +63,6 @@ if TYPE_CHECKING:
     from runa.tracing import (
         ConsoleExporter,
         Span,
-        SQLiteExporter,
         StoreExporter,
         Trace,
         TraceExporter,
@@ -104,9 +102,6 @@ _EXPORTS = {
     "RunState": "runa.run_state",
     "RunStatus": "runa.run",
     "RunStream": "runa.run",
-    "SQLiteCache": "runa.cache",
-    "SQLiteExporter": "runa.tracing",
-    "SQLiteSession": "runa.session",
     "Span": "runa.tracing",
     "StoreExporter": "runa.tracing",
     "StreamEvent": "runa.stream_events",
@@ -158,9 +153,6 @@ __all__ = [
     "RunStream",
     "RunState",
     "RunStatus",
-    "SQLiteCache",
-    "SQLiteExporter",
-    "SQLiteSession",
     "Span",
     "StoreExporter",
     "StreamEvent",

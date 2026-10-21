@@ -8,8 +8,8 @@ Three backends behind one protocol. `MemoryCache` (`cache/memory.py`) is an in-p
 when the process exits. `DatabaseCache` (`cache/database.py`) is persistent, and `runa.db.cache()`
 builds it the way it builds a session store: a table in the shared Postgres when
 `RUNA_DATABASE_URL` is a `postgresql://` one, in the local SQLite file otherwise (the in-memory
-database under `memory://`, where nothing else is persisted either). `SQLiteCache` is that same
-cache pointed at one specific file. `RedisCache` (`cache/redis.py`) is the explicit opt-in for a
+database under `memory://`, where nothing else is persisted either), and `runa.db.at(url).cache()`
+builds it in some other database. `RedisCache` (`cache/redis.py`) is the explicit opt-in for a
 deployment that wants its hot keys off the database's query path.
 
 Values round-trip through `json.dumps`/`json.loads`, not `pickle`, in every persistent backend:
@@ -63,9 +63,8 @@ class Cache(Protocol):
         ...
 
 
-# Below `Cache`, for symmetry with the other concern packages. Both local backends are always
+# Below `Cache`, for symmetry with the other concern packages. `MemoryCache` is always
 # importable; `RedisCache` needs its extra, so it stays an explicit import.
 from runa.cache.memory import MemoryCache  # noqa: E402
-from runa.cache.sqlite import SQLiteCache  # noqa: E402
 
-__all__ = ["Cache", "MemoryCache", "SQLiteCache"]
+__all__ = ["Cache", "MemoryCache"]

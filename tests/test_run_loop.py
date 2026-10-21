@@ -20,6 +20,7 @@ from helpers import (
     tool_call_response,
 )
 
+from runa import db
 from runa._models import ModelRequest, StreamDelta
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.compact import default_compactor
@@ -609,9 +610,7 @@ def test_a_resumed_run_reports_the_calls_that_ran_before_the_pause_too() -> None
 
 def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
     """A paused session-backed run saves nothing; resuming saves the full turn once."""
-    from runa.session import SQLiteSession
-
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
     ran: list[str] = []
     agent = scripted_agent(
         tools=_safe_and_gated_tools(ran),
@@ -637,9 +636,8 @@ def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
 def test_a_loaded_pause_keeps_the_session_turn(tmp_path: Any) -> None:
     """The transcript's `session_input`/`generated` survive the stored pause and a restart."""
     from runa.run_state import RunState
-    from runa.session import SQLiteSession
 
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
     ran: list[str] = []
     agent = scripted_agent(
         tools=_safe_and_gated_tools(ran),
@@ -1169,9 +1167,7 @@ def test_stream_exposes_the_finished_result_with_a_trace() -> None:
 
 def test_stream_persists_the_turn_to_the_session(tmp_path: Any) -> None:
     """`run_streamed(session=...)` saves the turn like `run` does."""
-    from runa.session import SQLiteSession
-
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
     agent = scripted_agent(model=_ScriptedStreamingModel([StreamDelta(text="Hi")]))
 
     _streamed(agent, "hello", session=session)
@@ -1339,9 +1335,7 @@ def test_compact_defaults_to_off() -> None:
 
 def test_compact_shrinks_session_backed_history_too(tmp_path: Any) -> None:
     """A compactor replaces a session's stored history too, not just `agent.history`."""
-    from runa.session import SQLiteSession
-
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
     asyncio.run(
         session.add_items(
             [
@@ -1399,9 +1393,7 @@ def test_compact_applies_a_rewrite_that_drops_nothing(tmp_path: Any) -> None:
 
     Mid-run on what the model is sent, and at the end on what the session stores.
     """
-    from runa.session import SQLiteSession
-
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
 
     def truncate(items: list[Any], usage_tokens: int) -> list[Any]:
         return [{**item, "content": (item.get("content") or "")[:5]} for item in items]
@@ -1647,9 +1639,7 @@ def test_a_tool_and_a_delegate_see_the_runs_user_on_their_run_context() -> None:
 
 def test_trace_session_id_is_derived_from_the_session(tmp_path: Any) -> None:
     """A session-backed run's `Trace.session_id` is that session's id, for grouping in the UI."""
-    from runa.session import SQLiteSession
-
-    session = SQLiteSession("s1", db_path=tmp_path / "runa.db")
+    session = db.at(f"sqlite:///{tmp_path / 'runa.db'}").session("s1")
     agent = scripted_agent(model=ScriptedModel([text_response("ok")]))
 
     result = agent.run_sync("hi", session=session)

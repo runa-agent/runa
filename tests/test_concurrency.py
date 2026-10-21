@@ -11,12 +11,11 @@ from typing import Any
 
 import pytest
 
-from runa import Agent
+from runa import Agent, db
 from runa._models import StreamDelta
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
 from runa.run_internal.agent_shape import shape_of as built_shape
-from runa.session import SQLiteSession
 from runa.tool import tool
 
 
@@ -116,12 +115,12 @@ def test_concurrent_runs_with_a_session_are_allowed(tmp_path: Any) -> None:
         model = _YieldingModel([_final_message("a"), _final_message("b")])
 
     agent = Shared()
-    db = tmp_path / "runa.db"
+    place = db.at(f"sqlite:///{tmp_path / 'runa.db'}")
 
     async def both() -> Any:
         return await asyncio.gather(
-            agent.run("one", session=SQLiteSession("s1", db)),
-            agent.run("two", session=SQLiteSession("s2", db)),
+            agent.run("one", session=place.session("s1")),
+            agent.run("two", session=place.session("s2")),
         )
 
     runs = asyncio.run(both())
@@ -229,12 +228,12 @@ def test_concurrent_streams_with_a_session_are_allowed(tmp_path: Any) -> None:
 
     agent = Shared()
     agent.model = _YieldingStreamModel(["a", "b"])
-    db = tmp_path / "runa.db"
+    place = db.at(f"sqlite:///{tmp_path / 'runa.db'}")
 
     async def both() -> Any:
         return await asyncio.gather(
-            _consume(agent, "one", SQLiteSession("s1", db)),
-            _consume(agent, "two", SQLiteSession("s2", db)),
+            _consume(agent, "one", place.session("s1")),
+            _consume(agent, "two", place.session("s2")),
         )
 
     runs = asyncio.run(both())

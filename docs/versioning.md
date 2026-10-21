@@ -9,9 +9,9 @@ Anything importable from the top-level `runa` package, plus the documented submo
 
 ```python
 from runa import Agent, tool, guardrail, approval, Run, ModelSettings   # public
-from runa.session import SQLiteSession                                  # public
+from runa.session import Session                                        # public
 from runa.tracing import observe, trace, TraceStore                     # public
-from runa.db import traces, sessions, evals, session, cache              # public
+from runa.db import at, traces, sessions, evals, session, cache          # public
 from runa.memory import Memory
 from runa.knowledge import Knowledge
 from runa.eval import Case, Report

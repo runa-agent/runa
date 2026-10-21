@@ -43,7 +43,7 @@ knowledge = Knowledge("app/knowledge")  # the default directory
 matches = await knowledge.search("refund policy")
 ```
 
-`Knowledge()` means `app/knowledge/`, `db/runa.db` (the same file `SQLiteSession`/`Memory` use),
+`Knowledge()` means `app/knowledge/`, `db/runa.db` (the same file sessions and `Memory` use),
 `sqlite-vec`, and OpenAI's `text-embedding-3-small`. A relative directory is relative to the
 project, not to wherever the process happens to be started, so an app served from somewhere else
 (`runa serve`, an embedded `create_app(root)`) reads its own corpus; pass an absolute path to mean

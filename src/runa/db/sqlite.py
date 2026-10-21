@@ -21,7 +21,7 @@ database that doesn't exist yet is empty rather than a side effect.
 `SQLiteDatabase` is `db/handle.py`'s `Database` over all of the above: a concern's queries,
 written once in Postgres's numbered style, run here.
 
-Which database a deployment has is `runa.db.sqlite_database`'s answer, not this module's.
+Which database a deployment has is `runa.db`'s answer, not this module's.
 """
 
 import asyncio

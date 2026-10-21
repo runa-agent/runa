@@ -2,9 +2,9 @@
 
 See RUNA.md #6 and docs/sessions.md ("Writing Your Own Backend").
 
-`SQLiteSession` is the only session Runa ships for a single local process; a real custom store
-would back this with something durable, not a plain dict. This one stays in-process on purpose,
-to keep the interface itself the whole point.
+`db.session(...)` is the session Runa ships, over whichever database `runa.db` names; a real
+custom store would back this with something durable, not a plain dict. This one stays in-process
+on purpose, to keep the interface itself the whole point.
 
 Run it:
 

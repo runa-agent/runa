@@ -34,6 +34,7 @@ from contracts import session as session_contract
 from contracts import vector as vector_contract
 
 import runa.db.pool as pool_module
+from runa import db
 from runa.cache import ENTRIES
 from runa.cache.database import DatabaseCache
 from runa.db.pool import PostgresDatabase
@@ -42,7 +43,6 @@ from runa.db.vectors.postgres import PostgresVectorStore
 from runa.run_state.database import DatabasePausedRunStore
 from runa.run_state.store import PAUSED_RUNS
 from runa.session.database import DatabaseSessionStore
-from runa.session.postgres import PostgresSession
 from runa.session.store import MESSAGES, SESSIONS
 
 _DSN = os.environ.get("RUNA_TEST_POSTGRES_DSN", "postgresql://runa:runa@localhost:5432/runa")
@@ -92,7 +92,7 @@ def test_session_contract(unique_id: str, check: session_contract.Check) -> None
     rather than the resolution: `test_postgres_observability.py` covers the routing itself.
     """
     pair = session_contract.SessionPair(
-        write=lambda session_id, agent=None: PostgresSession(session_id, _DSN, agent),
+        write=lambda session_id, agent=None: db.at(_DSN).session(session_id, agent),
         read=DatabaseSessionStore(PostgresDatabase(_DSN, SESSIONS, MESSAGES)),
         tag=unique_id,
     )

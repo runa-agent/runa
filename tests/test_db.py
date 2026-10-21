@@ -214,36 +214,42 @@ def test_a_shared_deployment_still_places_a_file_path(monkeypatch: pytest.Monkey
     assert _app.project_path("app/knowledge") == Path("other/project/app/knowledge")
 
 
-def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Constructing a local adapter by name must land on the same file the factories pick.
-
-    These seven used to default to a `db/runa.db` constant of their own, so an app that set
-    `sqlite:///data/runa.db` moved six concerns and left whichever one it built by hand behind
-    on the old path -- silently, and only in the deployment that set the variable.
-    """
+def test_a_bare_memory_or_knowledge_honors_the_sqlite_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A store built with no arguments lands on the same file the factories pick."""
     monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:///data/runa.db")
 
-    from runa.cache.sqlite import SQLiteCache
-    from runa.session.sqlite import SQLiteSession
-    from runa.tracing.export import SQLiteExporter
-
     expected = Path("data/runa.db")
-    assert SQLiteSession("user-42").database.location == expected  # type: ignore[attr-defined]
-    assert SQLiteExporter().store.database.location == expected  # type: ignore[attr-defined]
-    assert SQLiteCache().database.location == expected  # type: ignore[attr-defined]
     assert Memory(dimensions=3)._store.db_path == expected  # type: ignore[attr-defined]
     assert Knowledge(dimensions=3)._store.db_path == expected  # type: ignore[attr-defined]
 
 
-def test_an_explicit_db_path_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The sharp knife survives: `db_path=` points at some other file whatever the URL says."""
+def test_at_puts_every_concern_in_the_database_it_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sharp knife: `db.at(url)` points every concern at some other database, together.
+
+    Whatever the environment says, so a store built by hand for one concern can't split from
+    another built by hand beside it.
+    """
     monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:///data/runa.db")
+    other = db.at("sqlite:///other/runa.db")
 
-    from runa.session.sqlite import SQLiteSession
+    expected = Path("other/runa.db")
+    for store in (other.session("s"), other.sessions(), other.traces(), other.evals()):
+        assert store.database.location == expected  # type: ignore[attr-defined]
+    assert other.cache().database.location == expected  # type: ignore[attr-defined]
+    assert other.paused_runs().database.location == expected  # type: ignore[attr-defined]
+    assert db.session("s").database.location == Path("data/runa.db")  # type: ignore[attr-defined]
 
-    session = SQLiteSession("user-42", "other/runa.db")
 
-    assert session.database.location == Path("other/runa.db")  # type: ignore[attr-defined]
+def test_at_a_shared_url_reaches_postgres_and_an_unknown_one_is_a_user_error() -> None:
+    """`at` takes the forms `RUNA_DATABASE_URL` does; a typo in code is the code's mistake."""
+    pytest.importorskip("asyncpg")
+
+    shared = db.at("postgresql://example/db")
+    assert type(shared.session("s").database).__name__ == "PostgresDatabase"  # type: ignore[attr-defined]
+    assert shared.shared_url() == "postgresql://example/db"
+
+    with pytest.raises(UserError, match="postgresql://, sqlite:// or memory://"):
+        db.at("mysql://runa@localhost/runa")
 
 
 def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -433,10 +439,8 @@ def test_a_local_connection_applies_a_schema_once_per_file(
     """
     import asyncio
 
-    from runa.cache.sqlite import SQLiteCache
     from runa.db import sqlite as sqlite_db
     from runa.db.schema import Declaration, Dialect
-    from runa.session.sqlite import SQLiteSession
 
     applied: list[tuple[str, ...]] = []
     render = sqlite_db.ddl
@@ -447,14 +451,16 @@ def test_a_local_connection_applies_a_schema_once_per_file(
 
     monkeypatch.setattr(sqlite_db, "ddl", recording)
     db_path = tmp_path / "db" / "runa.db"
-    session = SQLiteSession("conv-1", db_path)
+    session = db.at(f"sqlite:///{db_path}").session("conv-1")
 
     asyncio.run(session.add_items([{"role": "user", "content": "hi"}]))
     for _ in range(5):
         assert len(asyncio.run(session.get_items())) == 1
     assert applied == [("agent_sessions", "agent_messages")]
 
-    asyncio.run(SQLiteCache(db_path).set("k", "v"))  # another concern's tables, same file
+    asyncio.run(
+        db.at(f"sqlite:///{db_path}").cache().set("k", "v")
+    )  # another concern's tables, same file
     assert applied[1:] == [("cache_entries",)]
 
     db_path.unlink()  # a file deleted underneath a live process is a new file, not a known one
@@ -501,14 +507,11 @@ def test_a_local_read_answers_no_rows_only_for_a_table_that_is_absent(tmp_path: 
     from contextlib import closing
 
     from runa.db.schema import SchemaOutOfDate
-    from runa.db.sqlite import SQLiteDatabase
-    from runa.session.database import DatabaseSessionStore
-    from runa.session.sqlite import SQLiteSession
-    from runa.session.store import MESSAGES, SESSIONS
 
     db_path = tmp_path / "db" / "runa.db"
-    asyncio.run(SQLiteSession("conv-1", db_path).add_items([{"role": "user", "content": "hi"}]))
-    store = DatabaseSessionStore(SQLiteDatabase(db_path, SESSIONS, MESSAGES))
+    here = db.at(f"sqlite:///{db_path}")
+    asyncio.run(here.session("conv-1").add_items([{"role": "user", "content": "hi"}]))
+    store = here.sessions()
     assert [summary.id for summary in run_sync(store.listing())] == ["conv-1"]
 
     with closing(sqlite3.connect(db_path)) as conn:

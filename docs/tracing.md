@@ -74,10 +74,13 @@ add_exporter(ConsoleExporter())  # runa.db still gets written to, console output
 swaps exporters for one block's duration:
 
 ```python
-from runa import ConsoleExporter, SQLiteExporter, observe
+from runa import ConsoleExporter, StoreExporter, db, observe
 
-observe(exporter=[SQLiteExporter(), ConsoleExporter()])  # replaces the exporter list entirely
+observe(exporter=[StoreExporter(db.traces()), ConsoleExporter()])  # replaces the list entirely
 ```
+
+`StoreExporter(db.traces())` is the default store exporter, so naming it keeps traces in the same
+database as every other concern. `StoreExporter(db.at(url).traces())` exports to some other one.
 
 Write your own by implementing `TraceExporter`'s single method, `export(self, trace: Trace) -> None`.
 
@@ -100,7 +103,7 @@ echo "LANGFUSE_SECRET_KEY=sk-lf-..." >> .env
 
 Set `LANGFUSE_HOST` too for a non-default Langfuse region or a self-hosted instance. Without
 `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` set, or without the `langfuse` extra installed,
-tracing behaves exactly as if `LangfuseExporter` didn't exist -- SQLite only.
+tracing behaves exactly as if `LangfuseExporter` didn't exist -- `runa.db` only.
 
 To point at a Langfuse project without using the environment (e.g. a second project, or one
 picked at runtime), construct `LangfuseExporter` directly instead and add it with `add_exporter`:
