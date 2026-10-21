@@ -70,6 +70,7 @@ def _knowledge(tmp_path: Path, directory: Path | None = None) -> Knowledge:
     )
 
 
+@pytest.mark.usefixtures("project_database")
 def test_default_configuration_needs_no_arguments() -> None:
     """`Knowledge()` means `app/knowledge/` + `db/runa.db` + `sqlite-vec` + the default model."""
     know = Knowledge()

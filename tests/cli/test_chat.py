@@ -190,6 +190,7 @@ def test_run_agent_repl_starts_a_new_session_each_time(
     assert all(session_id.startswith("Support-") for session_id in session_ids)
 
 
+@pytest.mark.usefixtures("project_database")
 def test_run_agent_repl_continue_resumes_the_most_recent_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -250,6 +251,7 @@ def test_run_agent_repl_resume_with_an_id_uses_it_directly(
     assert seen == ["Support-custom"]
 
 
+@pytest.mark.usefixtures("project_database")
 def test_run_agent_repl_resume_without_an_id_prompts_a_picker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

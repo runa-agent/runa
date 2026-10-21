@@ -39,6 +39,7 @@ def test_list_sessions_lists_a_session_with_history(tmp_path: Path) -> None:
     assert output.startswith("SupportAgent  ")
 
 
+@pytest.mark.usefixtures("project_database")
 def test_list_sessions_reads_the_project_in_use(tmp_path: Path) -> None:
     """The project `project.use` named is the one whose `db/runa.db` gets opened.
 

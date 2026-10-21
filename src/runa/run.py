@@ -51,8 +51,10 @@ class Run(GuardrailAudit):
 
     `status` is `"paused"` when a tool call needs human approval: resolve each of
     `interruptions` on `to_state()`, then pass that state back to `run`/`run_sync` in place of a
-    message. It is `"error"` when a `RunaError` (a guardrail tripwire, `MaxTurnsExceeded`, a
-    model error, ...) stopped the run; `error` then holds that exception's message.
+    message. The pause is already kept in `runa.db` under `run_id`, so another process resumes it
+    from `RunState.load(agent, run_id)`, and either way it resumes once. It is `"error"` when a
+    `RunaError` (a guardrail tripwire, `MaxTurnsExceeded`, a model error, ...) stopped the run;
+    `error` then holds that exception's message.
 
     `guardrail_results` is the guardrail audit trail: every guardrail that ran (tripped or not, a
     delegate's included), keyed by the `Phase` it ran in, whatever the `status`. The four
@@ -88,6 +90,11 @@ class Run(GuardrailAudit):
         """
         return self._transcript.tool_calls
 
+    @property
+    def run_id(self) -> str | None:
+        """The id a paused run is kept under in `runa.db`, for `RunState.load`; else `None`."""
+        return self._state.run_id if self._state is not None else None
+
     def to_state(self) -> RunState:
         """The paused run's `RunState`: approve or reject its `interruptions`, then resume."""
         if self._state is None:
@@ -104,12 +111,11 @@ class Run(GuardrailAudit):
         an approval" from "it failed" without parsing prose. `trace_id` is the handle for
         `runa traces show`, which is what makes a production incident debuggable.
 
-        A paused run's `RunState` is not part of it: the state carries the run's approval ledger,
-        which is the server's to keep, so a transport holds it itself and hands out a handle
-        (`runa serve` keeps it in `runa.db.paused_runs()`).
+        A paused run's `RunState` is not part of it, only its `run_id`: the state carries the
+        run's approval ledger, which stays in `runa.db`, so a client holds a handle to resume by.
 
-        One-way, unlike `RunState.to_json()`: a `Run` holds live objects (an `Agent`, a `Trace`'s
-        spans) and there is no `from_payload`. The guardrail audit trail is left out for the same
+        One-way: a `Run` holds live objects (an `Agent`, a `Trace`'s spans) and there is no
+        `from_payload`. The guardrail audit trail is left out for the same
         reason `RunState` omits it -- every guardrail that ran is already a span in the trace
         `trace_id` names, tripped or not. Plain dicts only, no transport imported here, so this
         stays a runtime concern.
@@ -119,6 +125,7 @@ class Run(GuardrailAudit):
             "output": _jsonable(self.output),
             "error": self.error,
             "trace_id": self.trace.id,
+            "run_id": self.run_id,
             "usage": {
                 "input_tokens": self.usage.input_tokens,
                 "output_tokens": self.usage.output_tokens,

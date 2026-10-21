@@ -1,9 +1,8 @@
-"""run_state/store.py: `PausedRunStore`, where a server keeps the runs it paused.
+"""run_state/store.py: `PausedRunStore`, where every paused run is kept until it resumes.
 
-A paused `RunState` carries its approval ledger, and the ledger is what stops a call id from
-running twice and records who approved what. Handed to a client, that record is the client's to
-replay or edit. Kept here, a client holds only a `run_id`, and resuming one is a `claim`: an
-atomic delete, so of two requests resuming the same pause exactly one gets it.
+A paused `RunState` carries its approval ledger, the record of who approved what. Kept here, a
+caller holds only a `run_id`, and resuming one is a `claim`: an atomic delete, so of two
+resumes of the same pause exactly one gets it. `RunState` is the only caller.
 
 One interface, one implementation over `db/handle.py`'s `Database`: `run_state/database.py`.
 Which database it queries is `runa.db.paused_runs()`'s decision. Nothing in this module touches a
@@ -29,10 +28,10 @@ PAUSED_RUNS = Table(
 
 
 class PausedRunStore(Protocol):
-    """What a server needs to hold a paused run for a client: save it, read it, claim it.
+    """What a paused run needs kept until it resumes: save it, read it, claim it.
 
     Every method is scoped to the agent the run started with, so a pause is only ever found again
-    through that agent's route. `state` is `RunState.to_json()`'s blob, stored as is.
+    through that agent. `state` is `RunState`'s own blob, stored as is.
     """
 
     async def save(self, agent: str, state: dict[str, Any]) -> str:

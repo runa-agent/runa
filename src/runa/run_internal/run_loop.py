@@ -35,6 +35,7 @@ from runa.exceptions import (
     ModelBehaviorError,
     OperatorError,
     RunaError,
+    RunAlreadyResumed,
     RunTimeout,
     ServiceUnavailable,
     UnexpectedError,
@@ -76,6 +77,9 @@ class _Frame:
     the guardrail audit trail are the run tree's, shared by reference with every delegate's frame,
     and a paused `RunState` carries them beside the record. The frame exists before the MCP
     servers are reached, so a run that fails reaching them still reports.
+
+    `owner` is the name of the agent the run started with, under which a pause is kept in
+    `runa.db`; `None` for a delegate, whose pause is its caller's.
     """
 
     shape: AgentShape
@@ -86,6 +90,7 @@ class _Frame:
     guardrail_results: GuardrailResults
     session: Session | None
     hooks: _Dispatch[Any]
+    owner: str | None
     emit: Emit | None = None
 
     @property
@@ -252,6 +257,7 @@ class _Run:
             record=record,
             agent_span=_Spans(frame.trace, under.id).open(shape.name, "agent", input=message),
             session=None,
+            owner=None,
             emit=None,
         )
         run = await _within(nested, message)
@@ -477,29 +483,38 @@ def _errored(failure: RunaError, frame: _Frame) -> Run:
     )
 
 
+async def _timed(turn: Awaitable[Run], frame: _Frame) -> Run:
+    """Await `turn` within the starting agent's `timeout`, less what the record already spent.
+
+    Overrunning it is `RunTimeout`. The time spent here is added to the record on every way out,
+    so a pause kept after this returns carries it.
+    """
+    timeout, record = frame.shape.timeout, frame.record
+    began = time.monotonic()
+    try:
+        if timeout is None:
+            return await turn
+        try:
+            async with asyncio.timeout(timeout - record.elapsed):
+                return await turn
+        except TimeoutError as exc:
+            raise RunTimeout(f"run timed out after {timeout}s") from exc
+    finally:
+        record.elapsed += time.monotonic() - began
+
+
 async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
     """Await the whole run and return its `Run`, the `"error"` one included.
 
     The boundary where "errors never raise out of a run" is kept: it encloses everything a run
     does, application code included (a `Hooks` method, a `Session`, a `Compactor`), and catches
     `Exception`. Anything not a `RunaError` becomes `UnexpectedError`, its traceback logged.
-    The starting agent's `timeout` bounds it, as `RunTimeout`, less what the record has already
-    spent before a pause; the time spent here is added to the record on every way out. The frame's
-    span is closed on every way out too; exporting the trace is `_traced`'s.
+    The frame's span is closed on every way out; exporting the trace is `_traced`'s.
 
     `BaseException` (cancellation) and `OperatorError` pass through, the span still closed.
     """
-    timeout, record = frame.shape.timeout, frame.record
-    began = time.monotonic()
     try:
-        if timeout is None:
-            result = await turn
-        else:
-            try:
-                async with asyncio.timeout(timeout - record.elapsed):
-                    result = await turn
-            except TimeoutError as exc:
-                raise RunTimeout(f"run timed out after {timeout}s") from exc
+        result = await turn
     except OperatorError as exc:
         _close_span(frame.agent_span, error=str(exc))
         raise
@@ -515,20 +530,27 @@ async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
         failure = UnexpectedError(exc)
     else:
         return result
-    finally:
-        record.elapsed += time.monotonic() - began
     return _errored(failure, frame)
 
 
-async def _within(frame: _Frame, input: str | list[ConversationItem] | None) -> Run:
+async def _within(
+    frame: _Frame,
+    input: str | list[ConversationItem] | None,
+    *,
+    claiming: RunState | None = None,
+) -> Run:
     """Run `frame.shape`'s agent on `input`, or with `None`, continue its paused record, guarded.
 
-    Every entry point ends here once its frame is built. Listing the MCP tools (which may start a
-    subprocess) and reading the session are inside `_guarded` too, so their failures end the run
-    like any other.
+    Every entry point ends here once its frame is built. Claiming the pause a resumed run is
+    `claiming`, listing the MCP tools (which may start a subprocess), reading the session and
+    keeping a pause in `runa.db` are inside `_guarded` too, so their failures end the run like any
+    other. A pause is kept once the clock has stopped, so it carries all the time it spent, and
+    only by a frame with an `owner`: a delegate's pause is carried by its caller's.
     """
 
     async def turn() -> Run:
+        if claiming is not None and not await claiming._claim():
+            raise RunAlreadyResumed(claiming.run_id)
         shape = await frame.shape.with_mcp_tools()
         if input is not None:
             session = frame.session
@@ -536,7 +558,13 @@ async def _within(frame: _Frame, input: str | list[ConversationItem] | None) -> 
             frame.record.transcript = Transcript.start(_turn_items(input), prior)
         return await _drive(_Run(frame, shape), input)
 
-    return await _guarded(turn(), frame)
+    async def kept() -> Run:
+        run = await _timed(turn(), frame)
+        if run.status == "paused" and frame.owner is not None:
+            await run.to_state()._keep(frame.owner)
+        return run
+
+    return await _guarded(kept(), frame)
 
 
 def _turn_items(input: str | list[ConversationItem]) -> list[ConversationItem]:
@@ -712,6 +740,7 @@ async def _run_async(
         guardrail_results=GuardrailResults(),
         session=session,
         hooks=dispatch,
+        owner=shape.name,
         emit=emit,
     )
     return await _traced(_within(frame, input), trace)
@@ -723,7 +752,11 @@ async def _resume(
     session: Session | None,
     emit: Emit | None = None,
 ) -> Run:
-    """Continue a paused run once its interruptions are resolved, on a copy of its record."""
+    """Continue a paused run once its interruptions are resolved, on a copy of its record.
+
+    The run claims the pause first, so a pause resumed already ends in `RunAlreadyResumed`. A
+    pause the resumed run comes to is its own, kept under the agent the run started with.
+    """
     shape = shape_of(state.agent)
     frame = _Frame(
         shape=shape,
@@ -734,9 +767,10 @@ async def _resume(
         guardrail_results=state.guardrail_results.snapshot(),
         session=session,
         hooks=dispatch,
+        owner=state._owner,
         emit=emit,
     )
-    return await _traced(_within(frame, None), state.trace)
+    return await _traced(_within(frame, None, claiming=state), state.trace)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]

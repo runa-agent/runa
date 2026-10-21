@@ -2,11 +2,15 @@
 
 A run is one `_RunRecord`, the facts about it that outlive the call running it, held by the turn
 loop as it goes and serialized as is. A fact a run starts carrying is a field there, and nowhere
-else: it reaches a paused state, its JSON and a resumed run with no further edit.
+else: it reaches a paused state, its stored row and a resumed run with no further edit.
+
+A pause is kept in `runa.db.paused_runs()` the moment it happens, under a `run_id`, and resuming
+it claims that row: an atomic delete, so of any number of resumes of one pause, in one process
+or across replicas, exactly one runs. The blob a row holds is this module's own format, never
+handed out, so no copy of a pause exists that could be resumed a second time.
 """
 
 import copy
-import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -20,6 +24,7 @@ from pydantic import (
 )
 
 from runa._items import ConversationItem
+from runa._loop import run_sync
 from runa._types import RunContext
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
@@ -49,7 +54,7 @@ def _find_agent_by_name(root: Agent, name: str) -> Agent:
 
 
 def _agent_from_json(value: Any, info: ValidationInfo) -> Any:
-    """A live agent passes through; a name is found again from the `root` `from_json` was given."""
+    """A live agent passes through; a name is found again from the `root` a load was given."""
     if not isinstance(value, str):
         return value
     return _find_agent_by_name((info.context or {})["root"], value)
@@ -88,7 +93,7 @@ class Interruption:
 
     `name` is the tool's own name, which is all a decision needs: the sticky ledger is keyed by
     it, and the resumed run looks the tool itself up again off the agent's shape. Carrying the
-    `FunctionTool` here as well would mean `from_json` had to rebuild one from a name, which for
+    `FunctionTool` here as well would mean `load` had to rebuild one from a name, which for
     an MCP tool means connecting to the server just to read a deserialized blob.
 
     Which run a paused call belongs to isn't here either, and needn't be: a call surfaced by a
@@ -151,9 +156,10 @@ class _RunRecord(BaseModel):
 
 
 class _RunStateSchema(BaseModel):
-    """The JSON envelope a `RunState` serializes through: its record, and what its tree shares.
+    """The JSON envelope a `RunState` is kept as: its record, and what its tree shares.
 
-    The guardrail audit trail isn't serialized: each result is already a span in the trace.
+    The guardrail audit trail isn't serialized: each result is already a span in the trace. Nor
+    are `run_id` and the owning agent's name, the keys the row is kept under.
     """
 
     schema_version: Literal[5]
@@ -172,14 +178,19 @@ class RunState(GuardrailAudit):
     message that requested the `pending` calls. `run_context` is the paused run's `RunContext`,
     its `context`, user and usage so far.
 
-    `to_json()`/`to_string()`/`from_json()`/`from_string()` let a paused run survive a process
-    restart -- see their docstrings for what is (and isn't) preserved.
+    `run_id` is the handle the pause is kept under in `runa.db`, and a pause resumes once: the
+    resumed run claims it, and resuming it again, from this object or from `load`, is an error
+    `Run`. `load(agent, run_id)` is how another process, or a later request, gets it back.
     """
 
     _record: _RunRecord
     trace: Trace
     _approvals: ApprovalLedger
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
+    run_id: str = ""
+    _owner: str = ""
+    """The name of the agent the run started with: whose pause this is, and the key it is kept
+    and found under."""
 
     @property
     def agent(self) -> Agent:
@@ -234,56 +245,69 @@ class RunState(GuardrailAudit):
             self._approvals.record(interruption.name, approved=False, message=rejection_message)
         self._approvals.record_call(interruption.call_id, approved=False, message=rejection_message)
 
-    def _to_schema(self) -> _RunStateSchema:
-        return _RunStateSchema(
+    @classmethod
+    async def load(cls, agent: Agent, run_id: str) -> RunState | None:
+        """The pause `agent`'s run is kept under as `run_id`; `None` if there is none.
+
+        `agent` is a fresh instance of the agent the run started with, and a pause is found only
+        through it. The agent running at the pause (a handoff may have switched it) and each
+        pending interruption's agent are found again from it by name. Loading resolves no tools,
+        so it never reaches an agent's MCP servers, and it spends nothing: the pause is claimed
+        when the run resumes, so a decision about a call the pause doesn't have can still be
+        refused first. A pause already resumed is `None`, like one that never existed.
+
+        A `context` that was a dataclass comes back as a plain dict, not its original class.
+        Raises `UserError` for a pause this Runa can no longer rebuild: an unknown schema
+        version, a malformed field, or an agent name no longer reachable from `agent`.
+        """
+        from runa import db
+
+        state_json = await db.paused_runs().load(agent.name, run_id)
+        if state_json is None:
+            return None
+        state = cls._from_json(agent, state_json)
+        state.run_id, state._owner = run_id, agent.name
+        return state
+
+    @classmethod
+    def load_sync(cls, agent: Agent, run_id: str) -> RunState | None:
+        """Synchronous `load`, for a caller resuming with `run_sync`."""
+        return run_sync(cls.load(agent, run_id))
+
+    async def _keep(self, owner: str) -> None:
+        """Save this pause as `owner`'s run, under the new `run_id` it is resumed by."""
+        from runa import db
+
+        self._owner = owner
+        self.run_id = await db.paused_runs().save(owner, self._to_json())
+
+    async def _claim(self) -> bool:
+        """Take this pause off the store to resume it; `False` if it was already resumed."""
+        from runa import db
+
+        return await db.paused_runs().claim(self._owner, self.run_id)
+
+    def _to_json(self) -> dict[str, Any]:
+        """The row this pause is kept as: everything the run carries, agents by name.
+
+        Not included: the guardrail audit trail and the trace's spans, both exported as spans.
+        """
+        schema = _RunStateSchema(
             schema_version=_SCHEMA_VERSION,
             trace=self.trace,
             approvals=self._approvals,
             run=self._record,
         )
-
-    def to_json(self) -> dict[str, Any]:
-        """Serialize this paused run to a JSON-compatible dict, to persist and resume later.
-
-        Everything the run carries is included, agents by name. Not included: the guardrail
-        audit trail and the trace's spans, both already exported as spans.
-        """
-        return self._to_schema().model_dump(mode="json")
-
-    def to_string(self) -> str:
-        """As `to_json()`, but as a JSON string."""
-        return self._to_schema().model_dump_json()
+        return schema.model_dump(mode="json")
 
     @classmethod
-    def from_json(cls, initial_agent: Agent, state_json: dict[str, Any]) -> RunState:
-        """Rebuild a paused `RunState` from `to_json()`'s output.
-
-        `initial_agent` is a fresh instance of the agent the run started with; the current agent
-        (possibly switched by a handoff before the pause) and each pending interruption's agent
-        are re-resolved from it by name -- a live `Agent` can't round-trip through JSON, so it
-        was never serialized as an object in the first place. Reading a blob is pure: the tools
-        themselves are resolved by the resumed run, off the shape it builds anyway, so rebuilding
-        a state never reaches out to an agent's MCP servers.
-
-        A `context` that was a dataclass comes back as a plain dict, not reinstantiated as its
-        original class -- there's no type registry to reverse that with. Raises `UserError` for
-        an unknown schema version, a malformed field, or an agent name that can no longer be
-        found -- never a raw `pydantic.ValidationError`.
-        """
+    def _from_json(cls, root: Agent, state_json: dict[str, Any]) -> RunState:
+        """Rebuild the pause `_to_json` wrote, its agents found again from `root` by name."""
         try:
-            schema = _RunStateSchema.model_validate(state_json, context={"root": initial_agent})
+            schema = _RunStateSchema.model_validate(state_json, context={"root": root})
         except ValidationError as exc:
-            raise UserError(f"invalid RunState JSON: {exc}") from exc
+            raise UserError(f"invalid paused run: {exc}") from exc
         return cls(schema.run, schema.trace, schema.approvals)
-
-    @classmethod
-    def from_string(cls, initial_agent: Agent, state_string: str) -> RunState:
-        """As `from_json()`, but from a JSON string produced by `to_string()`."""
-        try:
-            state_json = json.loads(state_string)
-        except json.JSONDecodeError as exc:
-            raise UserError(f"invalid RunState JSON: {exc}") from exc
-        return cls.from_json(initial_agent, state_json)
 
 
 __all__ = ["Interruption", "RunState"]

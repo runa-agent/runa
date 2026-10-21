@@ -1,10 +1,10 @@
-"""`RunState` surviving a process restart: serialize a pause, rebuild it, then resume.
+"""A paused run surviving a process restart: load it by its `run_id`, decide it, resume it.
 
 See RUNA.md #4 and docs/approval.md ("Durability").
 
-`state.to_json()` is a plain dict, safe to store anywhere (a database row, a queue message).
-Rebuilding it needs a fresh instance of the agent the run started with, used to re-resolve the
-current agent by name -- a live `Agent` instance can't round-trip through JSON itself.
+A pause is kept in `runa.db` the moment it happens, so `run.run_id` is all another process needs.
+Loading it takes a fresh instance of the agent the run started with, used to find the current
+agent again by name. A pause resumes once, whichever process gets to it.
 
 Run it:
 
@@ -33,14 +33,15 @@ class SupportAgent(Agent):
 
 
 run = SupportAgent().run_sync("Refund $75 to order A101.")
-state = run.to_state()
-blob = state.to_json()  # store this anywhere; the run is now paused indefinitely
-print(f"paused, serialized to {len(str(blob))} bytes of JSON-safe data")
+run_id = run.run_id  # hand this to whoever approves; the pause itself stays in runa.db
+print(f"paused as {run_id}")
 
-# ... a process restart happens here; nothing but `blob` survives it ...
+# ... a process restart happens here; nothing but `run_id` survives it ...
 
 restored_agent = SupportAgent()  # a fresh instance of the same agent class
-restored_state = RunState.from_json(restored_agent, blob)
+restored_state = RunState.load_sync(restored_agent, run_id or "")
+if restored_state is None:
+    raise SystemExit(f"{run_id} was already resumed")
 for interruption in restored_state.pending:
     restored_state.approve(interruption)
 

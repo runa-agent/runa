@@ -634,8 +634,8 @@ def test_resume_persists_the_whole_turn_to_the_session(tmp_path: Any) -> None:
     ]
 
 
-def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
-    """The transcript's `session_input`/`generated` survive JSON, so a restart persists."""
+def test_a_loaded_pause_keeps_the_session_turn(tmp_path: Any) -> None:
+    """The transcript's `session_input`/`generated` survive the stored pause and a restart."""
     from runa.run_state import RunState
     from runa.session import SQLiteSession
 
@@ -647,8 +647,9 @@ def test_resume_from_json_keeps_the_session_turn(tmp_path: Any) -> None:
     )
 
     result = agent.run_sync("go", session=session)
-    blob = result.to_state().to_json()
-    state = RunState.from_json(agent, blob)
+    assert result.run_id is not None
+    state = RunState.load_sync(agent, result.run_id)
+    assert state is not None
     state.approve(state.pending[0])
     agent.run_sync(state, session=session)
 
@@ -781,7 +782,7 @@ def test_parallel_tool_calls_false_runs_calls_one_at_a_time() -> None:
     assert log == ["first start", "first end", "second start"]
 
 
-def test_resuming_the_same_state_twice_reports_a_duplicate_call_id() -> None:
+def test_resuming_the_same_state_twice_reports_it_already_resumed() -> None:
     """Resuming the same paused `RunState` a second time doesn't silently re-run the tool."""
 
     @tool(needs_approval=True)
@@ -803,7 +804,7 @@ def test_resuming_the_same_state_twice_reports_a_duplicate_call_id() -> None:
     replayed = agent.run_sync(state)
 
     assert replayed.status == "error"
-    assert "already executed" in str(replayed.error)
+    assert replayed.error == f"paused run {result.run_id!r} was already resumed"
 
 
 def test_passing_input_guardrails_are_recorded_even_though_nothing_tripped() -> None:

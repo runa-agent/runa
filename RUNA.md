@@ -153,29 +153,40 @@ while run.status == "paused":
 tool (by name, not just this one call id), such as an operator answering "always" instead of "yes" in
 `runa chat`'s `[y/N/a]` prompt, or the same choice made programmatically. A rejection can carry
 a custom `rejection_message`, fed back to the model instead of the default text; with
-`always=True` it's reused for every later rejected call to that tool too. A `call_id` that
-already executed once can't be submitted again: resuming the same `RunState` twice raises
-`DuplicateToolCallError` rather than silently re-running the tool. A state carries the `context`
+`always=True` it's reused for every later rejected call to that tool too. **A pause resumes
+once**: resuming it a second time, from any copy of it in any process, is an error `Run`
+(`RunAlreadyResumed`) rather than a tool run twice. Enforced in code. A state carries the `context`
 and `user_id` of the run it paused, so passing either alongside one raises `UserError` instead of
 being dropped: pass them to the first run.
 
 `run_streamed` pauses the same way: once the stream ends, its `.run` is the paused `Run`,
 resumed with `agent.run_streamed(state)` (or `run`/`run_sync`).
 
-**Durability.** `RunState` survives a process restart: `state.to_json()`/`.to_string()`
-serialize it (as a plain dict, or a JSON string); `RunState.from_json(agent, blob)`/
-`.from_string(agent, blob)` rebuild it, synchronously, given a fresh instance of the agent the
-run started with (used to re-resolve the current agent by name; a live `Agent` instance can't
-round-trip through JSON itself). Everything else the run carries comes back too: its
-conversation, `context` and user, usage, the tool calls it already made, and the time already
-spent against its `timeout` (time paused doesn't count). Reading a blob resolves no tools, so it
-never connects to an agent's MCP servers: the resumed run looks each pending call's tool up
-itself. A `context` that
-was a dataclass comes back as a plain dict, not its original class; the run's guardrail-result
-audit trail (see below) and trace spans aren't included in the serialized blob: spans are
-already durably persisted separately (see [Tracing](#14-tracing)). An unrecognized
-`schema_version` raises `UserError` rather than resuming from a blob a different, incompatible
-version of Runa produced.
+**Durability.** A pause is kept in `runa.db` the moment it happens, under `run.run_id`, so it
+survives a process restart with nothing to save by hand. Another process (a worker, a later
+request, a Slack bot) gets it back with `await RunState.load(agent, run_id)` (`load_sync` beside
+`run_sync`), given a fresh instance of the agent the run started with, decides it, and resumes
+it the same way. That is the one cross-process shape: there is no blob to hand out, because a
+copy of a pause is a second chance to run it. `load` returns `None` for a pause that doesn't
+exist or already resumed, and spends nothing: the resumed run claims the pause, atomically, so of
+two processes resuming one pause exactly one runs it.
+
+```python
+state = RunState.load_sync(SupportAgent(), run_id)
+for item in state.pending:
+    state.approve(item)
+run = SupportAgent().run_sync(state)
+```
+
+Everything the run carries comes back: its conversation, `context` and user, usage, the tool
+calls it already made, and the time already spent against its `timeout` (time paused doesn't
+count). Loading resolves no tools, so it never connects to an agent's MCP servers: the resumed
+run looks each pending call's tool up itself. A `context` that was a dataclass comes back as a
+plain dict, not its original class; the run's guardrail-result audit trail (see below) and trace
+spans aren't stored with the pause: spans are already durably persisted separately (see
+[Tracing](#14-tracing)). A pause stored by an incompatible version of Runa raises `UserError`
+on `load` rather than resuming. A pause nobody resumes stays in the `paused_runs` table until an
+operator prunes it by `created_at`.
 
 **Guardrail audit trail.** Every guardrail that ran (tripped or not, a delegate's included) is
 listed on the `Run`, whatever its status, as `input_guardrail_results`/`.output_guardrail_results`/
@@ -198,7 +209,7 @@ A `.delegate` call shares the caller's [approval](#4-human-approval) ledger and 
 accounting: a sticky (`always=True`) decision on the caller's side already covers a matching
 tool the delegate calls. A delegate that pauses for approval pauses its caller too: the
 delegate's calls appear in the caller's `run.interruptions`, and resuming the caller resumes the
-delegate where it stopped (also across `to_json`/`from_json`). A delegate's run is part of its
+delegate where it stopped (also from `RunState.load`). A delegate's run is part of its
 caller's: the run's [hooks](#11-hooks) fire for it, and its spans are in the caller's trace, under
 the delegate call. A streamed caller shows that call and its output, not the delegate's tokens.
 The call is one of the caller's `run.tool_calls`, the delegate's own calls as its `.children`.

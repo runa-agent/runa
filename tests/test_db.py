@@ -565,6 +565,7 @@ def test_a_local_read_of_another_concerns_file_is_no_rows(tmp_path: Path) -> Non
         assert conn is None
 
 
+@pytest.mark.usefixtures("project_database")
 def test_deleting_a_trace_takes_its_spans(tmp_path: Path) -> None:
     """The retention pass documented for `traces` reaches `spans` without naming them."""
     import sqlite3

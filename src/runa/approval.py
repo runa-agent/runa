@@ -65,8 +65,9 @@ class ApprovalLedger:
     `sticky`/`sticky_messages` are the "always approve"/"always reject" decisions, keyed by tool
     *name*: once recorded they cover every later call to that tool, in this run or a delegate's.
     `calls`/`call_messages` are the one-off decisions, keyed by call id: each settles only the
-    call it names. `executed` is the set of call ids that have already run, so resuming a stale
-    `RunState` cannot run a tool a second time.
+    call it names. `executed` is the set of call ids that have already run in this run tree, so
+    a call id the model sends again is not run a second time. That a pause resumes only once is
+    `RunState`'s to keep, not the ledger's: a ledger loaded from a stored pause is a snapshot.
     """
 
     DEFAULT_REJECTION: ClassVar[str] = "rejected by the operator"

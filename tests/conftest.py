@@ -11,6 +11,9 @@ that the default store exporter would otherwise persist to `runa.db` in the proc
 test should touch that real file, so every test runs with trace export disabled by default; a
 test that specifically wants to exercise an exporter (e.g. a fail-open test) can still pass its
 own `exporter=` to `observe.scoped(...)`, which overrides this for the scope of its `with` block.
+A paused run is kept in `runa.db` too, so every test runs under `memory://` unless it sets its
+own `RUNA_DATABASE_URL`; a test of the default itself, a project's own `db/runa.db`, asks for
+`project_database`.
 
 That default is installed with `observe(...)`, not an `observe.scoped(...)` block, because
 process-wide is what it means: a scoped block covers one task (see `tracing/config.py`), so held
@@ -20,14 +23,21 @@ mask an `observe(...)` call under test.
 
 import pytest
 
-from runa import _app
+from runa import _app, db
 from runa.tracing import observe
 
 
 @pytest.fixture(autouse=True)
-def _fresh_process():
+def _fresh_process(monkeypatch: pytest.MonkeyPatch):
     """Start every test as a fresh process with trace export off, and forget it all afterwards."""
     _app.reset()
+    monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
     observe(exporter=[])
     yield
     _app.reset()
+
+
+@pytest.fixture
+def project_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unset `RUNA_DATABASE_URL`, so state lands in the project's own `db/runa.db` by default."""
+    monkeypatch.delenv(db.DATABASE_URL_ENV, raising=False)

@@ -1,10 +1,12 @@
-"""Tests for `RunState`'s durable JSON serialization: `to_json`/`to_string`/`from_json`.
+"""Tests for `RunState`'s durability: a pause kept in `runa.db`, loaded back, resumed once.
 
-These let a paused run survive a process restart -- see `RunState`'s docstring for what's
-preserved (everything the run carries, agents by name) and what isn't (guardrail results, trace
-spans, a dataclass context's original type).
+A paused run is kept the moment it pauses, under its `run_id`; `RunState.load` is how another
+process gets it back -- see `RunState`'s docstring for what's preserved (everything the run
+carries, agents by name) and what isn't (guardrail results, trace spans, a dataclass context's
+original type).
 """
 
+import asyncio
 from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
@@ -12,7 +14,7 @@ from typing import Any
 import pytest
 from helpers import ScriptedModel, agent_class, text_response, tool_call_response
 
-from runa import db
+from runa import _loop, db
 from runa.agent import Agent
 from runa.exceptions import UserError
 from runa.run import Run
@@ -23,7 +25,7 @@ from runa.tool import tool
 def _paused_run() -> tuple[Run, type[Agent]]:
     """Run an agent to a pause on `needs_approval`, returning the paused `Run` and its class.
 
-    The class is what `RunState.from_json` is handed a fresh instance of, as after a restart; it
+    The class is what `RunState.load` is handed a fresh instance of, as after a restart; it
     declares its scripted model, so every instance answers from the same script.
     """
 
@@ -40,13 +42,36 @@ def _paused_run() -> tuple[Run, type[Agent]]:
     return gated().run_sync("do it"), gated
 
 
+def _stored(run: Run, agent: str = "TestAgent") -> dict[str, Any]:
+    """The row `run`'s pause is kept as."""
+    assert run.run_id is not None
+    blob = _loop.run_sync(db.paused_runs().load(agent, run.run_id))
+    assert blob is not None
+    return blob
+
+
+def _store(blob: dict[str, Any], agent: str = "TestAgent") -> str:
+    """Keep `blob` as a pause of its own, as a row edited by hand would be, and return its id."""
+    return _loop.run_sync(db.paused_runs().save(agent, blob))
+
+
+def _load(agent: Agent, run_id: str | None) -> RunState:
+    """`RunState.load_sync`, for a pause the test knows is there."""
+    assert run_id is not None
+    state = RunState.load_sync(agent, run_id)
+    assert state is not None
+    return state
+
+
 _SERIALIZED_AS = {"_record": "run", "trace": "trace", "_approvals": "approvals"}
 """Each `RunState` field and the `_RunStateSchema` field it is written to."""
 
 _NOT_SERIALIZED = {
     "guardrail_results": "every guardrail that ran is already a span in the run's trace",
+    "run_id": "the row's key, not its content",
+    "_owner": "the row's other key: the agent a pause is found through",
 }
-"""`RunState` fields deliberately left out of the JSON envelope, and why.
+"""`RunState` fields deliberately left out of the stored blob, and why.
 
 The reason is also written where a reader meets the field -- `_RunStateSchema`'s docstring -- and
 this is the list that makes leaving a *second* field out a deliberate act rather than an omission
@@ -66,64 +91,127 @@ def test_every_run_record_field_is_serialized() -> None:
     """The run itself has no field left out: a fact added to it survives a restart unasked."""
     result, _ = _paused_run()
 
-    assert set(result.to_state().to_json()["run"]) == set(_RunRecord.model_fields)
+    assert set(_stored(result)["run"]) == set(_RunRecord.model_fields)
 
 
-def test_to_json_then_from_json_round_trips_a_paused_run() -> None:
-    """A paused run serialized with `to_json` and rebuilt with `from_json` resumes cleanly."""
+def test_a_paused_run_is_kept_under_its_run_id() -> None:
+    """Nothing to save by hand: the pause is in `runa.db` by the time the `Run` comes back."""
+    result, _ = _paused_run()
+
+    assert result.run_id == result.to_state().run_id
+    assert result.to_payload()["run_id"] == result.run_id
+    assert _stored(result)["run"]["pending"][0]["name"] == "dangerous"
+
+
+def test_a_completed_run_has_no_run_id() -> None:
+    """Only a pause is kept, so only a pause has a handle."""
     result, gated = _paused_run()
     state = result.to_state()
     state.approve(state.pending[0])
 
-    blob = state.to_json()
+    assert gated().run_sync(state).run_id is None
+
+
+def test_a_loaded_pause_resumes_in_a_fresh_agent() -> None:
+    """Another process loads the pause by its `run_id`, decides it, and resumes it."""
+    result, gated = _paused_run()
+
     fresh = gated()
-    restored = RunState.from_json(fresh, blob)
+    restored = _load(fresh, result.run_id)
+    restored.approve(restored.pending[0])
 
     resumed = fresh.run_sync(restored)
     assert resumed.output == "all done"
 
 
-def test_to_string_then_from_string_round_trips_the_same_way() -> None:
-    """`to_string`/`from_string` behave like `to_json`/`from_json`, just JSON-text-shaped."""
+def test_load_is_awaitable_for_an_async_caller() -> None:
+    """`load` is the async spelling `load_sync` wraps, for `await agent.run(...)`."""
+    result, gated = _paused_run()
+    fresh = gated()
+    run_id = result.run_id
+    assert run_id is not None
+
+    async def resume() -> Run:
+        restored = await RunState.load(fresh, run_id)
+        assert restored is not None
+        restored.approve(restored.pending[0])
+        return await fresh.run(restored)
+
+    assert asyncio.run(resume()).output == "all done"
+
+
+def test_a_pause_resumes_once_across_every_copy_of_it() -> None:
+    """Two loads of one pause, as two processes would make: the second resume runs nothing."""
+    ran: list[str] = []
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Do something that needs a human's OK."""
+        ran.append("dangerous")
+        return "done"
+
+    gated = agent_class(
+        "TestAgent",
+        ScriptedModel([tool_call_response("dangerous", "{}"), text_response("all done")]),
+        tools=[dangerous],
+    )
+    result = gated().run_sync("do it")
+    first, second = gated(), gated()
+    first_state, second_state = _load(first, result.run_id), _load(second, result.run_id)
+    for state in (first_state, second_state):
+        state.approve(state.pending[0])
+
+    assert first.run_sync(first_state).status == "completed"
+    replayed = second.run_sync(second_state)
+
+    assert replayed.status == "error"
+    assert replayed.error == f"paused run {result.run_id!r} was already resumed"
+    assert ran == ["dangerous"]
+
+
+def test_a_resumed_pause_is_no_longer_found() -> None:
+    """A pause already resumed loads as `None`, like one that never existed."""
     result, gated = _paused_run()
     state = result.to_state()
     state.approve(state.pending[0])
+    gated().run_sync(state)
 
-    blob = state.to_string()
-    assert isinstance(blob, str)
-    fresh = gated()
-    restored = RunState.from_string(fresh, blob)
-
-    resumed = fresh.run_sync(restored)
-    assert resumed.output == "all done"
+    assert result.run_id is not None
+    assert RunState.load_sync(gated(), result.run_id) is None
+    assert RunState.load_sync(gated(), "no-such-run") is None
 
 
-def test_from_json_rejects_an_unknown_schema_version() -> None:
+def test_a_pause_is_found_only_through_the_agent_it_started_with() -> None:
+    """A `run_id` under another agent's name is somebody else's pause, so it isn't there."""
+    result, _ = _paused_run()
+    other = agent_class("OtherAgent", ScriptedModel([text_response("hi")]))
+    assert result.run_id is not None
+
+    assert RunState.load_sync(other(), result.run_id) is None
+
+
+def test_load_rejects_an_unknown_schema_version() -> None:
     """An unrecognized `schema_version` raises `UserError`, not a raw Pydantic error."""
     result, gated = _paused_run()
-    state = result.to_state()
-    state.approve(state.pending[0])
-    blob = state.to_json()
+    blob = _stored(result)
     blob["schema_version"] = 999
 
     with pytest.raises(UserError):
-        RunState.from_json(gated(), blob)
+        RunState.load_sync(gated(), _store(blob))
 
 
-def test_from_json_rejects_a_malformed_field() -> None:
+def test_load_rejects_a_malformed_field() -> None:
     """A field with the wrong shape also surfaces as `UserError`, not a raw Pydantic error."""
     result, gated = _paused_run()
-    state = result.to_state()
-    state.approve(state.pending[0])
-    blob = state.to_json()
+    blob = _stored(result)
     blob["approvals"]["calls"] = "not-a-dict"
 
     with pytest.raises(UserError):
-        RunState.from_json(gated(), blob)
+        RunState.load_sync(gated(), _store(blob))
 
 
-def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_pause() -> None:
-    """The serialized `agent` reflects a handoff that switched agents before the pause."""
+def test_a_pause_keeps_the_current_agent_after_a_handoff_occurred_before_it() -> None:
+    """The stored `agent` reflects a handoff; the pause is still found through the first agent."""
 
     @tool(needs_approval=True)
     def dangerous() -> str:
@@ -142,78 +230,96 @@ def test_to_json_records_the_current_agent_after_a_handoff_occurred_before_the_p
     )
 
     result = main().run_sync("please transfer")
-    state = result.to_state()
-    state.approve(state.pending[0])
-
-    blob = state.to_json()
-    assert blob["run"]["agent"] == "Target"
+    assert _stored(result, "Main")["run"]["agent"] == "Target"
 
     fresh_main = main()
-    restored = RunState.from_json(fresh_main, blob)
+    restored = _load(fresh_main, result.run_id)
     assert restored.agent.name == "Target"
+    restored.approve(restored.pending[0])
 
     resumed = fresh_main.run_sync(restored)
     assert resumed.output == "done"
 
 
-def test_from_json_resolves_the_paused_interruptions_agent_from_its_name() -> None:
+def test_a_handed_off_run_that_pauses_again_is_kept_under_the_first_agent() -> None:
+    """A resumed run's next pause is found the way its first one was: through `Main`."""
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Do something that needs a human's OK."""
+        return "done"
+
+    target = agent_class(
+        "Target",
+        ScriptedModel(
+            [
+                tool_call_response("dangerous", "{}"),
+                tool_call_response("dangerous", "{}", "call_2"),
+                text_response("done"),
+            ]
+        ),
+        tools=[dangerous],
+    )
+    main = agent_class(
+        "Main",
+        ScriptedModel([tool_call_response("transfer_to_target", "{}")]),
+        subagents=[target.handoff],
+    )
+    first = main()
+    state = first.run_sync("please transfer").to_state()
+    state.approve(state.pending[0])
+
+    again = first.run_sync(state)
+
+    assert again.status == "paused"
+    assert _load(main(), again.run_id).pending[0].call_id == "call_2"
+
+
+def test_load_resolves_the_paused_interruptions_agent_from_its_name() -> None:
     """A pending interruption's `agent` is re-resolved by name against the fresh agent."""
     result, gated = _paused_run()
-    state = result.to_state()
 
-    blob = state.to_json()
     fresh_agent = gated()
-    restored = RunState.from_json(fresh_agent, blob)
+    restored = _load(fresh_agent, result.run_id)
 
     assert restored.pending[0].agent is fresh_agent
     assert restored.pending[0].name == "dangerous"
 
 
-def test_from_json_never_lists_an_agents_mcp_server_tools() -> None:
-    """Reading a blob resolves no tools, so an agent's MCP servers are left alone entirely.
+def test_load_never_lists_an_agents_mcp_server_tools() -> None:
+    """Loading a pause resolves no tools, so an agent's MCP servers are left alone entirely.
 
     The tool a pending call names is looked up by the resumed run, off the shape it builds
-    anyway -- which is what keeps `from_json` a synchronous, I/O-free read even when the paused
-    call was an MCP server's tool and the fresh agent declares nothing locally.
+    anyway -- even when the paused call was an MCP server's tool and the fresh agent declares
+    nothing locally.
     """
 
     class _ExplodingServer:
         async def list_tools(self) -> list[Any]:
-            raise AssertionError("from_json must not connect to an MCP server")
+            raise AssertionError("load must not connect to an MCP server")
 
-    result, gated = _paused_run()
-    blob = result.to_state().to_json()
+    result, _ = _paused_run()
     fresh_agent: Any = SimpleNamespace(
         name="TestAgent", tools=[], handoffs=[], mcp_servers=[_ExplodingServer()]
     )
 
-    restored = RunState.from_json(fresh_agent, blob)
+    restored = _load(fresh_agent, result.run_id)
 
     assert [item.name for item in restored.pending] == ["dangerous"]
 
 
-def test_to_json_carries_the_sticky_approval_ledger_and_executed_call_ids() -> None:
-    """The sticky approval ledger and replay-guard set survive a JSON round trip."""
+def test_a_loaded_pause_carries_the_sticky_approval_ledger() -> None:
+    """A sticky decision made on a loaded pause reaches the run that resumes it."""
     result, gated = _paused_run()
-    state = result.to_state()
-    state.approve(state.pending[0], always=True)
-
-    blob = state.to_json()
-    assert blob["approvals"]["sticky"] == {"dangerous": True}
-
     fresh = gated()
-    restored = RunState.from_json(fresh, blob)
-    assert restored._approvals.sticky == {"dangerous": True}
+    restored = _load(fresh, result.run_id)
+    restored.approve(restored.pending[0], always=True)
 
     resumed = fresh.run_sync(restored)
+
     assert resumed.output == "all done"
+    assert restored._approvals.sticky == {"dangerous": True}
     assert "call_1" in restored._approvals.executed
-
-
-@pytest.fixture(autouse=True)
-def _in_memory_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep every session these tests open in the `memory://` database, never in the cwd's file."""
-    monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
 
 
 def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:
@@ -247,11 +353,10 @@ def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:
 def test_a_restored_run_keeps_its_user_and_the_tool_calls_made_before_the_pause() -> None:
     """Who the run is for and what it already did both come back, with no session to ask."""
     result, gated = _paused_after_a_safe_call()
-    state = result.to_state()
-    state.approve(state.pending[0])
 
     fresh = gated()
-    restored = RunState.from_json(fresh, state.to_json())
+    restored = _load(fresh, result.run_id)
+    restored.approve(restored.pending[0])
 
     assert restored.run_context.user_id == "u1"
     resumed = fresh.run_sync(restored, session=db.session("s"))
@@ -262,7 +367,7 @@ def test_a_restored_trace_keeps_its_session_grouping() -> None:
     """The trace a resumed run continues is still grouped under the session it started on."""
     result, gated = _paused_after_a_safe_call()
 
-    restored = RunState.from_json(gated(), result.to_state().to_json())
+    restored = _load(gated(), result.run_id)
 
     assert restored.trace.session_id == "s"
     assert restored.trace.metadata == {"group_id": "s"}
@@ -271,13 +376,14 @@ def test_a_restored_trace_keeps_its_session_grouping() -> None:
 def test_a_resumed_run_spends_the_timeout_left_over_from_before_the_pause() -> None:
     """The deadline is the run's, not each call's: time spent running before a pause counts."""
     result, gated = _paused_after_a_safe_call(timeout=5.0)
-    state = result.to_state()
-    state.approve(state.pending[0])
-    blob = state.to_json()
+    blob = _stored(result)
     assert blob["run"]["elapsed"] > 0
     blob["run"]["elapsed"] = 5.0
 
-    resumed = gated().run_sync(RunState.from_json(gated(), blob))
+    fresh = gated()
+    restored = _load(fresh, _store(blob))
+    restored.approve(restored.pending[0])
+    resumed = fresh.run_sync(restored)
 
     assert resumed.status == "error"
     assert resumed.error == "run timed out after 5.0s"

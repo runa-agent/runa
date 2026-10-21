@@ -117,6 +117,7 @@ def client(project: Path) -> TestClient:
     return TestClient(create_app(project))
 
 
+@pytest.mark.usefixtures("project_database")
 def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
     """`create_app(root)` is the whole configuration an embedded dashboard gets.
 

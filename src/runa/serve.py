@@ -11,10 +11,10 @@ What a deployment gets:
   (`RUNA_DATABASE_URL`), so more than one replica needs no code change.
 * **Authentication is on unless you turn it off.** A bearer token from `RUNA_API_KEY`, checked on
   every route but `/health`; `--no-auth` turns it off for local use.
-* **A paused run stays on the server, and resumes through the route it paused on.** Its state is
-  saved in `runa.db` (`db.paused_runs()`) and the response carries only its `run_id`; the request
-  body carries that `run_id` plus the `decisions` a human made, in place of `message`. Resuming
-  claims the id, so a pause resumes once, and its approval ledger never leaves the server.
+* **A paused run stays on the server, and resumes through the route it paused on.** A pause is
+  kept in `runa.db` by the run itself and the response carries only its `run_id`; the request
+  body carries that `run_id` plus the `decisions` a human made, in place of `message`. A pause
+  resumes once (see `RunState`), and its approval ledger never leaves the server.
 
 Only serving needs the `serve` extra; `cli/serve.py` imports this module lazily. `create_app` is
 public, for an `asgi.py` that brings its own server or mounts these routes inside a larger one.
@@ -115,17 +115,9 @@ class RunRequest(BaseModel):
         return self
 
 
-async def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
-    """`Run.to_payload()`, plus what HTTP knows and the run doesn't.
-
-    Which agent ran it, and for a paused run the `run_id` it resumes by: its state is saved to
-    `db.paused_runs()` here, so the client holds a handle rather than the ledger. `None` for any
-    other status.
-    """
-    run_id = None
-    if run.status == "paused":
-        run_id = await db.paused_runs().save(agent_name, run.to_state().to_json())
-    return {"agent": agent_name, **run.to_payload(), "run_id": run_id}
+def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
+    """`Run.to_payload()`, plus what HTTP knows and the run doesn't: which agent ran it."""
+    return {"agent": agent_name, **run.to_payload()}
 
 
 async def _turn(agent: Agent, agent_name: str, body: RunRequest) -> str | RunState:
@@ -136,8 +128,9 @@ async def _turn(agent: Agent, agent_name: str, body: RunRequest) -> str | RunSta
 
     A `run_id` this agent has no pause under -- unknown, or already resumed -- is a `404`. A pause
     that no longer rebuilds (a schema version this Runa doesn't know, an agent renamed since it
-    paused) is a `409`, and a decision for a call the pause doesn't have is a `422`; neither
-    spends the pause. Only then is it claimed, and a claim another request won first is a `409`.
+    paused) is a `409`, and a decision for a call the pause doesn't have is a `422`; none of them
+    spends the pause, which only the resumed run claims. A request that loses that claim to
+    another one resuming the same pause gets the run's `RunAlreadyResumed` error back.
     An `Interruption` left undecided keeps pausing the run, which the next response reports the
     same way as the first: the decisions a client sends are the ones a human has actually made,
     and nothing here invents the rest.
@@ -145,17 +138,15 @@ async def _turn(agent: Agent, agent_name: str, body: RunRequest) -> str | RunSta
     if body.run_id is None:
         # `RunRequest` has already rejected a body with neither; this is for the type checker.
         return body.message or ""
-    paused_runs = db.paused_runs()
-    state_json = await paused_runs.load(agent_name, body.run_id)
-    if state_json is None:
+    try:
+        state = await RunState.load(agent, body.run_id)
+    except UserError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if state is None:
         raise HTTPException(
             status_code=404,
             detail=f"{agent_name!r} has no paused run {body.run_id!r}, or it was already resumed",
         )
-    try:
-        state = RunState.from_json(agent, state_json)
-    except UserError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     pending = {item.call_id: item for item in state.pending}
     for decision in body.decisions:
@@ -171,10 +162,6 @@ async def _turn(agent: Agent, agent_name: str, body: RunRequest) -> str | RunSta
             state.reject(
                 interruption, always=decision.always, rejection_message=decision.rejection_message
             )
-    if not await paused_runs.claim(agent_name, body.run_id):
-        raise HTTPException(
-            status_code=409, detail=f"paused run {body.run_id!r} was already resumed"
-        )
     return state
 
 
@@ -283,7 +270,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         session = db.session(body.session_id, agent_name) if body.session_id else None
         turn = await _turn(agent, agent_name, body)
         run = await agent.run(turn, session=session, user_id=body.user_id)
-        return await _run_payload(run, agent_name)
+        return _run_payload(run, agent_name)
 
     @api.post("/agents/{agent_name}/runs/stream")
     async def stream_agent(agent_name: str, body: RunRequest) -> StreamingResponse:
@@ -312,7 +299,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
                         token = {"type": "token", "text": event.text}
                         yield f"data: {json.dumps(token)}\n\n"
                 if stream.run is not None:
-                    payload = {"type": "run", **await _run_payload(stream.run, agent_name)}
+                    payload = {"type": "run", **_run_payload(stream.run, agent_name)}
                     yield f"data: {json.dumps(payload)}\n\n"
             except Exception:  # noqa: BLE001 -- the client must not be left hanging
                 # The response status went out with the first byte, so an error here cannot

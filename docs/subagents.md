@@ -50,7 +50,7 @@ A `.delegate` call shares the caller's [approval](approval.md) ledger and usage 
 sticky (`always=True`) decision on the caller's side already covers a matching tool the delegate
 calls. A delegate that pauses on an approval pauses its caller too: the delegate's pending calls
 appear in the caller's `run.interruptions`, and resuming the caller's `RunState` resumes the
-delegate where it stopped, even after a `to_json`/`from_json` round trip.
+delegate where it stopped, even from `RunState.load` in another process.
 
 A delegate's run is part of its caller's: the `hooks=` passed to `run` fire for the delegate too,
 and its spans land in the caller's trace, under the delegate call that started it. A streamed run

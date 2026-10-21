@@ -51,6 +51,7 @@ def _memory(tmp_path: Path) -> Memory:
     )
 
 
+@pytest.mark.usefixtures("project_database")
 def test_default_configuration_needs_no_arguments() -> None:
     """`Memory()` means `db/runa.db` + `sqlite-vec` + `text-embedding-3-small`."""
     mem = Memory()

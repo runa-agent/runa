@@ -78,8 +78,9 @@ that tool, matched by name rather than just this one call id. This is what an op
 carry a custom `rejection_message`, fed back to the model instead of the default text; with
 `always=True`, that message is reused for every later rejected call to the same tool too.
 
-A `call_id` that already ran once cannot be submitted again. Resuming the same `RunState` twice
-raises `DuplicateToolCallError` rather than silently re-running the tool.
+A pause resumes once. Resuming it a second time, from the same `RunState` or from another
+process's copy of it, comes back as an error `Run` (`RunAlreadyResumed`) rather than running the
+tool again.
 
 `run_streamed` pauses the same way. Once the stream ends, its `.run` is the paused `Run`;
 resolve it and pass the state back to continue, streaming again:
@@ -101,24 +102,31 @@ delegate right where it stopped.
 
 ## Durability
 
-`RunState` survives a process restart. `state.to_json()`/`.to_string()` serialize it, as a plain
-dict or a JSON string. `RunState.from_json(agent, blob)`/`.from_string(agent, blob)` rebuild it,
-given a fresh instance of the agent the run started with, used to re-resolve the current agent
-by name -- a live `Agent` instance cannot round-trip through JSON itself. Both are plain
-synchronous calls, like `to_json`/`to_string`: reading a blob resolves no tools and so never
-connects to an agent's MCP servers.
+A pause survives a process restart with nothing to save by hand: it is kept in `runa.db` the
+moment it happens, under `run.run_id`. Another process gets it back with
+`await RunState.load(agent, run_id)`, or `RunState.load_sync` beside `run_sync`, given a fresh
+instance of the agent the run started with:
 
-Over HTTP that round trip is already written, and the blob never leaves the server: `runa serve`
-keeps a paused run's state in `runa.db` and reports a `run_id`, and posting that back with a
-decision per interruption resumes it, once (see [Deployment](deployment.md#resuming-a-paused-run)).
+```python
+state = RunState.load_sync(SupportAgent(), run_id)
+for item in state.pending:
+    state.approve(item)
+run = SupportAgent().run_sync(state)
+```
+
+`load` returns `None` for a pause that doesn't exist or already resumed. It spends nothing and
+resolves no tools, so it never connects to an agent's MCP servers: the resumed run claims the
+pause, atomically, so of two workers resuming the same pause exactly one runs it. There is no
+blob to hand a client instead, since every copy of a pause would be another chance to run it.
+Over HTTP this is already written: `runa serve` reports the `run_id`, and posting it back with a
+decision per interruption resumes it (see [Deployment](deployment.md#resuming-a-paused-run)).
 
 Everything the run carries comes back: its conversation, `context` and user, its usage, the
 tool calls it already made and the time it has already spent against its `timeout`. A `context`
 that was a dataclass comes back as a plain dict, not its original class. The run's
-[guardrail audit trail](guardrails.md#audit-trail) and trace spans are not included in the serialized blob. Spans are
-already persisted separately (see [Tracing and Hooks](tracing.md)). An unrecognized
-`schema_version` raises `UserError` rather than resuming from a blob a different, incompatible
-version of Runa produced.
+[guardrail audit trail](guardrails.md#audit-trail) and trace spans are not stored with the pause. Spans are
+already persisted separately (see [Tracing and Hooks](tracing.md)). A pause stored by an
+incompatible version of Runa raises `UserError` on `load` rather than resuming.
 
 ## Example
 

@@ -136,8 +136,8 @@ class GuardrailTripwireTriggered(RunaError):
 class DuplicateToolCallError(RunaError):
     """Raised when a tool-call id that already executed once is submitted for execution again.
 
-    Guards against silently re-running a tool -- e.g. resuming the same `RunState` twice, or a
-    model retry that reuses a call id.
+    Guards against silently re-running a tool within one run, such as a model retry that reuses a
+    call id. Resuming a pause twice is `RunAlreadyResumed`.
     """
 
     def __init__(self, call_id: str, tool_name: str) -> None:
@@ -147,6 +147,19 @@ class DuplicateToolCallError(RunaError):
         super().__init__(f"tool call {call_id!r} for {tool_name!r} was already executed")
 
 
+class RunAlreadyResumed(RunaError):
+    """Raised when a paused run is resumed after it already was: its `run_id` is claimed.
+
+    A pause resumes once, from the `RunState` it paused with or from `RunState.load` in any
+    process sharing its database, so the calls it approved run at most once.
+    """
+
+    def __init__(self, run_id: str) -> None:
+        """Store the claimed `run_id` and name it in the message."""
+        self.run_id = run_id
+        super().__init__(f"paused run {run_id!r} was already resumed")
+
+
 __all__ = [
     "DuplicateToolCallError",
     "GuardrailTripwireTriggered",
@@ -154,6 +167,7 @@ __all__ = [
     "MaxTurnsExceeded",
     "ModelBehaviorError",
     "OperatorError",
+    "RunAlreadyResumed",
     "RunTimeout",
     "RunaError",
     "ServiceUnavailable",

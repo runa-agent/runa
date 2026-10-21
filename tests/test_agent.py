@@ -2027,13 +2027,14 @@ def test_a_delegate_that_pauses_pauses_its_caller_and_resumes_where_it_stopped()
     assert parent.history[-2]["content"] == "refunded 5"  # the delegate's answer, as a tool result
 
 
-def test_a_paused_delegate_survives_a_json_round_trip() -> None:
-    """`to_json`/`from_json` carry the child's paused state, so a restart resumes it too."""
+def test_a_paused_delegate_survives_a_restart() -> None:
+    """The stored pause carries the child's paused state, so a restart resumes it too."""
     calls: list[float] = []
     parent = _parent_with_paused_delegate(calls)
-    blob = parent.run_sync("please refund").to_state().to_json()
+    run_id = parent.run_sync("please refund").run_id
 
-    state = RunState.from_json(parent, blob)
+    state = RunState.load_sync(parent, run_id or "")
+    assert state is not None
     state.reject(state.pending[0], rejection_message="not today")
     resumed = parent.run_sync(state)
 
@@ -2096,13 +2097,14 @@ def test_a_delegate_of_a_delegate_pauses_the_whole_chain_and_resumes_it() -> Non
     assert calls == [5]
 
 
-def test_a_paused_delegate_of_a_delegate_survives_a_json_round_trip() -> None:
-    """Ownership is serialized, so a restart still resolves the call against the deepest run."""
+def test_a_paused_delegate_of_a_delegate_survives_a_restart() -> None:
+    """Ownership is stored, so a restart still resolves the call against the deepest run."""
     calls: list[float] = []
     parent = _parent_with_a_paused_grandchild(calls)
-    blob = parent.run_sync("please refund").to_state().to_json()
+    run_id = parent.run_sync("please refund").run_id
 
-    state = RunState.from_json(parent, blob)
+    state = RunState.load_sync(parent, run_id or "")
+    assert state is not None
     state.approve(state.pending[0])
     resumed = parent.run_sync(state)
 

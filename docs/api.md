@@ -201,3 +201,5 @@ signature-level reference.
 ::: runa.exceptions.GuardrailTripwireTriggered
 
 ::: runa.exceptions.DuplicateToolCallError
+
+::: runa.exceptions.RunAlreadyResumed

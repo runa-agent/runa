@@ -202,7 +202,7 @@ def cache() -> Cache:
 
 
 def paused_runs() -> PausedRunStore:
-    """This deployment's `PausedRunStore`: the runs `runa serve` paused, held until resumed."""
+    """This deployment's `PausedRunStore`: every paused run, held until it resumes."""
     from runa.run_state.database import DatabasePausedRunStore
     from runa.run_state.store import PAUSED_RUNS
 

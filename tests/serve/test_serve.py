@@ -162,6 +162,7 @@ def _auth(token: str = "secret-token") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+@pytest.mark.usefixtures("project_database")
 def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
     """An app served from outside its own directory keeps all of its state in one file.
 
@@ -333,15 +334,14 @@ def test_a_paused_run_is_kept_on_the_server_and_named_by_a_run_id(
     paused = _paused_body(pausing_client)
 
     assert "state" not in paused
-    state_json = asyncio.run(db.paused_runs().load("refund_agent", paused["run_id"]))
-    assert state_json is not None
     with loaded_app(project):
         classes = {
             getattr(cls, "name", None): cls
             for cls in iter_agent_classes(project / "app" / "agents")
         }
-        state = RunState.from_json(classes["refund_agent"](), state_json)
+        state = RunState.load_sync(classes["refund_agent"](), paused["run_id"])
 
+    assert state is not None
     assert [item.name for item in state.pending] == ["issue_refund"]
 
 
@@ -650,6 +650,7 @@ def test_a_user_id_beside_a_paused_run_is_refused(client: TestClient) -> None:
     assert "user_id" in response.text
 
 
+@pytest.mark.usefixtures("project_database")
 def test_a_session_is_persisted_to_the_projects_database(client: TestClient, project: Path) -> None:
     """Sessions land in the app's own `db/runa.db`, where `runa ui` and `runa chat` find them."""
     client.post(
