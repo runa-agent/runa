@@ -225,7 +225,7 @@ def test_a_directly_built_adapter_honors_the_sqlite_url(monkeypatch: pytest.Monk
 
     from runa.cache.sqlite import SQLiteCache
     from runa.session.sqlite import SQLiteSession
-    from runa.tracing.config import SQLiteExporter
+    from runa.tracing.export import SQLiteExporter
 
     expected = Path("data/runa.db")
     assert SQLiteSession("user-42").database.location == expected  # type: ignore[attr-defined]

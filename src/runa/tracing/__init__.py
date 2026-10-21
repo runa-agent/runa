@@ -10,13 +10,13 @@ Reading history back is `runa.db.traces()`, not a function here: it hands over a
 queries traces names a file or a URL.
 """
 
-from runa.tracing.config import (
+from runa.tracing.config import observe
+from runa.tracing.export import (
     ConsoleExporter,
     SQLiteExporter,
     StoreExporter,
     TraceExporter,
     add_exporter,
-    observe,
 )
 from runa.tracing.manual import span, trace
 from runa.tracing.spans import Span, SpanStatus, SpanType

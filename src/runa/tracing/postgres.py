@@ -6,8 +6,8 @@ database other than this deployment's.
 """
 
 from runa.db.pool import PostgresDatabase
-from runa.tracing.config import StoreExporter
 from runa.tracing.database import DatabaseTraceStore
+from runa.tracing.export import StoreExporter
 from runa.tracing.store import SPANS, TRACES
 
 

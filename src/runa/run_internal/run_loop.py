@@ -55,7 +55,7 @@ from runa.run_state import RunState, _RunRecord
 from runa.session import Session
 from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
 from runa.tool import FunctionTool
-from runa.tracing.config import export_trace_later
+from runa.tracing.export import export_trace_later
 from runa.tracing.manual import current_trace
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace

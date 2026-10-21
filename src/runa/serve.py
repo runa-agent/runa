@@ -42,7 +42,7 @@ from runa.run import Run
 from runa.run_internal.agent_shape import shape_of
 from runa.run_state import RunState
 from runa.stream_events import TextDelta
-from runa.tracing.config import flush_exports
+from runa.tracing.export import flush_exports
 
 API_KEY_ENV = "RUNA_API_KEY"
 

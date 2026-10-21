@@ -15,7 +15,7 @@ from helpers import scripted_agent
 from runa import Agent, Trace, tracing
 from runa._types import ModelResponse, Usage
 from runa.tracing import observe
-from runa.tracing.config import flush_exports
+from runa.tracing.export import flush_exports
 
 
 class _TextModel:

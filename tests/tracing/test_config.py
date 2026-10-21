@@ -10,7 +10,7 @@ from runa import db
 from runa._types import ModelResponse, Usage
 from runa.db.handle import run_sync
 from runa.tool import ToolCall, tool
-from runa.tracing import ConsoleExporter, Trace, config, observe
+from runa.tracing import ConsoleExporter, Trace, config, export, observe
 
 
 class _TextModel:
@@ -206,7 +206,7 @@ def test_default_exporters_is_the_store_only_without_langfuse_env_vars(
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
-    exporters = config._default_exporters()
+    exporters = export._default_exporters()
 
     assert [type(e).__name__ for e in exporters] == ["StoreExporter"]
     assert type(exporters[0].store.database).__name__ == "SQLiteDatabase"  # type: ignore[attr-defined]
@@ -225,7 +225,7 @@ def test_default_exporters_adds_langfuse_once_its_env_vars_are_set(
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-env")
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
-    names = [type(e).__name__ for e in config._default_exporters()]
+    names = [type(e).__name__ for e in export._default_exporters()]
 
     assert names == ["StoreExporter", "LangfuseExporter"]
 
@@ -235,7 +235,7 @@ def test_the_local_exporter_follows_the_database_url(monkeypatch: pytest.MonkeyP
     pytest.importorskip("asyncpg")
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
 
-    exporter = config._local_exporter()
+    exporter = export._local_exporter()
 
     assert type(exporter.store.database).__name__ == "PostgresDatabase"  # type: ignore[attr-defined]
 
@@ -252,10 +252,10 @@ def test_the_default_exporters_are_resolved_on_first_use_not_at_import(
     pytest.importorskip("asyncpg")
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    config._set_default(config.Policy())  # exporters unresolved, as at import
+    export._forget_default()  # unresolved, as at import
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://runa:runa@localhost:5432/runa")
 
-    exporters = config.exporters()
+    exporters = export.exporters()
 
     assert [type(e).__name__ for e in exporters] == ["StoreExporter"]
     assert type(exporters[0].store.database).__name__ == "PostgresDatabase"  # type: ignore[attr-defined]
@@ -272,7 +272,7 @@ def test_the_exporter_writes_to_the_store_it_was_resolved_with(
     exporter exists must not move its traces.
     """
     monkeypatch.setenv("RUNA_DATABASE_URL", "memory://")
-    exporter = config._local_exporter()
+    exporter = export._local_exporter()
 
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgresql://nowhere:5432/none")
     exporter.export(Trace(id="t1", name="A", start_time=0.0))
@@ -288,12 +288,12 @@ def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
     `observe.scoped(...)` block that swaps exporters temporarily, but a footgun for the common
     case of wanting one more exporter without silently losing the default.
     """
-    before = list(config.exporters())
+    before = list(export.exporters())
     extra = ConsoleExporter()
 
-    config.add_exporter(extra)
+    export.add_exporter(extra)
 
-    assert config.exporters() == [*before, extra]
+    assert export.exporters() == [*before, extra]
 
 
 def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:

@@ -11,7 +11,7 @@ import uuid
 from contextvars import ContextVar
 from typing import Any
 
-from runa.tracing.config import export_trace
+from runa.tracing.export import export_trace
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 

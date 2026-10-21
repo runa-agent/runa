@@ -35,7 +35,7 @@ from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import StreamEvent
 from runa.tool import FunctionTool
-from runa.tracing.config import flush_exports
+from runa.tracing.export import flush_exports
 
 if TYPE_CHECKING:
     from graphviz import Digraph
