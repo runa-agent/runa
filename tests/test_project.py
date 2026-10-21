@@ -170,7 +170,7 @@ def test_use_says_both_halves_of_one_fact(tmp_path: Path) -> None:
 
     use(project_dir)
 
-    assert db.sqlite_path() == project_dir / "db" / "runa.db"
+    assert db._configured().sqlite_path() == project_dir / "db" / "runa.db"
     assert [info.name for info in list_agents(root=project_dir)] == ["support_agent"]
 
 
@@ -179,7 +179,7 @@ def test_loaded_app_says_both_halves_too(tmp_path: Path) -> None:
     project_dir = scaffold_project("demo", root=tmp_path)
 
     with loaded_app(project_dir):
-        assert db.sqlite_path() == project_dir / "db" / "runa.db"
+        assert db._configured().sqlite_path() == project_dir / "db" / "runa.db"
 
 
 def test_use_imports_the_app_only_once_something_reads_it(tmp_path: Path) -> None:
@@ -236,7 +236,7 @@ def test_loaded_app_refuses_a_second_project_too(tmp_path: Path) -> None:
     with pytest.raises(UserError), loaded_app(second):
         pass  # pragma: no cover -- the block is never entered
 
-    assert db.sqlite_path() == first / "db" / "runa.db"
+    assert db._configured().sqlite_path() == first / "db" / "runa.db"
     assert [info.name for info in list_agents(root=first)] == ["support_agent"]
 
 
@@ -251,7 +251,7 @@ def test_use_none_clears_the_whole_fact(tmp_path: Path) -> None:
     use(None)
     use(second)
 
-    assert db.sqlite_path() == second / "db" / "runa.db"
+    assert db._configured().sqlite_path() == second / "db" / "runa.db"
     assert [info.name for info in list_agents(root=second)] == ["support_agent"]
 
 

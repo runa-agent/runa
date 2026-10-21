@@ -94,7 +94,7 @@ class _StoredSession(DatabaseSession):
     """A session in this process's `memory://` database, for a subclass to break one method of."""
 
     def __init__(self, session_id: str) -> None:
-        super().__init__(session_id, db.database(SESSIONS, MESSAGES))
+        super().__init__(session_id, db._configured().database(SESSIONS, MESSAGES))
 
 
 class _UnreadableSession(_StoredSession):

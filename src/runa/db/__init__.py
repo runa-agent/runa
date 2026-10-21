@@ -218,36 +218,6 @@ def _configured() -> Place:
     return Place(url)
 
 
-def shared_url() -> str | None:
-    """The Postgres URL this deployment shares, or `None` when its state is not shared."""
-    return _configured().shared_url()
-
-
-def ephemeral() -> bool:
-    """Whether this deployment keeps its state in this process only (`memory://`).
-
-    The honest answer to "where does state live" for a test suite: one `monkeypatch.setenv`
-    moves every concern into one in-memory SQLite database at once, with no live Postgres and
-    no temporary file, and `runa.db` stays the only thing that decided.
-    """
-    return _configured().ephemeral()
-
-
-def sqlite_path() -> Path:
-    """Where this deployment's SQLite file lives: `RUNA_DATABASE_URL`'s path, or `db/runa.db`."""
-    return _configured().sqlite_path()
-
-
-def sqlite_database() -> Location:
-    """The SQLite database this deployment's local state lives in."""
-    return _configured().sqlite_database()
-
-
-def database(*tables: Table) -> Database:
-    """The database `tables` live in: this deployment's shared Postgres, or its local SQLite."""
-    return _configured().database(*tables)
-
-
 def session(session_id: str, agent: str | None = None) -> Session:
     """This deployment's session store for `session_id`, the conversation of `agent` if named."""
     return _configured().session(session_id, agent)
@@ -302,16 +272,32 @@ __all__ = [
     "Place",
     "at",
     "cache",
-    "database",
-    "ephemeral",
     "evals",
     "paused_runs",
     "reset_ephemeral",
     "session",
     "sessions",
-    "shared_url",
-    "sqlite_database",
-    "sqlite_path",
     "traces",
     "vector_store",
 ]
+
+_DEPRECATED = ("shared_url", "ephemeral", "sqlite_path", "sqlite_database", "database")
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the deprecated backend queries, with a warning; each answers for the environment.
+
+    They name the backend this module exists to hide, so app code reaches state through the
+    concern factories (`db.session(...)`, `db.cache()`, ...) or `db.at(url)` instead.
+    """
+    if name not in _DEPRECATED:
+        raise AttributeError(f"module 'runa.db' has no attribute {name!r}")
+    import warnings
+
+    warnings.warn(
+        f"runa.db.{name} is deprecated and will be removed: reach state through a concern "
+        "factory (db.session, db.cache, ...) or db.at(url), never by its backend",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return getattr(_configured(), name)

@@ -19,41 +19,51 @@ from runa.project import use
 _URL = "postgresql://runa:runa@localhost:5432/runa"
 
 
+def test_a_backend_query_still_answers_but_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backend queries left the public surface; until removed they warn and still answer."""
+    monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
+    with pytest.warns(DeprecationWarning, match="runa.db.shared_url is deprecated"):
+        assert getattr(db, "shared_url")() == _URL  # noqa: B009
+    assert "shared_url" not in db.__all__
+    with pytest.raises(AttributeError):
+        getattr(db, "no_such_thing")  # noqa: B009
+
+
 def test_an_unset_variable_means_local(monkeypatch: pytest.MonkeyPatch) -> None:
     """The zero-setup default: no variable, no Postgres, one SQLite file."""
     monkeypatch.delenv("RUNA_DATABASE_URL", raising=False)
 
-    assert db.shared_url() is None
-    assert db.sqlite_path() == Path("db/runa.db")
+    assert db._configured().shared_url() is None
+    assert db._configured().sqlite_path() == Path("db/runa.db")
 
 
 def test_a_postgres_url_is_shared(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `postgresql://` URL is what every adapter branches on."""
     monkeypatch.setenv("RUNA_DATABASE_URL", _URL)
 
-    assert db.shared_url() == _URL
+    assert db._configured().shared_url() == _URL
 
 
 def test_a_postgres_scheme_alias_is_shared_too(monkeypatch: pytest.MonkeyPatch) -> None:
     """`postgres://` is the same database; plenty of platforms hand out that spelling."""
     monkeypatch.setenv("RUNA_DATABASE_URL", "postgres://runa@localhost/runa")
 
-    assert db.shared_url() == "postgres://runa@localhost/runa"
+    assert db._configured().shared_url() == "postgres://runa@localhost/runa"
 
 
 def test_an_explicit_sqlite_url_is_not_shared(monkeypatch: pytest.MonkeyPatch) -> None:
     """Saying `sqlite://` out loud must mean the same thing as saying nothing."""
     monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:///data/runa.db")
 
-    assert db.shared_url() is None
-    assert db.sqlite_path() == Path("data/runa.db")
+    assert db._configured().shared_url() is None
+    assert db._configured().sqlite_path() == Path("data/runa.db")
 
 
 def test_four_slashes_is_an_absolute_sqlite_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The `DATABASE_URL` convention: three slashes relative, four absolute."""
     monkeypatch.setenv("RUNA_DATABASE_URL", "sqlite:////tmp/runa.db")
 
-    assert db.sqlite_path() == Path("/tmp/runa.db")
+    assert db._configured().sqlite_path() == Path("/tmp/runa.db")
 
 
 def test_an_unknown_scheme_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,7 +71,7 @@ def test_an_unknown_scheme_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUNA_DATABASE_URL", "mysql://runa@localhost/runa")
 
     with pytest.raises(db.InvalidDatabaseURL, match="postgresql://, sqlite:// or memory://"):
-        db.shared_url()
+        db._configured().shared_url()
 
 
 def test_local_factories_return_stores_over_sqlite(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,7 +130,7 @@ def test_a_project_moves_every_local_concern(monkeypatch: pytest.MonkeyPatch) ->
 
     use(root)
 
-    assert db.sqlite_path() == expected
+    assert db._configured().sqlite_path() == expected
     assert db.session("s").database.location == expected  # type: ignore[attr-defined]
     assert db.sessions().database.location == expected  # type: ignore[attr-defined]
     assert db.traces().database.location == expected  # type: ignore[attr-defined]
@@ -137,7 +147,7 @@ def test_no_project_is_the_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
     use(Path("other/project"))
     use(None)
 
-    assert db.sqlite_path() == Path("db/runa.db")
+    assert db._configured().sqlite_path() == Path("db/runa.db")
 
 
 def test_the_same_project_twice_is_one_project(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,7 +162,7 @@ def test_the_same_project_twice_is_one_project(monkeypatch: pytest.MonkeyPatch) 
     use(root)
     use(root)
 
-    assert db.sqlite_path() == root / "db" / "runa.db"
+    assert db._configured().sqlite_path() == root / "db" / "runa.db"
 
 
 def test_a_second_project_leaves_the_first_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,7 +179,7 @@ def test_a_second_project_leaves_the_first_in_place(monkeypatch: pytest.MonkeyPa
     with pytest.raises(UserError):
         use(Path("other/project"))
 
-    assert db.sqlite_path() == Path("one/project/db/runa.db")
+    assert db._configured().sqlite_path() == Path("one/project/db/runa.db")
 
 
 def test_a_project_applies_an_explicit_sqlite_url_relative_to_it(
@@ -180,7 +190,7 @@ def test_a_project_applies_an_explicit_sqlite_url_relative_to_it(
 
     use(Path("other/project"))
 
-    assert db.sqlite_path() == Path("other/project/data/runa.db")
+    assert db._configured().sqlite_path() == Path("other/project/data/runa.db")
 
 
 def test_a_project_leaves_an_absolute_sqlite_url_alone(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,7 +199,7 @@ def test_a_project_leaves_an_absolute_sqlite_url_alone(monkeypatch: pytest.Monke
 
     use(Path("other/project"))
 
-    assert db.sqlite_path() == Path("/var/lib/runa.db")
+    assert db._configured().sqlite_path() == Path("/var/lib/runa.db")
 
 
 def test_a_project_moves_a_file_path_too(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -263,10 +273,10 @@ def test_memory_url_resolves_every_concern_in_process(monkeypatch: pytest.Monkey
 
     from runa.db.sqlite import MemoryDatabase
 
-    database = db.sqlite_database()
+    database = db._configured().sqlite_database()
 
-    assert db.ephemeral() is True
-    assert db.shared_url() is None
+    assert db._configured().ephemeral() is True
+    assert db._configured().shared_url() is None
     assert isinstance(database, MemoryDatabase)
     for store in (db.session("s"), db.sessions(), db.traces(), db.evals(), db.cache()):
         assert store.database.location is database  # type: ignore[attr-defined]

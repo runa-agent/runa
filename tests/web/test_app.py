@@ -131,7 +131,7 @@ def test_create_app_points_the_db_at_its_own_project(project: Path) -> None:
 
     TestClient(create_app(project))
 
-    assert db.sqlite_path() == project / "db" / "runa.db"
+    assert db._configured().sqlite_path() == project / "db" / "runa.db"
     assert Memory(dimensions=4)._store.db_path == project / "db" / "runa.db"  # type: ignore[attr-defined]
 
 

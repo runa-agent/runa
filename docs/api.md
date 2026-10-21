@@ -172,14 +172,6 @@ signature-level reference.
 
 ::: runa.db.cache
 
-::: runa.db.shared_url
-
-::: runa.db.sqlite_path
-
-::: runa.db.sqlite_database
-
-::: runa.db.ephemeral
-
 ::: runa.session.store.SessionStore
 
 ::: runa.eval.store.EvalStore
