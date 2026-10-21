@@ -4,7 +4,7 @@
 scrub what's kept; the `max_*_bytes` limits truncate what's left. Spans and `lifecycle.py`'s DEBUG
 log lines both read it through `policy()`. It has a process-wide default (`observe(...)`) and a
 per-task override (`with observe.scoped(...)`), held in a `ContextVar`. Where a finished trace
-goes is `export.py`; `observe(exporter=...)` forwards there.
+goes is `export.py`.
 """
 
 import json
@@ -14,7 +14,6 @@ from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from runa import _app
-from runa.tracing import export
 
 _REDACTED = "[REDACTED]"
 
@@ -58,7 +57,7 @@ def _merge(base: Policy, updates: dict[str, Any]) -> Policy:
 
 
 def _default() -> Policy:
-    """The process-wide policy, which is what an `observe(...)` call and `add_exporter` write.
+    """The process-wide policy, which is what an `observe(...)` call writes.
 
     It is process state, so `runa._app.reset` forgets it with the app.
     """
@@ -125,45 +124,25 @@ def _updates(named: dict[str, Any]) -> dict[str, Any]:
     return {f.name: named[f.name] for f in fields(Policy) if named[f.name] is not None}
 
 
-def _exporter_list(named: dict[str, Any]) -> list[export.TraceExporter] | None:
-    """The `exporter=` argument as a list, or `None` if it wasn't named."""
-    exporter = named["exporter"]
-    if exporter is None:
-        return None
-    return exporter if isinstance(exporter, list) else [exporter]
-
-
 class _ScopedPolicy:
     """What `observe.scoped(...)` returns: its overrides, installed on the current task only.
 
     Reusable and reentrant: each entry restores the policy in force where it was entered.
     """
 
-    def __init__(
-        self, updates: dict[str, Any], exporters: list[export.TraceExporter] | None
-    ) -> None:
-        """Hold `updates` and `exporters` until a `with` block installs them."""
+    def __init__(self, updates: dict[str, Any]) -> None:
+        """Hold `updates` until a `with` block installs them."""
         self._updates = updates
-        self._exporters = exporters
-        self._tokens: list[
-            tuple[Token[Policy | None], Token[list[export.TraceExporter] | None]]
-        ] = []
+        self._tokens: list[Token[Policy | None]] = []
 
     def __enter__(self) -> _ScopedPolicy:
         """Install these overrides on top of whatever policy is in force here."""
-        self._tokens.append(
-            (
-                _scoped.set(_merge(policy(), self._updates)),
-                export.scope_exporters(self._exporters),
-            )
-        )
+        self._tokens.append(_scoped.set(_merge(policy(), self._updates)))
         return self
 
     def __exit__(self, *exc_info: object) -> None:
         """Restore whatever tracing policy this task saw before the block."""
-        policy_token, exporters_token = self._tokens.pop()
-        export.unscope(exporters_token)
-        _scoped.reset(policy_token)
+        _scoped.reset(self._tokens.pop())
 
 
 class observe:
@@ -189,16 +168,12 @@ class observe:
         max_input_bytes: int | None = None,
         max_output_bytes: int | None = None,
         max_tool_result_bytes: int | None = None,
-        exporter: export.TraceExporter | list[export.TraceExporter] | None = None,
     ) -> None:
         """Apply the given overrides to the process-wide tracing policy, permanently.
 
         Not a context manager: `with observe(...)` is a `TypeError`; use `observe.scoped(...)`.
         """
-        named = locals()
-        _set_default(_merge(_default(), _updates(named)))
-        if (exporters := _exporter_list(named)) is not None:
-            export.set_exporters(exporters)
+        _set_default(_merge(_default(), _updates(locals())))
 
     @staticmethod
     def scoped(
@@ -210,15 +185,13 @@ class observe:
         max_input_bytes: int | None = None,
         max_output_bytes: int | None = None,
         max_tool_result_bytes: int | None = None,
-        exporter: export.TraceExporter | list[export.TraceExporter] | None = None,
     ) -> _ScopedPolicy:
         """A `with` block that applies the given overrides to the current task only.
 
         Nothing is applied until the block is entered, and everything is restored when it exits.
         An inner block overrides what it names and inherits the rest from the block around it.
         """
-        named = locals()
-        return _ScopedPolicy(_updates(named), _exporter_list(named))
+        return _ScopedPolicy(_updates(locals()))
 
 
 __all__ = ["observe"]

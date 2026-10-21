@@ -70,17 +70,10 @@ from runa import add_exporter, ConsoleExporter
 add_exporter(ConsoleExporter())  # runa.db still gets written to, console output is now added
 ```
 
-`observe(exporter=...)` is a full override instead, since it's also how `observe.scoped(...)`
-swaps exporters for one block's duration:
-
-```python
-from runa import ConsoleExporter, StoreExporter, db, observe
-
-observe(exporter=[StoreExporter(db.traces()), ConsoleExporter()])  # replaces the list entirely
-```
-
-`StoreExporter(db.traces())` is the default store exporter, so naming it keeps traces in the same
-database as every other concern. `StoreExporter(db.at(url).traces())` exports to some other one.
+It is the only way to install one. The store exporter is always kept, because it is what
+`runa ui`, `runa traces` and `runa eval --add` read: where the store lives is `RUNA_DATABASE_URL`,
+as for every other concern (`memory://` keeps nothing on disk). `add_exporter(StoreExporter(db.at(url).traces()))`
+writes a copy to some other database too.
 
 Write your own by implementing `TraceExporter`'s single method, `export(self, trace: Trace) -> None`.
 

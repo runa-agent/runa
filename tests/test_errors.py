@@ -27,7 +27,7 @@ from runa.lifecycle import Hooks
 from runa.run import Run
 from runa.session.database import DatabaseSession
 from runa.session.store import MESSAGES, SESSIONS
-from runa.tracing import Trace, observe
+from runa.tracing import Trace, add_exporter
 
 
 def _final_message(text: str) -> dict[str, Any]:
@@ -180,8 +180,8 @@ def test_an_unexpected_failure_still_records_usage_and_exports_its_trace() -> No
     exports = _Exports()
     agent = _agent()
 
-    with observe.scoped(exporter=[exports]):
-        run = agent.run_sync("hi", session=_UnwritableSession("s3"))
+    add_exporter(exports)
+    run = agent.run_sync("hi", session=_UnwritableSession("s3"))
 
     assert run.status == "error"
     assert len(exports.traces) == 1
@@ -245,7 +245,8 @@ def test_an_operator_error_is_not_reported_as_a_run_failure() -> None:
 
     exports = _Exports()
 
-    with observe.scoped(exporter=[exports]), pytest.raises(OperatorError, match="RUNA_DATABASE"):
+    add_exporter(exports)
+    with pytest.raises(OperatorError, match="RUNA_DATABASE"):
         _agent().run_sync("hi", session=_MisconfiguredSession("s4"))
 
     assert len(exports.traces) == 1
@@ -274,7 +275,8 @@ def test_cancelling_a_run_escapes_the_broader_catch() -> None:
         task.cancel()
         await task
 
-    with observe.scoped(exporter=[exports]), pytest.raises(asyncio.CancelledError):
+    add_exporter(exports)
+    with pytest.raises(asyncio.CancelledError):
         asyncio.run(cancel_mid_run())
 
     assert exports.traces == []

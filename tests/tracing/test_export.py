@@ -14,7 +14,7 @@ from helpers import scripted_agent
 
 from runa import Agent, Trace, tracing
 from runa._types import ModelResponse, Usage
-from runa.tracing import observe
+from runa.tracing import add_exporter
 from runa.tracing.export import flush_exports
 
 
@@ -46,8 +46,7 @@ def test_a_run_returns_without_waiting_for_a_slow_exporter() -> None:
 
     The exporter blocks until the test releases it, which the test only does once the run has
     returned: had the run waited for its export, it would never have come back. `flush_exports`
-    then finds the trace written, with the `observe.scoped(...)` `ContextVar` carried onto the
-    export thread -- the process-wide default here is no exporter at all.
+    then finds the trace written.
     """
     released = threading.Event()
     exported: list[Trace] = []
@@ -58,8 +57,8 @@ def test_a_run_returns_without_waiting_for_a_slow_exporter() -> None:
             assert released.wait(timeout=2.0), "the run waited for its own export"
             exported.append(trace)
 
-    with observe.scoped(exporter=[_Blocking()]):
-        result = asyncio.run(_run())
+    add_exporter(_Blocking())
+    result = asyncio.run(_run())
 
     assert result.output == "ok"
     assert exported == []
@@ -78,9 +77,9 @@ def test_run_sync_has_written_its_trace_by_the_time_it_returns() -> None:
         instructions = "You research topics."
         model = _TextModel()
 
-    with observe.scoped(exporter=[recording]):
-        result = Researcher().run_sync("hi")
-        assert [t.id for t in recording.traces] == [result.trace.id]
+    add_exporter(recording)
+    result = Researcher().run_sync("hi")
+    assert [t.id for t in recording.traces] == [result.trace.id]
 
 
 def test_a_manual_trace_block_exports_on_its_own_thread() -> None:
@@ -92,10 +91,10 @@ def test_a_manual_trace_block_exports_on_its_own_thread() -> None:
             """Keep every trace, with the thread it arrived on."""
             exported.append((trace, threading.get_ident()))
 
-    with observe.scoped(exporter=[_Recording()]):
-        with tracing.trace("nightly-batch") as t, tracing.span("step-1", t):
-            pass
-        assert len(exported) == 1
+    add_exporter(_Recording())
+    with tracing.trace("nightly-batch") as t, tracing.span("step-1", t):
+        pass
+    assert len(exported) == 1
 
     trace, thread = exported[0]
     assert trace.id == t.id

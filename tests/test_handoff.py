@@ -14,7 +14,7 @@ from runa.agent import Agent, Subagent
 from runa.lifecycle import Hooks
 from runa.run_internal.agent_shape import reachable, subagent_edges
 from runa.tool import ToolCall, tool
-from runa.tracing import observe
+from runa.tracing import add_exporter
 
 
 def _final_message(text: str) -> dict[str, Any]:
@@ -193,8 +193,8 @@ def test_a_delegates_spans_are_in_its_callers_trace_under_the_call() -> None:
         [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
     )
 
-    with observe.scoped(exporter=[Recording()]):
-        run = lead.run_sync("go")
+    add_exporter(Recording())
+    run = lead.run_sync("go")
 
     assert [trace.id for trace in exported] == [run.trace.id]
     spans = {span.name: span for span in run.trace.spans if span.type in ("agent", "delegate")}

@@ -280,18 +280,22 @@ def test_the_exporter_writes_to_the_store_it_was_resolved_with(
 
 
 def test_add_exporter_appends_without_replacing_the_active_ones() -> None:
-    """`add_exporter` keeps whatever was active (the default store exporter) and adds to it.
-
-    Unlike `observe(exporter=...)`, which fully replaces the list -- the right tool for an
-    `observe.scoped(...)` block that swaps exporters temporarily, but a footgun for the common
-    case of wanting one more exporter without silently losing the default.
-    """
-    before = list(export.exporters())
+    """`add_exporter` keeps the store exporter `runa ui`/`runa traces` read and adds to it."""
+    before = export.exporters()
     extra = ConsoleExporter()
 
     export.add_exporter(extra)
 
-    assert export.exporters() == [*before, extra]
+    assert export.exporters() == (*before, extra)
+    assert type(before[0]).__name__ == "StoreExporter"
+
+
+def test_observe_takes_no_exporter() -> None:
+    """What a span keeps and where a trace goes are separate: `observe` can't drop the store."""
+    with pytest.raises(TypeError):
+        observe(exporter=[])  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        observe.scoped(exporter=[])  # type: ignore[call-arg]
 
 
 def test_capture_inputs_false_means_tool_span_input_is_not_recorded() -> None:

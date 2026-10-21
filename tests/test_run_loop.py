@@ -734,7 +734,7 @@ def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
         model=ScriptedModel([_two_calls_response("slow", "blocked")]),
     )
 
-    from runa.tracing import observe
+    from runa.tracing import add_exporter
 
     exported: dict[str, str | None] = {}
 
@@ -742,8 +742,8 @@ def test_a_tripped_call_cancels_its_sibling_and_both_spans_say_why() -> None:
         def export(self, trace: Any) -> None:
             exported.update({s.name: s.error for s in trace.spans if s.type == "tool"})
 
-    with observe.scoped(exporter=[_Capture()]):
-        result = agent.run_sync("go")
+    add_exporter(_Capture())
+    result = agent.run_sync("go")
 
     assert result.status == "error"
     # As exported, not after `asyncio.run` tidied up leftover tasks.

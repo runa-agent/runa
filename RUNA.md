@@ -506,9 +506,10 @@ with tracing.trace("nightly-batch") as t:
         ...
 ```
 
-Add a `TraceExporter` (`ConsoleExporter`, `StoreExporter(db.at(url).traces())`, or your own)
-to change *where* traces go; never change *whether* they're captured.
-There is no flag for that.
+Add a `TraceExporter` with `add_exporter(...)` (`ConsoleExporter`,
+`StoreExporter(db.at(url).traces())`, or your own) to send traces somewhere *else*; never change
+*whether* they're captured. The store `runa ui` reads is always written, wherever
+`RUNA_DATABASE_URL` puts it. There is no flag for that.
 
 ---
 

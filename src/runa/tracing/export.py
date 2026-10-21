@@ -1,15 +1,14 @@
 """tracing/export.py: where a finished trace goes: the exporters, and the queue that feeds them.
 
 `export_trace` hands a trace to every active exporter on the calling thread, `export_trace_later`
-queues it off a run's loop, and `flush_exports` waits for the queue. The active list is a
-process-wide default (`observe(exporter=...)`, `add_exporter`) with a per-task override
-(`observe.scoped(exporter=...)`), held in a `ContextVar`. What a trace captures is `config.py`.
+queues it off a run's loop, and `flush_exports` waits for the queue. The list is one per
+process: this deployment's store, Langfuse when its keys are set, then whatever `add_exporter`
+appended. Nothing removes the store, because it is what "every run is traced" means. What a trace
+captures is `config.py`.
 """
 
-import contextvars
 import os
 from concurrent.futures import ThreadPoolExecutor
-from contextvars import ContextVar, Token
 from typing import Protocol
 
 from runa import _app
@@ -56,10 +55,9 @@ def export_trace_later(trace: Trace) -> None:
     """Queue `export_trace(trace)` on `_exporting` and return without waiting for it.
 
     So a slow exporter never holds up a run's loop, a `Run` can reach its caller before its trace
-    reaches the store; `flush_exports` waits for it. The task's context is copied across, so the
-    worker sees `observe.scoped(...)` overrides.
+    reaches the store; `flush_exports` waits for it.
     """
-    _exporting.submit(contextvars.copy_context().run, export_trace, trace)
+    _exporting.submit(export_trace, trace)
 
 
 def flush_exports() -> None:
@@ -132,9 +130,6 @@ before a generated `main.py` has run its `load_dotenv()`, and an app whose `.env
 database would write its traces to SQLite while its sessions went to Postgres.
 """
 
-_scoped: ContextVar[list[TraceExporter] | None] = ContextVar("runa_tracing_exporters", default=None)
-"""The `observe.scoped(exporter=...)` list for the current task, or `None` to use `_default`."""
-
 
 def _forget_default() -> None:
     global _default
@@ -144,43 +139,22 @@ def _forget_default() -> None:
 _app.on_reset(_forget_default)
 
 
-def _process_exporters() -> list[TraceExporter]:
+def _installed() -> list[TraceExporter]:
     global _default
     if _default is None:
         _default = _default_exporters()
     return _default
 
 
-def exporters() -> list[TraceExporter]:
-    """Return the active list of `TraceExporter`s a finished trace is sent to.
-
-    This task's `observe.scoped(exporter=...)` list, else the process-wide default, resolved on
-    first call.
-    """
-    scoped = _scoped.get()
-    return scoped if scoped is not None else _process_exporters()
-
-
-def set_exporters(replacement: list[TraceExporter]) -> None:
-    """Replace the process-wide list, as startup configuration (`observe(exporter=...)`)."""
-    global _default
-    _default = replacement
+def exporters() -> tuple[TraceExporter, ...]:
+    """Return the `TraceExporter`s a finished trace is sent to, in order, resolved on first call."""
+    return tuple(_installed())
 
 
 def add_exporter(exporter: TraceExporter) -> None:
-    """Add `exporter` alongside whatever's already installed, instead of replacing it.
+    """Send every finished trace to `exporter` too, after the ones already installed.
 
-    `observe(exporter=...)` replaces the list; this keeps the default store exporter. Writes the
-    process-wide default, as startup configuration.
+    The one way to change where traces go: the store is always kept. Startup configuration, so
+    it applies to every run in the process.
     """
-    set_exporters([*_process_exporters(), exporter])
-
-
-def scope_exporters(replacement: list[TraceExporter] | None) -> Token[list[TraceExporter] | None]:
-    """Make `replacement` this task's list (`None` keeps the one in force); undo with `unscope`."""
-    return _scoped.set(replacement if replacement is not None else _scoped.get())
-
-
-def unscope(token: Token[list[TraceExporter] | None]) -> None:
-    """Restore the list this task saw before the `scope_exporters` call that made `token`."""
-    _scoped.reset(token)
+    _installed().append(exporter)

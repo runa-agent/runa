@@ -2,8 +2,8 @@
 
 See RUNA.md #14 and docs/tracing.md ("Custom Exporters").
 
-`add_exporter` adds one more exporter without disabling the default; `observe(exporter=...)`
-would replace the list entirely instead. Writing your own is one method: `export(trace) -> None`.
+`add_exporter` adds one more exporter; the default store exporter is always kept. Writing your
+own is one method: `export(trace) -> None`.
 
 Run it:
 

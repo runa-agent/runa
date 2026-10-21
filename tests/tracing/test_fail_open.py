@@ -6,7 +6,7 @@ from helpers import scripted_agent
 
 from runa import Trace
 from runa._types import ModelResponse, Usage
-from runa.tracing import observe
+from runa.tracing import add_exporter
 
 
 class _BrokenExporter:
@@ -31,8 +31,8 @@ def _agent() -> Any:
 
 def test_agent_run_sync_completes_even_when_the_exporter_fails() -> None:
     """A run still returns a completed result when the tracing exporter raises."""
-    with observe.scoped(exporter=_BrokenExporter()):
-        result = _agent().run_sync("hi")
+    add_exporter(_BrokenExporter())
+    result = _agent().run_sync("hi")
 
     assert result.output == "ok"
     assert result.trace is not None

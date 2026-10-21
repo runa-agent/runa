@@ -7,32 +7,23 @@ too, so it is reset here without a fixture of its own.
 
 Tracing is automatic (see `runa.tracing`), so any test that drives a real run through
 `Agent.run`/`run_sync`/`run_streamed` or `evaluate_agent` produces a real finished trace
-that the default store exporter would otherwise persist to `runa.db` in the process's cwd. No
-test should touch that real file, so every test runs with trace export disabled by default; a
-test that specifically wants to exercise an exporter (e.g. a fail-open test) can still pass its
-own `exporter=` to `observe.scoped(...)`, which overrides this for the scope of its `with` block.
-A paused run is kept in `runa.db` too, so every test runs under `memory://` unless it sets its
-own `RUNA_DATABASE_URL`; a test of the default itself, a project's own `db/runa.db`, asks for
-`project_database`.
-
-That default is installed with `observe(...)`, not an `observe.scoped(...)` block, because
-process-wide is what it means: a scoped block covers one task (see `tracing/config.py`), so held
-open around a test it would say nothing about the default the test's own tasks inherit, and would
-mask an `observe(...)` call under test.
+that the default store exporter persists wherever `runa.db` resolved. No test should touch the
+real `runa.db` in the process's cwd, and a paused run is kept there too, so every test runs under
+`memory://` unless it sets its own `RUNA_DATABASE_URL`; a test of the default itself, a project's
+own `db/runa.db`, asks for `project_database`. A test that watches exports calls `add_exporter`:
+the reset below forgets it with the rest of the process.
 """
 
 import pytest
 
 from runa import _app, db
-from runa.tracing import observe
 
 
 @pytest.fixture(autouse=True)
 def _fresh_process(monkeypatch: pytest.MonkeyPatch):
-    """Start every test as a fresh process with trace export off, and forget it all afterwards."""
+    """Start every test as a fresh process under `memory://`, and forget it all afterwards."""
     _app.reset()
     monkeypatch.setenv(db.DATABASE_URL_ENV, "memory://")
-    observe(exporter=[])
     yield
     _app.reset()
 
