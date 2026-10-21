@@ -16,7 +16,7 @@ from runa.run_state.store import PausedRunStore
 
 Check = Callable[[PausedRunStore, str], Coroutine[Any, Any, None]]
 
-_STATE = {"schema_version": 5, "run": {"pending": [{"call_id": "call_1"}]}}
+_STATE = {"schema_version": 6, "run": {"pending": [{"call_id": "call_1"}]}}
 
 
 async def check_load_on_unknown_id_returns_none(store: PausedRunStore, agent: str) -> None:

@@ -9,7 +9,7 @@ import inspect
 import time
 from collections.abc import AsyncIterator, Awaitable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -72,17 +72,16 @@ class _Frame:
     """One call running a run: the run's record, and everything about the call that isn't resumed.
 
     Every entry point builds one, then hands it to `_within`. The record is what the run is, and
-    what a pause hands back; the rest is ephemeral. The starting agent's shape and this call's
-    agent span, session, hooks and `emit` are the call's own. The trace, the approval ledger and
-    the guardrail audit trail are the run tree's, shared by reference with every delegate's frame,
-    and a paused `RunState` carries them beside the record. The frame exists before the MCP
-    servers are reached, so a run that fails reaching them still reports.
+    what a pause hands back; the rest is ephemeral. This call's agent span, session, hooks and
+    `emit` are the call's own. The trace, the approval ledger and the guardrail audit trail are
+    the run tree's, shared by reference with every delegate's frame, and a paused `RunState`
+    carries them beside the record. The frame exists before the MCP servers are reached, so a run
+    that fails reaching them still reports.
 
-    `owner` is the name of the agent the run started with, under which a pause is kept in
-    `runa.db`; `None` for a delegate, whose pause is its caller's.
+    `delegated` is set for a delegate's run, whose pause is its caller's rather than kept in
+    `runa.db` on its own.
     """
 
-    shape: AgentShape
     record: _RunRecord
     trace: Trace
     agent_span: Span
@@ -90,8 +89,8 @@ class _Frame:
     guardrail_results: GuardrailResults
     session: Session | None
     hooks: _Dispatch[Any]
-    owner: str | None
     emit: Emit | None = None
+    delegated: bool = False
 
     @property
     def run_context(self) -> RunContext[Any]:
@@ -103,19 +102,17 @@ class _Frame:
 class _Run:
     """One run, from the moment the loop starts it to the moment it becomes the caller's `Run`.
 
-    Its `frame`, plus what needed the MCP servers reached: the `shape` with their tools.
-
-    `shape` is the agent running now and `start` the one the run began with, the same until a
-    handoff. The run as a whole (its context sources, its compaction of history, its turn and
-    token ceilings) belongs to `start`; each turn reads `shape`.
+    Its `frame`, plus what needed the MCP servers reached: the `shape` of the agent running now,
+    with their tools. Each turn reads `shape`; the run as a whole reads `start`.
     """
 
     frame: _Frame
     shape: AgentShape
-    start: AgentShape = field(init=False)
 
-    def __post_init__(self) -> None:
-        self.start = self.shape
+    @property
+    def start(self) -> AgentShape:
+        """The shape of the agent the run began with, whose the run's ceilings and sources are."""
+        return shape_of(self.record.start)
 
     @property
     def record(self) -> _RunRecord:
@@ -241,21 +238,22 @@ class _Run:
         if paused is None:
             context = frame.run_context
             record = _RunRecord(
+                start=delegate.agent,
                 agent=delegate.agent,
                 run_context=RunContext(context=context.context, user_id=context.user_id),
             )
             message = input
         else:
             record, message = paused.resumed(), None
-        shape = shape_of(record.agent)
         nested = replace(
             frame,
-            shape=shape,
             record=record,
-            agent_span=_Spans(frame.trace, under.id).open(shape.name, "agent", input=message),
+            agent_span=_Spans(frame.trace, under.id).open(
+                record.agent.name, "agent", input=message
+            ),
             session=None,
-            owner=None,
             emit=None,
+            delegated=True,
         )
         run = await _within(nested, message)
         frame.run_context.usage.add(run.usage)
@@ -387,6 +385,8 @@ async def _record_tool_results(
 async def _run_turns(run: _Run) -> _TurnOutcome:
     """Call the model and run its tool calls until it answers, pauses, or runs out of turns.
 
+    A turn is counted on the record, so a resumed run goes on from the turns it already took.
+
     With `run.frame.emit` (a streamed run), the model is streamed and every step is emitted as a
     `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
     """
@@ -402,7 +402,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             return _TurnOutcome(None, interruptions, results)
         await _record_tool_results(run, results, switched)
 
-    for _turn in range(max_turns):
+    while record.turns < max_turns:
+        record.turns += 1
         shape = run.shape
         items = list(transcript.items)
         request = ModelRequest(
@@ -486,7 +487,8 @@ async def _timed(turn: Awaitable[Run], frame: _Frame) -> Run:
     Overrunning it is `RunTimeout`. The time spent here is added to the record on every way out,
     so a pause kept after this returns carries it.
     """
-    timeout, record = frame.shape.timeout, frame.record
+    record = frame.record
+    timeout = shape_of(record.start).timeout
     began = time.monotonic()
     try:
         if timeout is None:
@@ -536,19 +538,19 @@ async def _within(
     *,
     claiming: RunState | None = None,
 ) -> Run:
-    """Run `frame.shape`'s agent on `input`, or with `None`, continue its paused record, guarded.
+    """Run the record's agent on `input`, or with `None`, continue its paused record, guarded.
 
     Every entry point ends here once its frame is built. Claiming the pause a resumed run is
     `claiming`, listing the MCP tools (which may start a subprocess), reading the session and
     keeping a pause in `runa.db` are inside `_guarded` too, so their failures end the run like any
     other. A pause is kept once the clock has stopped, so it carries all the time it spent, and
-    only by a frame with an `owner`: a delegate's pause is carried by its caller's.
+    never by a delegate's frame: a delegate's pause is carried by its caller's.
     """
 
     async def turn() -> Run:
         if claiming is not None and not await claiming._claim():
             raise RunAlreadyResumed(claiming.run_id)
-        shape = await frame.shape.with_mcp_tools()
+        shape = await shape_of(frame.record.agent).with_mcp_tools()
         if input is not None:
             session = frame.session
             prior = await session.get_items() if session is not None else []
@@ -557,8 +559,8 @@ async def _within(
 
     async def kept() -> Run:
         run = await _timed(turn(), frame)
-        if run.status == "paused" and frame.owner is not None:
-            await run.to_state()._keep(frame.owner)
+        if run.status == "paused" and not frame.delegated:
+            await run.to_state()._keep()
         return run
 
     return await _guarded(kept(), frame)
@@ -727,19 +729,18 @@ async def _run_async(
     if group_id is not None:
         trace.metadata = {"group_id": group_id}
 
-    shape = shape_of(agent)
     frame = _Frame(
-        shape=shape,
-        record=_RunRecord(agent=agent, run_context=RunContext(context=context, user_id=user_id)),
+        record=_RunRecord(
+            start=agent, agent=agent, run_context=RunContext(context=context, user_id=user_id)
+        ),
         trace=trace,
         agent_span=_Spans(trace).open(
-            shape.name, "agent", input=latest_user_text(_turn_items(input))
+            agent.name, "agent", input=latest_user_text(_turn_items(input))
         ),
         approvals=ApprovalLedger(),
         guardrail_results=GuardrailResults(),
         session=session,
         hooks=dispatch,
-        owner=shape.name,
         emit=emit,
     )
     return await _traced(_within(frame, input), trace)
@@ -756,17 +757,14 @@ async def _resume(
     The run claims the pause first, so a pause resumed already ends in `RunAlreadyResumed`. A
     pause the resumed run comes to is its own, kept under the agent the run started with.
     """
-    shape = shape_of(state.agent)
     frame = _Frame(
-        shape=shape,
         record=state._record.resumed(),
         trace=state.trace,
-        agent_span=_Spans(state.trace).open(shape.name, "agent"),
+        agent_span=_Spans(state.trace).open(state.agent.name, "agent"),
         approvals=state._approvals,
         guardrail_results=state.guardrail_results.snapshot(),
         session=session,
         hooks=dispatch,
-        owner=state._owner,
         emit=emit,
     )
     return await _traced(_within(frame, None, claiming=state), state.trace)

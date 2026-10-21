@@ -69,7 +69,6 @@ _SERIALIZED_AS = {"_record": "run", "trace": "trace", "_approvals": "approvals"}
 _NOT_SERIALIZED = {
     "guardrail_results": "every guardrail that ran is already a span in the run's trace",
     "run_id": "the row's key, not its content",
-    "_owner": "the row's other key: the agent a pause is found through",
 }
 """`RunState` fields deliberately left out of the stored blob, and why.
 
@@ -387,3 +386,48 @@ def test_a_resumed_run_spends_the_timeout_left_over_from_before_the_pause() -> N
 
     assert resumed.status == "error"
     assert resumed.error == "run timed out after 5.0s"
+
+
+def test_a_resumed_run_spends_the_turns_left_over_from_before_the_pause() -> None:
+    """`max_turns` counts the run's model calls, not each resume's: two before the pause count."""
+    result, gated = _paused_after_a_safe_call(max_turns=2)
+    assert _stored(result)["run"]["turns"] == 2
+
+    fresh = gated()
+    restored = _load(fresh, result.run_id)
+    restored.approve(restored.pending[0])
+    resumed = fresh.run_sync(restored, session=db.session("s"))
+
+    assert resumed.status == "error"
+    assert resumed.error == "max turns (2) exceeded"
+
+
+def test_a_handed_off_run_keeps_the_starting_agents_ceilings_across_a_pause() -> None:
+    """After a handoff and a pause, the run is still held to the agent it started with."""
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Do something that needs a human's OK."""
+        return "done"
+
+    target = agent_class(
+        "Target",
+        ScriptedModel([tool_call_response("dangerous", "{}"), text_response("done")]),
+        tools=[dangerous],
+    )
+    main = agent_class(
+        "Main",
+        ScriptedModel([tool_call_response("transfer_to_target", "{}")]),
+        subagents=[target.handoff],
+        max_turns=2,
+    )
+    paused = main().run_sync("please transfer")
+    assert _stored(paused, "Main")["run"]["start"] == "Main"
+
+    fresh = main()
+    restored = _load(fresh, paused.run_id)
+    restored.approve(restored.pending[0])
+    resumed = fresh.run_sync(restored)
+
+    assert resumed.status == "error"
+    assert resumed.error == "max turns (2) exceeded"

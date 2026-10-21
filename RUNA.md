@@ -179,8 +179,9 @@ run = SupportAgent().run_sync(state)
 ```
 
 Everything the run carries comes back: its conversation, `context` and user, usage, the tool
-calls it already made, and the time already spent against its `timeout` (time paused doesn't
-count). Loading resolves no tools, so it never connects to an agent's MCP servers: the resumed
+calls it already made, the model calls already spent against its `max_turns`, and the time
+already spent against its `timeout` (time paused doesn't count). After a handoff the run is
+still the starting agent's: its ceilings, memory, knowledge and compaction stay in force. Loading resolves no tools, so it never connects to an agent's MCP servers: the resumed
 run looks each pending call's tool up itself. A `context` that was a dataclass comes back as a
 plain dict, not its original class; the run's guardrail-result audit trail (see below) and trace
 spans aren't stored with the pause: spans are already durably persisted separately (see

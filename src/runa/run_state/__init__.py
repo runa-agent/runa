@@ -36,7 +36,7 @@ from runa.transcript import Transcript
 if TYPE_CHECKING:
     from runa.agent import Agent
 
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 
 def _find_agent_by_name(root: Agent, name: str) -> Agent:
@@ -116,8 +116,12 @@ class _RunRecord(BaseModel):
     agent by its name), so all of it is serialized. What only the call running it holds -- its
     hooks, its session, its stream, its open span -- isn't here, and isn't resumed.
 
-    * `agent`: the agent running now, the same as the starting one until a handoff.
+    * `start`: the agent the run began with. The run as a whole is its: the turn, token and time
+      ceilings, the context sources, the compaction of history, and the key a pause is kept under.
+    * `agent`: the agent running now, the same as `start` until a handoff.
     * `run_context`: what user code is told, its `context`, `user_id` and usage so far.
+    * `turns`: the model calls the turn loop has made, across its resumes: what `max_turns` is
+      measured against.
     * `elapsed`: the seconds the run has spent running, across its resumes: what its `timeout`
       is measured against. Time spent paused doesn't count.
     * `pending`: the calls a paused run waits on, all in its `paused_message`. Empty while the
@@ -128,9 +132,11 @@ class _RunRecord(BaseModel):
       resuming this run reaches the same call again.
     """
 
+    start: _AgentRef
     agent: _AgentRef
     transcript: Transcript = Field(default_factory=Transcript)
     run_context: RunContext[Any] = Field(default_factory=RunContext)
+    turns: int = 0
     elapsed: float = 0.0
     pending: list[Interruption] = Field(default_factory=list)
     ready_results: list[ConversationItem] = Field(default_factory=list)
@@ -159,10 +165,10 @@ class _RunStateSchema(BaseModel):
     """The JSON envelope a `RunState` is kept as: its record, and what its tree shares.
 
     The guardrail audit trail isn't serialized: each result is already a span in the trace. Nor
-    are `run_id` and the owning agent's name, the keys the row is kept under.
+    is `run_id`, the key the row is kept under beside the starting agent's name.
     """
 
-    schema_version: Literal[5]
+    schema_version: Literal[6]
     trace: _TraceRef
     approvals: ApprovalLedger
     run: _RunRecord
@@ -188,9 +194,6 @@ class RunState(GuardrailAudit):
     _approvals: ApprovalLedger
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
     run_id: str = ""
-    _owner: str = ""
-    """The name of the agent the run started with: whose pause this is, and the key it is kept
-    and found under."""
 
     @property
     def agent(self) -> Agent:
@@ -266,7 +269,7 @@ class RunState(GuardrailAudit):
         if state_json is None:
             return None
         state = cls._from_json(agent, state_json)
-        state.run_id, state._owner = run_id, agent.name
+        state.run_id = run_id
         return state
 
     @classmethod
@@ -274,18 +277,17 @@ class RunState(GuardrailAudit):
         """Synchronous `load`, for a caller resuming with `run_sync`."""
         return run_sync(cls.load(agent, run_id))
 
-    async def _keep(self, owner: str) -> None:
-        """Save this pause as `owner`'s run, under the new `run_id` it is resumed by."""
+    async def _keep(self) -> None:
+        """Save this pause as its starting agent's, under the new `run_id` it is resumed by."""
         from runa import db
 
-        self._owner = owner
-        self.run_id = await db.paused_runs().save(owner, self._to_json())
+        self.run_id = await db.paused_runs().save(self._record.start.name, self._to_json())
 
     async def _claim(self) -> bool:
         """Take this pause off the store to resume it; `False` if it was already resumed."""
         from runa import db
 
-        return await db.paused_runs().claim(self._owner, self.run_id)
+        return await db.paused_runs().claim(self._record.start.name, self.run_id)
 
     def _to_json(self) -> dict[str, Any]:
         """The row this pause is kept as: everything the run carries, agents by name.

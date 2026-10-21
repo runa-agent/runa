@@ -1486,6 +1486,33 @@ def test_a_resumed_run_extracts_memory_from_the_original_turn() -> None:
     assert [(query, output) for query, output, _, _ in memory.told] == [("do it", "all done")]
 
 
+def test_a_handed_off_run_resumed_from_a_pause_still_extracts_the_starting_agents_memory() -> None:
+    """Memory is the starting agent's, whichever agent the run paused in."""
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Needs approval."""
+        return "done"
+
+    memory = _FakeSource()
+    target = agent_class(
+        "Target",
+        ScriptedModel([tool_call_response("dangerous", "{}"), text_response("all done")]),
+        tools=[dangerous],
+    )
+    triage = scripted_agent(
+        model=ScriptedModel([tool_call_response("transfer_to_target", "{}")]),
+        subagents=[target.handoff],
+        memory=memory,
+    )
+
+    state = triage.run_sync("do it").to_state()
+    state.approve(state.pending[0])
+    triage.run_sync(state)
+
+    assert [(query, output) for query, output, _, _ in memory.told] == [("do it", "all done")]
+
+
 def test_retrieved_blocks_go_right_before_the_message_they_were_retrieved_for() -> None:
     """With an input list that doesn't end on the user's message, blocks still precede it.
 
