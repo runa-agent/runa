@@ -7,8 +7,8 @@ import pytest
 from helpers import ScriptedModel, scripted_agent
 
 from runa import db
+from runa._loop import run_sync
 from runa._types import ModelResponse, Usage
-from runa.db.handle import run_sync
 from runa.tool import ToolCall, tool
 from runa.tracing import ConsoleExporter, Trace, config, export, observe
 

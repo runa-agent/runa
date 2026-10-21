@@ -13,14 +13,9 @@ not a parameter, but the SQLite rewrite cannot tell, so a literal never contains
 
 A call outside `transaction()` is its own transaction. Reads never create anything: a database
 that isn't there yet answers a `fetch` with no rows, and the first write is what makes it.
-
-`run_sync` is how a synchronous caller (`TraceExporter.export`, `runa traces`) awaits a method
-written against this handle.
 """
 
-import asyncio
-import threading
-from collections.abc import Coroutine, Sequence
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
 
@@ -70,39 +65,4 @@ class Database(Queries, Protocol):
         ...
 
 
-_loop: asyncio.AbstractEventLoop | None = None
-_loop_lock = threading.Lock()
-
-
-def _background_loop() -> asyncio.AbstractEventLoop:
-    """A daemon event loop for the synchronous callers that still need a `Database`.
-
-    `TraceExporter.export` and the `runa traces`/`runa chat` commands are synchronous, so they
-    have no loop of their own to await on. One long-lived loop on its own thread serves them
-    all, and `LoopCache` gives it its own pool, as it would any other loop -- which is the point:
-    `asyncio.run()` per call would open and close a loop, and so a pool, per query.
-    """
-    global _loop
-    if _loop is not None and not _loop.is_closed():
-        return _loop
-    with _loop_lock:
-        if _loop is None or _loop.is_closed():
-            _loop = asyncio.new_event_loop()
-            threading.Thread(target=_loop.run_forever, name="runa-database", daemon=True).start()
-    return _loop
-
-
-def run_sync[T](coro: Coroutine[Any, Any, T], *, timeout: float = 30.0) -> T:
-    """Run `coro` on the background loop and wait for it, for a synchronous caller.
-
-    This blocks the calling thread, so call it from a thread that has nothing better to do: a CLI
-    command, or tracing's own export thread. Calling it from a thread running an event loop
-    (`runa serve`'s) does not deadlock -- the work happens on a different loop entirely -- but it
-    stalls every task on that loop for the duration, which is what `export_trace_later` and
-    `evaluate_agent`'s `asyncio.to_thread` exist to prevent.
-    """
-    future = asyncio.run_coroutine_threadsafe(coro, _background_loop())
-    return future.result(timeout)
-
-
-__all__ = ["Database", "Queries", "Row", "run_sync"]
+__all__ = ["Database", "Queries", "Row"]

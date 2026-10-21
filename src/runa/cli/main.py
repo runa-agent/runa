@@ -21,8 +21,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from runa import project
+from runa._loop import run_sync
 from runa._models import DEFAULT_MODEL
-from runa.db.handle import run_sync
 from runa.exceptions import OperatorError
 from runa.project import AppLoadError
 

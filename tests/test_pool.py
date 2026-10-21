@@ -15,7 +15,7 @@ import pytest
 
 def test_run_sync_reaches_an_async_body_from_inside_a_running_loop() -> None:
     """The case `asyncio.run` can't serve: a synchronous exporter called mid-run."""
-    from runa.db.handle import run_sync
+    from runa._loop import run_sync
 
     saved: list[str] = []
 

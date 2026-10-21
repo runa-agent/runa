@@ -19,7 +19,7 @@ from contracts.eval import CONTRACT, Check
 from helpers import finished_run
 
 from runa import db
-from runa.db.handle import run_sync
+from runa._loop import run_sync
 from runa.eval.case import Case
 from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report

@@ -20,7 +20,7 @@ from contracts.session import CONTRACT, Check, SessionPair
 from helpers import ScriptedModel, scripted_agent, text_response
 
 from runa import db
-from runa.db.handle import run_sync
+from runa._loop import run_sync
 from runa.project import use
 from runa.session.store import listing_clause
 

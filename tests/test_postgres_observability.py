@@ -27,7 +27,7 @@ from contracts import eval as eval_contract
 from contracts import trace as trace_contract
 
 from runa import db
-from runa.db.handle import run_sync
+from runa._loop import run_sync
 from runa.db.pool import PostgresDatabase
 from runa.eval.database import DatabaseEvalStore
 from runa.eval.store import CASES, RUNS

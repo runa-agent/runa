@@ -11,7 +11,8 @@ import uuid
 from contextvars import ContextVar
 from typing import Any
 
-from runa.tracing.export import export_trace
+from runa._loop import current_loop
+from runa.tracing.export import export_trace, export_trace_later
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
 
@@ -52,13 +53,17 @@ class trace:
     def __exit__(self, *exc_info: object) -> None:
         """Close and export the `Trace`, regardless of whether the block raised.
 
-        Exported inline, where a finishing run queues its export (`export_trace_later`):
-        this is a synchronous `with` block, so the thread it blocks is the caller's own, and the
-        only work it holds up is the code that opened the block.
+        Exported inline when no loop runs on this thread, since the only work that holds up is the
+        code that opened the block. Inside a coroutine it is queued, as a finishing run's is
+        (`export_trace_later`): exporting inline there would stall the loop, or on Runa's own
+        background loop wait on itself.
         """
         _current.reset(self._token)
         self._trace.end_time = time.time()
-        export_trace(self._trace)
+        if current_loop() is None:
+            export_trace(self._trace)
+        else:
+            export_trace_later(self._trace)
 
 
 class span:

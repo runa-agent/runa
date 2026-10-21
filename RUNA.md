@@ -382,14 +382,10 @@ so two servers exposing the same tool stay two tools, told apart by their
 there's no explicit `.connect()`/`.close()` for user code to call in the
 common case.
 
-**An agent's whole lifetime means one event loop.** A session's streams
-belong to the loop they were opened on and can't outlive it, so the
-connection is held per loop and `run_sync` -- which opens a loop per call
--- connects again each turn, respawning a `.stdio` server's subprocess
-with it (and shutting the previous one down, rather than leaving a process
-per turn behind). A long-lived app on its own loop, `await agent.run(...)`,
-is the one that gets a single persistent connection; prefer it when a
-`.stdio` server is expensive to start.
+**An agent's whole lifetime means the process.** `await agent.run(...)`
+on an app's own loop and `run_sync` (every call of which shares one
+background loop) each keep one connection open across turns, and a
+`.stdio` server's subprocess is shut down when the process exits.
 
 ## 10. Model
 

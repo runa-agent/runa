@@ -32,10 +32,10 @@ class TestResult:
 
 
 async def _await(awaitable: Awaitable[Any]) -> Any:
-    """Await `awaitable` inside a real coroutine, which is what `runa._loop.run` takes.
+    """Await `awaitable` inside a real coroutine, which is what `runa._loop.run_sync` takes.
 
     An `async def` test returns a coroutine, but a test may equally return any awaitable, and
-    `asyncio.run` underneath it is typed (and documented) for coroutines alone.
+    the task it runs as is built from a coroutine alone.
     """
     return await awaitable
 
@@ -67,7 +67,7 @@ def run_project_tests(root: Path) -> list[TestResult]:
                 try:
                     outcome = attr()
                     if inspect.isawaitable(outcome):
-                        _loop.run(_await(outcome))
+                        _loop.run_sync(_await(outcome))
                 except AssertionError as exc:
                     results.append(TestResult(name=name, passed=False, error=str(exc)))
                 else:

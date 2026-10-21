@@ -15,7 +15,7 @@ import pytest
 from helpers import scripted_agent, shape_of
 from pydantic import BaseModel
 
-from runa import Agent, tracing
+from runa import Agent, _loop, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContext, Usage
 from runa.agent import _AGENT_FIELDS, Subagent
@@ -1287,13 +1287,15 @@ def test_run_sync_returns_a_completed_run(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 class _ClosableServer(_MCPServerBase):
-    """An MCP server whose connection is a counter: opening it costs nothing, closing counts."""
+    """An MCP server whose connection is a pair of counters: opening and closing cost nothing."""
 
     def __init__(self) -> None:
         super().__init__(name="fake", address="fake://server")
+        self.opens = 0
         self.closes = 0
 
     async def _open(self) -> _Connection:
+        self.opens += 1
         stack = AsyncExitStack()
         stack.callback(self._closed)
         return _Connection(stack=stack, session=cast(Any, None), tools=[])
@@ -1302,13 +1304,13 @@ class _ClosableServer(_MCPServerBase):
         self.closes += 1
 
 
-def test_run_sync_closes_every_mcp_server_the_turn_reached(
+def test_run_sync_keeps_every_mcp_server_the_turns_reached_connected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`run_sync` owns the loop it made, so nothing connected on it outlives the turn.
+    """Every `run_sync` shares one loop, so a second turn reuses the first turn's connection.
 
     Not just the root agent's own servers: one a subagent connected is a `.stdio` subprocess
-    too, which `runa chat` would otherwise leave running for every turn it takes.
+    too, which `runa chat` would otherwise respawn for every turn it takes.
     """
     server = _ClosableServer()
     subagent = Translator(mcp=[server])
@@ -1323,13 +1325,13 @@ def test_run_sync_closes_every_mcp_server_the_turn_reached(
     agent.run_sync("hi")
     agent.run_sync("again")
 
-    assert server.closes == 2
+    assert (server.opens, server.closes) == (1, 0)
 
 
-def test_run_sync_closes_the_mcp_servers_even_when_the_turn_raises(
+def test_the_background_loops_shutdown_closes_the_mcp_servers_run_sync_reached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An `OperatorError` escaping a turn still takes its connections down, not leaks them."""
+    """What `run_sync` connected, even on a turn that raised, is closed when the process exits."""
     server = _ClosableServer()
 
     async def connect_then_raise(*args: Any, **kwargs: Any) -> Run:
@@ -1340,8 +1342,10 @@ def test_run_sync_closes_the_mcp_servers_even_when_the_turn_raises(
 
     with pytest.raises(OperatorError):
         Researcher(mcp=[server]).run_sync("hi")
+    loop, _ = _loop._background_loop()
+    _loop.run_sync(_loop._close_resources(loop))
 
-    assert server.closes == 1
+    assert (server.opens, server.closes) == (1, 1)
 
 
 def test_run_sync_passes_multimodal_message_content_through(

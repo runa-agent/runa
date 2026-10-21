@@ -14,8 +14,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from runa import db
+from runa._loop import run_sync
 from runa.agent import Agent
-from runa.db.handle import run_sync
 from runa.project import find_agent_class, loaded_app, require_agents_dir
 from runa.session import Session
 

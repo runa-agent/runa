@@ -17,12 +17,11 @@ under `.stdio`, an HTTP connection under `.http` -- belong to the loop that was 
 were opened, and do not survive it being closed, which is the lifetime `runa._loop.LoopCache`
 exists to state and which `db/pool.py`'s pools, `cache/redis.py`'s client and `ModelProvider`'s
 HTTP clients already hold themselves to. A session is the fourth such resource, so it is held the
-same way: per loop, built on first use there. `await agent.run(...)` on an app's own loop gets
-the persistent connection the paragraph above promises; `Agent.run_sync` opens a loop per call,
-so each turn connects again, and a `.stdio` server spawns its subprocess again with it. The
-cache is built with a `close`, so `runa._loop.run`, which `run_sync` runs each turn on, shuts
-every server connected on that loop down -- a subagent's included -- instead of leaving a
-process per turn behind. That cost is the reason a long-lived app should prefer `run`.
+same way: per loop, built on first use there. An app's own loop and the background loop every
+`Agent.run_sync` shares both live as long as the process, so either gets the persistent
+connection the paragraph above promises. The cache is built with a `close`, so the background
+loop shuts every server it connected -- a subagent's included -- down before the interpreter
+exits rather than leaving a `.stdio` subprocess behind.
 """
 
 import re
@@ -123,8 +122,7 @@ class _MCPServerBase:
 
         An app that runs on one loop never needs this, same as `db/pool.py`'s `close_pool`: the
         connection lives as long as the loop does, which is as long as the process. Nor does a
-        caller that owns a loop it is about to close, if it ran on `runa._loop.run`, which closes
-        every server's connection on that loop itself.
+        synchronous caller: the connections `Agent.run_sync` opened are closed at exit.
         """
         connection = self._connections.pop(self._address)
         if connection is not None:

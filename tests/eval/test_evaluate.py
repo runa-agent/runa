@@ -7,9 +7,9 @@ import pytest
 from helpers import ScriptedModel, finished_run
 
 from runa import db
+from runa._loop import run_sync
 from runa._types import Usage
 from runa.agent import Agent
-from runa.db.handle import run_sync
 from runa.eval.case import Case
 from runa.eval.evaluate import evaluate_agent
 from runa.eval.evaluation.core import EvalStatus, EvaluationResult

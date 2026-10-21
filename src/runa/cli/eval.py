@@ -75,4 +75,4 @@ def run_project_evals(root: Path, agent_name: str | None = None) -> list[Report]
         async def _run_all() -> list[Report]:
             return [await agent.evaluate(dataset) for agent, dataset in modules]
 
-        return _loop.run(_run_all())
+        return _loop.run_sync(_run_all())

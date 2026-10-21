@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from runa import db
+from runa._loop import run_sync
 from runa.cli.new import scaffold_project
-from runa.db.handle import run_sync
 from runa.eval import Case, Dataset
 from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
 from runa.project import use

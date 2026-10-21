@@ -15,7 +15,7 @@ from typing import Protocol
 
 from runa import _app
 from runa._log import logger
-from runa.db.handle import run_sync
+from runa._loop import run_sync
 from runa.tracing.store import TraceStore
 from runa.tracing.traces import Trace
 

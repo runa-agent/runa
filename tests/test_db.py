@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from runa import _app, db
-from runa.db.handle import run_sync
+from runa._loop import run_sync
 from runa.exceptions import UserError
 from runa.knowledge import Knowledge
 from runa.memory import Memory

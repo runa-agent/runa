@@ -509,12 +509,17 @@ class Agent:
     ) -> Run:
         """Synchronous `run`, for callers not already inside an event loop.
 
-        Runs on an event loop of its own, closing every `.stdio` MCP server the turn reached before
-        the loop goes; `await agent.run(...)` keeps them open for the agent's lifetime. The trace
-        is written by the time this returns, where `run` only queues its export.
+        Runs on Runa's one background event loop, shared by every synchronous call in the process,
+        so the connections a turn opens (a database pool, a provider's HTTP client, an MCP server
+        and its `.stdio` subprocess) are still open for the next one, as they are under
+        `await agent.run(...)`. Ctrl-C cancels the run and waits for it to unwind before raising.
+        Works from a notebook's running loop too, though it blocks that loop until it returns; from
+        inside a coroutine already running on Runa's loop it raises `UserError`, since it would
+        wait on itself. The trace is written by the time this returns, where `run` only queues its
+        export.
         """
         try:
-            return _loop.run(self.run(message, context, hooks, session, user_id))
+            return _loop.run_sync(self.run(message, context, hooks, session, user_id))
         finally:
             flush_exports()
 
