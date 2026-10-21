@@ -128,14 +128,8 @@ def _stats(paths: list[Path]) -> _Stats:
 def _digest(directory: Path, header: str) -> str:
     """Hash `header` and every supported file under `directory`, as `Knowledge._fingerprint` does.
 
-    Contents, not `(size, mtime)`: a container build or a fresh checkout rewrites every
-    timestamp, so a timestamp-keyed fingerprint would re-embed the whole corpus on each deploy.
-
-    Which is why the timestamps are only a cache key here, never the hash: an unchanged
-    `(path, size, mtime)` for every file means the digest this process computed last time still
-    stands, and a fresh checkout invalidates the cache, re-reads the corpus once, and arrives at
-    the same digest -- so it still doesn't re-embed. Losing this cache costs one hash; it can
-    never cost a rebuild, and it can never skip one a changed file calls for.
+    The digest covers file contents only, so a fresh checkout of the same corpus hashes the same.
+    Each file's `(path, size, mtime)` is just the key of a per-process cache of the last digest.
     """
     paths = _discover(directory)
     stats = _stats(paths)
@@ -260,26 +254,12 @@ class Knowledge:
     async def _rebuild(self) -> int:
         """`ingest`'s work, with its lock already held: empty the store, refill it, then stamp it.
 
-        The fingerprint is taken before the files are read, so a file edited mid-ingest is stored
-        under the older fingerprint and the next `search` rebuilds. The safe direction: a corpus
-        that looks staler than it is costs one rebuild, where one that looks fresher is wrong.
+        The store stays unversioned until the last row lands, so a concurrent reader rebuilds
+        rather than searching a partial corpus. The fingerprint is taken before the files are
+        read, so a file edited mid-ingest leaves the store looking stale, never fresh.
 
-        Which is also why the store is stamped at the end, after the last `add`, rather than by
-        the `reset` that empties it at the start. A version is a claim that the store *holds* this
-        corpus, and that only becomes true once the rows are there; stamped up front it would be
-        false for as long as the embedding round trip and the inserts behind it take. Every other
-        reader of this storage -- the next request's `Knowledge`, a second replica -- would
-        believe the claim, skip its own ingest, and search a corpus that was still arriving, which
-        is the one failure that leaves no mark on an answer. Between the `reset` and the `stamp`
-        the store is unversioned instead: the state that costs a rebuild rather than a quietly
-        thin answer.
-
-        An empty corpus is logged, the way `Agent` logs a missing prompt file, and
-        for the same reason: retrieval is the one step whose failure leaves no mark on the output
-        (an empty knowledge block reads exactly like a corpus with nothing relevant in it), so an
-        agent that asked for `knowledge=` and found nothing to search has to say so somewhere.
-        Once per corpus, not per turn: an empty directory is fingerprinted like any other, so the
-        next `search` finds the store already current.
+        An empty corpus is logged, once per corpus: it is stamped like any other, and an empty
+        knowledge block is otherwise indistinguishable from one with no relevant matches.
         """
         fingerprint = await self._fingerprint()
         chunks = [

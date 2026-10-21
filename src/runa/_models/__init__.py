@@ -44,11 +44,8 @@ _BACKENDS = {
     "AnthropicModel": "runa._models.anthropic",
     "OpenAICompatibleModel": "runa._models.chat_completions",
 }
-"""The lazily resolved backends, mapped to the module that defines each one.
-
-`OpenAICompatibleModel` is lazy alongside the SDK-backed one, not because it costs anything, but
-because "a backend is imported by whoever routes to it" is one rule and this would be two.
-"""
+"""The lazily resolved backends, mapped to the module that defines each one: every backend is
+imported by whoever routes to it."""
 
 __all__ = [
     "DEFAULT_MODEL",

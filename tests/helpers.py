@@ -94,9 +94,9 @@ def stand_in_agent(**attributes: Any) -> Agent:
     """A real `Agent` with `attributes` set on it, for a test that drives the turn loop directly.
 
     Only for what `Agent.run` cannot reach, such as an input list that doesn't end on the user's
-    message; everything else goes through `scripted_agent` and `agent.run`. `attributes`
-    use the names an `Agent` stores its settings under (`handoffs`, `mcp_servers`). A name the
-    agent has no attribute for is refused rather than set and never read.
+    message; everything else goes through `scripted_agent` and `agent.run`. `attributes` are
+    `Agent` setting names (`model`, `memory`); one the agent has no attribute for is refused
+    rather than set and never read.
     """
     agent = _TestAgent()
     for name, value in attributes.items():

@@ -158,14 +158,9 @@ def listing_clause(
 ) -> tuple[str, tuple[Any, ...]]:
     """Everything after `SELECT ... FROM traces` for `TraceStore.list`, and the values it binds.
 
-    One sentence of policy: keep the traces matching whichever of the three filters were given,
-    newest first, at most `limit` of them. `agent` is `traces.name` -- for a run's trace, the
-    agent's declared `name` -- not an `agent` column. The tie-break is this clause's -- both
-    engines leave it to chance when the `ORDER BY` names `start_time` alone.
-
-    The whole tail rather than the `WHERE` alone, because a numbered placeholder counts every
-    value bound before it: a caller handed the filter and left to append `LIMIT` has to know how
-    many filters went in to number it, which is exactly the arithmetic this hoists.
+    Keeps the traces matching whichever filters were given, newest first (ties broken by `id`),
+    at most `limit` of them. `agent` matches `traces.name`, which for a run's trace is the
+    agent's declared `name`. The placeholders are numbered, so nothing may be appended after it.
     """
     clauses: list[str] = []
     params: list[Any] = []
