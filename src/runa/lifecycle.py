@@ -18,7 +18,6 @@ be: an `Agent` carries the `hooks` below.
 """
 
 import logging
-from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from runa._items import ConversationItem
@@ -98,43 +97,64 @@ class Hooks[TContext]:
         """Called once the model call has returned `response`."""
 
 
-_EVENTS = frozenset(name for name in vars(Hooks) if name.startswith("on_"))
-
-
-class _Dispatch[TContext]:
-    """Fires one lifecycle event at both scopes: the run's hooks, then the agent's own.
+class _Dispatch[TContext](Hooks[TContext]):
+    """Fires each lifecycle event at both scopes: the run's hooks, then the agent's own.
 
     `runa.run_internal` holds one of these for a whole run and calls it exactly where it would
-    call `Hooks`. It forwards by `Hooks`' own method names, so an event added to `Hooks`
-    dispatches with no edit here, and an unknown one raises `AttributeError`.
+    call `Hooks`. Every event is overridden here, so an event added to `Hooks` needs its own
+    override below or it fires at neither scope.
 
-    The one thing it knows per event is which agent's own `hooks` to fire, read out of that
-    call's arguments: the agent acting, except for a handoff, which notifies the target.
-
+    Each event fires the `hooks` of the agent acting, except a handoff, which notifies the target.
     Run-scoped hooks fire first, so a run-wide audit log records an event before any one agent's
     callback can raise out of it.
     """
 
-    _NOTIFIED = {"on_handoff": 1}
-    """Whose `hooks` an event fires, as an index into its arguments past `context`; default 0."""
-
     def __init__(self, run_hooks: Hooks[TContext]) -> None:
         self.run_hooks = run_hooks
 
-    def __getattr__(self, event: str) -> Callable[..., Coroutine[Any, Any, None]]:
-        """A `Hooks` event as one callable, firing it at the run scope then the agent's own."""
-        if event not in _EVENTS:
-            raise AttributeError(event)
+    def _scopes(self, agent: Agent) -> list[Hooks[TContext]]:
+        """The hooks an event about `agent` fires, in order: the run's, then `agent`'s own."""
+        return [self.run_hooks] if agent.hooks is None else [self.run_hooks, agent.hooks]
 
-        async def fire(context: RunContext[TContext], *args: Any) -> None:
-            await getattr(self.run_hooks, event)(context, *args)
-            # Which argument is the agent is per-event (`_NOTIFIED`), so it arrives untyped; the
-            # annotation is what says the thing it was read out of was an agent all along.
-            agent: Agent = args[self._NOTIFIED.get(event, 0)]
-            if (own := agent.hooks) is not None:
-                await getattr(own, event)(context, *args)
+    async def on_agent_start(self, context: RunContext[TContext], agent: Agent) -> None:
+        for hooks in self._scopes(agent):
+            await hooks.on_agent_start(context, agent)
 
-        return fire
+    async def on_agent_end(self, context: RunContext[TContext], agent: Agent, output: Any) -> None:
+        for hooks in self._scopes(agent):
+            await hooks.on_agent_end(context, agent, output)
+
+    async def on_handoff(
+        self, context: RunContext[TContext], from_agent: Agent, to_agent: Agent
+    ) -> None:
+        for hooks in self._scopes(to_agent):
+            await hooks.on_handoff(context, from_agent, to_agent)
+
+    async def on_tool_start(
+        self, context: RunContext[TContext], agent: Agent, tool: FunctionTool
+    ) -> None:
+        for hooks in self._scopes(agent):
+            await hooks.on_tool_start(context, agent, tool)
+
+    async def on_tool_end(
+        self, context: RunContext[TContext], agent: Agent, tool: FunctionTool, result: object
+    ) -> None:
+        for hooks in self._scopes(agent):
+            await hooks.on_tool_end(context, agent, tool, result)
+
+    async def on_llm_start(
+        self,
+        context: RunContext[TContext],
+        agent: Agent,
+        system_prompt: str | None,
+        input_items: list[ConversationItem],
+    ) -> None:
+        for hooks in self._scopes(agent):
+            await hooks.on_llm_start(context, agent, system_prompt, input_items)
+
+    async def on_llm_end(self, context: RunContext[TContext], agent: Agent, response: Any) -> None:
+        for hooks in self._scopes(agent):
+            await hooks.on_llm_end(context, agent, response)
 
 
 class LoggingHooks(Hooks[Any]):

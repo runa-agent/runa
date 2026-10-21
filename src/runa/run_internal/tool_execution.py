@@ -47,7 +47,7 @@ async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) ->
 
     args_json = call_arguments(call)
     with run.span(tool.name, "tool", input=args_json) as span:
-        await run.fire("on_tool_start", tool)
+        await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
         await run.guard(Phase.TOOL_INPUT, args_json, tool=tool, under=span)
         try:
             result = await tool.on_invoke_tool(run.run_context, args_json, call_id)
@@ -57,7 +57,7 @@ async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) ->
         await run.guard(Phase.TOOL_OUTPUT, result, tool=tool, under=span)
         span.output = result
     run.transcript.record_call(ToolCall(tool.name, args_json, str(result)))
-    await run.fire("on_tool_end", tool, result)
+    await run.hooks.on_tool_end(run.run_context, run.current_agent, tool, result)
     return tool_result(call_id, result)
 
 
@@ -166,7 +166,7 @@ async def _run_message_tool_calls(
             handoff = handoff_map[name]
             switched_agent = handoff.agent
             with run.span(handoff.tool_name, "handoff"):
-                await run.fire("on_handoff", switched_agent)
+                await run.hooks.on_handoff(run.run_context, run.current_agent, switched_agent)
             slots.append(_Slot(tool_result(call_id, f"Transferred to {switched_agent.name}.")))
             continue
 

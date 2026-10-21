@@ -156,13 +156,10 @@ class _Run:
         if self.frame.emit is not None:
             self.frame.emit(event)
 
-    async def fire(self, event: str, *args: Any, agent: Agent | None = None) -> None:
-        """Fire the `Hooks` method named `event` with `(run_context, agent, *args)`.
-
-        `agent` is the one acting, the agent running now unless given.
-        """
-        acting = self.current_agent if agent is None else agent
-        await getattr(self.frame.hooks, event)(self.run_context, acting, *args)
+    @property
+    def hooks(self) -> Hooks[Any]:
+        """The run's lifecycle events, each fired at the run's scope and the agent's own."""
+        return self.frame.hooks
 
     def claim(self, call_id: str, name: str) -> None:
         """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
@@ -384,7 +381,7 @@ async def _record_tool_results(
     if switched is not None:
         await run.hand_off(switched)
         run.notify(AgentChanged(switched))
-        await run.fire("on_agent_start")
+        await run.hooks.on_agent_start(run.run_context, run.current_agent)
 
 
 async def _run_turns(run: _Run) -> _TurnOutcome:
@@ -606,27 +603,29 @@ class _RunModel:
     async def get_response(self, request: ModelRequest) -> ModelResponse:
         """One call to the agent's model, charged to the run."""
         with metered(str(self.shape.model), input=list(request.input)) as charge:
-            await self._fire("on_llm_start", request.system_instructions, list(request.input))
+            await self._on_llm_start(request)
             response = await self.shape.resolve_model().get_response(request)
             charge(response.usage)
             _check_token_budget(self.run.run_context.usage, self.max_tokens)
-        await self._fire("on_llm_end", response)
+        await self.run.hooks.on_llm_end(self.run.run_context, self.shape.agent, response)
         return response
 
     async def stream_response(self, request: ModelRequest) -> AsyncIterator[StreamDelta]:
         """One streamed call to the agent's model, charged to the run once the stream ends."""
         assembly = _Assembly()
         with metered(str(self.shape.model), input=list(request.input)) as charge:
-            await self._fire("on_llm_start", request.system_instructions, list(request.input))
+            await self._on_llm_start(request)
             async for delta in self.shape.resolve_model().stream_response(request):
                 assembly.add(delta)
                 yield delta
             charge(assembly.usage)
             _check_token_budget(self.run.run_context.usage, self.max_tokens)
-        await self._fire("on_llm_end", assembly.response())
+        await self.run.hooks.on_llm_end(self.run.run_context, self.shape.agent, assembly.response())
 
-    async def _fire(self, event: str, *args: Any) -> None:
-        await self.run.fire(event, *args, agent=self.shape.agent)
+    async def _on_llm_start(self, request: ModelRequest) -> None:
+        await self.run.hooks.on_llm_start(
+            self.run.run_context, self.shape.agent, request.system_instructions, list(request.input)
+        )
 
 
 async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
@@ -667,7 +666,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             await frame.session.set_items(transcript.history())
     await _after_turn(run, outcome.final_output)
 
-    await run.fire("on_agent_end", outcome.final_output)
+    await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
     return Run(
         output=outcome.final_output,
         trace=frame.trace,
@@ -686,7 +685,7 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
     Its agent span is open throughout, so a call charged to nothing narrower is charged under it.
     """
     with charging(run.spans):
-        await run.fire("on_agent_start")
+        await run.hooks.on_agent_start(run.run_context, run.current_agent)
         if input is not None:
             query = run.transcript.latest_user_text()
             if query is not None:

@@ -7,7 +7,7 @@ import pytest
 
 from runa import Agent, LoggingHooks
 from runa._types import ModelResponse, RunContext, Usage
-from runa.lifecycle import _EVENTS, Hooks, _Dispatch
+from runa.lifecycle import Hooks, _Dispatch
 from runa.tool import tool as tool_decorator
 from runa.tracing import observe
 
@@ -71,13 +71,10 @@ def test_logging_hooks_log_every_callback(caplog: pytest.LogCaptureFixture) -> N
     ]
 
 
-def test_hooks_declares_one_name_per_event() -> None:
-    """One class, one spelling per event: `_Dispatch` forwards over these names and no others.
-
-    The split that used to exist (`on_agent_start` against an agent-scoped `on_start`) is what
-    made the dispatcher restate every event, so the set is pinned rather than left to drift.
-    """
-    assert sorted(_EVENTS) == [
+def test_dispatch_overrides_every_hooks_event() -> None:
+    """An event added to `Hooks` without a `_Dispatch` override would silently fire nowhere."""
+    events = {name for name in vars(Hooks) if name.startswith("on_")}
+    assert sorted(events) == [
         "on_agent_end",
         "on_agent_start",
         "on_handoff",
@@ -86,13 +83,42 @@ def test_hooks_declares_one_name_per_event() -> None:
         "on_tool_end",
         "on_tool_start",
     ]
-    assert all(hasattr(_Dispatch(Hooks()), event) for event in _EVENTS)
+    assert events <= set(vars(_Dispatch))
 
 
-def test_dispatch_refuses_an_event_hooks_does_not_declare() -> None:
-    """A name that isn't a `Hooks` event raises rather than returning a callable firing nowhere."""
-    with pytest.raises(AttributeError):
-        _ = _Dispatch(Hooks()).on_tool_strt
+class _Recorder(Hooks[None]):
+    def __init__(self, label: str, seen: list[str]) -> None:
+        self.label, self.seen = label, seen
+
+    async def on_agent_start(self, context: RunContext[None], agent: Agent) -> None:
+        self.seen.append(f"{self.label}:start:{agent.name}")
+
+    async def on_handoff(
+        self, context: RunContext[None], from_agent: Agent, to_agent: Agent
+    ) -> None:
+        self.seen.append(f"{self.label}:handoff:{from_agent.name}->{to_agent.name}")
+
+
+def test_dispatch_fires_the_run_scope_then_the_agents_own() -> None:
+    """Run hooks fire first; a handoff notifies the target's own hooks, never the sender's."""
+    seen: list[str] = []
+    researcher, translator = Researcher(), Translator()
+    researcher.hooks = _Recorder("researcher", seen)
+    translator.hooks = _Recorder("translator", seen)
+    dispatch = _Dispatch(_Recorder("run", seen))
+    context: RunContext[None] = RunContext(context=None)
+
+    async def fire() -> None:
+        await dispatch.on_agent_start(context, researcher)
+        await dispatch.on_handoff(context, researcher, translator)
+
+    asyncio.run(fire())
+    assert seen == [
+        "run:start:Researcher",
+        "researcher:start:Researcher",
+        "run:handoff:Researcher->Translator",
+        "translator:handoff:Researcher->Translator",
+    ]
 
 
 def test_info_level_logging_carries_no_content(caplog: pytest.LogCaptureFixture) -> None:
