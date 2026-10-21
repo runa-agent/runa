@@ -13,8 +13,12 @@ from runa.project import use
 from runa.tracing import Span, Trace, TraceNotFound
 
 
-def _save_agent_trace(project_dir: Path, trace_id: str, input: str | None) -> None:
+def _save_agent_trace(
+    project_dir: Path, trace_id: str, input: str | None, *, group_id: str | None = None
+) -> None:
     trace = Trace(id=trace_id, name="SupportAgent", start_time=0.0, end_time=1.0)
+    if group_id is not None:
+        trace.metadata = {"group_id": group_id}
     trace.spans = [
         Span(
             id=f"{trace_id}_root",
@@ -65,4 +69,19 @@ def test_add_trace_to_evals_rejects_an_unknown_trace_or_one_without_input(
         run_sync(add_trace_to_evals("nope", root=project_dir))
     with pytest.raises(TraceHasNoInput):
         run_sync(add_trace_to_evals("t1", root=project_dir))
+    assert not (project_dir / "evals" / "support_agent.jsonl").exists()
+
+
+def test_add_trace_to_evals_rejects_a_run_from_an_eval(tmp_path: Path) -> None:
+    """A run grouped under an eval's trace is grading traffic, not a failure to add."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+    _save_agent_trace(project_dir, "case", "Where is my order?", group_id="batch")
+    run_sync(
+        db.traces().save(
+            Trace(id="batch", name="eval:support_agent", start_time=0.0, metadata={"eval": "x"})
+        )
+    )
+
+    with pytest.raises(TraceHasNoInput):
+        run_sync(add_trace_to_evals("case", root=project_dir))
     assert not (project_dir / "evals" / "support_agent.jsonl").exists()

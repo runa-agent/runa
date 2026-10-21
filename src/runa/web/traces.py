@@ -99,12 +99,12 @@ def _tree(trace: Trace) -> str:
     return f'<ul class="span-tree">{_siblings_html(roots)}</ul>'
 
 
-def _add_to_evals(trace: Trace, *, root: Path) -> str:
+async def _add_to_evals(trace: Trace, *, root: Path) -> str:
     """The "Add to evals" form, or where the case already is once it's been added.
 
-    Nothing to add when the trace recorded no user input (see `eval/corpus.py`'s `traced_input`).
+    Nothing to add when the trace has no input to replay (see `eval/corpus.py`'s `traced_input`).
     """
-    traced = traced_input(trace)
+    traced = await traced_input(trace)
     if traced is None:
         return ""
     agent_name, input = traced
@@ -140,5 +140,5 @@ async def render_detail(trace_id: str, *, root: Path) -> str:
         f'<p class="subtitle">{escape(trace.id)} · {escape(trace.elapsed)}'
         f"{session_link}</p>"
     )
-    body = header + _add_to_evals(trace, root=root) + _tree(trace)
+    body = header + await _add_to_evals(trace, root=root) + _tree(trace)
     return page(title=trace.name, active="", body=body)

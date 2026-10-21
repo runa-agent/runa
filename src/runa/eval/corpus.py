@@ -18,9 +18,12 @@ from runa.exceptions import OperatorError
 from runa.project import NotARunaProject
 from runa.tracing import Trace, require_trace
 
+EVAL_METADATA_KEY = "eval"
+"""The `Trace.metadata` key marking an eval run's group trace; its value is the agent's name."""
+
 
 class TraceHasNoInput(OperatorError):
-    """Raised when a trace recorded no user input to replay as an eval case."""
+    """Raised when a trace has no user input to replay as an eval case."""
 
 
 class CaseAlreadyInEvals(OperatorError):
@@ -38,8 +41,17 @@ def require_evals_dir(root: Path) -> Path:
     return evals_dir
 
 
-def traced_input(trace: Trace) -> tuple[str, str] | None:
-    """The `(agent_name, user input)` a trace's run started with, `None` if it recorded none."""
+async def traced_input(trace: Trace) -> tuple[str, str] | None:
+    """The `(agent_name, user input)` a trace's run started with, `None` if it has none to add.
+
+    A run grouped under an eval's trace has none: its input is already a case, or is a judge's
+    grading prompt, and neither is a real failure to grow a dataset from.
+    """
+    group_id = trace.metadata.get("group_id")
+    if group_id is not None:
+        group = await db.traces().get(group_id)
+        if group is not None and EVAL_METADATA_KEY in group.metadata:
+            return None
     agent_span = next(
         (span for span in trace.spans if span.parent_id is None and span.type == "agent"), None
     )
@@ -63,9 +75,9 @@ async def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None 
     """
     evals_dir = require_evals_dir(root)
     trace = await require_trace(db.traces(), trace_id)
-    traced = traced_input(trace)
+    traced = await traced_input(trace)
     if traced is None:
-        raise TraceHasNoInput(f"trace {trace_id!r} recorded no user input to add as a case")
+        raise TraceHasNoInput(f"trace {trace_id!r} has no user input to add as a case")
     agent_name, input = traced
 
     case: dict[str, object] = {"input": input}
@@ -83,6 +95,7 @@ async def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None 
 
 
 __all__ = [
+    "EVAL_METADATA_KEY",
     "CaseAlreadyInEvals",
     "TraceHasNoInput",
     "add_trace_to_evals",

@@ -115,6 +115,29 @@ def test_evaluate_agent_runs_each_case_on_its_own_agent(monkeypatch: pytest.Monk
     assert _AGENT not in ran_on
 
 
+def test_evaluate_agent_groups_every_case_under_one_eval_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each case runs inside one `eval:<agent>` trace, so its trace is stamped with that group."""
+    from runa.tracing.manual import current_trace
+
+    _patch_run_and_storage(monkeypatch, {})
+    _stub_semantic(monkeypatch)
+    enclosing: list[Trace | None] = []
+
+    async def fake_run(self: Agent, message: Any, *args: Any, **kwargs: Any) -> Run:
+        enclosing.append(current_trace())
+        return _run(message)
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+
+    asyncio.run(evaluate_agent(_AGENT, [Case(input="one"), Case(input="two")]))
+
+    assert enclosing[0] is not None and enclosing[0] is enclosing[1]
+    assert enclosing[0].name == "eval:UnderTest"
+    assert enclosing[0].metadata == {"eval": "UnderTest"}
+
+
 def test_evaluate_agent_passes_each_case_s_context_to_its_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

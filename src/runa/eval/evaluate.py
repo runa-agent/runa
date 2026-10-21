@@ -17,9 +17,10 @@ actually completed, so a case that errors doesn't also burn a judge-model call. 
 import asyncio
 from collections.abc import Iterable
 
-from runa import db
+from runa import db, tracing
 from runa.agent import Agent
 from runa.eval.case import Case
+from runa.eval.corpus import EVAL_METADATA_KEY
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.eval.evaluation.metrics import DEFAULT_THRESHOLDS, evaluate_semantic
 from runa.eval.report import CaseReport, Report
@@ -79,7 +80,8 @@ async def evaluate_agent(
     grading needs no separate credentials. `threshold` overrides every metric's pass threshold at
     once; `thresholds` overrides just the named ones. Up to `concurrency` cases run at once, and
     `concurrency=1` runs them one by one, for an agent whose tools can't run in parallel. Every
-    case runs to completion even if another fails or errors. The finished `Report` keeps dataset
+    case runs to completion even if another fails or errors. Each case's and judge's trace is
+    grouped under one `eval:<agent name>` trace. The finished `Report` keeps dataset
     order, is compared against the agent's previous run (see `Report.regressions`), then persisted
     to `runa.db` before it's returned (see `eval/store.py`).
     """
@@ -93,9 +95,12 @@ async def evaluate_agent(
                 agent, index, case, judge=judge_model_name, thresholds=resolved_thresholds
             )
 
-    case_reports = await asyncio.gather(
-        *(_bounded(index, case) for index, case in enumerate(dataset))
-    )
+    # Every case and judge run is grouped under this one trace, marked as eval traffic, so a
+    # store shared with production can tell the two apart (see `eval/corpus.py`).
+    with tracing.trace(f"eval:{agent.name}", metadata={EVAL_METADATA_KEY: agent.name}):
+        case_reports = await asyncio.gather(
+            *(_bounded(index, case) for index, case in enumerate(dataset))
+        )
 
     # One store, resolved once: the baseline this run is graded against and the history it
     # becomes are the same store, which they were not while each function asked separately.
