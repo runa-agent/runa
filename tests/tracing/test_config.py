@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from helpers import ScriptedModel, scripted_agent
 
-from runa import db
+from runa import db, tracing
 from runa._loop import run_sync
 from runa._types import ModelResponse, Usage
 from runa.tool import ToolCall, tool
@@ -385,3 +385,32 @@ def test_the_policy_filters_spans_without_touching_what_the_run_recorded() -> No
     assert result.tool_calls == (
         ToolCall(name="lookup", arguments='{"order_id": "4821"}', output=long_result),
     )
+
+
+def test_a_manual_span_keeps_its_data_only_as_the_policy_allows() -> None:
+    """`tracing.span(data=...)` and a block's `span.output` go through a run's span policy."""
+    with (
+        observe.scoped(capture_inputs=False),
+        tracing.trace("batch") as t,
+        tracing.span("load", t, data={"ssn": "123-45-6789"}) as span,
+    ):
+        span.output = "x" * 100
+    assert span.input is None
+    assert span.output == "x" * 100
+
+    with (
+        observe.scoped(redact=["ssn"], max_output_bytes=10),
+        tracing.trace("batch") as t,
+        tracing.span("load", t, data={"ssn": "123-45-6789", "id": 1}) as span,
+    ):
+        span.output = "x" * 100
+    assert span.input == {"ssn": "[REDACTED]", "id": 1}
+    assert span.output.endswith("[truncated]")
+
+
+def test_a_failed_manual_span_records_its_error() -> None:
+    """A block that raises leaves its span closed and marked failed."""
+    with pytest.raises(ValueError), tracing.trace("batch") as t, tracing.span("step", t) as span:
+        raise ValueError("boom")
+    assert span.end_time is not None
+    assert (span.status, span.error) == ("error", "boom")

@@ -45,7 +45,7 @@ from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape, shape_of
-from runa.run_internal.spans import _close_span, _Spans
+from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
 from runa.run_internal.tool_execution import (
     DelegatePaused,
@@ -58,7 +58,7 @@ from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
 from runa.tool import FunctionTool
 from runa.tracing.export import export_trace_later
 from runa.tracing.manual import current_trace
-from runa.tracing.spans import Span
+from runa.tracing.spans import Span, close_span
 from runa.tracing.traces import Trace
 from runa.tracing.util import gen_trace_id
 from runa.transcript import Transcript
@@ -470,7 +470,7 @@ def _errored(failure: RunaError, frame: _Frame) -> Run:
     Reports what the frame holds: the spans, the usage, the guardrails that ran. An unfinished
     turn is not history, so the `Run` carries an empty `Transcript`.
     """
-    _close_span(frame.agent_span, error=str(failure))
+    close_span(frame.agent_span, error=str(failure))
     return Run(
         output=None,
         trace=frame.trace,
@@ -515,7 +515,7 @@ async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
     try:
         result = await turn
     except OperatorError as exc:
-        _close_span(frame.agent_span, error=str(exc))
+        close_span(frame.agent_span, error=str(exc))
         raise
     except RunaError as exc:
         failure = exc
@@ -641,7 +641,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     """
     frame, record, transcript = run.frame, run.record, run.transcript
     run_context = frame.run_context
-    _close_span(frame.agent_span, output=outcome.final_output)
+    close_span(frame.agent_span, output=outcome.final_output)
 
     if outcome.interruptions:
         record.pending, record.ready_results = outcome.interruptions, outcome.ready_results

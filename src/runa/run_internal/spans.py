@@ -5,7 +5,6 @@ A run's spans are also where its model calls are charged: inside a span the run 
 `"llm"` span under it, counted in the run's usage. The innermost open span pays.
 """
 
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,10 +12,8 @@ from typing import Any
 
 from runa._metering import Charge, charging
 from runa._types import Usage
-from runa.tracing import config as tracing_config
-from runa.tracing.spans import Span
+from runa.tracing.spans import Span, close_span, open_span
 from runa.tracing.traces import Trace
-from runa.tracing.util import gen_span_id
 
 
 @dataclass(frozen=True)
@@ -38,19 +35,7 @@ class _Spans:
 
     def open(self, name: str, span_type: Any, *, input: Any = None) -> Span:
         """Start a span under this scope's parent, recorded on the trace straight away."""
-        span = Span(
-            id=gen_span_id(),
-            trace_id=self.trace.id,
-            parent_id=self.parent_id,
-            name=name,
-            type=span_type,
-            start_time=time.time(),
-        )
-        policy = tracing_config.policy()
-        if input is not None and policy.capture_inputs:
-            span.input = tracing_config.apply_policy(input, max_bytes=policy.max_input_bytes)
-        self.trace.spans.append(span)
-        return span
+        return open_span(self.trace, name, span_type, parent_id=self.parent_id, input=input)
 
     @contextmanager
     def span(self, name: str, span_type: Any, *, input: Any = None) -> Iterator[Span]:
@@ -59,7 +44,7 @@ class _Spans:
         The block sets `span.output`, or `span.error` for a failure it handles itself; one that
         escapes the block is recorded as the span's error before it propagates. So a step that
         raises can't leave its span open, and the failed span is the one worth inspecting.
-        `open`/`_close_span` remain for a span whose output comes from later code: the agent's.
+        `open`/`close_span` remain for a span whose output comes from later code: the agent's.
 
         The `metered` calls the block makes, in this task or one it starts, are charged under the
         span, unless a span opened inside it takes them.
@@ -100,22 +85,11 @@ class _Spans:
             raise
         finally:
             output, span.output = span.output, None  # the block's raw value, before the policy
-            _close_span(span, error=failure or span.error, output=output)
+            close_span(span, error=failure or span.error, output=output)
 
     def under(self, span: Span) -> _Spans:
         """This same trace, with `span` as the parent: the scope inside a span just opened."""
         return _Spans(self.trace, span.id, self.usage)
 
 
-def _close_span(span: Span, *, error: str | None = None, output: Any = None) -> None:
-    span.end_time = time.time()
-    policy = tracing_config.policy()
-    if output is not None and policy.capture_outputs:
-        max_bytes = policy.max_tool_result_bytes if span.type == "tool" else policy.max_output_bytes
-        span.output = tracing_config.apply_policy(output, max_bytes=max_bytes)
-    if error is not None:
-        span.status = "error"
-        span.error = error
-
-
-__all__ = ["_Spans", "_close_span"]
+__all__ = ["_Spans"]

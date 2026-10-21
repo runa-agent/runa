@@ -24,7 +24,7 @@ from runa._items import ConversationItem
 from runa._log import logger
 from runa._types import RunContext
 from runa.tool import FunctionTool
-from runa.tracing.config import apply_policy, policy
+from runa.tracing.config import kept
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -33,12 +33,6 @@ __all__ = [
     "Hooks",
     "LoggingHooks",
 ]
-
-
-def _content(value: Any, *, limit: int | None = None) -> str:
-    """Render `value` for a DEBUG log line under `runa.tracing`'s active privacy policy."""
-    limit = limit if limit is not None else policy().max_output_bytes
-    return repr(apply_policy(value, max_bytes=limit))
 
 
 class Hooks[TContext]:
@@ -172,13 +166,8 @@ class LoggingHooks(Hooks[Any]):
     async def on_agent_end(self, context: RunContext[Any], agent: Agent, output: Any) -> None:
         """Log that `agent` finished: its name at INFO, its output at DEBUG if policy allows."""
         logger.info("agent end: %s", agent.name)
-        active = policy()
-        if active.capture_outputs and logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "agent output: %s -> %s",
-                agent.name,
-                _content(output, limit=active.max_output_bytes),
-            )
+        if logger.isEnabledFor(logging.DEBUG) and (shown := kept(output, "output")) is not None:
+            logger.debug("agent output: %s -> %r", agent.name, shown)
 
     async def on_handoff(
         self, context: RunContext[Any], from_agent: Agent, to_agent: Agent
@@ -197,13 +186,11 @@ class LoggingHooks(Hooks[Any]):
     ) -> None:
         """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
         logger.info("tool end: %s (%s)", tool.name, agent.name)
-        active = policy()
-        if active.capture_outputs and logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "tool output: %s -> %s",
-                tool.name,
-                _content(result, limit=active.max_tool_result_bytes),
-            )
+        if (
+            logger.isEnabledFor(logging.DEBUG)
+            and (shown := kept(result, "tool_result")) is not None
+        ):
+            logger.debug("tool output: %s -> %r", tool.name, shown)
 
     async def on_llm_start(
         self,

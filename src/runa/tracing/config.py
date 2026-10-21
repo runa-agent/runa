@@ -1,8 +1,9 @@
 """tracing/config.py: the privacy policy every captured span/trace goes through, plus `observe()`.
 
 `capture_inputs`/`capture_outputs` gate whether input/output are kept at all; `redact`/`redactor`
-scrub what's kept; the `max_*_bytes` limits truncate what's left. Spans and `lifecycle.py`'s DEBUG
-log lines both read it through `policy()`. It has a process-wide default (`observe(...)`) and a
+scrub what's kept; the `max_*_bytes` limits truncate what's left. `kept()` applies all three to one
+value: every span (`tracing.spans.open_span`/`close_span`) and every DEBUG content line of
+`runa.lifecycle` gets its content through it. It has a process-wide default (`observe(...)`) and a
 per-task override (`with observe.scoped(...)`), held in a `ContextVar`. Where a finished trace
 goes is `export.py`.
 """
@@ -11,11 +12,14 @@ import json
 from collections.abc import Callable
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, fields, replace
-from typing import Any
+from typing import Any, Literal
 
 from runa import _app
 
 _REDACTED = "[REDACTED]"
+
+Side = Literal["input", "output", "tool_result"]
+"""Which part of a span a value is: it picks the `capture_*` switch and the `max_*_bytes` limit."""
 
 
 @dataclass(frozen=True)
@@ -92,15 +96,23 @@ def _truncate(text: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", errors="ignore") + "... [truncated]"
 
 
-def apply_policy(value: Any, *, max_bytes: int) -> Any:
-    """Apply the active redact/size policy to one span's `input`/`output`/tool result.
+def kept(value: Any, side: Side) -> Any:
+    """`value` as the policy in force here keeps it as a span's `side`, or `None` if it isn't kept.
 
-    Callers check `policy().capture_inputs`/`.capture_outputs` themselves before calling this:
-    this function only redacts and truncates a value that's already been decided worth keeping.
+    Dropped unless `capture_inputs` (for `"input"`) or `capture_outputs` (otherwise) is on, then
+    redacted, then truncated to that side's `max_*_bytes`. Call it on the task that produced the
+    value: an `observe.scoped` policy isn't visible from the thread that exports a trace.
     """
     if value is None:
         return None
     active = policy()
+    if not (active.capture_inputs if side == "input" else active.capture_outputs):
+        return None
+    max_bytes = {
+        "input": active.max_input_bytes,
+        "output": active.max_output_bytes,
+        "tool_result": active.max_tool_result_bytes,
+    }[side]
     if active.redactor is not None:
         value = active.redactor(value)
     if active.redact and isinstance(value, dict):
