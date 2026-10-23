@@ -501,12 +501,14 @@ class Agent:
         Returns a `Run`. A tool call needing approval pauses it (`status="paused"`). Nothing a run
         fails on propagates: a guardrail tripwire, `MaxTurnsExceeded`, a model error and an
         exception out of a `Hooks`/`Session`/`Compactor` (wrapped in `UnexpectedError`, its
-        traceback logged) all come back as `status="error"`. Only `asyncio.CancelledError` and
-        `OperatorError` raise. `self.history` only changes once a turn completes; usage is
-        recorded to `self.last_usage` and `self.usage` either way.
+        traceback logged) all come back as `status="error"`. Once it starts, only
+        `asyncio.CancelledError` and `OperatorError` raise. `self.history` only changes once a
+        turn completes; usage is recorded to `self.last_usage` and `self.usage` either way.
 
-        **One instance runs one conversation at a time**: two overlapping session-less runs raise
-        `UserError`. Give each run its own `session`, or its own `Agent`.
+        A call that can't start raises `UserError` before the run begins: a `context`, `user_id`
+        or other session beside a `RunState` that carries its own, or a second overlapping
+        session-less run on this instance (**one instance runs one conversation at a time**: give
+        each run its own `session`, or its own `Agent`).
         """
         session = _resolve_session(message, session, self.name)
         turn_input = _turn_input(message, self.history, session, context, user_id)

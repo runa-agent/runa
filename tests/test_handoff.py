@@ -249,7 +249,10 @@ def test_a_delegate_called_with_malformed_arguments_answers_an_error_and_runs_no
     run = lead.run_sync("go")
 
     assert run.status == "completed", run.error
-    assert run.tool_calls == ()
+    (call,) = run.tool_calls
+    assert (call.name, call.children) == ("delegate", ())
+    assert call.error is not None
+    assert call.output == f"error: {call.error}"
     assert not [span for span in run.trace.spans if span.type == "delegate"]
 
 

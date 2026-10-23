@@ -27,8 +27,8 @@ One Runa app per process: a second `create_app` for a different project is a `Us
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, Self
 
@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
-from runa import db, project
+from runa import project
 from runa._log import logger
 from runa.agent import Agent, declared_name
 from runa.exceptions import OperatorError, UserError
@@ -106,20 +106,26 @@ class RunRequest(BaseModel):
 
     @model_validator(mode="after")
     def _exactly_one_turn(self) -> Self:
-        """Reject a body that is neither a turn nor a resume, tries to be both, or re-sends a user.
-
-        A paused run carries the `user_id` and `session_id` of the turn that paused, so either one
-        beside its `run_id` is refused, as `Agent.run` refuses it, rather than dropped.
-        """
+        """Reject a body that is neither a turn nor a resume, or tries to be both."""
         if (self.message is None) == (self.run_id is None):
             raise ValueError("send either a `message` to run or the `run_id` of a paused run")
         if self.decisions and self.run_id is None:
             raise ValueError("`decisions` resolve a paused run, so they need its `run_id` too")
-        if self.run_id is not None:
-            for name in ("user_id", "session_id"):
-                if getattr(self, name) is not None:
-                    raise ValueError(f"a paused run already carries the `{name}` its turn was sent")
         return self
+
+
+@contextmanager
+def _refused_as_422() -> Iterator[None]:
+    """Answer a turn `Agent.run` refuses to start with a `422`, its message as the detail.
+
+    A run that starts never raises (see `Agent.run`), so a `UserError` here is the request's own
+    mistake, such as a `user_id` or `session_id` beside the `run_id` of a pause that already
+    carries one: the rules are `Agent.run`'s, and this is the one place HTTP learns of them.
+    """
+    try:
+        yield
+    except UserError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _run_payload(run: Run, agent_name: str) -> dict[str, Any]:
@@ -274,9 +280,9 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         resumes it here, in the session it paused in.
         """
         agent = _build(agent_name)
-        session = db.session(body.session_id, agent_name) if body.session_id else None
         turn = await _turn(agent, agent_name, body)
-        run = await agent.run(turn, session=session, user_id=body.user_id)
+        with _refused_as_422():
+            run = await agent.run(turn, session=body.session_id, user_id=body.user_id)
         return _run_payload(run, agent_name)
 
     @api.post("/agents/{agent_name}/runs/stream")
@@ -287,19 +293,20 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
         produced, then a single `{"type": "run", ...}` carrying the same payload the non-streaming
         route returns, so a client gets the trace id and usage either way -- including the `run_id`
         of a run that paused, which this route takes back the same way the other one does. That
-        body is resolved before the response starts, so a pause that can't be resumed is still a
-        `4xx` rather than an error event in a stream that already answered `200`.
+        body is resolved, and the stream started, before the response starts, so a pause that can't
+        be resumed or a turn `Agent.run_streamed` refuses is still a `4xx` rather than an error
+        event in a stream that already answered `200`.
 
         A run that fails needs nothing special here: `Agent.run_streamed` reports every failure
         on the `Run` the stream ends with (see `Agent.run`), so `{"type": "run"}` with
         `status="error"` is one wire shape for a turn that answered and one that didn't.
         """
         agent = _build(agent_name)
-        session = db.session(body.session_id, agent_name) if body.session_id else None
         turn = await _turn(agent, agent_name, body)
+        with _refused_as_422():
+            stream = agent.run_streamed(turn, session=body.session_id, user_id=body.user_id)
 
         async def events() -> AsyncIterator[str]:
-            stream = agent.run_streamed(turn, session=session, user_id=body.user_id)
             try:
                 async for event in stream:
                     if isinstance(event, TextDelta):

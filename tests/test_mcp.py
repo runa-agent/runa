@@ -11,6 +11,7 @@ from mcp_types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from runa import Agent, guardrail, mcp
 from runa._types import ModelResponse, RunContext, Usage
+from runa.exceptions import ToolError
 from runa.guardrail import Phase
 from runa.mcp import (
     MCPServer,
@@ -161,8 +162,8 @@ def test_on_invoke_tool_extracts_text_from_a_successful_call() -> None:
     assert session.calls == [("add", {"a": 1, "b": 2})]
 
 
-def test_on_invoke_tool_surfaces_an_error_result() -> None:
-    """A `CallToolResult` with `is_error=True` surfaces as an error string, not a crash."""
+def test_on_invoke_tool_raises_a_tool_error_for_an_error_result() -> None:
+    """A `CallToolResult` with `is_error=True` fails the call as a `ToolError`, not a string."""
     tool = Tool(name="fail", input_schema={"type": "object"})
     result = CallToolResult(content=[TextContent(type="text", text="boom")], is_error=True)
     session = _FakeSession([tool], {"fail": result})
@@ -173,9 +174,8 @@ def test_on_invoke_tool_surfaces_an_error_result() -> None:
     async def call() -> Any:
         return await function_tool.on_invoke_tool(RunContext(), "{}", "call_1")
 
-    output = asyncio.run(call())
-
-    assert output == "error: boom"
+    with pytest.raises(ToolError, match="^boom$"):
+        asyncio.run(call())
 
 
 def test_on_invoke_tool_falls_back_to_structured_content() -> None:

@@ -21,10 +21,13 @@ from runa._items import (
     tool_result,
 )
 from runa._items import call_id as id_of  # `call_id` here is the id of the call at hand
+from runa._log import logger
+from runa.exceptions import ToolError
 from runa.guardrail import Phase
 from runa.handoff import Delegate
 from runa.run_state import Interruption
 from runa.tool import FunctionTool, ToolCall
+from runa.tracing.spans import Span
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -46,17 +49,18 @@ async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) ->
     run.claim(call_id, tool.name)
 
     args_json = call_arguments(call)
+    failed: ToolCall | None = None
     with run.span(tool.name, "tool", input=args_json) as span:
         await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
         await run.guard(Phase.TOOL_INPUT, args_json, tool=tool, under=span)
         try:
             result = await tool.on_invoke_tool(run.run_context, args_json, call_id)
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
-            result = f"error: {exc}"
-            span.error = str(exc)
+            failed = _failed(tool.name, args_json, str(exc) or type(exc).__name__, exc, span)
+            result = failed.output
         await run.guard(Phase.TOOL_OUTPUT, result, tool=tool, under=span)
         span.output = result
-    run.transcript.record_call(ToolCall(tool.name, args_json, str(result)))
+    run.transcript.record_call(failed or ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(run.run_context, run.current_agent, tool, result)
     return tool_result(call_id, result)
 
@@ -67,15 +71,15 @@ async def _run_delegate_call(
     """Run one delegate call as a nested run of this one, under the call's `"delegate"` span.
 
     Recorded like a tool call, its `children` the calls the nested run made. Arguments the model
-    got wrong, or a delegate that errored, answer `"error: ..."`, for the model to respond to;
-    one that paused for approval comes back as its `DelegatePaused`, not a result: the call
-    hasn't finished, so resuming may run it again.
+    got wrong, or a delegate that errored, fail the call (see `_failed`); one that paused for
+    approval comes back as its `DelegatePaused`, not a result: the call hasn't finished, so
+    resuming may run it again.
     """
     call_id = id_of(call)
     args_json = call_arguments(call)
     args = _arguments_or_error(args_json)
     if isinstance(args, str):
-        return tool_result(call_id, args)
+        return _answer(run, call_id, _failed(delegate.tool_name, args_json, args))
     run.claim(call_id, delegate.tool_name)
 
     with run.span(delegate.tool_name, "delegate", input=args_json) as span:
@@ -86,27 +90,57 @@ async def _run_delegate_call(
             span.output = "paused for approval"
             return paused
         if nested.status == "completed":
-            result = nested.output
+            span.output = nested.output
+            recorded = ToolCall(
+                delegate.tool_name, args_json, str(nested.output), children=nested.tool_calls
+            )
         else:
-            result = f"error: {nested.error}"
-            span.error = nested.error
-        span.output = result
-    run.transcript.record_call(
-        ToolCall(delegate.tool_name, args_json, str(result), children=nested.tool_calls)
-    )
-    return tool_result(call_id, result)
+            error = nested.error or "the delegate failed"
+            recorded = _failed(
+                delegate.tool_name, args_json, error, span=span, children=nested.tool_calls
+            )
+            span.output = recorded.output
+    return _answer(run, call_id, recorded)
 
 
 def _arguments_or_error(args_json: str) -> dict[str, Any] | str:
-    """A tool call's arguments as a dict, or an error string to feed back to the model.
+    """A tool call's arguments as a dict, or why they aren't one.
 
-    Arguments a model got wrong are data, not a failed run: the string goes back as that call's
-    result and the model gets to try again. What counts as wrong is `_items`' to say.
+    Arguments a model got wrong are data, not a failed run: they fail the call, and the model
+    gets to try again. What counts as wrong is `_items`' to say.
     """
     try:
         return parsed_arguments(args_json)
     except ValueError as exc:
-        return f"error: {exc}"
+        return str(exc)
+
+
+def _failed(
+    name: str,
+    arguments: str,
+    error: str,
+    exc: Exception | None = None,
+    span: Span | None = None,
+    *,
+    children: tuple[ToolCall, ...] = (),
+) -> ToolCall:
+    """The record of a call that failed with `error`; its `output` is what the model is answered.
+
+    Every way a call can fail comes through here. The model gets `"error: ..."` to respond to,
+    and everyone else gets the failure as data: the record's `error`, the span's, and a warning
+    in the log, with `exc`'s traceback unless the tool raised `ToolError` to fail on purpose.
+    """
+    if span is not None:
+        span.error = error
+    traceback = None if isinstance(exc, ToolError) else exc
+    logger.warning("tool call %s failed: %s", name, error, exc_info=traceback)
+    return ToolCall(name, arguments, f"error: {error}", children=children, error=error)
+
+
+def _answer(run: _Run, call_id: str, call: ToolCall) -> ConversationItem:
+    """Record `call` on the run, and answer the model's call `call_id` with its output."""
+    run.transcript.record_call(call)
+    return tool_result(call_id, call.output)
 
 
 type _Thunk = Callable[[], Awaitable[ConversationItem | DelegatePaused]]
@@ -178,15 +212,17 @@ async def _run_message_tool_calls(
             slots.append(slot)
             deferred.append((slot, partial(_run_delegate_call, run, shape.delegates[name], call)))
             continue
+        args_json = call_arguments(call)
         tool = shape.find_tool(name)
         if tool is None:
-            slots.append(_Slot(tool_result(call_id, f"error: unknown tool {name}")))
+            slots.append(
+                _Slot(_answer(run, call_id, _failed(name, args_json, f"unknown tool {name}")))
+            )
             continue
 
-        args_json = call_arguments(call)
         args = _arguments_or_error(args_json)
         if isinstance(args, str):
-            slots.append(_Slot(tool_result(call_id, args)))
+            slots.append(_Slot(_answer(run, call_id, _failed(name, args_json, args))))
             continue
         gate = await run.decide(tool, call_id, args)
         if gate.action == "interrupt":

@@ -56,6 +56,11 @@ tripped guardrail, a model error and a bug in an app's own `Hooks`/`Session`/`Co
 (the last wrapped in `UnexpectedError`, its traceback logged), each with the trace around the
 failure. The two that still raise are `asyncio.CancelledError`, because a caller cancelling a run
 asked for it to stop rather than to fail, and `OperatorError`, which isn't a run's failure at all.
+A call that can't start is not a run either: a wrong argument, a second session-less run on a busy
+instance, or `run_sync` from inside Runa's own loop raises `UserError` before the run begins (a
+transcript passed as `message` is a `TypeError`, see [Session](#6-session)), so a transport maps
+that one exception (`runa serve` answers it with a `422`) instead of re-checking each rule. A run
+that starts never raises anything else.
 Four more class attributes cover what a run needs:
 
 * `output_type`: a dataclass, Pydantic model or `TypedDict` the final answer is parsed into.
@@ -87,6 +92,13 @@ def get_weather(city: str) -> str:
     city: city name
     """
 ```
+
+**A tool that raises fails its call, not the run.** The model is answered `error: <message>`
+and gets to try again; everyone else gets the failure as data: the call's `ToolCall.error` on
+`run.tool_calls`, its span's error, and a warning in the `runa` log with the traceback. Raise
+`runa.exceptions.ToolError` for a failure the tool means, and the log skips the traceback. Arguments that don't parse
+and a name no tool has fail the call the same way, and an eval's `expected_tool` counts only a
+call that succeeded.
 
 ## 3. Guardrail
 

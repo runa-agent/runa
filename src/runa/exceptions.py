@@ -87,6 +87,15 @@ class ServiceUnavailable(RunaError):
     """
 
 
+class ToolError(RunaError):
+    """Raised by a tool to fail its call on purpose, with a message that says what went wrong.
+
+    The call fails, not the run, as it does for any exception a tool raises: the model is answered
+    `"error: <message>"` and the failure is the call's `ToolCall.error`. What this one changes is
+    the log: a warning without a traceback, since the tool already said what went wrong.
+    """
+
+
 class UserError(RunaError):
     """Raised when the caller has misused the framework itself (bad config, missing credentials)."""
 
@@ -171,6 +180,7 @@ __all__ = [
     "RunTimeout",
     "RunaError",
     "ServiceUnavailable",
+    "ToolError",
     "UnexpectedError",
     "UserError",
 ]

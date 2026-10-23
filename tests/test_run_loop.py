@@ -24,7 +24,7 @@ from runa import db
 from runa._models import ModelRequest, StreamDelta
 from runa._types import ModelResponse, ModelSettings, Usage
 from runa.compact import default_compactor
-from runa.exceptions import ServiceUnavailable, UserError
+from runa.exceptions import ServiceUnavailable, ToolError, UserError
 from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase, guardrail
 from runa.lifecycle import Hooks
 from runa.run import Run
@@ -139,6 +139,85 @@ def test_tool_error_is_fed_back_and_run_continues() -> None:
     (tool_span,) = [s for s in result.trace.spans if s.type == "tool"]
     assert tool_span.status == "error"
     assert "boom" in (tool_span.error or "")
+    assert result.tool_calls == (
+        ToolCall(name="boom", arguments="{}", output="error: boom", error="boom"),
+    )
+
+
+def test_a_failing_tool_is_logged_with_its_traceback(caplog: Any) -> None:
+    """A tool's own exception is a warning in the `runa` log, traceback included."""
+
+    @tool
+    def boom() -> str:
+        """Raise unconditionally."""
+        raise ValueError("boom")
+
+    agent = scripted_agent(
+        tools=[boom],
+        model=ScriptedModel([tool_call_response("boom", "{}"), text_response("handled it")]),
+    )
+
+    with caplog.at_level("WARNING", logger="runa"):
+        agent.run_sync("go")
+
+    (record,) = [r for r in caplog.records if "tool call boom failed" in r.getMessage()]
+    assert record.levelname == "WARNING"
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], ValueError)
+
+
+def test_a_tool_error_fails_the_call_without_a_traceback(caplog: Any) -> None:
+    """`ToolError` fails the call like any exception, but the tool already said why."""
+
+    @tool
+    def lookup_order(order_id: str) -> str:
+        """Look up an order."""
+        raise ToolError(f"no order {order_id}")
+
+    model = ScriptedModel(
+        [tool_call_response("lookup_order", '{"order_id": "7"}'), text_response("not found")]
+    )
+    agent = scripted_agent(tools=[lookup_order], model=model)
+
+    with caplog.at_level("WARNING", logger="runa"):
+        result = agent.run_sync("go")
+
+    assert model.calls[1][-1]["content"] == "error: no order 7"
+    (call,) = result.tool_calls
+    assert call.error == "no order 7"
+    (record,) = [r for r in caplog.records if "lookup_order" in r.getMessage()]
+    assert record.exc_info is None
+
+
+def test_a_tool_returning_error_text_is_not_a_failure() -> None:
+    """Only a raised failure sets `ToolCall.error`: returned text is the tool's answer."""
+
+    @tool
+    def status() -> str:
+        """Report status."""
+        return "error: disk full"
+
+    agent = scripted_agent(
+        tools=[status],
+        model=ScriptedModel([tool_call_response("status", "{}"), text_response("ok")]),
+    )
+
+    (call,) = agent.run_sync("go").tool_calls
+
+    assert (call.output, call.error) == ("error: disk full", None)
+
+
+def test_an_unknown_tool_is_recorded_as_a_failed_call() -> None:
+    """A name no tool has fails the call: the model is told, and the run records it."""
+    model = ScriptedModel([tool_call_response("nope", "{}"), text_response("sorry")])
+    agent = scripted_agent(model=model)
+
+    result = agent.run_sync("go")
+
+    assert model.calls[1][-1]["content"] == "error: unknown tool nope"
+    assert result.tool_calls == (
+        ToolCall("nope", "{}", "error: unknown tool nope", error="unknown tool nope"),
+    )
 
 
 def test_malformed_tool_arguments_are_fed_back_and_run_continues() -> None:
@@ -169,9 +248,11 @@ def test_non_object_tool_arguments_are_fed_back_as_an_error() -> None:
     model = ScriptedModel([tool_call_response("lookup", "[1]"), text_response("sorry")])
     agent = scripted_agent(tools=[lookup], model=model)
 
-    agent.run_sync("go")
+    result = agent.run_sync("go")
 
     assert model.calls[1][-1]["content"] == "error: tool arguments must be a JSON object"
+    (call,) = result.tool_calls
+    assert (call.name, call.error) == ("lookup", "tool arguments must be a JSON object")
 
 
 def test_handoff_switches_current_agent() -> None:

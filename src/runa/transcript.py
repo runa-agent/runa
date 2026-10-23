@@ -55,7 +55,7 @@ class Transcript:
 
     @property
     def tool_calls(self) -> tuple[ToolCall, ...]:
-        """Every tool call this run executed, in the order they finished (see `ToolCall`)."""
+        """Every tool call this run answered, in the order they finished (see `ToolCall`)."""
         return tuple(self._tool_calls)
 
     def latest_user_text(self) -> str | None:
@@ -68,7 +68,7 @@ class Transcript:
         self._generated.extend(items)
 
     def record_call(self, call: ToolCall) -> None:
-        """Note one tool call the run executed."""
+        """Note one tool call the run answered."""
         self._tool_calls.append(call)
 
     def add_context(self, *blocks: ConversationItem) -> None:

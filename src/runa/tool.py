@@ -40,7 +40,11 @@ class FunctionTool:
 
 @dataclass(frozen=True)
 class ToolCall:
-    """One tool call a run actually executed: the tool's name, its arguments, its result.
+    """One tool call a run answered: the tool's name, its arguments, its result, its failure.
+
+    A call the model made is recorded whether it ran or failed: the tool raised, the delegate's
+    run errored, the arguments didn't parse, or no tool has that name. A call a human rejected
+    is not, since nothing was attempted.
 
     Recorded by the turn loop as the call runs (`run_internal/tool_execution.py`) and kept on the
     `Run`, deliberately not derived from the run's `"tool"` trace spans: a span's input/output
@@ -53,10 +57,14 @@ class ToolCall:
     arguments: str
     """The call's arguments as JSON, exactly the string the model produced."""
     output: str
-    """The tool's return value, exactly the string that went back to the model."""
+    """The tool's return value, exactly the string that went back to the model. For a failed
+    call that is `"error: "` and its `error`."""
     children: tuple[ToolCall, ...] = ()
-    """For a `.delegate` call, every tool call the delegate's own run executed, in order (its
+    """For a `.delegate` call, every tool call the delegate's own run answered, in order (its
     delegate calls with their own `children`); empty for any other call."""
+    error: str | None = None
+    """Why the call failed, or `None` if it succeeded: the one way to tell a failure from a tool
+    that returned text starting with `"error: "`."""
 
     def walk(self) -> Iterator[ToolCall]:
         """This call, then every call under it, depth-first in the order they finished."""

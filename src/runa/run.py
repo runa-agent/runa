@@ -81,12 +81,12 @@ class Run(GuardrailAudit):
 
     @property
     def tool_calls(self) -> tuple[ToolCall, ...]:
-        """Every tool call this run executed, in the order they finished (see `ToolCall`).
+        """Every tool call this run answered, in the order they finished (see `ToolCall`).
 
         What the tool was actually given and returned, unlike a `"tool"` span in `trace`, whose
         input and output the tracing privacy policy may withhold or redact: this is the record to
-        grade a run's tool use on. A `.delegate` call is one of them, the calls its own run made
-        as its `children`.
+        grade a run's tool use on. A failed call is one of them, its `error` saying why, and so
+        is a `.delegate` call, the calls its own run made as its `children`.
         """
         return self._transcript.tool_calls
 

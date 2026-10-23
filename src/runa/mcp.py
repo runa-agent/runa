@@ -36,6 +36,7 @@ from mcp_types import TextContent
 from runa._items import parsed_arguments
 from runa._loop import LoopCache
 from runa._types import RunContext
+from runa.exceptions import ToolError
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 from runa.tool import FunctionTool, _NeedsApproval
 
@@ -147,7 +148,7 @@ class _MCPServerBase:
             result = await session.call_tool(tool.name, args)
             text = "".join(block.text for block in result.content if isinstance(block, TextContent))
             if result.is_error:
-                return f"error: {text or 'the tool call failed'}"
+                raise ToolError(text or "the tool call failed")
             return text or result.structured_content
 
         return FunctionTool(

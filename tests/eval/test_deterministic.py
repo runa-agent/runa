@@ -84,6 +84,32 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
     assert "search" in result.reason
 
 
+def test_check_expected_tool_called_fails_when_every_call_to_the_tool_failed() -> None:
+    """A tool that was called but failed each time isn't counted as called."""
+    case = Case(input="where is order 4821?", expected_tool="lookup_order")
+    failed = ToolCall(name="lookup_order", arguments="{}", output="error: down", error="down")
+    run = finished_run("sorry", _transcript=_transcript_of(failed, failed))
+
+    result = check_expected_tool_called(case, run)
+
+    assert result is not None
+    assert result.status == EvalStatus.FAIL
+    assert result.reason == "called 'lookup_order' but it failed: down"
+
+
+def test_check_expected_tool_called_passes_once_a_retry_succeeds() -> None:
+    """One successful call is enough, whatever failed before it."""
+    case = Case(input="where is order 4821?", expected_tool="lookup_order")
+    failed = ToolCall(name="lookup_order", arguments="{}", output="error: down", error="down")
+    ok = ToolCall(name="lookup_order", arguments="{}", output="shipped")
+    run = finished_run("shipped", _transcript=_transcript_of(failed, ok))
+
+    result = check_expected_tool_called(case, run)
+
+    assert result is not None
+    assert result.status == EvalStatus.PASS
+
+
 def test_check_expected_tool_called_finds_a_delegate_and_the_tools_it_called() -> None:
     """A delegate call counts as called, and so does any call beneath it, at any depth."""
     cancel = ToolCall(name="cancel_order", arguments="{}", output="done")

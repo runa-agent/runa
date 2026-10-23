@@ -621,8 +621,7 @@ def test_a_user_id_reaches_the_run_with_or_without_a_session(
     original = Agent.run
 
     async def recording_run(self: Agent, message: Any, **kwargs: Any) -> Any:
-        session = kwargs.get("session")
-        seen.append((kwargs.get("user_id"), session.session_id if session else None))
+        seen.append((kwargs.get("user_id"), kwargs.get("session")))
         return await original(self, message, **kwargs)
 
     monkeypatch.setattr(Agent, "run", recording_run)
@@ -636,28 +635,24 @@ def test_a_user_id_reaches_the_run_with_or_without_a_session(
     assert seen == [("u1", None), ("u2", "c")]
 
 
-def test_a_user_id_beside_a_paused_run_is_refused(client: TestClient) -> None:
-    """A paused run already carries its user, so a second one is a `422`, not dropped."""
-    response = client.post(
-        "/agents/support_agent/runs",
-        json={"run_id": "r1", "user_id": "u1"},
-        headers=_auth(),
+@pytest.mark.parametrize("route", ["/agents/refund_agent/runs", "/agents/refund_agent/runs/stream"])
+@pytest.mark.parametrize(("field", "value"), [("user_id", "u1"), ("session_id", "c")])
+def test_a_turn_agent_run_refuses_is_a_422_and_spends_no_pause(
+    pausing_client: TestClient, route: str, field: str, value: str
+) -> None:
+    """A paused run carries its user and session, so `Agent.run` refuses another; HTTP says so."""
+    paused = _paused_body(pausing_client)
+
+    response = pausing_client.post(
+        route, json={"run_id": paused["run_id"], field: value}, headers=_auth()
     )
 
     assert response.status_code == 422
-    assert "user_id" in response.text
-
-
-def test_a_session_id_beside_a_paused_run_is_refused(client: TestClient) -> None:
-    """A paused run resumes in the session it paused in, so naming one is a `422`."""
-    response = client.post(
-        "/agents/support_agent/runs",
-        json={"run_id": "r1", "session_id": "c"},
-        headers=_auth(),
+    assert "RunState already carries" in response.json()["detail"]
+    assert (
+        _resume(pausing_client, paused, [{"call_id": "call_1", "approve": True}])["status"]
+        == "completed"
     )
-
-    assert response.status_code == 422
-    assert "session_id" in response.text
 
 
 @pytest.mark.usefixtures("project_database")

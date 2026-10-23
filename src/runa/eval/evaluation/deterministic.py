@@ -28,12 +28,22 @@ def check_expected_tool_called(case: Case, run: Run) -> EvaluationResult | None:
     """Assert `case.expected_tool` was called, or `None` if the case declares no expected tool.
 
     Called anywhere in the run: by the agent itself, as one of its delegates, or by a delegate.
+    A call counts only if it succeeded: a tool that failed every time it was called fails the
+    check, with the failure as its reason.
     """
     if case.expected_tool is None:
         return None
-    called = {call.name for tool_call in run.tool_calls for call in tool_call.walk()}
-    if case.expected_tool in called:
+    calls = [call for tool_call in run.tool_calls for call in tool_call.walk()]
+    expected = [call for call in calls if call.name == case.expected_tool]
+    if any(call.error is None for call in expected):
         return TOOL_CORRECTNESS.result(EvalStatus.PASS, f"called {case.expected_tool!r}", score=1.0)
+    if expected:
+        return TOOL_CORRECTNESS.result(
+            EvalStatus.FAIL,
+            f"called {case.expected_tool!r} but it failed: {expected[-1].error}",
+            score=0.0,
+        )
+    called = {call.name for call in calls}
     return TOOL_CORRECTNESS.result(
         EvalStatus.FAIL,
         f"expected {case.expected_tool!r} to be called, got {sorted(called)}",
