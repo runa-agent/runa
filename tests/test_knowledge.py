@@ -614,3 +614,28 @@ def test_custom_store_can_be_injected() -> None:
     matches = asyncio.run(_run())
 
     assert [m.text for m in matches] == ["cats are great pets"]
+
+
+def test_declared_knowledge_reads_the_class_without_building_an_agent() -> None:
+    """`runa serve` warms each class's corpus from its declaration, not from a built agent."""
+    from runa import Agent
+    from runa.run_internal.agent_shape import declared_knowledge
+
+    corpus = Knowledge("elsewhere")
+
+    class Nameless(Agent):  # constructing it raises, so reading it must not construct it
+        knowledge = "auto"
+
+    class OwnCorpus(Agent):
+        knowledge = corpus
+
+    class ModelSearches(Agent):
+        knowledge = "llm"
+
+    class NoKnowledge(Agent):
+        pass
+
+    assert isinstance(declared_knowledge(Nameless), Knowledge)
+    assert declared_knowledge(OwnCorpus) is corpus
+    assert declared_knowledge(ModelSearches) is None
+    assert declared_knowledge(NoKnowledge) is None

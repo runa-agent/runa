@@ -341,6 +341,16 @@ class AgentShape(_Resolved):
         return _MODEL_PROVIDER.get_model(model) if isinstance(model, str) else model
 
 
+def declared_knowledge(agent_cls: type[Agent]) -> KnowledgeLike | None:
+    """The knowledge source `agent_cls`'s runs consult, from its declaration, building no agent.
+
+    `None` when it declares none, or `"llm"`, whose source is the search tool it hands the model.
+    A `knowledge` value no run could use is a `UserError`, as constructing the agent would be.
+    """
+    knowledge, _ = _retrieval(getattr(agent_cls, "knowledge", None), Knowledge)
+    return knowledge
+
+
 def shape_of(agent: Agent) -> AgentShape:
     """`agent`'s shape as resolved when it was built or last had a setting reassigned."""
     return agent._shape
@@ -377,4 +387,4 @@ def reachable(agent: Agent) -> Iterator[Agent]:
         queue.extend(target for _, target in subagent_edges(candidate))
 
 
-__all__ = ["AgentShape", "reachable", "shape_of", "subagent_edges"]
+__all__ = ["AgentShape", "declared_knowledge", "reachable", "shape_of", "subagent_edges"]

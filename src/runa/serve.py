@@ -41,7 +41,7 @@ from runa._log import logger
 from runa.agent import Agent, declared_name
 from runa.exceptions import OperatorError, UserError
 from runa.run import Run
-from runa.run_internal.agent_shape import shape_of
+from runa.run_internal.agent_shape import declared_knowledge
 from runa.run_state import RunState
 from runa.stream_events import TextDelta
 from runa.tracing.export import flush_exports
@@ -341,15 +341,15 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
     to a `retrieval` span rather than to the deploy that caused it. A startup that fails on a
     missing embeddings credential is the same trade: found by the thing that rolls out.
 
-    One throwaway `Agent` per class, for the `knowledge=` its constructor resolves (`"auto"`
-    builds a `Knowledge` there, see `Agent.__init__`). Agents sharing one corpus cost nothing
+    Each class's declared `knowledge=` is read without building the agent or its subagent graph.
+    Agents sharing one corpus cost nothing
     extra: `ingest` asks the store whether it already holds what it would write, so the second
     one pays a `stat` per file and a version read. An agent in `knowledge="llm"` mode keeps its
     `Knowledge` inside the search tool it hands the model and so isn't warmed here -- that cost
     lands on a tool call the model chose, not on every turn.
     """
     for agent_cls in agent_classes:
-        knowledge = shape_of(agent_cls()).knowledge
+        knowledge = declared_knowledge(agent_cls)
         if knowledge is None:
             continue
         chunks = await knowledge.ingest()
