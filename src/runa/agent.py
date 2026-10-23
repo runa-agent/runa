@@ -303,8 +303,23 @@ class Agent:
     h = handoff
     delegate = _Mode("delegate")
     d = delegate
-    model = DEFAULT_MODEL
-    max_turns = 10
+
+    # Every setting, typed as an instance holds it once built. One without a value here is
+    # absent from the class, so `_settings` reads a subclass's declaration or falls back.
+    name: str
+    instructions: str | Callable[..., Any] | None
+    model: str | Any = DEFAULT_MODEL
+    model_settings: ModelSettings | None
+    tools: Sequence[FunctionTool]
+    subagents: Sequence[type[Agent] | Subagent]
+    guardrails: GuardrailsList
+    mcp: Sequence[Any]
+    output_type: type | None
+    hooks: Hooks[Any] | None
+    memory: MemoryLike | Literal["auto", "llm"] | None
+    knowledge: KnowledgeLike | Literal["auto", "llm"] | None
+    compact: bool | Compactor | None
+    max_turns: int = 10
     max_tokens: int | None = None
     timeout: float | None = None
 
@@ -374,25 +389,7 @@ class Agent:
         passed = locals()
         declared = all(passed[name] is _UNSET for name in _AGENT_FIELDS)
         setting = _settings(cls, passed)
-
-        self.name: str = setting["name"]
-        self.instructions: str | Callable[..., Any] | None = setting["instructions"]
-        self.model: str | Any = setting["model"]
-        self.model_settings: ModelSettings | None = setting["model_settings"]
-        self.tools: Sequence[FunctionTool] = setting["tools"]
-        self.subagents: Sequence[type[Agent] | Subagent] = setting["subagents"]
-        self.guardrails: GuardrailsList = setting["guardrails"]
-        self.mcp: Sequence[Any] = setting["mcp"]
-        # Unannotated: a subclass declares these as the setting, `"auto"` say, not as the source.
-        self.memory = setting["memory"]
-        self.knowledge = setting["knowledge"]
-        self.output_type: type | None = setting["output_type"]
-        self.hooks: Hooks[Any] | None = setting["hooks"]
-        self.compact: bool | Compactor | None = setting["compact"]
-        self.max_turns: int = setting["max_turns"]
-        self.max_tokens: int | None = setting["max_tokens"]
-        self.timeout: float | None = setting["timeout"]
-
+        vars(self).update(setting)
         self.history: list[ConversationItem] = []
         self.usage = Usage()
         self.last_usage = Usage()

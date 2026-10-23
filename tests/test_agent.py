@@ -527,7 +527,7 @@ def test_memory_rejects_an_unknown_string() -> None:
     class BadMemory(Agent):
         name = "BadMemory"
         instructions = "bad memory"
-        memory = "sometimes"
+        memory = "sometimes"  # type: ignore[assignment]
 
     with pytest.raises(UserError, match="memory"):
         BadMemory()
@@ -638,7 +638,7 @@ def test_knowledge_rejects_an_unknown_string() -> None:
     class BadKnowledge(Agent):
         name = "BadKnowledge"
         instructions = "bad knowledge"
-        knowledge = "sometimes"
+        knowledge = "sometimes"  # type: ignore[assignment]
 
     with pytest.raises(UserError, match="knowledge"):
         BadKnowledge()

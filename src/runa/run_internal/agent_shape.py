@@ -199,26 +199,24 @@ class Resolved:
 def resolve(settings: Mapping[str, Any]) -> Resolved:
     """`settings`, one value per `Agent` setting as an agent holds it, translated for a run.
 
-    A value no run could use is a `UserError`.
+    A value no run could use is a `UserError`. A field named after a setting and not translated
+    here holds that setting as given.
     """
     memory, memory_tools = _retrieval(settings["memory"], Memory)
     knowledge, knowledge_tools = _retrieval(settings["knowledge"], Knowledge)
-    return Resolved(
-        name=settings["name"],
-        instructions=_adapt_instructions(settings["instructions"]),
-        model=_checked_model(settings["model"]),
-        model_settings=settings["model_settings"] or ModelSettings(),
-        output_type=settings["output_type"],
-        tools=(*settings["tools"], *memory_tools, *knowledge_tools),
-        mcp_servers=tuple(settings["mcp"]),
-        guardrails=flatten_guardrails(settings["guardrails"]),
-        compactor=resolve_compactor(settings["compact"]),
-        memory=memory,
-        knowledge=knowledge,
-        max_turns=settings["max_turns"],
-        max_tokens=settings["max_tokens"],
-        timeout=settings["timeout"],
-    )
+    translated: dict[str, Any] = {
+        "instructions": _adapt_instructions(settings["instructions"]),
+        "model": _checked_model(settings["model"]),
+        "model_settings": settings["model_settings"] or ModelSettings(),
+        "tools": (*settings["tools"], *memory_tools, *knowledge_tools),
+        "mcp_servers": tuple(settings["mcp"]),
+        "guardrails": flatten_guardrails(settings["guardrails"]),
+        "compactor": resolve_compactor(settings["compact"]),
+        "memory": memory,
+        "knowledge": knowledge,
+    }
+    given = {f.name: settings[f.name] for f in fields(Resolved) if f.name not in translated}
+    return Resolved(**given, **translated)
 
 
 @dataclass(frozen=True)
