@@ -32,7 +32,9 @@ class RunState(GuardrailAudit):
 
     It carries the session the run started in too, so resuming saves the turn there with no
     `session=` passed: by id, resolved through `runa.db.session`, or, resumed in the process that
-    paused, as the very `Session` object the run was given.
+    paused, as the very `Session` object the run was given. A `context`, `user_id` or session
+    passed beside it is a `UserError` rather than dropped, unless it is that session's own
+    `Session` object.
 
     `run_id` is the handle the pause is kept under in `runa.db`, and a pause resumes once: the
     resumed run claims it, and resuming it again, from this object or from `load`, is an error

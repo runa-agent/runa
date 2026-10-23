@@ -268,19 +268,11 @@ class Agent:
     this instance; `last_usage` holds just the most recent call's usage. Both are read from
     `RunContext.usage`, which the turn loop populates regardless of `hooks`.
 
-    One run is bounded three ways, each `None`/unset meaning "no ceiling of that kind":
-    `max_turns` (model calls, default 10), `max_tokens` (total tokens the run may spend, its
-    memory's and knowledge's embedding and extraction calls included), and
-    `timeout` (wall-clock seconds). Hitting any of them ends the run as `Run(status="error")`,
-    the same as every other `RunaError`. `max_tokens` is the run's whole budget and is not the
-    same knob as `ModelSettings(max_tokens=...)`, which caps one response's length.
+    One run is bounded by `max_turns` (model calls), `max_tokens` (every token spent on the run's
+    behalf) and `timeout` (wall-clock seconds), `None` meaning no ceiling of that kind.
 
-    An instance carries per-run state (`history`, `usage`), so it is not safe to share across
-    concurrent runs; see `run` for the rule and the two ways to satisfy it.
-
-    A run reads the settings as they stood when the agent was built, or when one was last
-    reassigned (`agent.model = ...` takes effect from the next run). The list settings are
-    stored as tuples, so they change by reassignment only.
+    An instance carries one conversation (`history`, `usage`) at a time; see `_exclusive`. The
+    settings are resolved when the agent is built, and again when one is reassigned.
     """
 
     handoff = _Mode("handoff")
@@ -488,28 +480,18 @@ class Agent:
 
         `user_id` is who the run acts for, `RunContext.user_id` to its tools and delegates. It is
         the scope of every `memory` read and write the run makes; `None` is a scope of its own,
-        shared by every run that passes none. Like `context`, a paused `RunState` carries it.
+        shared by every run that passes none.
 
         Pass a `session` to persist conversation history there instead of on `self.history`; the
         session supplies prior turns automatically, so only the new `message` is sent as input,
-        and `self.history` is left untouched. A paused run's `RunState` carries its session, so
-        it resumes there with no `session=`.
+        and `self.history` is left untouched. A `session` is normally the conversation's id,
+        resolved through `runa.db.session`; pass a `Session` instead to point at a store of your
+        own. A `RunState` carries its own `context`, `user_id` and session (see `RunState`).
 
-        A `session` is normally the conversation's id: `session="ticket-42"` persists to
-        whichever backend `RUNA_DATABASE_URL` names, so an app moves to Postgres without naming
-        one here. Pass a `Session` instead to point at a store of your own.
-
-        Returns a `Run`. A tool call needing approval pauses it (`status="paused"`). Nothing a run
-        fails on propagates: a guardrail tripwire, `MaxTurnsExceeded`, a model error and an
-        exception out of a `Hooks`/`Session`/`Compactor` (wrapped in `UnexpectedError`, its
-        traceback logged) all come back as `status="error"`. Once it starts, only
-        `asyncio.CancelledError` and `OperatorError` raise. `self.history` only changes once a
-        turn completes; usage is recorded to `self.last_usage` and `self.usage` either way.
-
-        A call that can't start raises `UserError` before the run begins: a `context`, `user_id`
-        or other session beside a `RunState` that carries its own, or a second overlapping
-        session-less run on this instance (**one instance runs one conversation at a time**: give
-        each run its own `session`, or its own `Agent`).
+        Returns a `Run`, whatever the run fails on; what still raises, and which calls are refused
+        with `UserError` before a run starts, is RUNA.md's Agent section. `self.history` only
+        changes once a turn completes; usage is recorded to `self.last_usage` and `self.usage`
+        either way.
         """
         session = _resolve_session(message, session, self.name)
         turn_input = _turn_input(message, self.history, session, context, user_id)
@@ -564,11 +546,8 @@ class Agent:
         `ToolOutput`, `AgentChanged`) as they arrive; once it ends,
         its `.run` holds the `Run` that `run` would have returned, paused, completed or errored.
         History and usage are recorded only once the stream is fully consumed, so a caller that
-        stops iterating early leaves them unchanged.
-
-        One instance still runs one conversation at a time: a stream shares `run`'s latch, so
-        starting to consume a second session-less stream on the same instance while one is in
-        flight raises `UserError` rather than interleaving the two histories.
+        stops iterating early leaves them unchanged. The instance is held (see `_exclusive`) only
+        while the stream is consumed.
         """
         session = _resolve_session(message, session, self.name)
         turn_input = _turn_input(message, self.history, session, context, user_id)

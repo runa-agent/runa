@@ -2,12 +2,9 @@
 
 What a deployment gets:
 
-* **An `Agent` is built per request, from a class resolved once at startup.** An instance carries
-  the conversation it is running, so one is never shared across requests; what its class
-  declares is resolved once per process, so building one reads nothing from disk. The app is
-  imported once, by `create_app`; picking up an edit to `app/agents/` or `app/prompts/` takes a
-  restart. Every declared
-  agent's `knowledge=` corpus is ingested at startup too.
+* **An `Agent` is built per request, from a class resolved once at startup.** The app is
+  imported once, by `create_app`, so picking up an edit to `app/agents/` or `app/prompts/` takes
+  a restart. Every declared agent's `knowledge=` corpus is ingested at startup too.
 * **Conversation state is a `session`, never `self.history`.** A `session_id` in the request body
   is the whole continuity mechanism, and `runa.db` decides where that history lives
   (`RUNA_DATABASE_URL`), so more than one replica needs no code change.
@@ -15,8 +12,8 @@ What a deployment gets:
   every route but `/health`; `--no-auth` turns it off for local use.
 * **A paused run stays on the server, and resumes through the route it paused on.** A pause is
   kept in `runa.db` by the run itself and the response carries only its `run_id`; the request
-  body carries that `run_id` plus the `decisions` a human made, in place of `message`. A pause
-  resumes once (see `RunState`), and its approval ledger never leaves the server.
+  body carries that `run_id` plus the `decisions` a human made, in place of `message`, so the
+  approval ledger never leaves the server. Resuming follows `RunState`'s rules.
 
 Only serving needs the `serve` extra; `cli/serve.py` imports this module lazily. `create_app` is
 public, for an `asgi.py` that brings its own server or mounts these routes inside a larger one.
