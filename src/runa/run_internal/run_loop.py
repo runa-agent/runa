@@ -45,7 +45,7 @@ from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape, shape_of
-from runa.run_internal.record import Pause, RunRecord
+from runa.run_internal.record import RunRecord, keep, paused, resuming
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
 from runa.run_internal.tool_execution import (
@@ -53,7 +53,6 @@ from runa.run_internal.tool_execution import (
     _run_message_tool_calls,
     _TurnOutcome,
 )
-from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
 from runa.tool import FunctionTool
@@ -66,6 +65,8 @@ from runa.transcript import Transcript
 
 if TYPE_CHECKING:
     from runa.agent import Agent
+    from runa.run_internal.record import Pause
+    from runa.run_state import RunState
 
 
 @dataclass
@@ -561,7 +562,7 @@ async def _within(
     async def kept() -> Run:
         run = await _timed(turn(), frame)
         if run.status == "paused" and not frame.delegated:
-            await run.to_state().pause.keep()
+            await keep(run.to_state())
         return run
 
     return await _guarded(kept(), frame)
@@ -653,11 +654,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             usage=run_context.usage,
             status="paused",
             interruptions=outcome.interruptions,
-            _state=RunState(
-                Pause(
-                    record, frame.trace, frame.approvals, guardrail_results, session=frame.session
-                )
-            ),
+            _state=paused(record, frame.trace, frame.approvals, guardrail_results, frame.session),
             _transcript=transcript,
             guardrail_results=guardrail_results,
         )
@@ -720,7 +717,7 @@ async def _run_async(
     """
     dispatch = _Dispatch(hooks or LoggingHooks())
 
-    if isinstance(input, RunState):
+    if not isinstance(input, str | list):
         return await _resume(input, dispatch, session, emit)
 
     session_id = session.session_id if session is not None else None
@@ -762,13 +759,13 @@ async def _resume(
     pause the resumed run comes to is its own, kept under the agent the run started with.
     `session` is the one the run started in (see `RunState`), never a caller's choice.
     """
-    pause = state.pause
+    pause = resuming(state)
     frame = _Frame(
-        record=pause.record.resumed(),
+        record=pause.record,
         trace=pause.trace,
         agent_span=_Spans(pause.trace).open(pause.record.agent.name, "agent"),
         approvals=pause.approvals,
-        guardrail_results=pause.guardrail_results.snapshot(),
+        guardrail_results=pause.guardrail_results,
         session=session,
         hooks=dispatch,
         emit=emit,

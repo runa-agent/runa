@@ -31,6 +31,7 @@ from runa.lifecycle import Hooks
 from runa.memory import MemoryLike
 from runa.run import Run, RunStream
 from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.record import session_for
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.session import Session
@@ -62,7 +63,7 @@ def _resolve_session(
     own session, so one passed beside it is refused unless it is that session's `Session` object.
     """
     if isinstance(message, RunState):
-        return message.pause.session_for(session)
+        return session_for(message, session)
     if isinstance(session, str):
         from runa import db
 

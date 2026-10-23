@@ -6,18 +6,20 @@ which the loop needs and a caller doesn't, is an underscore-prefixed field on it
 
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
 from runa._types import Usage
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
-from runa.run_state import Interruption, RunState
 from runa.stream_events import StreamEvent
 from runa.tool import ToolCall
 from runa.tracing import Trace
 from runa.transcript import Transcript
+
+if TYPE_CHECKING:
+    from runa.run_state import Interruption, RunState
 
 RunStatus = Literal["completed", "paused", "error"]
 """What `Run.status` can be: see `Run`."""

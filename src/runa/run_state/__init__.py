@@ -7,16 +7,17 @@ and decides on, and where the rules a caller relies on are stated.
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from runa._items import ConversationItem
 from runa._loop import run_sync
-from runa._types import RunContext
-from runa.guardrail import GuardrailAudit, GuardrailResults
+from runa.guardrail import GuardrailAudit
 from runa.run_internal.record import Interruption, Pause
-from runa.tracing.traces import Trace
-from runa.transcript import Transcript
 
 if TYPE_CHECKING:
+    from runa._items import ConversationItem
+    from runa._types import RunContext
     from runa.agent import Agent
+    from runa.guardrail import GuardrailResults
+    from runa.tracing.traces import Trace
+    from runa.transcript import Transcript
 
 
 @dataclass
@@ -37,55 +38,57 @@ class RunState(GuardrailAudit):
     resumed run claims it, and resuming it again, from this object or from `load`, is an error
     `Run`. `load(agent, run_id)` is how another process, or a later request, gets it back.
 
-    `pause` is the runtime's own record of all of this, which every property here reads.
+    `_pause` is the runtime's own record of all of this, which every property here reads. It is
+    private because a copy of a pause, saved or resumed by hand, would be a second chance to run
+    it: only the runtime builds one, keeps it and resumes from it.
     """
 
-    pause: Pause
+    _pause: Pause
 
     @property
     def trace(self) -> Trace:
         """The paused run's trace, which the resumed run goes on adding spans to."""
-        return self.pause.trace
+        return self._pause.trace
 
     @property
     def guardrail_results(self) -> GuardrailResults:
         """Every guardrail that ran before the pause, keyed by the `Phase` it ran in."""
-        return self.pause.guardrail_results
+        return self._pause.guardrail_results
 
     @property
     def run_id(self) -> str:
         """The handle the pause is kept under in `runa.db`, for `load`."""
-        return self.pause.run_id
+        return self._pause.run_id
 
     @property
     def agent(self) -> Agent:
         """The agent the run paused in, the starting one unless a handoff switched it."""
-        return self.pause.record.agent
+        return self._pause.record.agent
 
     @property
     def pending(self) -> list[Interruption]:
         """The calls waiting on a decision."""
-        return self.pause.record.pending
+        return self._pause.record.pending
 
     @property
     def transcript(self) -> Transcript:
         """The conversation as it stood at the pause."""
-        return self.pause.record.transcript
+        return self._pause.record.transcript
 
     @property
     def run_context(self) -> RunContext[Any]:
         """The paused run's `context`, user and usage so far."""
-        return self.pause.record.run_context
+        return self._pause.record.run_context
 
     @property
     def session_id(self) -> str | None:
         """The id of the session the run started in; `None` for a session-less run."""
-        return self.pause.record.session_id
+        return self._pause.record.session_id
 
     @property
     def paused_message(self) -> ConversationItem:
         """The assistant message whose calls paused the run: the transcript's last, always."""
-        return self.pause.record.paused_message
+        return self._pause.record.paused_message
 
     def approve(self, interruption: Interruption, *, always: bool = False) -> None:
         """Mark `interruption` approved; its tool runs when the run is resumed.
@@ -95,8 +98,8 @@ class RunState(GuardrailAudit):
         approval prompt entirely.
         """
         if always:
-            self.pause.approvals.record(interruption.name, approved=True)
-        self.pause.approvals.record_call(interruption.call_id, approved=True)
+            self._pause.approvals.record(interruption.name, approved=True)
+        self._pause.approvals.record_call(interruption.call_id, approved=True)
 
     def reject(
         self,
@@ -112,10 +115,10 @@ class RunState(GuardrailAudit):
         any) for every future call to this tool, the same way `approve(always=True)` does.
         """
         if always:
-            self.pause.approvals.record(
+            self._pause.approvals.record(
                 interruption.name, approved=False, message=rejection_message
             )
-        self.pause.approvals.record_call(
+        self._pause.approvals.record_call(
             interruption.call_id, approved=False, message=rejection_message
         )
 

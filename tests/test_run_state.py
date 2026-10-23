@@ -18,7 +18,7 @@ from runa import _loop, db
 from runa.agent import Agent
 from runa.exceptions import UserError
 from runa.run import Run
-from runa.run_internal.record import Pause, PauseSchema, RunRecord
+from runa.run_internal.record import Pause, PauseSchema, RunRecord, resuming
 from runa.run_state import RunState
 from runa.tool import tool
 
@@ -319,8 +319,8 @@ def test_a_loaded_pause_carries_the_sticky_approval_ledger() -> None:
     resumed = fresh.run_sync(restored)
 
     assert resumed.output == "all done"
-    assert restored.pause.approvals.sticky == {"dangerous": True}
-    assert "call_1" in restored.pause.approvals.executed
+    assert resuming(restored).approvals.sticky == {"dangerous": True}
+    assert "call_1" in resuming(restored).approvals.executed
 
 
 def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:
