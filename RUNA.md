@@ -186,7 +186,9 @@ request, a Slack bot) gets it back with `await RunState.load(agent, run_id)` (`l
 it the same way. That is the one cross-process shape: there is no blob to hand out, because a
 copy of a pause is a second chance to run it. `load` returns `None` for a pause that doesn't
 exist or already resumed, and spends nothing: the resumed run claims the pause, atomically, so of
-two processes resuming one pause exactly one runs it.
+two processes resuming one pause exactly one runs it. It claims last, just before the decided
+calls run, so a resume that fails before then (an MCP server that doesn't answer, a hook that
+raises) is an error `Run` that leaves the pause in place, to load and resume again.
 
 ```python
 state = RunState.load_sync(SupportAgent(), run_id)

@@ -17,6 +17,7 @@ from helpers import ScriptedModel, agent_class, text_response, tool_call_respons
 from runa import _loop, db
 from runa.agent import Agent
 from runa.exceptions import UserError
+from runa.lifecycle import Hooks
 from runa.run import Run
 from runa.run_internal.record import Pause, PauseSchema, RunRecord, resuming
 from runa.run_state import RunState
@@ -167,6 +168,39 @@ def test_a_pause_resumes_once_across_every_copy_of_it() -> None:
 
     assert replayed.status == "error"
     assert replayed.error == f"paused run {result.run_id!r} was already resumed"
+    assert ran == ["dangerous"]
+
+
+def test_a_resume_that_fails_before_running_a_call_leaves_the_pause_to_resume_again() -> None:
+    """A failed resume that ran nothing it decided hasn't spent the human's decision."""
+    ran: list[str] = []
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Do something that needs a human's OK."""
+        ran.append("dangerous")
+        return "done"
+
+    class _BrokenHooks(Hooks[Any]):
+        async def on_agent_start(self, context: Any, agent: Any) -> None:
+            raise RuntimeError("the approval log is down")
+
+    gated = agent_class(
+        "TestAgent",
+        ScriptedModel([tool_call_response("dangerous", "{}"), text_response("all done")]),
+        tools=[dangerous],
+    )
+    result = gated().run_sync("do it")
+    state = _load(gated(), result.run_id)
+    state.approve(state.pending[0])
+
+    failed = gated().run_sync(state, hooks=_BrokenHooks())
+    retried = _load(gated(), result.run_id)
+    retried.approve(retried.pending[0])
+
+    assert failed.status == "error"
+    assert ran == []
+    assert gated().run_sync(retried).output == "all done"
     assert ran == ["dangerous"]
 
 

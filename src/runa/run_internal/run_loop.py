@@ -542,22 +542,20 @@ async def _within(
 ) -> Run:
     """Run the record's agent on `input`, or with `None`, continue its paused record, guarded.
 
-    Every entry point ends here once its frame is built. Claiming the pause a resumed run is
-    `claiming`, listing the MCP tools (which may start a subprocess), reading the session and
-    keeping a pause in `runa.db` are inside `_guarded` too, so their failures end the run like any
-    other. A pause is kept once the clock has stopped, so it carries all the time it spent, and
-    never by a delegate's frame: a delegate's pause is carried by its caller's.
+    Every entry point ends here once its frame is built. Listing the MCP tools (which may start a
+    subprocess), reading the session, claiming the pause a resumed run is `claiming` (see
+    `_drive`) and keeping a pause in `runa.db` are inside `_guarded` too, so their failures end
+    the run like any other. A pause is kept once the clock has stopped, so it carries all the time
+    it spent, and never by a delegate's frame: a delegate's pause is carried by its caller's.
     """
 
     async def turn() -> Run:
-        if claiming is not None and not await claiming.claim():
-            raise RunAlreadyResumed(claiming.run_id)
         shape = await shape_of(frame.record.agent).with_mcp_tools()
         if input is not None:
             session = frame.session
             prior = await session.get_items() if session is not None else []
             frame.record.transcript = Transcript.start(_turn_items(input), prior)
-        return await _drive(_Run(frame, shape), input)
+        return await _drive(_Run(frame, shape), input, claiming)
 
     async def kept() -> Run:
         run = await _timed(turn(), frame)
@@ -680,13 +678,18 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     )
 
 
-async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
+async def _drive(
+    run: _Run, input: str | list[ConversationItem] | None, claiming: Pause | None = None
+) -> Run:
     """Start `run`'s agent and take it to its `Run`: a fresh run, a resumed one and a delegate's.
 
     A fresh run first consults memory/knowledge for its latest user message and checks `input`
     against the agent's input guardrails; a resumed one (`input=None`) did both before it paused.
     A resumed agent still gets `on_agent_start`, pairing the `on_agent_end` `_finish` fires.
     Its agent span is open throughout, so a call charged to nothing narrower is charged under it.
+
+    The pause a resumed root run is `claiming` is claimed last, just before its decided calls
+    run: a run that fails before then leaves the pause in `runa.db`, resumable again.
     """
     with charging(run.spans):
         await run.hooks.on_agent_start(run.run_context, run.current_agent)
@@ -695,6 +698,8 @@ async def _drive(run: _Run, input: str | list[ConversationItem] | None) -> Run:
             if query is not None:
                 await _inject_retrieved(run, query)
             await run.guard(Phase.INPUT, input)
+        if claiming is not None and not await claiming.claim():
+            raise RunAlreadyResumed(claiming.run_id)
         return await _finish(run, await _run_turns(run))
 
 
@@ -755,7 +760,8 @@ async def _resume(
 ) -> Run:
     """Continue a paused run once its interruptions are resolved, on a copy of its record.
 
-    The run claims the pause first, so a pause resumed already ends in `RunAlreadyResumed`. A
+    The run claims the pause before running anything it decided (see `_drive`), so a pause
+    resumed already ends in `RunAlreadyResumed`. A
     pause the resumed run comes to is its own, kept under the agent the run started with.
     `session` is the one the run started in (see `RunState`), never a caller's choice.
     """
