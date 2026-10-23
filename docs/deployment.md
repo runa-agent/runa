@@ -112,12 +112,11 @@ being decided for you.
 
 The paused run itself stays on the server, in `runa.db` beside your sessions, so its context and
 approval ledger are never the client's to edit, and any replica sharing `RUNA_DATABASE_URL` can
-resume it. A `run_id` resumes once: the resumed run claims it, so posting the same approval
-twice runs the call once and the second request is a `404`, as is a `run_id` sent to a different
-agent's route. Two requests racing on one `run_id` still run it once: the one that loses the
-claim gets back an `"error"` run saying the pause was already resumed. A decision for a call the
-pause doesn't have (`422`) spends nothing. A pause nobody
-resumes stays in the `paused_runs` table until you prune it by `created_at`.
+resume it. A pause [resumes once](approval.md#durability); over HTTP, posting the same approval
+twice makes the second request a `404`, as is a `run_id` sent to a different agent's route, and
+of two requests racing on one `run_id` the loser gets back an `"error"` run. A decision for a
+call the pause doesn't have (`422`) spends nothing. A pause nobody resumes stays in the
+`paused_runs` table until you prune it by `created_at`.
 
 ### Authentication
 

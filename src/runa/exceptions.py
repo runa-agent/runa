@@ -159,8 +159,7 @@ class DuplicateToolCallError(RunaError):
 class RunAlreadyResumed(RunaError):
     """Raised when a paused run is resumed after it already was: its `run_id` is claimed.
 
-    A pause resumes once, from the `RunState` it paused with or from `RunState.load` in any
-    process sharing its database, so the calls it approved run at most once.
+    See `RunState` for why a pause resumes once.
     """
 
     def __init__(self, run_id: str) -> None:

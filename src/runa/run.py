@@ -52,7 +52,7 @@ class Run(GuardrailAudit):
     `status` is `"paused"` when a tool call needs human approval: resolve each of
     `interruptions` on `to_state()`, then pass that state back to `run`/`run_sync` in place of a
     message. The pause is already kept in `runa.db` under `run_id`, so another process resumes it
-    from `RunState.load(agent, run_id)`, and either way it resumes once. It is `"error"` when a
+    from `RunState.load(agent, run_id)` (see `RunState`). It is `"error"` when a
     `RunaError` (a guardrail tripwire, `MaxTurnsExceeded`, a model error, ...) stopped the run;
     `error` then holds that exception's message.
 

@@ -1,7 +1,7 @@
 """run_state: `RunState`, the public handle on a paused run, to resolve and resume it.
 
-What a pause is, and how it is kept in `runa.db` and claimed to resume once, is the runtime's
-(`runa.run_internal.record`); this is what a caller reads and decides on.
+How a pause is stored and claimed is `runa.run_internal.record`'s; this is what a caller reads
+and decides on, and where the rules a caller relies on are stated.
 """
 
 from dataclasses import dataclass

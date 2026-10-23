@@ -118,9 +118,7 @@ class RunRequest(BaseModel):
 def _refused_as_422() -> Iterator[None]:
     """Answer a turn `Agent.run` refuses to start with a `422`, its message as the detail.
 
-    A run that starts never raises (see `Agent.run`), so a `UserError` here is the request's own
-    mistake, such as a `user_id` or `session_id` beside the `run_id` of a pause that already
-    carries one: the rules are `Agent.run`'s, and this is the one place HTTP learns of them.
+    Which turns those are is `Agent.run`'s to say; this maps its `UserError` and nothing else.
     """
     try:
         yield
