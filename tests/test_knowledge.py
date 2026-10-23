@@ -616,26 +616,44 @@ def test_custom_store_can_be_injected() -> None:
     assert [m.text for m in matches] == ["cats are great pets"]
 
 
-def test_declared_knowledge_reads_the_class_without_building_an_agent() -> None:
-    """`runa serve` warms each class's corpus from its declaration, not from a built agent."""
+def test_a_declaration_holds_the_knowledge_its_agents_runs_consult() -> None:
+    """`runa serve` warms the very corpus a built agent's runs search, without building one."""
     from runa import Agent
-    from runa.run_internal.agent_shape import declared_knowledge
+    from runa.agent import declaration
+    from runa.run_internal.agent_shape import shape_of
 
     corpus = Knowledge("elsewhere")
 
-    class Nameless(Agent):  # constructing it raises, so reading it must not construct it
+    class Searches(Agent):
+        name = "searches"
         knowledge = "auto"
 
     class OwnCorpus(Agent):
+        name = "own_corpus"
         knowledge = corpus
 
     class ModelSearches(Agent):
+        name = "model_searches"
         knowledge = "llm"
 
     class NoKnowledge(Agent):
-        pass
+        name = "no_knowledge"
 
-    assert isinstance(declared_knowledge(Nameless), Knowledge)
-    assert declared_knowledge(OwnCorpus) is corpus
-    assert declared_knowledge(ModelSearches) is None
-    assert declared_knowledge(NoKnowledge) is None
+    warmed = declaration(Searches).knowledge
+    assert isinstance(warmed, Knowledge)
+    assert shape_of(Searches()).knowledge is warmed
+    assert declaration(OwnCorpus).knowledge is corpus
+    assert declaration(ModelSearches).knowledge is None
+    assert declaration(NoKnowledge).knowledge is None
+
+
+def test_a_class_no_agent_could_be_built_from_has_no_declaration() -> None:
+    """Reading a broken class fails the way constructing it would, so `runa serve` won't start."""
+    from runa import Agent
+    from runa.agent import declaration
+
+    class Nameless(Agent):
+        knowledge = "auto"
+
+    with pytest.raises(UserError, match="missing the required 'name'"):
+        declaration(Nameless)

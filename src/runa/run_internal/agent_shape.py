@@ -5,10 +5,10 @@ is the one place they are translated into what a run uses: the subagent graph bu
 `knowledge` resolved to a source and the model's search tools. The agent builds its shape when it
 is constructed, and again whenever one of its settings is reassigned, so the two always agree and
 a bad value is a `UserError` at the line that set it. What a class declares is translated once per
-process and shared by every instance built without overrides, so building one costs only its
-subagent graph, whose agents are still its own. The turn loop reads an agent's settings from its
-shape and nowhere else: `shape.agent` is the identity handed to user code (a hook, an
-`instructions` callable, a pause), never read for a setting.
+process (`runa.agent.declaration`) and shared by every instance built without overrides, so
+building one costs only its subagent graph, whose agents are still its own. The turn loop reads an
+agent's settings from its shape and nowhere else: `shape.agent` is the identity handed to user
+code (a hook, an `instructions` callable, a pause), never read for a setting.
 
 `shape_of` is how anything outside the agent reads one, and `subagent_edges`/`reachable` walk the
 graph the shape builds, so a third subagent mode is a change in this module alone.
@@ -19,14 +19,13 @@ start a subprocess) and the model client (`resolve_model`, which needs the provi
 
 import inspect
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
-from runa import _app
 from runa._models import Model, ModelProvider, ToolSchema, check_model_name
 from runa._types import ModelSettings, RunContext
 from runa.compact import Compactor, resolve_compactor
@@ -168,7 +167,7 @@ def _checked_unique(agent_name: str, names: Iterable[str]) -> None:
 
 
 @dataclass(frozen=True)
-class _Resolved:
+class Resolved:
     """Every setting of an agent but `subagents`, each in the form the turn loop uses it.
 
     Holds no agent, so every instance of a class that declares the same settings shares one.
@@ -197,43 +196,33 @@ class _Resolved:
     timeout: float | None
 
 
-def _resolve(agent: Agent) -> _Resolved:
-    """`agent`'s settings translated; a value no run could use is a `UserError`."""
-    memory, memory_tools = _retrieval(agent.memory, Memory)
-    knowledge, knowledge_tools = _retrieval(agent.knowledge, Knowledge)
-    return _Resolved(
-        name=agent.name,
-        instructions=_adapt_instructions(agent.instructions),
-        model=_checked_model(agent.model),
-        model_settings=agent.model_settings or ModelSettings(),
-        output_type=agent.output_type,
-        tools=(*agent.tools, *memory_tools, *knowledge_tools),
-        mcp_servers=tuple(agent.mcp),
-        guardrails=flatten_guardrails(agent.guardrails),
-        compactor=resolve_compactor(agent.compact),
+def resolve(settings: Mapping[str, Any]) -> Resolved:
+    """`settings`, one value per `Agent` setting as an agent holds it, translated for a run.
+
+    A value no run could use is a `UserError`.
+    """
+    memory, memory_tools = _retrieval(settings["memory"], Memory)
+    knowledge, knowledge_tools = _retrieval(settings["knowledge"], Knowledge)
+    return Resolved(
+        name=settings["name"],
+        instructions=_adapt_instructions(settings["instructions"]),
+        model=_checked_model(settings["model"]),
+        model_settings=settings["model_settings"] or ModelSettings(),
+        output_type=settings["output_type"],
+        tools=(*settings["tools"], *memory_tools, *knowledge_tools),
+        mcp_servers=tuple(settings["mcp"]),
+        guardrails=flatten_guardrails(settings["guardrails"]),
+        compactor=resolve_compactor(settings["compact"]),
         memory=memory,
         knowledge=knowledge,
-        max_turns=agent.max_turns,
-        max_tokens=agent.max_tokens,
-        timeout=agent.timeout,
+        max_turns=settings["max_turns"],
+        max_tokens=settings["max_tokens"],
+        timeout=settings["timeout"],
     )
 
 
-_DECLARED = "agent declarations"
-"""The `_app` fact holding each class's resolved declaration, so a reset forgets them."""
-
-
-def _declared(agent: Agent) -> _Resolved:
-    """What `agent`'s class declares, resolved the first time an instance asks in this process."""
-    declared = _app.held(_DECLARED, dict[type, _Resolved])
-    resolved = declared.get(type(agent))
-    if resolved is None:
-        resolved = declared.setdefault(type(agent), _resolve(agent))
-    return resolved
-
-
 @dataclass(frozen=True)
-class AgentShape(_Resolved):
+class AgentShape(Resolved):
     """One agent's settings as the turn loop uses them, wired into its agent graph.
 
     Every tool, delegate and handoff it offers has a name no other one has: a shape where two
@@ -247,29 +236,13 @@ class AgentShape(_Resolved):
     """Its `subagents` wired up as delegates, keyed by the tool name that triggers each."""
 
     @classmethod
-    def of(cls, agent: Agent, previous: AgentShape | None = None) -> AgentShape:
-        """`agent`'s shape, translated from its settings; a value no run could use is a `UserError`.
+    def of(cls, agent: Agent, resolved: Resolved, previous: AgentShape | None = None) -> AgentShape:
+        """`agent`'s shape: its settings as `resolved`, wired into its agent graph.
 
         `previous` is a shape of the same agent graph whose subagents are kept rather than built
         again, given when `subagents` isn't what changed, so the agents below this one keep their
         identity.
         """
-        return cls._wired(agent, _resolve(agent), previous)
-
-    @classmethod
-    def declared(cls, agent: Agent) -> AgentShape:
-        """`agent`'s shape when it holds exactly what its class declares, its subagents built.
-
-        The settings are translated once per class per process and shared by every such
-        instance, so building one costs its subagent graph and no I/O.
-        """
-        return cls._wired(agent, _declared(agent))
-
-    @classmethod
-    def _wired(
-        cls, agent: Agent, resolved: _Resolved, previous: AgentShape | None = None
-    ) -> AgentShape:
-        """`resolved` for `agent`, with `previous`'s subagents, or its own built when none."""
         handoffs, delegates = (
             _subagent_graph(agent)
             if previous is None
@@ -284,7 +257,7 @@ class AgentShape(_Resolved):
             ),
         )
         return cls(
-            **{field.name: getattr(resolved, field.name) for field in fields(_Resolved)},
+            **{field.name: getattr(resolved, field.name) for field in fields(Resolved)},
             agent=agent,
             handoffs={handoff.tool_name: handoff for handoff in handoffs},
             delegates={delegate.tool_name: delegate for delegate in delegates},
@@ -341,16 +314,6 @@ class AgentShape(_Resolved):
         return _MODEL_PROVIDER.get_model(model) if isinstance(model, str) else model
 
 
-def declared_knowledge(agent_cls: type[Agent]) -> KnowledgeLike | None:
-    """The knowledge source `agent_cls`'s runs consult, from its declaration, building no agent.
-
-    `None` when it declares none, or `"llm"`, whose source is the search tool it hands the model.
-    A `knowledge` value no run could use is a `UserError`, as constructing the agent would be.
-    """
-    knowledge, _ = _retrieval(getattr(agent_cls, "knowledge", None), Knowledge)
-    return knowledge
-
-
 def shape_of(agent: Agent) -> AgentShape:
     """`agent`'s shape as resolved when it was built or last had a setting reassigned."""
     return agent._shape
@@ -387,4 +350,4 @@ def reachable(agent: Agent) -> Iterator[Agent]:
         queue.extend(target for _, target in subagent_edges(candidate))
 
 
-__all__ = ["AgentShape", "declared_knowledge", "reachable", "shape_of", "subagent_edges"]
+__all__ = ["AgentShape", "Resolved", "reachable", "resolve", "shape_of", "subagent_edges"]

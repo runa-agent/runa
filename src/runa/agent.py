@@ -11,7 +11,7 @@ import copy
 import difflib
 import inspect
 import re
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -30,7 +30,7 @@ from runa.knowledge import KnowledgeLike
 from runa.lifecycle import Hooks
 from runa.memory import MemoryLike
 from runa.run import Run, RunStream
-from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.agent_shape import AgentShape, Resolved, resolve
 from runa.run_internal.record import session_for
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
@@ -217,19 +217,43 @@ _SIGNALLED_WHEN_ABSENT = ("name", "instructions")
 """The two settings whose caller tells "never given" apart from "given as `None`"."""
 
 
-def _settings(cls: type[Agent], passed: dict[str, Any]) -> dict[str, Any]:
-    """Every setting resolved: what the constructor was passed, else what `cls` declares.
+def _settings(cls: type[Agent], passed: Mapping[str, Any]) -> dict[str, Any]:
+    """Every setting as an agent of `cls` holds it: what was passed, else what `cls` declares.
 
-    `passed` is `__init__`'s `locals()`, one entry per parameter, so a setting added to the
-    signature is resolved with no edit here. A setting neither supplies is `None`, except `name`
-    and `instructions`, which stay `_UNSET` for `__init__` to act on.
+    `passed` holds one entry per setting, `_UNSET` where none was passed, so a setting added to
+    `__init__`'s signature is resolved with no edit here. A setting neither supplies is `None`;
+    `name` is required, and `instructions` defaults to `cls`'s prompt file. A class attribute
+    that isn't a setting, and a missing `name`, are each a `UserError`.
     """
-    resolved: dict[str, Any] = {}
+    _reject_unknown_settings(cls)
+    setting: dict[str, Any] = {}
     for name in _AGENT_FIELDS:
         absent = _UNSET if name in _SIGNALLED_WHEN_ABSENT else None
         value = passed[name]
-        resolved[name] = value if value is not _UNSET else getattr(cls, name, absent)
-    return resolved
+        setting[name] = _stored(name, value if value is not _UNSET else getattr(cls, name, absent))
+    if setting["name"] is _UNSET:
+        raise UserError(f"{cls.__name__}(...) is missing the required 'name'")
+    if setting["instructions"] is _UNSET:
+        setting["instructions"] = _prompt(cls, setting["name"])
+    return setting
+
+
+_DECLARATIONS = "agent declarations"
+"""The `_app` fact holding each class's resolved declaration, so a reset forgets them."""
+
+
+def declaration(agent_cls: type[Agent]) -> Resolved:
+    """What `agent_cls` declares, resolved as every run of an agent built without overrides uses it.
+
+    Resolved once per class per process and shared, the very `memory` and `knowledge` sources
+    included, so a surface reading a class (`runa serve` warming its corpus) needs no instance.
+    A declaration no agent could be built from is a `UserError`, as constructing one would be.
+    """
+    declarations = _app.held(_DECLARATIONS, dict[type, Resolved])
+    if agent_cls not in declarations:
+        declared = _settings(agent_cls, dict.fromkeys(_AGENT_FIELDS, _UNSET))
+        declarations.setdefault(agent_cls, resolve(declared))
+    return declarations[agent_cls]
 
 
 _LIST_SETTINGS = frozenset({"tools", "subagents", "guardrails", "mcp"})
@@ -347,21 +371,12 @@ class Agent:
         cls = type(self)
         if cls is Agent:
             raise UserError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
-        _reject_unknown_settings(cls)
-
         passed = locals()
         declared = all(passed[name] is _UNSET for name in _AGENT_FIELDS)
         setting = _settings(cls, passed)
 
-        name = setting["name"]
-        if name is _UNSET:
-            raise UserError(f"{cls.__name__}(...) is missing the required 'name'")
-        instructions = setting["instructions"]
-        if instructions is _UNSET:
-            instructions = _prompt(cls, name)
-
-        self.name: str = name
-        self.instructions: str | Callable[..., Any] | None = instructions
+        self.name: str = setting["name"]
+        self.instructions: str | Callable[..., Any] | None = setting["instructions"]
         self.model: str | Any = setting["model"]
         self.model_settings: ModelSettings | None = setting["model_settings"]
         self.tools: Sequence[FunctionTool] = setting["tools"]
@@ -382,7 +397,8 @@ class Agent:
         self.usage = Usage()
         self.last_usage = Usage()
         self._in_flight = 0
-        self._shape = AgentShape.declared(self) if declared else AgentShape.of(self)
+        resolved = declaration(cls) if declared else resolve(setting)
+        self._shape = AgentShape.of(self, resolved)
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Set an attribute, rebuilding the shape a run reads when it is one of the settings.
@@ -394,7 +410,9 @@ class Agent:
             return
         super().__setattr__(name, _stored(name, value))
         if "_shape" in vars(self):
-            self._shape = AgentShape.of(self, None if name == "subagents" else self._shape)
+            resolved = resolve({setting: getattr(self, setting) for setting in _AGENT_FIELDS})
+            previous = None if name == "subagents" else self._shape
+            self._shape = AgentShape.of(self, resolved, previous)
 
     @property
     def graph(self) -> Digraph:
