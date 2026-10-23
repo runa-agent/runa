@@ -50,12 +50,12 @@ class RunState(GuardrailAudit):
     @property
     def trace(self) -> Trace:
         """The paused run's trace, which the resumed run goes on adding spans to."""
-        return self._pause.trace
+        return self._pause.tree.trace
 
     @property
     def guardrail_results(self) -> GuardrailResults:
         """Every guardrail that ran before the pause, keyed by the `Phase` it ran in."""
-        return self._pause.guardrail_results
+        return self._pause.tree.guardrail_results
 
     @property
     def run_id(self) -> str:
@@ -100,8 +100,8 @@ class RunState(GuardrailAudit):
         approval prompt entirely.
         """
         if always:
-            self._pause.approvals.record(interruption.name, approved=True)
-        self._pause.approvals.record_call(interruption.call_id, approved=True)
+            self._pause.tree.approvals.record(interruption.name, approved=True)
+        self._pause.tree.approvals.record_call(interruption.call_id, approved=True)
 
     def reject(
         self,
@@ -117,10 +117,10 @@ class RunState(GuardrailAudit):
         any) for every future call to this tool, the same way `approve(always=True)` does.
         """
         if always:
-            self._pause.approvals.record(
+            self._pause.tree.approvals.record(
                 interruption.name, approved=False, message=rejection_message
             )
-        self._pause.approvals.record_call(
+        self._pause.tree.approvals.record_call(
             interruption.call_id, approved=False, message=rejection_message
         )
 

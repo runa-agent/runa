@@ -19,7 +19,7 @@ from runa.agent import Agent
 from runa.exceptions import UserError
 from runa.lifecycle import Hooks
 from runa.run import Run
-from runa.run_internal.record import Pause, PauseSchema, RunRecord, resuming
+from runa.run_internal.record import Pause, PauseSchema, RunRecord, RunTree, resuming
 from runa.run_state import RunState
 from runa.tool import tool
 
@@ -65,11 +65,10 @@ def _load(agent: Agent, run_id: str | None) -> RunState:
     return state
 
 
-_SERIALIZED_AS = {"record": "run", "trace": "trace", "approvals": "approvals"}
+_SERIALIZED_AS = {"record": "run", "tree": "tree"}
 """Each `Pause` field and the `PauseSchema` field it is written to."""
 
 _NOT_SERIALIZED = {
-    "guardrail_results": "every guardrail that ran is already a span in the run's trace",
     "run_id": "the row's key, not its content",
     "session": "a live object; the record carries its id",
 }
@@ -94,6 +93,13 @@ def test_every_run_record_field_is_serialized() -> None:
     result, _ = _paused_run()
 
     assert set(_stored(result)["run"]) == set(RunRecord.model_fields)
+
+
+def test_every_run_tree_field_but_the_audit_trail_is_serialized() -> None:
+    """What the tree shares survives a restart, but for guardrails already kept as spans."""
+    result, _ = _paused_run()
+
+    assert set(_stored(result)["tree"]) == set(RunTree.model_fields) - {"guardrail_results"}
 
 
 def test_a_paused_run_is_kept_under_its_run_id() -> None:
@@ -239,7 +245,7 @@ def test_load_rejects_a_malformed_field() -> None:
     """A field with the wrong shape also surfaces as `UserError`, not a raw Pydantic error."""
     result, gated = _paused_run()
     blob = _stored(result)
-    blob["approvals"]["calls"] = "not-a-dict"
+    blob["tree"]["approvals"]["calls"] = "not-a-dict"
 
     with pytest.raises(UserError):
         RunState.load_sync(gated(), _store(blob))
@@ -353,8 +359,8 @@ def test_a_loaded_pause_carries_the_sticky_approval_ledger() -> None:
     resumed = fresh.run_sync(restored)
 
     assert resumed.output == "all done"
-    assert resuming(restored).approvals.sticky == {"dangerous": True}
-    assert "call_1" in resuming(restored).approvals.executed
+    assert resuming(restored).tree.approvals.sticky == {"dangerous": True}
+    assert "call_1" in resuming(restored).tree.approvals.executed
 
 
 def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:

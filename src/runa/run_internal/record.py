@@ -1,8 +1,9 @@
 """record.py: `RunRecord`, what a run is as it would be resumed, and `Pause`, one kept in `runa.db`.
 
 A run is one `RunRecord`, the facts about it that outlive the call running it, held by the turn
-loop as it goes and serialized as is. A fact a run starts carrying is a field there, and nowhere
-else: it reaches a paused state, its stored row and a resumed run with no further edit.
+loop as it goes and serialized as is. What every run in one tree shares, the root's and each
+delegate's alike, is one `RunTree`. A fact a run starts carrying is a field on one of the two, and
+nowhere else: it reaches a paused state, its stored row and a resumed run with no further edit.
 
 A pause is kept in `runa.db.paused_runs()` the moment it happens, under a `run_id`, and resuming
 it claims that row (see `PausedRunStore.claim`). The blob a row holds is this module's own
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     PlainSerializer,
     PlainValidator,
@@ -39,7 +41,7 @@ if TYPE_CHECKING:
     from runa.agent import Agent
     from runa.run_state import RunState
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _find_agent_by_name(root: Agent, name: str) -> Agent:
@@ -169,34 +171,49 @@ class RunRecord(BaseModel):
         )
 
 
-class PauseSchema(BaseModel):
-    """The JSON envelope a `Pause` is kept as: its record, and what its tree shares.
+class RunTree(BaseModel):
+    """What every run in one tree shares by reference: the root run's and each delegate's.
 
-    The guardrail audit trail isn't serialized: each result is already a span in the trace. Nor
-    is `run_id`, the key the row is kept under beside the starting agent's name, nor the run's
-    `Session` object, whose id the record carries.
+    * `trace`: the one trace every run's spans go in.
+    * `approvals`: the ledger a decision is written to, and each run reads its calls' from.
+    * `guardrail_results`: the audit trail of every guardrail any of them ran. Not serialized:
+      each result is already a span in the trace.
     """
 
-    schema_version: Literal[7]
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     trace: _TraceRef
-    approvals: ApprovalLedger
+    approvals: ApprovalLedger = Field(default_factory=ApprovalLedger)
+    guardrail_results: GuardrailResults = Field(default_factory=GuardrailResults, exclude=True)
+
+    def snapshot(self) -> RunTree:
+        """The same trace and ledger, with a copy of the audit trail as it stands now."""
+        return self.model_copy(update={"guardrail_results": self.guardrail_results.snapshot()})
+
+
+class PauseSchema(BaseModel):
+    """The JSON envelope a `Pause` is kept as: its record and its tree.
+
+    Not serialized: `run_id`, the key the row is kept under beside the starting agent's name, and
+    the run's `Session` object, whose id the record carries.
+    """
+
+    schema_version: Literal[8]
+    tree: RunTree
     run: RunRecord
 
 
 @dataclass
 class Pause:
-    """A paused root run: its record, and what every run in its tree shares with it.
+    """A paused root run: its record, and the tree every run in it shares.
 
-    The `trace`, the approval ledger a decision is written to, and the guardrail audit trail
-    are the tree's. `session` is the very `Session` object the run was given, held only in the
-    process that paused it; elsewhere the record's `session_id` is resolved again. `run_id` is
-    the key it is kept under in `runa.db`, set by `keep` or `load`.
+    `session` is the very `Session` object the run was given, held only in the process that
+    paused it; elsewhere the record's `session_id` is resolved again. `run_id` is the key it is
+    kept under in `runa.db`, set by `keep` or `load`.
     """
 
     record: RunRecord
-    trace: Trace
-    approvals: ApprovalLedger
-    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
+    tree: RunTree
     run_id: str = ""
     session: Session | None = field(default=None, repr=False)
 
@@ -233,12 +250,7 @@ class Pause:
 
         Not included: the guardrail audit trail and the trace's spans, both exported as spans.
         """
-        schema = PauseSchema(
-            schema_version=SCHEMA_VERSION,
-            trace=self.trace,
-            approvals=self.approvals,
-            run=self.record,
-        )
+        schema = PauseSchema(schema_version=SCHEMA_VERSION, tree=self.tree, run=self.record)
         return schema.model_dump(mode="json")
 
     @classmethod
@@ -248,20 +260,14 @@ class Pause:
             schema = PauseSchema.model_validate(state_json, context={"root": root})
         except ValidationError as exc:
             raise UserError(f"invalid paused run: {exc}") from exc
-        return cls(schema.run, schema.trace, schema.approvals)
+        return cls(schema.run, schema.tree)
 
 
-def paused(
-    record: RunRecord,
-    trace: Trace,
-    approvals: ApprovalLedger,
-    guardrail_results: GuardrailResults,
-    session: Session | None,
-) -> RunState:
+def paused(record: RunRecord, tree: RunTree, session: Session | None) -> RunState:
     """The `RunState` a root run hands back when it pauses, not yet kept (see `keep`)."""
     from runa.run_state import RunState
 
-    return RunState(Pause(record, trace, approvals, guardrail_results, session=session))
+    return RunState(Pause(record, tree, session=session))
 
 
 async def keep(state: RunState) -> None:
@@ -275,11 +281,7 @@ def resuming(state: RunState) -> Pause:
     Its record and audit trail are copies, so `state` still reads as it paused.
     """
     pause = state._pause
-    return replace(
-        pause,
-        record=pause.record.resumed(),
-        guardrail_results=pause.guardrail_results.snapshot(),
-    )
+    return replace(pause, record=pause.record.resumed(), tree=pause.tree.snapshot())
 
 
 def session_for(state: RunState, passed: Session | str | None) -> Session | None:
@@ -314,6 +316,7 @@ __all__ = [
     "Pause",
     "PauseSchema",
     "RunRecord",
+    "RunTree",
     "keep",
     "paused",
     "resuming",

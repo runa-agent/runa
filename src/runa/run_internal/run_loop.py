@@ -25,7 +25,7 @@ from runa._log import logger
 from runa._metering import charging, metered
 from runa._models import ModelRequest, StreamDelta
 from runa._types import ModelResponse, RunContext, Usage
-from runa.approval import ApprovalDecision, ApprovalLedger
+from runa.approval import ApprovalDecision
 from runa.context_source import ContextSource
 from runa.exceptions import (
     DuplicateToolCallError,
@@ -40,12 +40,12 @@ from runa.exceptions import (
     ServiceUnavailable,
     UnexpectedError,
 )
-from runa.guardrail import GuardrailResult, GuardrailResults, Phase
+from runa.guardrail import GuardrailResult, Phase
 from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape, shape_of
-from runa.run_internal.record import RunRecord, keep, paused, resuming
+from runa.run_internal.record import RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
 from runa.run_internal.tool_execution import (
@@ -74,21 +74,18 @@ class _Frame:
     """One call running a run: the run's record, and everything about the call that isn't resumed.
 
     Every entry point builds one, then hands it to `_within`. The record is what the run is, and
-    what a pause hands back; the rest is ephemeral. This call's agent span, session, hooks and
-    `emit` are the call's own. The trace, the approval ledger and the guardrail audit trail are
-    the run tree's, shared by reference with every delegate's frame, and a paused `RunState`
-    carries them beside the record. The frame exists before the MCP servers are reached, so a run
-    that fails reaching them still reports.
+    the `tree` what it shares with every delegate's frame, by reference; a pause hands both back.
+    This call's agent span, session, hooks and `emit` are the call's own, and not resumed. The
+    frame exists before the MCP servers are reached, so a run that fails reaching them still
+    reports.
 
     `delegated` is set for a delegate's run, whose pause is its caller's rather than kept in
     `runa.db` on its own.
     """
 
     record: RunRecord
-    trace: Trace
+    tree: RunTree
     agent_span: Span
-    approvals: ApprovalLedger
-    guardrail_results: GuardrailResults
     session: Session | None
     hooks: _Dispatch[Any]
     emit: Emit | None = None
@@ -139,7 +136,7 @@ class _Run:
     @property
     def spans(self) -> _Spans:
         """Where this run's steps put their spans: children of its one agent span, charged to it."""
-        return _Spans(self.frame.trace, self.frame.agent_span.id, self.run_context.usage)
+        return _Spans(self.frame.tree.trace, self.frame.agent_span.id, self.run_context.usage)
 
     def span(self, name: str, span_type: Any, *, input: Any = None) -> AbstractContextManager[Span]:
         """A span under this run's agent span, for a `with` block."""
@@ -162,12 +159,12 @@ class _Run:
 
     def claim(self, call_id: str, name: str) -> None:
         """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
-        if not self.frame.approvals.claim(call_id):
+        if not self.frame.tree.approvals.claim(call_id):
             raise DuplicateToolCallError(call_id, name)
 
     def release(self, call_id: str) -> None:
         """Give `call_id`'s claim back: the call didn't finish, so resuming may run it again."""
-        self.frame.approvals.release(call_id)
+        self.frame.tree.approvals.release(call_id)
 
     async def decide(
         self, tool: FunctionTool, call_id: str, args: dict[str, Any]
@@ -180,7 +177,8 @@ class _Run:
             verdict = tool.needs_approval(self.run_context, args, call_id)
             return bool(await verdict if inspect.isawaitable(verdict) else verdict)
 
-        return await self.frame.approvals.decide(tool.name, call_id, needs_approval=needs_approval)
+        approvals = self.frame.tree.approvals
+        return await approvals.decide(tool.name, call_id, needs_approval=needs_approval)
 
     async def guard(
         self,
@@ -212,7 +210,7 @@ class _Run:
                 if verdict.tripped:
                     span.error = "tripwire triggered"
             result = GuardrailResult(entry, verdict, verdict.tripped, phase)
-            self.frame.guardrail_results.record(result)
+            self.frame.tree.guardrail_results.record(result)
             if verdict.tripped:
                 raise GuardrailTripwireTriggered(result)
 
@@ -221,8 +219,8 @@ class _Run:
 
         The nested frame is this one's with the delegate's own agent (and its ceilings), a record
         of its own over the same `context` and `user_id`, whose usage is merged back here, and an
-        agent span under `under`. The trace, approval ledger, guardrail audit trail and hooks are
-        shared, as is anything a frame starts carrying unless named below. This run's deadline
+        agent span under `under`. The tree and hooks are shared, as is anything a frame starts
+        carrying unless named below. This run's deadline
         encloses the delegate's.
 
         Not shared: the `session` (a delegate is handed fresh input, not a conversation) and
@@ -250,7 +248,7 @@ class _Run:
         nested = replace(
             frame,
             record=record,
-            agent_span=_Spans(frame.trace, under.id).open(
+            agent_span=_Spans(frame.tree.trace, under.id).open(
                 record.agent.name, "agent", input=message
             ),
             session=None,
@@ -475,11 +473,11 @@ def _errored(failure: RunaError, frame: _Frame) -> Run:
     close_span(frame.agent_span, error=str(failure))
     return Run(
         output=None,
-        trace=frame.trace,
+        trace=frame.tree.trace,
         usage=frame.run_context.usage,
         status="error",
         error=str(failure),
-        guardrail_results=frame.guardrail_results.snapshot(),
+        guardrail_results=frame.tree.guardrail_results.snapshot(),
     )
 
 
@@ -578,7 +576,7 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
     if not sources or query is None:
         return
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
-    beside = _Spans(run.frame.trace, run.frame.agent_span.parent_id, run.run_context.usage)
+    beside = _Spans(run.frame.tree.trace, run.frame.agent_span.parent_id, run.run_context.usage)
     for name, source in sources:
         with (
             beside.span(name, "custom", input=query) as span,
@@ -645,16 +643,16 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
 
     if outcome.interruptions:
         record.pending, record.ready_results = outcome.interruptions, outcome.ready_results
-        guardrail_results = frame.guardrail_results.snapshot()
+        tree = frame.tree.snapshot()
         return Run(
             output=None,
-            trace=frame.trace,
+            trace=tree.trace,
             usage=run_context.usage,
             status="paused",
             interruptions=outcome.interruptions,
-            _state=paused(record, frame.trace, frame.approvals, guardrail_results, frame.session),
+            _state=paused(record, tree, frame.session),
             _transcript=transcript,
-            guardrail_results=guardrail_results,
+            guardrail_results=tree.guardrail_results,
         )
 
     # The next call's history starts from the same cut compaction made mid-run.
@@ -671,10 +669,10 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
     return Run(
         output=outcome.final_output,
-        trace=frame.trace,
+        trace=frame.tree.trace,
         usage=run_context.usage,
         _transcript=transcript,
-        guardrail_results=frame.guardrail_results.snapshot(),
+        guardrail_results=frame.tree.guardrail_results.snapshot(),
     )
 
 
@@ -715,8 +713,8 @@ async def _run_async(
 ) -> Run:
     """Run `agent` on `input`, or resume the paused `RunState` it is, and return its `Run`.
 
-    The run behind `Agent.run`: it owns its trace, approval ledger and guardrail audit trail,
-    which a delegate's nested run shares with its caller instead (`_Run.delegate`). The trace is
+    The run behind `Agent.run`: it owns its tree, which a delegate's nested run shares with its
+    caller instead (`_Run.delegate`). The trace is
     named for `agent`'s declared `name` and grouped under an enclosing `tracing.trace` block, else
     under `session`.
     """
@@ -739,12 +737,10 @@ async def _run_async(
             run_context=RunContext(context=context, user_id=user_id),
             session_id=session_id,
         ),
-        trace=trace,
+        tree=RunTree(trace=trace),
         agent_span=_Spans(trace).open(
             agent.name, "agent", input=latest_user_text(_turn_items(input))
         ),
-        approvals=ApprovalLedger(),
-        guardrail_results=GuardrailResults(),
         session=session,
         hooks=dispatch,
         emit=emit,
@@ -768,15 +764,13 @@ async def _resume(
     pause = resuming(state)
     frame = _Frame(
         record=pause.record,
-        trace=pause.trace,
-        agent_span=_Spans(pause.trace).open(pause.record.agent.name, "agent"),
-        approvals=pause.approvals,
-        guardrail_results=pause.guardrail_results,
+        tree=pause.tree,
+        agent_span=_Spans(pause.tree.trace).open(pause.record.agent.name, "agent"),
         session=session,
         hooks=dispatch,
         emit=emit,
     )
-    return await _traced(_within(frame, None, claiming=pause), pause.trace)
+    return await _traced(_within(frame, None, claiming=pause), pause.tree.trace)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]
