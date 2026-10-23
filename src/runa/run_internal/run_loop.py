@@ -45,6 +45,7 @@ from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape, shape_of
+from runa.run_internal.record import Pause, RunRecord
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
 from runa.run_internal.tool_execution import (
@@ -52,7 +53,7 @@ from runa.run_internal.tool_execution import (
     _run_message_tool_calls,
     _TurnOutcome,
 )
-from runa.run_state import RunState, _RunRecord
+from runa.run_state import RunState
 from runa.session import Session
 from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
 from runa.tool import FunctionTool
@@ -82,7 +83,7 @@ class _Frame:
     `runa.db` on its own.
     """
 
-    record: _RunRecord
+    record: RunRecord
     trace: Trace
     agent_span: Span
     approvals: ApprovalLedger
@@ -115,7 +116,7 @@ class _Run:
         return shape_of(self.record.start)
 
     @property
-    def record(self) -> _RunRecord:
+    def record(self) -> RunRecord:
         """What this run is, as it would be resumed."""
         return self.frame.record
 
@@ -237,7 +238,7 @@ class _Run:
         message: str | None
         if paused is None:
             context = frame.run_context
-            record = _RunRecord(
+            record = RunRecord(
                 start=delegate.agent,
                 agent=delegate.agent,
                 run_context=RunContext(context=context.context, user_id=context.user_id),
@@ -536,7 +537,7 @@ async def _within(
     frame: _Frame,
     input: str | list[ConversationItem] | None,
     *,
-    claiming: RunState | None = None,
+    claiming: Pause | None = None,
 ) -> Run:
     """Run the record's agent on `input`, or with `None`, continue its paused record, guarded.
 
@@ -548,7 +549,7 @@ async def _within(
     """
 
     async def turn() -> Run:
-        if claiming is not None and not await claiming._claim():
+        if claiming is not None and not await claiming.claim():
             raise RunAlreadyResumed(claiming.run_id)
         shape = await shape_of(frame.record.agent).with_mcp_tools()
         if input is not None:
@@ -560,7 +561,7 @@ async def _within(
     async def kept() -> Run:
         run = await _timed(turn(), frame)
         if run.status == "paused" and not frame.delegated:
-            await run.to_state()._keep()
+            await run.to_state().pause.keep()
         return run
 
     return await _guarded(kept(), frame)
@@ -653,7 +654,9 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             status="paused",
             interruptions=outcome.interruptions,
             _state=RunState(
-                record, frame.trace, frame.approvals, guardrail_results, _session=frame.session
+                Pause(
+                    record, frame.trace, frame.approvals, guardrail_results, session=frame.session
+                )
             ),
             _transcript=transcript,
             guardrail_results=guardrail_results,
@@ -728,7 +731,7 @@ async def _run_async(
         trace.metadata = {"group_id": group_id}
 
     frame = _Frame(
-        record=_RunRecord(
+        record=RunRecord(
             start=agent,
             agent=agent,
             run_context=RunContext(context=context, user_id=user_id),
@@ -759,17 +762,18 @@ async def _resume(
     pause the resumed run comes to is its own, kept under the agent the run started with.
     `session` is the one the run started in (see `RunState`), never a caller's choice.
     """
+    pause = state.pause
     frame = _Frame(
-        record=state._record.resumed(),
-        trace=state.trace,
-        agent_span=_Spans(state.trace).open(state.agent.name, "agent"),
-        approvals=state._approvals,
-        guardrail_results=state.guardrail_results.snapshot(),
+        record=pause.record.resumed(),
+        trace=pause.trace,
+        agent_span=_Spans(pause.trace).open(pause.record.agent.name, "agent"),
+        approvals=pause.approvals,
+        guardrail_results=pause.guardrail_results.snapshot(),
         session=session,
         hooks=dispatch,
         emit=emit,
     )
-    return await _traced(_within(frame, None, claiming=state), state.trace)
+    return await _traced(_within(frame, None, claiming=pause), pause.trace)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]

@@ -5,9 +5,9 @@ delegates and handoffs (recursively) as a Graphviz digraph, since that's all `Ag
 promised. A delegate is drawn as the agent it wraps (dotted edge), not as a plain tool box; a
 handoff gets a dashed edge.
 
-Which agents those are comes from `subagent_edges`, the same walk `run_state` resumes
-a paused run through; only the recursion stays here, because drawing needs each agent's tools and
-MCP servers too, which a walk over agents alone doesn't carry.
+Which agents those are comes from `subagent_edges`, the same walk a resumed run finds its agents
+again through; only the recursion stays here, because drawing needs each agent's tools and MCP
+servers too, which a walk over agents alone doesn't carry.
 """
 
 from typing import TYPE_CHECKING

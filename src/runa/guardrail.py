@@ -107,15 +107,21 @@ class GuardrailResults:
 class GuardrailAudit:
     """The four `*_guardrail_results` names RUNA.md documents, over one phase-keyed mapping.
 
-    Mixed into `Run` and `RunState`, each of which holds the trail as a single
-    `guardrail_results` field: the four public names are written here once instead of once per
-    holder, and a fifth phase adds nothing to either.
+    Mixed into `Run` and `RunState`, each of which exposes the trail as a single
+    `guardrail_results`, a field or a property: the four public names are written here once
+    instead of once per holder, and a fifth phase adds nothing to either.
     """
 
     if TYPE_CHECKING:
-        # Declared for the properties to read, not contributed as a dataclass field: a base
-        # class's field sorts ahead of every field the holder declares itself.
-        guardrail_results: GuardrailResults
+
+        @property
+        def guardrail_results(self) -> GuardrailResults:
+            """The trail, keyed by `Phase`: the holder's own, never a dataclass field here.
+
+            A base class's field sorts ahead of every field the holder declares itself, and a
+            read-only declaration lets a holder answer it with a property.
+            """
+            ...
 
     @property
     def input_guardrail_results(self) -> list[GuardrailResult]:

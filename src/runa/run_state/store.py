@@ -2,7 +2,7 @@
 
 A paused `RunState` carries its approval ledger, the record of who approved what. Kept here, a
 caller holds only a `run_id`, and resuming one is a `claim`: an atomic delete, so of two
-resumes of the same pause exactly one gets it. `RunState` is the only caller.
+resumes of the same pause exactly one gets it. `runa.run_internal.record` is the only caller.
 
 The `paused_runs` table in whichever database the deployment has, queried through `db/handle.py`'s
 `Database`, so on a shared one a run paused on one replica resumes on any other. Which database it
@@ -34,7 +34,7 @@ class PausedRunStore:
     """What a paused run needs kept until it resumes: save it, read it, claim it.
 
     Every method is scoped to the agent the run started with, so a pause is only ever found again
-    through that agent. `state` is `RunState`'s own blob, stored as is.
+    through that agent. `state` is a paused run's own blob, stored as is.
     """
 
     def __init__(self, database: Database) -> None:

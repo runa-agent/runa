@@ -11,7 +11,7 @@ A run holds one ledger, shared by reference with every delegate the run starts, 
 the delegate whichever state it was made on. Both rest on a call id being unique across the whole
 run tree.
 
-Imports nothing from `runa` at runtime: `runa.tool` and `runa.run_state` both import it.
+Imports nothing from `runa` at runtime: `runa.tool` and `runa.run_internal.record` both import it.
 """
 
 import inspect

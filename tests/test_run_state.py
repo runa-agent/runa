@@ -18,7 +18,8 @@ from runa import _loop, db
 from runa.agent import Agent
 from runa.exceptions import UserError
 from runa.run import Run
-from runa.run_state import RunState, _RunRecord, _RunStateSchema
+from runa.run_internal.record import Pause, PauseSchema, RunRecord
+from runa.run_state import RunState
 from runa.tool import tool
 
 
@@ -63,35 +64,35 @@ def _load(agent: Agent, run_id: str | None) -> RunState:
     return state
 
 
-_SERIALIZED_AS = {"_record": "run", "trace": "trace", "_approvals": "approvals"}
-"""Each `RunState` field and the `_RunStateSchema` field it is written to."""
+_SERIALIZED_AS = {"record": "run", "trace": "trace", "approvals": "approvals"}
+"""Each `Pause` field and the `PauseSchema` field it is written to."""
 
 _NOT_SERIALIZED = {
     "guardrail_results": "every guardrail that ran is already a span in the run's trace",
     "run_id": "the row's key, not its content",
-    "_session": "a live object; the record carries its id",
+    "session": "a live object; the record carries its id",
 }
-"""`RunState` fields deliberately left out of the stored blob, and why.
+"""`Pause` fields deliberately left out of the stored blob, and why.
 
-The reason is also written where a reader meets the field -- `_RunStateSchema`'s docstring -- and
+The reason is also written where a reader meets the field -- `PauseSchema`'s docstring -- and
 this is the list that makes leaving a *second* field out a deliberate act rather than an omission
 nothing notices.
 """
 
 
-def test_every_run_state_field_is_serialized_or_named_as_not() -> None:
+def test_every_pause_field_is_serialized_or_named_as_not() -> None:
     """A field carried through a pause, in memory but not through a restart, by accident."""
-    state_fields = {field.name for field in fields(RunState)}
+    state_fields = {field.name for field in fields(Pause)}
 
     assert state_fields == set(_SERIALIZED_AS) | set(_NOT_SERIALIZED)
-    assert set(_RunStateSchema.model_fields) == set(_SERIALIZED_AS.values()) | {"schema_version"}
+    assert set(PauseSchema.model_fields) == set(_SERIALIZED_AS.values()) | {"schema_version"}
 
 
 def test_every_run_record_field_is_serialized() -> None:
     """The run itself has no field left out: a fact added to it survives a restart unasked."""
     result, _ = _paused_run()
 
-    assert set(_stored(result)["run"]) == set(_RunRecord.model_fields)
+    assert set(_stored(result)["run"]) == set(RunRecord.model_fields)
 
 
 def test_a_paused_run_is_kept_under_its_run_id() -> None:
@@ -318,8 +319,8 @@ def test_a_loaded_pause_carries_the_sticky_approval_ledger() -> None:
     resumed = fresh.run_sync(restored)
 
     assert resumed.output == "all done"
-    assert restored._approvals.sticky == {"dangerous": True}
-    assert "call_1" in restored._approvals.executed
+    assert restored.pause.approvals.sticky == {"dangerous": True}
+    assert "call_1" in restored.pause.approvals.executed
 
 
 def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:

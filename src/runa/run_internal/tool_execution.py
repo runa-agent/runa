@@ -25,7 +25,7 @@ from runa._log import logger
 from runa.exceptions import ToolError
 from runa.guardrail import Phase
 from runa.handoff import Delegate
-from runa.run_state import Interruption
+from runa.run_internal.record import Interruption
 from runa.tool import FunctionTool, ToolCall
 from runa.tracing.spans import Span
 

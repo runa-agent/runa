@@ -62,7 +62,7 @@ def _resolve_session(
     own session, so one passed beside it is refused unless it is that session's `Session` object.
     """
     if isinstance(message, RunState):
-        return message._session_for(session)
+        return message.pause.session_for(session)
     if isinstance(session, str):
         from runa import db
 
