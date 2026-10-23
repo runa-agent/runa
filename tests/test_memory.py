@@ -201,7 +201,7 @@ def test_as_tool_formats_matches_as_plain_text(tmp_path: Path) -> None:
     async def _run():
         await mem.remember("cats are great pets")
         await mem.remember("dogs are loyal companions")
-        args = '{"query": "query about pets", "k": 1}'
+        args = {"query": "query about pets", "k": 1}
         return await search_tool.on_invoke_tool(RunContext(), args, "call_1")
 
     result = asyncio.run(_run())
@@ -213,7 +213,7 @@ def test_as_tool_searches_the_calling_runs_user_scope(tmp_path: Path) -> None:
     """The model's `search_memory` reads `ctx.user_id`, the scope `memory="auto"` uses too."""
     mem = _memory(tmp_path)
     search_tool = mem._as_tool()
-    args = '{"query": "language preference"}'
+    args = {"query": "language preference"}
 
     async def _run() -> tuple[Any, Any]:
         await mem.remember("User prefers Japanese.", user_id="u1")
@@ -233,7 +233,7 @@ def test_as_tool_with_no_matches_says_so(tmp_path: Path) -> None:
     search_tool = mem._as_tool()
 
     result = run_awaitable(
-        search_tool.on_invoke_tool(RunContext(), '{"query": "anything"}', "call_1")
+        search_tool.on_invoke_tool(RunContext(), {"query": "anything"}, "call_1")
     )
 
     assert result == "No relevant memory found."

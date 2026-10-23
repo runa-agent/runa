@@ -154,7 +154,7 @@ def test_on_invoke_tool_extracts_text_from_a_successful_call() -> None:
     (function_tool,) = asyncio.run(server.list_tools())
 
     async def call() -> Any:
-        return await function_tool.on_invoke_tool(RunContext(), '{"a": 1, "b": 2}', "call_1")
+        return await function_tool.on_invoke_tool(RunContext(), {"a": 1, "b": 2}, "call_1")
 
     output = asyncio.run(call())
 
@@ -172,7 +172,7 @@ def test_on_invoke_tool_raises_a_tool_error_for_an_error_result() -> None:
     (function_tool,) = asyncio.run(server.list_tools())
 
     async def call() -> Any:
-        return await function_tool.on_invoke_tool(RunContext(), "{}", "call_1")
+        return await function_tool.on_invoke_tool(RunContext(), {}, "call_1")
 
     with pytest.raises(ToolError, match="^boom$"):
         asyncio.run(call())
@@ -188,7 +188,7 @@ def test_on_invoke_tool_falls_back_to_structured_content() -> None:
     (function_tool,) = asyncio.run(server.list_tools())
 
     async def call() -> Any:
-        return await function_tool.on_invoke_tool(RunContext(), "{}", "call_1")
+        return await function_tool.on_invoke_tool(RunContext(), {}, "call_1")
 
     output = asyncio.run(call())
 
@@ -259,8 +259,8 @@ def test_a_servers_guardrails_are_bound_against_the_tool_call() -> None:
 
     assert function_tool.guardrails[Phase.TOOL_OUTPUT] == []
     (entry,) = function_tool.guardrails[Phase.TOOL_INPUT]
-    assert await_(entry.guardrail_function('{"path": "../etc/passwd"}')).tripped
-    assert not await_(entry.guardrail_function('{"path": "notes.md"}')).tripped
+    assert await_(entry.guardrail_function({"path": "../etc/passwd"})).tripped
+    assert not await_(entry.guardrail_function({"path": "notes.md"})).tripped
 
 
 def test_the_builder_carries_the_policy_onto_either_transport() -> None:

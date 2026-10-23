@@ -525,7 +525,7 @@ def test_as_tool_formats_matches_as_plain_text(tmp_path: Path) -> None:
     know = _knowledge(tmp_path, source_dir)
     search_tool = know._as_tool()
 
-    args = '{"query": "query about pets", "k": 1}'
+    args = {"query": "query about pets", "k": 1}
     result = run_awaitable(search_tool.on_invoke_tool(RunContext(), args, "call_1"))
 
     assert result == "cats are great pets"
@@ -560,7 +560,7 @@ def test_as_tool_with_no_matches_says_so(tmp_path: Path) -> None:
     search_tool = know._as_tool()
 
     result = run_awaitable(
-        search_tool.on_invoke_tool(RunContext(), '{"query": "anything"}', "call_1")
+        search_tool.on_invoke_tool(RunContext(), {"query": "anything"}, "call_1")
     )
 
     assert result == "No relevant knowledge found."

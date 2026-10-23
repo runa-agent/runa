@@ -89,8 +89,8 @@ def test_needs_approval_passes_through_natively() -> None:
     assert now.needs_approval is True
 
 
-def test_tool_input_guardrail_sees_parsed_arguments() -> None:
-    """An `.input`-bound predicate, reused in a tool context, sees parsed call arguments."""
+def test_tool_input_guardrail_sees_the_arguments_dict() -> None:
+    """An `.input`-bound predicate, reused in a tool context, sees the call's arguments dict."""
 
     @tool(guardrails=[block_args.input])
     def now() -> str:
@@ -98,8 +98,8 @@ def test_tool_input_guardrail_sees_parsed_arguments() -> None:
         return "now"
 
     (bound,) = now.guardrails[Phase.TOOL_INPUT]
-    assert _run(bound, '{"x": 1}').tripped
-    assert not _run(bound, "{}").tripped
+    assert _run(bound, {"x": 1}).tripped
+    assert not _run(bound, {}).tripped
 
 
 def test_tool_output_guardrail_sees_return_value() -> None:

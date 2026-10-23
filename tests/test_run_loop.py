@@ -965,7 +965,7 @@ def test_tool_input_guardrail_results_are_recorded_even_when_they_pass() -> None
 
 
 def test_a_tool_guardrail_is_handed_the_calls_arguments_then_its_return_value() -> None:
-    """The runner hands a tool phase its one raw value: the arguments JSON, the return value."""
+    """The runner hands a tool phase its one value: the parsed arguments, the return value."""
     seen: list[Any] = []
 
     async def _record(value: Any) -> GuardrailVerdict:
@@ -989,8 +989,7 @@ def test_a_tool_guardrail_is_handed_the_calls_arguments_then_its_return_value() 
 
     agent.run_sync("search for x")
 
-    # Unreduced: parsing the arguments is `guardrail._checked`'s job, not the runner's.
-    assert seen == ['{"query": "x"}', "results"]
+    assert seen == [{"query": "x"}, "results"]
 
 
 def test_a_paused_run_states_guardrail_results_reflect_what_ran_before_the_pause() -> None:
@@ -1975,7 +1974,7 @@ def test_mcp_server_tools_are_merged_in_and_callable() -> None:
     """A tool listed by an `mcp` entry is callable exactly like a `@tool` function."""
     from runa.tool import FunctionTool
 
-    async def on_invoke_tool(ctx: Any, arguments_json: str, call_id: str) -> Any:
+    async def on_invoke_tool(ctx: Any, args: dict[str, Any], call_id: str) -> Any:
         return "42"
 
     mcp_tool = FunctionTool(

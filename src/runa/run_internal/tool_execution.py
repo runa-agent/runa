@@ -43,8 +43,14 @@ class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
         self.interruptions = interruptions
 
 
-async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) -> ConversationItem:
-    """Run one already-approved tool call end to end: guardrails, invocation, guardrails."""
+async def _run_tool_call(
+    run: _Run, tool: FunctionTool, call: dict[str, Any], args: dict[str, Any]
+) -> ConversationItem:
+    """Run one already-approved tool call end to end: guardrails, invocation, guardrails.
+
+    `args` are the call's arguments as the gate already parsed them; the raw JSON is kept only
+    for the span and the `ToolCall`, which record what the model wrote.
+    """
     call_id = id_of(call)
     run.claim(call_id, tool.name)
 
@@ -52,9 +58,9 @@ async def _run_tool_call(run: _Run, tool: FunctionTool, call: dict[str, Any]) ->
     failed: ToolCall | None = None
     with run.span(tool.name, "tool", input=args_json) as span:
         await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
-        await run.guard(Phase.TOOL_INPUT, args_json, tool=tool, under=span)
+        await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
         try:
-            result = await tool.on_invoke_tool(run.run_context, args_json, call_id)
+            result = await tool.on_invoke_tool(run.run_context, args, call_id)
         except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
             failed = _failed(tool.name, args_json, str(exc) or type(exc).__name__, exc, span)
             result = failed.output
@@ -236,7 +242,7 @@ async def _run_message_tool_calls(
 
         slot = _Slot()  # filled in below, once the approved calls have run
         slots.append(slot)
-        deferred.append((slot, partial(_run_tool_call, run, tool, call)))
+        deferred.append((slot, partial(_run_tool_call, run, tool, call, args)))
 
     parallel = shape.model_settings.parallel_tool_calls is not False
     outcomes = await _execute([thunk for _, thunk in deferred], parallel)

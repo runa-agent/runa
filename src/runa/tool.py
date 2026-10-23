@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
-from runa._items import parsed_arguments
 from runa._types import RunContext
 from runa.approval import _NeedsApproval as _ApprovalPredicate
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
@@ -30,8 +29,9 @@ class FunctionTool:
     name: str
     description: str
     params_json_schema: dict[str, Any]
-    on_invoke_tool: Callable[[RunContext, str, str], Awaitable[Any]]
-    """Called with `(ctx, arguments_json, call_id)`; returns what the tool does."""
+    on_invoke_tool: Callable[[RunContext, dict[str, Any], str], Awaitable[Any]]
+    """Called with `(ctx, args, call_id)`, `args` the model's arguments already parsed into a
+    dict; returns what the tool does."""
     guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     """This tool's guardrails by `Phase`, checked against the call's arguments
     (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
@@ -173,8 +173,7 @@ def tool(
     def decorator(fn: Callable[..., Any]) -> FunctionTool:
         schema, _ = _schema_from_signature(fn)
 
-        async def on_invoke_tool(ctx: RunContext, arguments_json: str, call_id: str) -> Any:
-            args = parsed_arguments(arguments_json)
+        async def on_invoke_tool(ctx: RunContext, args: dict[str, Any], call_id: str) -> Any:
             kwargs = _bind_arguments(fn, args, ctx, call_id)
             if inspect.iscoroutinefunction(fn):
                 result = await fn(**kwargs)

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from runa._items import ConversationItem, latest_text, parsed_arguments
+from runa._items import ConversationItem, latest_text
 from runa.exceptions import UserError
 
 _Predicate = Callable[[Any], bool | Awaitable[bool]]
@@ -169,26 +169,18 @@ def _checked_input(value: str | list[ConversationItem]) -> str:
     return value if isinstance(value, str) else latest_text(value)
 
 
-def _tool_args(args_json: str) -> Any:
-    """Parse a tool call's raw JSON arguments into a dict, falling back to the raw string."""
-    try:
-        return parsed_arguments(args_json)
-    except ValueError:
-        return args_json
-
-
 def _checked(phase: Phase, value: Any) -> Any:
     """The value `phase`'s predicate actually sees, reduced from the one the runner passed.
 
     Every guardrail is called with exactly one argument, whatever its phase; what that argument
     is, is this 2x2's only statement. An output phase is handed what came back (the agent's
-    final output, the tool's return value) and checks it as-is; an input phase is handed what is
-    going in (the run's input, the call's raw JSON arguments) and checks it reduced (the latest
-    user text, the parsed arguments).
+    final output, the tool's return value) and checks it as-is, and so does a tool's input phase,
+    handed the call's arguments already parsed into a dict. The agent's input phase is handed
+    the run's input (a string, or the running item list) and checks the latest user text.
     """
-    if phase.on_output:
+    if phase.on_output or phase.on_tool:
         return value
-    return _tool_args(value) if phase.on_tool else _checked_input(value)
+    return _checked_input(value)
 
 
 def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:

@@ -33,7 +33,6 @@ from mcp import ClientSession, StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp_types import TextContent
 
-from runa._items import parsed_arguments
 from runa._loop import LoopCache
 from runa._types import RunContext
 from runa.exceptions import ToolError
@@ -142,9 +141,8 @@ class _MCPServerBase:
         runs for every tool call have something to read here too.
         """
 
-        async def on_invoke_tool(ctx: RunContext, arguments_json: str, call_id: str) -> Any:
+        async def on_invoke_tool(ctx: RunContext, args: dict[str, Any], call_id: str) -> Any:
             session = (await self.connect()).session
-            args = parsed_arguments(arguments_json)
             result = await session.call_tool(tool.name, args)
             text = "".join(block.text for block in result.content if isinstance(block, TextContent))
             if result.is_error:
