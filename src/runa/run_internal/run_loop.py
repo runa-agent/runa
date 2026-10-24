@@ -470,8 +470,8 @@ def _export(trace: Trace) -> None:
 def _errored(failure: RunaError, frame: _Frame) -> Run:
     """Close the run's agent span around `failure` and return the `Run` the caller was promised.
 
-    Reports what the frame holds: the spans, the usage, the guardrails that ran. An unfinished
-    turn is not history, so the `Run` carries an empty `Transcript`.
+    Reports what the frame holds: the spans, the usage, the tool calls and the guardrails that
+    ran. An unfinished turn is not history, so the `Run` carries an empty `Transcript`.
     """
     close_span(frame.agent_span, error=str(failure))
     return Run(
@@ -480,6 +480,7 @@ def _errored(failure: RunaError, frame: _Frame) -> Run:
         usage=frame.run_context.usage,
         status="error",
         error=str(failure),
+        tool_calls=tuple(frame.record.tool_calls),
         guardrail_results=frame.tree.guardrail_results.snapshot(),
     )
 
@@ -653,6 +654,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             usage=run_context.usage,
             status="paused",
             interruptions=outcome.interruptions,
+            tool_calls=tuple(record.tool_calls),
             _state=paused(record, tree, frame.session),
             _transcript=transcript,
             guardrail_results=tree.guardrail_results,
@@ -674,6 +676,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
         output=outcome.final_output,
         trace=frame.tree.trace,
         usage=run_context.usage,
+        tool_calls=tuple(record.tool_calls),
         _transcript=transcript,
         guardrail_results=frame.tree.guardrail_results.snapshot(),
     )

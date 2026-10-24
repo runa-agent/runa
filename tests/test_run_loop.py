@@ -393,6 +393,7 @@ def test_max_turns_exceeded() -> None:
 
     assert result.status == "error"
     assert result.error == "max turns (3) exceeded"
+    assert result.tool_calls == (ToolCall(name="loop_tool", arguments="{}", output="again"),) * 3
 
 
 def test_a_failed_run_comes_back_as_an_error_run_with_its_trace() -> None:

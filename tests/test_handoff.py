@@ -237,6 +237,33 @@ def test_a_delegate_call_is_on_its_callers_tool_calls_with_the_delegates_own_ben
     assert [each.name for each in call.walk()] == ["delegate", "lookup"]
 
 
+def test_a_delegate_that_errors_keeps_the_calls_it_made_as_its_children() -> None:
+    """A delegate failing after a tool call fails the delegate call, with that call beneath."""
+
+    @tool
+    def lookup(order: str) -> str:
+        """Look an order up."""
+        return f"{order} shipped"
+
+    class Delegate(Agent):
+        name = "Delegate"
+        tools = [lookup]
+        max_turns = 1
+        model = _ScriptedModel([_tool_call_message("lookup", '{"order": "4821"}', "d1")])
+
+    lead = _lead(
+        Delegate,
+        [_tool_call_message("delegate", '{"input": "where is 4821?"}'), _final_message("done")],
+    )
+
+    run = lead.run_sync("go")
+
+    assert run.status == "completed", run.error
+    (call,) = run.tool_calls
+    assert call.error == "max turns (1) exceeded"
+    assert call.children == (ToolCall("lookup", '{"order": "4821"}', "4821 shipped"),)
+
+
 def test_a_delegate_called_with_malformed_arguments_answers_an_error_and_runs_nothing() -> None:
     """Arguments the model got wrong go back to it as the call's result, as for any tool."""
 

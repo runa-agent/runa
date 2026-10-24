@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 
 from runa._items import ConversationItem, latest_user_index, latest_user_text
 from runa.compact import Compactor
-from runa.tool import ToolCall
 
 
 @dataclass
@@ -38,7 +37,6 @@ class Transcript:
     _input: list[ConversationItem] = field(default_factory=list)
     _items: list[ConversationItem] = field(default_factory=list)
     _generated: list[ConversationItem] = field(default_factory=list)
-    _tool_calls: list[ToolCall] = field(default_factory=list)
     _compacted_history: list[ConversationItem] | None = None
 
     @classmethod
@@ -53,11 +51,6 @@ class Transcript:
         """Everything the model is sent next; a paused run's ends with the message that paused."""
         return tuple(self._items)
 
-    @property
-    def tool_calls(self) -> tuple[ToolCall, ...]:
-        """Every tool call this run answered, in the order they finished (see `ToolCall`)."""
-        return tuple(self._tool_calls)
-
     def latest_user_text(self) -> str | None:
         """The latest user text this run was given: what memory and knowledge are searched for."""
         return latest_user_text(self._input)
@@ -66,10 +59,6 @@ class Transcript:
         """Append what the run produced: the model is sent it from now on, and it is history."""
         self._items.extend(items)
         self._generated.extend(items)
-
-    def record_call(self, call: ToolCall) -> None:
-        """Note one tool call the run answered."""
-        self._tool_calls.append(call)
 
     def add_context(self, *blocks: ConversationItem) -> None:
         """Send the model `blocks` right before the latest user turn, for this run only.
@@ -133,7 +122,6 @@ class Transcript:
             _input=list(self._input),
             _items=list(self._items),
             _generated=list(self._generated),
-            _tool_calls=list(self._tool_calls),
             _compacted_history=None if compacted is None else list(compacted),
         )
 

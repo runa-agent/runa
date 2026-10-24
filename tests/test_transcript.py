@@ -4,7 +4,6 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from runa.tool import ToolCall
 from runa.transcript import Transcript
 
 _HI = {"role": "user", "content": "hi"}
@@ -15,15 +14,13 @@ _EARLIER = [{"role": "user", "content": "earlier"}, {"role": "assistant", "conte
 def _transcript() -> Transcript:
     transcript = Transcript.start([_HI])
     transcript.record(_HELLO)
-    transcript.record_call(ToolCall(name="now", arguments="{}", output="noon"))
     return transcript
 
 
-def test_a_json_round_trip_keeps_the_conversation_and_the_tool_calls() -> None:
-    """What a paused run's blob carries: every field, so a restored run reports every call."""
+def test_a_json_round_trip_keeps_the_conversation() -> None:
+    """What a paused run's blob carries: every field, so a restored run continues where it was."""
     transcript = Transcript.start([_HI], prior=_EARLIER)
     transcript.record(_HELLO)
-    transcript.record_call(ToolCall(name="now", arguments="{}", output="noon"))
     adapter = TypeAdapter(Transcript)
 
     restored = adapter.validate_python(adapter.dump_python(transcript, mode="json"))
@@ -31,7 +28,6 @@ def test_a_json_round_trip_keeps_the_conversation_and_the_tool_calls() -> None:
     assert restored.history() == transcript.history()
     assert restored.unsaved() == transcript.unsaved()
     assert restored.items == transcript.items
-    assert restored.tool_calls == transcript.tool_calls
 
 
 def test_a_session_less_run_starts_from_its_input_and_saves_nothing_else() -> None:
@@ -135,7 +131,6 @@ def test_a_copy_is_appended_to_without_touching_the_original() -> None:
     copy = transcript.copy()
 
     copy.record({"role": "assistant", "content": "more"})
-    copy.record_call(ToolCall(name="later", arguments="{}", output="night"))
     copy.compact(lambda items, usage_tokens: items[1:], 0)
 
     assert transcript == _transcript()

@@ -34,6 +34,7 @@ from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailResults
 from runa.session import Session
+from runa.tool import ToolCall
 from runa.tracing.traces import Trace
 from runa.transcript import Transcript
 
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
     from runa.agent import Agent
     from runa.run_state import RunState
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def _find_agent_by_name(root: Agent, name: str) -> Agent:
@@ -127,6 +128,8 @@ class RunRecord(BaseModel):
       ceilings, the context sources, the compaction of history, and the key a pause is kept under.
     * `agent`: the agent running now, the same as `start` until a handoff.
     * `run_context`: what user code is told, its `context`, `user_id` and usage so far.
+    * `tool_calls`: every tool call the run answered, across its resumes, in the order they
+      finished. A fact about the run, not its conversation: a run that fails still reports it.
     * `session_id`: the id of the session the run started in, which its turn is saved to once it
       completes. `None` for a session-less run, and for every delegate's.
     * `turns`: the model calls the turn loop has made, across its resumes: what `max_turns` is
@@ -145,6 +148,7 @@ class RunRecord(BaseModel):
     agent: _AgentRef
     transcript: Transcript = Field(default_factory=Transcript)
     run_context: RunContext[Any] = Field(default_factory=RunContext)
+    tool_calls: list[ToolCall] = Field(default_factory=list)
     session_id: str | None = None
     turns: int = 0
     elapsed: float = 0.0
@@ -163,6 +167,7 @@ class RunRecord(BaseModel):
         return self.model_copy(
             update={
                 "transcript": self.transcript.copy(),
+                "tool_calls": list(self.tool_calls),
                 "run_context": RunContext(
                     self.run_context.context, self.run_context.user_id, usage
                 ),
@@ -198,7 +203,7 @@ class PauseSchema(BaseModel):
     the run's `Session` object, whose id the record carries.
     """
 
-    schema_version: Literal[8]
+    schema_version: Literal[9]
     tree: RunTree
     run: RunRecord
 

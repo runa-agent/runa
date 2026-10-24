@@ -74,23 +74,21 @@ class Run(GuardrailAudit):
     error: str | None = None
     interruptions: list[Interruption] = field(default_factory=list)
     guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
+    tool_calls: tuple[ToolCall, ...] = ()
+    """Every tool call this run answered, in the order they finished (see `ToolCall`), whatever
+    the `status`: a run that errored after eight calls reports all eight.
+
+    What the tool was actually given and returned, unlike a `"tool"` span in `trace`, whose
+    input and output the tracing privacy policy may withhold or redact: this is the record to
+    grade a run's tool use on. A failed call is one of them, its `error` saying why, and so is a
+    `.delegate` call, the calls its own run made as its `children`, a failed delegate's included.
+    """
     _state: RunState | None = field(default=None, repr=False)
     _transcript: Transcript = field(default_factory=Transcript, repr=False)
     """The run's conversation (see `Transcript`): `history()` is what `Agent.run` writes back to
     `Agent.history`. Private because `trace` is how a caller inspects a run, and a session holds
     a session-backed run's history. Empty for a run that failed: an unfinished turn is not
     history."""
-
-    @property
-    def tool_calls(self) -> tuple[ToolCall, ...]:
-        """Every tool call this run answered, in the order they finished (see `ToolCall`).
-
-        What the tool was actually given and returned, unlike a `"tool"` span in `trace`, whose
-        input and output the tracing privacy policy may withhold or redact: this is the record to
-        grade a run's tool use on. A failed call is one of them, its `error` saying why, and so
-        is a `.delegate` call, the calls its own run made as its `children`.
-        """
-        return self._transcript.tool_calls
 
     @property
     def run_id(self) -> str | None:

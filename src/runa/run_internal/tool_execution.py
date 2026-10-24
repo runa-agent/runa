@@ -57,7 +57,7 @@ async def _run_tool_call(
             result = failed.output
         await run.guard(Phase.TOOL_OUTPUT, result, tool=tool, under=span)
         span.output = result
-    run.transcript.record_call(failed or ToolCall(tool.name, args_json, str(result)))
+    run.record.tool_calls.append(failed or ToolCall(tool.name, args_json, str(result)))
     await run.hooks.on_tool_end(run.run_context, run.current_agent, tool, result)
     return tool_result(call_id, result)
 
@@ -132,7 +132,7 @@ def _failed(
 
 def _answer(run: _Run, call_id: str, call: ToolCall) -> ConversationItem:
     """Record `call` on the run, and answer the model's call `call_id` with its output."""
-    run.transcript.record_call(call)
+    run.record.tool_calls.append(call)
     return tool_result(call_id, call.output)
 
 

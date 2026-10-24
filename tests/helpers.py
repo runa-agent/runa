@@ -115,7 +115,7 @@ def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides:
 
     `Run`'s required fields are the turn loop's to fill (`run_internal/run_loop._finish`), and a
     test asserting on an eval metric or an evaluation page cares about one or two of them. Pass
-    `status=`/`error=`/`_transcript=` for the rest, or `trace=` for a test that reads the trace
+    `status=`/`error=`/`tool_calls=` for the rest, or `trace=` for a test that reads the trace
     itself -- a run always has one, so an anonymous stand-in stands in when it doesn't matter.
     """
     stand_in = Trace(id="trace_stub", name="stub", start_time=0.0)

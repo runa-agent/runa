@@ -7,15 +7,6 @@ from runa.eval.evaluation.core import EvalStatus
 from runa.eval.evaluation.deterministic import check_expected_tool_called, check_run_completed
 from runa.tool import ToolCall
 from runa.tracing import Span, Trace
-from runa.transcript import Transcript
-
-
-def _transcript_of(*calls: ToolCall) -> Transcript:
-    """A transcript of a run that executed `calls`, in order."""
-    transcript = Transcript()
-    for call in calls:
-        transcript.record_call(call)
-    return transcript
 
 
 def test_check_run_completed_passes_for_a_completed_run() -> None:
@@ -59,7 +50,7 @@ def test_check_expected_tool_called_passes_when_the_tool_was_called() -> None:
     case = Case(input="cancel order 123", expected_tool="cancel_order")
     run = finished_run(
         "done",
-        _transcript=_transcript_of(ToolCall(name="cancel_order", arguments="{}", output="done")),
+        tool_calls=(ToolCall(name="cancel_order", arguments="{}", output="done"),),
     )
 
     result = check_expected_tool_called(case, run)
@@ -73,7 +64,7 @@ def test_check_expected_tool_called_fails_when_the_tool_was_not_called() -> None
     case = Case(input="cancel order 123", expected_tool="cancel_order")
     run = finished_run(
         "done",
-        _transcript=_transcript_of(ToolCall(name="search", arguments="{}", output="nothing")),
+        tool_calls=(ToolCall(name="search", arguments="{}", output="nothing"),),
     )
 
     result = check_expected_tool_called(case, run)
@@ -88,7 +79,7 @@ def test_check_expected_tool_called_fails_when_every_call_to_the_tool_failed() -
     """A tool that was called but failed each time isn't counted as called."""
     case = Case(input="where is order 4821?", expected_tool="lookup_order")
     failed = ToolCall(name="lookup_order", arguments="{}", output="error: down", error="down")
-    run = finished_run("sorry", _transcript=_transcript_of(failed, failed))
+    run = finished_run("sorry", tool_calls=(failed, failed))
 
     result = check_expected_tool_called(case, run)
 
@@ -102,7 +93,7 @@ def test_check_expected_tool_called_passes_once_a_retry_succeeds() -> None:
     case = Case(input="where is order 4821?", expected_tool="lookup_order")
     failed = ToolCall(name="lookup_order", arguments="{}", output="error: down", error="down")
     ok = ToolCall(name="lookup_order", arguments="{}", output="shipped")
-    run = finished_run("shipped", _transcript=_transcript_of(failed, ok))
+    run = finished_run("shipped", tool_calls=(failed, ok))
 
     result = check_expected_tool_called(case, run)
 
@@ -114,7 +105,7 @@ def test_check_expected_tool_called_finds_a_delegate_and_the_tools_it_called() -
     """A delegate call counts as called, and so does any call beneath it, at any depth."""
     cancel = ToolCall(name="cancel_order", arguments="{}", output="done")
     billing = ToolCall(name="billing", arguments='{"input": "x"}', output="ok", children=(cancel,))
-    run = finished_run("done", _transcript=_transcript_of(billing))
+    run = finished_run("done", tool_calls=(billing,))
 
     for expected in ("billing", "cancel_order"):
         result = check_expected_tool_called(Case(input="x", expected_tool=expected), run)
@@ -146,7 +137,7 @@ def test_check_expected_tool_called_grades_the_runs_own_record_not_its_trace_spa
     run = finished_run(
         "done",
         trace=Trace(id="t1", name="UnderTest", start_time=0.0, end_time=0.0, spans=[redacted]),
-        _transcript=_transcript_of(call),
+        tool_calls=(call,),
     )
 
     result = check_expected_tool_called(case, run)
