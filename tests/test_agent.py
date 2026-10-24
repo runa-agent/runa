@@ -801,7 +801,7 @@ def test_a_misspelled_constructor_kwarg_is_rejected_by_the_signature() -> None:
 
 
 _PER_RUN_STATE = frozenset({"history", "usage", "last_usage"})
-"""What `Agent._fresh` clears: one run's state rather than configuration, so it goes nowhere."""
+"""What `copy.copy(agent)` clears: one run's state rather than configuration, so it goes nowhere."""
 
 
 def _every_setting_agent() -> Agent:

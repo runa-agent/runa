@@ -7,7 +7,6 @@ trace's grouping, its refusal of two concurrent session-less runs.
 """
 
 import asyncio
-import copy
 import difflib
 import inspect
 import re
@@ -373,10 +372,7 @@ class Agent:
         declared = all(passed[name] is _UNSET for name in _AGENT_FIELDS)
         setting = _settings(cls, passed)
         vars(self).update(setting)
-        self.history: list[ConversationItem] = []
-        self.usage = Usage()
-        self.last_usage = Usage()
-        self._in_flight = 0
+        self._start_conversation()
         resolved = declaration(cls) if declared else resolve(setting)
         self._shape = AgentShape.of(self, resolved)
 
@@ -417,18 +413,24 @@ class Agent:
             self.history = run._transcript.history()
         return run
 
-    def _fresh(self) -> Agent:
-        """A copy of this agent with empty per-run state, sharing its config and subagents.
+    def __copy__(self) -> Agent:
+        """Another conversation with this agent's settings: `copy.copy(agent)`.
 
-        For runs that must not share a conversation, such as an eval's concurrent cases.
+        The copy shares the settings' values (its tools, subagents and model) and starts with
+        empty `history` and `usage`, so it can run beside the original.
         """
-        clone = copy.copy(self)
-        clone.history = []
-        clone.usage = Usage()
-        clone.last_usage = Usage()
-        clone._in_flight = 0
+        clone = type(self).__new__(type(self))
+        vars(clone).update(vars(self))
+        clone._start_conversation()
         clone._shape = replace(self._shape, agent=clone)
         return clone
+
+    def _start_conversation(self) -> None:
+        """Give this instance the empty state one conversation owns."""
+        self.history: list[ConversationItem] = []
+        self.usage = Usage()
+        self.last_usage = Usage()
+        self._in_flight = 0
 
     @contextmanager
     def _exclusive(self, session: Session | None) -> Iterator[None]:

@@ -92,7 +92,7 @@ def test_evaluate_agent_runs_every_case_in_a_mixed_dataset(
 
 
 def test_evaluate_agent_runs_each_case_on_its_own_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each case gets a `_fresh()` copy, so one case's history never reaches the next.
+    """Each case gets a `copy.copy(agent)`, so one case's history never reaches the next.
 
     `evaluate_agent` runs up to `concurrency` cases at once over one `Agent`, which is exactly
     what `Agent._exclusive` refuses for session-less runs and what would otherwise let two cases

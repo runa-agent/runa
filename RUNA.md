@@ -78,7 +78,9 @@ answer is in, is counted but never fails a finished run.
 
 **One instance runs one conversation at a time.** An `Agent` holds `self.history`, so two
 overlapping session-less runs on the same instance raise `UserError` rather than interleaving.
-Pass a `session` per run, or use an `Agent` per run. Enforced in code.
+Pass a `session` per run, or use an `Agent` per run. Enforced in code. `copy.copy(agent)` is
+that other `Agent` for an instance built with overrides: the same settings, an empty
+conversation.
 
 ## 2. Tool
 
