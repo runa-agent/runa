@@ -34,10 +34,20 @@ if TYPE_CHECKING:
     from runa.run_internal.run_loop import _Run
 
 
-async def _run_tool_call(
-    run: _Run, tool: FunctionTool, call: dict[str, Any], args: dict[str, Any]
-) -> ConversationItem:
-    """Run one already-approved tool call end to end: guardrails, invocation, guardrails.
+async def _run_call(
+    run: _Run,
+    tool: FunctionTool,
+    call: dict[str, Any],
+    args: dict[str, Any],
+    delegate: Delegate | None = None,
+) -> ConversationItem | list[Interruption]:
+    """Run one approved call end to end. Every tool call and delegate call goes through this.
+
+    In order, the steps are: claim the call, fire `on_tool_start`, guard its input, invoke it,
+    guard its output, record it, then fire `on_tool_end`. Only the invoke step differs: a tool
+    runs its function, and `delegate` runs a nested run of this one. A delegate that pauses for
+    approval comes back as its interruptions, because the call hasn't finished. When that call
+    resumes it continues where it stopped, so its start is not repeated and it ends once.
 
     `args` are the call's arguments as the gate already parsed them; the raw JSON is kept only
     for the span and the `ToolCall`, which record what the model wrote.
@@ -46,54 +56,56 @@ async def _run_tool_call(
     run.claim(call_id, tool.name)
 
     args_json = call_arguments(call)
-    failed: ToolCall | None = None
-    with run.span(tool.name, "tool", input=args_json) as span:
-        await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
-        await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
-        try:
-            result = await tool.on_invoke_tool(run.run_context, args, call_id)
-        except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
-            failed = _failed(tool.name, args_json, str(exc) or type(exc).__name__, exc, span)
-            result = failed.output
+    continuing = call_id in run.record.delegates
+    with run.span(tool.name, "tool" if delegate is None else "delegate", input=args_json) as span:
+        if not continuing:
+            await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
+            await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
+        if delegate is None:
+            outcome = await _invoked(run, tool, call_id, args, args_json, span)
+        else:
+            outcome = await _delegated(run, delegate, call_id, args, args_json, span)
+        if isinstance(outcome, list):
+            span.output = "paused for approval"
+            return outcome
+        result, recorded = outcome
         await run.guard(Phase.TOOL_OUTPUT, result, tool=tool, under=span)
         span.output = result
-    run.record.tool_calls.append(failed or ToolCall(tool.name, args_json, str(result)))
+    item = _answer(run, call_id, recorded)
     await run.hooks.on_tool_end(run.run_context, run.current_agent, tool, result)
-    return tool_result(call_id, result)
+    return item
 
 
-async def _run_delegate_call(
-    run: _Run, delegate: Delegate, call: dict[str, Any]
-) -> ConversationItem | list[Interruption]:
-    """Run one delegate call as a nested run of this one, under the call's `"delegate"` span.
+async def _invoked(
+    run: _Run, tool: FunctionTool, call_id: str, args: dict[str, Any], args_json: str, span: Span
+) -> tuple[Any, ToolCall]:
+    """Invoke `tool`: its result, and the record of the call. A tool that raises fails the call."""
+    try:
+        result = await tool.on_invoke_tool(run.run_context, args, call_id)
+    except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
+        failed = _failed(tool.name, args_json, str(exc) or type(exc).__name__, exc, span)
+        return failed.output, failed
+    return result, ToolCall(tool.name, args_json, str(result))
 
-    Recorded like a tool call, its `children` the calls the nested run made. Arguments the model
-    got wrong, or a delegate that errored, fail the call (see `_failed`); one that paused for
-    approval comes back as its interruptions, not a result: the call hasn't finished.
+
+async def _delegated(
+    run: _Run, delegate: Delegate, call_id: str, args: dict[str, Any], args_json: str, span: Span
+) -> tuple[Any, ToolCall] | list[Interruption]:
+    """Invoke `delegate` as a nested run under `span`: its output and the record of the call.
+
+    The record's `children` are the calls the nested run made. A delegate that errored fails the
+    call, and one that paused for approval comes back as its interruptions.
     """
-    call_id = id_of(call)
-    args_json = call_arguments(call)
-    args = _arguments_or_error(args_json)
-    if isinstance(args, str):
-        return _answer(run, call_id, _failed(delegate.tool_name, args_json, args))
-
-    with run.span(delegate.tool_name, "delegate", input=args_json) as span:
-        nested = await run.delegate(delegate, str(args.get("input", "")), call_id, under=span)
-        if isinstance(nested, list):
-            span.output = "paused for approval"
-            return nested
-        if nested.status == "completed":
-            span.output = nested.output
-            recorded = ToolCall(
-                delegate.tool_name, args_json, str(nested.output), children=nested.tool_calls
-            )
-        else:
-            error = nested.error or "the delegate failed"
-            recorded = _failed(
-                delegate.tool_name, args_json, error, span=span, children=nested.tool_calls
-            )
-            span.output = recorded.output
-    return _answer(run, call_id, recorded)
+    nested = await run.delegate(delegate, str(args.get("input", "")), call_id, under=span)
+    if isinstance(nested, list):
+        return nested
+    name = delegate.tool.name
+    if nested.status == "completed":
+        output = nested.output
+        return output, ToolCall(name, args_json, str(output), children=nested.tool_calls)
+    error = nested.error or "the delegate failed"
+    failed = _failed(name, args_json, error, span=span, children=nested.tool_calls)
+    return failed.output, failed
 
 
 def _arguments_or_error(args_json: str) -> dict[str, Any] | str:
@@ -174,7 +186,13 @@ async def _run_message_tool_calls(
 
     Calls are gated one by one, in order, then the approved ones run concurrently, unless the
     agent's `model_settings.parallel_tool_calls` is `False`. Results keep the message's call
-    order either way. A call that needs approval is decided by the run's approval ledger.
+    order either way. A tool's call and a delegate's are gated alike: a call that needs approval
+    is decided by the run's approval ledger, then run by `_run_call`. A delegate call resuming
+    after its delegate paused already passed the gate and is not decided again.
+
+    A handoff is the one call that isn't gated, because it is a switch rather than a call. It
+    fires `on_handoff`, not the tool hooks, and is not one of `run.tool_calls`.
+
     `ready_results` are a paused run's results already computed for calls in `message` that
     didn't need approval: those are reused as is, never executed a second time.
     """
@@ -200,13 +218,8 @@ async def _run_message_tool_calls(
         if call_id in ready:
             slots.append(_Slot(ready[call_id]))
             continue
-        if name in shape.delegates:  # needs no approval of its own: its tools ask for theirs
-            slot = _Slot()  # filled in below, once the approved calls have run
-            slots.append(slot)
-            deferred.append((slot, partial(_run_delegate_call, run, shape.delegates[name], call)))
-            continue
         args_json = call_arguments(call)
-        tool = shape.find_tool(name)
+        tool = shape.callables.get(name)
         if tool is None:
             slots.append(
                 _Slot(_answer(run, call_id, _failed(name, args_json, f"unknown tool {name}")))
@@ -217,19 +230,21 @@ async def _run_message_tool_calls(
         if isinstance(args, str):
             slots.append(_Slot(_answer(run, call_id, _failed(name, args_json, args))))
             continue
-        gate = await run.decide(tool, call_id, args)
-        if gate.action == "interrupt":
-            interruptions.append(
-                Interruption(name=name, arguments=args_json, call_id=call_id, agent=shape.agent)
-            )
-            continue
-        if gate.action == "reject":
-            slots.append(_Slot(tool_result(call_id, gate.message)))
-            continue
+        if call_id not in run.record.delegates:
+            gate = await run.decide(tool, call_id, args)
+            if gate.action == "interrupt":
+                interruptions.append(
+                    Interruption(name=name, arguments=args_json, call_id=call_id, agent=shape.agent)
+                )
+                continue
+            if gate.action == "reject":
+                slots.append(_Slot(tool_result(call_id, gate.message)))
+                continue
 
         slot = _Slot()  # filled in below, once the approved calls have run
         slots.append(slot)
-        deferred.append((slot, partial(_run_tool_call, run, tool, call, args)))
+        delegate = shape.delegates.get(name)
+        deferred.append((slot, partial(_run_call, run, tool, call, args, delegate)))
 
     parallel = shape.model_settings.parallel_tool_calls is not False
     outcomes = await _execute([thunk for _, thunk in deferred], parallel)
@@ -255,9 +270,4 @@ async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -
         raise
 
 
-__all__ = [
-    "_TurnOutcome",
-    "_run_delegate_call",
-    "_run_message_tool_calls",
-    "_run_tool_call",
-]
+__all__ = ["_TurnOutcome", "_run_call", "_run_message_tool_calls"]

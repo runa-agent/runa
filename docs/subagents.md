@@ -46,6 +46,24 @@ conversation to it:
 subagents = [Researcher, Translator.delegate]  # Researcher: both, Translator: delegate only
 ```
 
+## A Delegate Is a Tool, a Handoff Is a Switch
+
+A delegate call goes through the same steps as a `@tool` call: [approval](approval.md), input
+[guardrails](guardrails.md), `on_tool_start`, the call itself, output guardrails, `on_tool_end`,
+and an entry in `run.tool_calls`. So a delegate takes the same policy as a tool, with none by
+default:
+
+```python
+subagents = [Researcher.delegate(needs_approval=True, guardrails=[no_secrets.input])]
+```
+
+A delegate that pauses partway is still one call. Its `on_tool_start` fires when it starts, and
+its `on_tool_end` fires once it finishes after the resume.
+
+A handoff's call is the switch itself. It fires `on_handoff` instead of the tool hooks and isn't
+in `run.tool_calls`. There is nothing to approve or guard, so `.handoff(needs_approval=...)` and
+`.handoff(guardrails=...)` raise `UserError`. Put the guardrails on the target agent instead.
+
 A `.delegate` call shares the caller's [approval](approval.md) ledger and usage accounting: a
 sticky (`always=True`) decision on the caller's side already covers a matching tool the delegate
 calls. A delegate that pauses on an approval pauses its caller too: the delegate's pending calls

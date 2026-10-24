@@ -47,7 +47,7 @@ def _tool_names(agent: Agent) -> list[str]:
 
 def _delegate_names(agent: Agent) -> list[str]:
     """The tool names an agent's delegates are called by."""
-    return [delegate.tool_name for delegate in built_shape(agent).delegates.values()]
+    return [delegate.tool.name for delegate in built_shape(agent).delegates.values()]
 
 
 class Researcher(Agent):
@@ -216,7 +216,7 @@ def test_delegate_adds_only_to_tools() -> None:
     agent = Main()
 
     assert built_shape(agent).handoffs == {}
-    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool_name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool.name]
 
 
 def test_h_and_d_are_shorthand_for_handoff_and_delegate() -> None:
@@ -230,7 +230,7 @@ def test_h_and_d_are_shorthand_for_handoff_and_delegate() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool.name]
 
 
 def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
@@ -328,8 +328,8 @@ def test_delegate_tool_name_and_description_override() -> None:
     agent = Main()
 
     (delegate,) = built_shape(agent).delegates.values()
-    assert delegate.tool_name == "do_research"
-    assert delegate.tool_description == "Look into it."
+    assert delegate.tool.name == "do_research"
+    assert delegate.tool.description == "Look into it."
     assert agent.tools == ()
 
 
@@ -344,7 +344,7 @@ def test_bare_subagent_wires_both_handoff_and_delegate() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool_name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool.name]
 
 
 def test_mixed_modes_wire_independently() -> None:
@@ -358,7 +358,7 @@ def test_mixed_modes_wire_independently() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool.name]
 
 
 def test_no_subagents_leaves_handoffs_and_tools_empty() -> None:
@@ -1025,7 +1025,7 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert agent.model == "claude-sonnet-5"
     assert agent.model_settings is model_settings
     assert _tool_names(agent) == ["ping"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool_name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool.name]
     assert agent.guardrails == tuple(passed["guardrails"])
     assert built_shape(agent).mcp_servers == tuple(passed["mcp"])
     assert agent.output_type is Answer

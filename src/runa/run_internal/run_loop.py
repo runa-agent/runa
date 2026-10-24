@@ -234,11 +234,12 @@ class _Run:
     ) -> Run | list[Interruption]:
         """Run `delegate`'s agent on `input` as call `call_id` of this run, nested in it.
 
-        The whole of a delegate's pause protocol is here. The call is claimed like any tool call.
-        A delegate that pauses for approval gives the claim back, is stashed in this run's record
-        under `call_id` and comes back as its pending `Interruption`s, for this run to pause on;
-        the same call reaching here again, on resume, continues it instead of starting it over,
-        and `input` is not read again. Otherwise the returned `Run` is completed or errored.
+        The whole of a delegate's pause protocol is here. The call arrives claimed, like any
+        tool call. A delegate that pauses for approval gives the claim back, is stashed in this
+        run's record under `call_id` and comes back as its pending `Interruption`s, for this run
+        to pause on; the same call reaching here again, on resume, continues it instead of
+        starting it over, and `input` is not read again. Otherwise the returned `Run` is completed
+        or errored.
 
         The nested run is this one with the delegate's own agent (and its ceilings), a record of
         its own over the same `context` and `user_id`, and an agent span under `under`. Each call
@@ -251,7 +252,6 @@ class _Run:
         `emit` (a stream event doesn't say which agent produced it, so the stream sees the
         delegate call and its output, not the delegate's tokens).
         """
-        self.claim(call_id, delegate.tool_name)
         paused = self.record.delegates.pop(call_id, None)
         message: str | None
         if paused is None:

@@ -229,6 +229,19 @@ class MyAgent(Agent):
   main agent, like a tool call: the main agent stays in control.
 * `None`: main agent will choose automatically to handoff or delegate
 
+**A delegate is a tool; a handoff is a switch.** A `.delegate` call goes through the same gate
+as a `@tool` call: approval, input guardrails, `on_tool_start`, the call, output guardrails,
+`on_tool_end`, and an entry in `run.tool_calls`. It takes the same policy, with none by default:
+
+```python
+subagents = [Researcher.delegate(needs_approval=True, guardrails=[no_secrets.input])]
+```
+
+A handoff's call is the switch itself. It fires `on_handoff` rather than the tool hooks, is not
+one of `run.tool_calls`, and has nothing to approve or guard: `needs_approval`/`guardrails` on
+a `.handoff` raise `UserError`. Put the policy on the target agent's own `guardrails` instead.
+Enforced in code.
+
 A `.delegate` call shares the caller's [approval](#4-human-approval) ledger and usage
 accounting: a sticky (`always=True`) decision on the caller's side already covers a matching
 tool the delegate calls. A delegate that pauses for approval pauses its caller too: the

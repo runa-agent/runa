@@ -94,7 +94,13 @@ def _subagent_graph(agent: Agent) -> tuple[list[Handoff], list[Delegate]]:
                     handoffs.append(Handoff.from_agent(target, sub.tool_name, sub.tool_description))
                 else:
                     delegates.append(
-                        Delegate.from_agent(target, sub.tool_name, sub.tool_description)
+                        Delegate.from_agent(
+                            target,
+                            sub.tool_name,
+                            sub.tool_description,
+                            needs_approval=sub.needs_approval,
+                            guardrails=sub.guardrails,
+                        )
                     )
             else:
                 target = build(sub)
@@ -253,7 +259,7 @@ class AgentShape(Resolved):
             agent.name,
             (
                 *(tool.name for tool in resolved.tools),
-                *(delegate.tool_name for delegate in delegates),
+                *(delegate.tool.name for delegate in delegates),
                 *(handoff.tool_name for handoff in handoffs),
             ),
         )
@@ -261,7 +267,7 @@ class AgentShape(Resolved):
             **{field.name: getattr(resolved, field.name) for field in fields(Resolved)},
             agent=agent,
             handoffs={handoff.tool_name: handoff for handoff in handoffs},
-            delegates={delegate.tool_name: delegate for delegate in delegates},
+            delegates={delegate.tool.name: delegate for delegate in delegates},
         )
 
     async def with_mcp_tools(self) -> AgentShape:
@@ -274,6 +280,15 @@ class AgentShape(Resolved):
         return shape
 
     @cached_property
+    def callables(self) -> dict[str, FunctionTool]:
+        """Every tool and delegate by the name the model calls it, which is what gates a call.
+
+        Handoffs are not listed, because a handoff is a switch rather than a call.
+        """
+        tools = (*self.tools, *(delegate.tool for delegate in self.delegates.values()))
+        return {tool.name: tool for tool in tools}
+
+    @cached_property
     def offered(self) -> list[ToolSchema]:
         """Every tool, delegate and handoff, in the order the model is offered them.
 
@@ -284,26 +299,13 @@ class AgentShape(Resolved):
         return [
             *(
                 ToolSchema(tool.name, tool.description or "", tool.params_json_schema or no_input)
-                for tool in self.tools
-            ),
-            *(
-                ToolSchema(
-                    delegate.tool_name, delegate.tool_description, delegate.params_json_schema
-                )
-                for delegate in self.delegates.values()
+                for tool in (*self.tools, *(delegate.tool for delegate in self.delegates.values()))
             ),
             *(
                 ToolSchema(handoff.tool_name, handoff.tool_description or "", no_input)
                 for handoff in self.handoffs.values()
             ),
         ]
-
-    def find_tool(self, name: str) -> FunctionTool | None:
-        """The `FunctionTool` this agent calls `name`, or `None` if it declares no such tool."""
-        for candidate in self.tools:
-            if isinstance(candidate, FunctionTool) and candidate.name == name:
-                return candidate
-        return None
 
     def resolve_model(self) -> Model:
         """This agent's `model`: a string names a provider's model, anything else is one.

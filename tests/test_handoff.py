@@ -8,9 +8,13 @@ here" shares (`reachable`/`subagent_edges`).
 from collections.abc import Sequence
 from typing import Any
 
+import pytest
+
 from runa import Trace
 from runa._types import ModelResponse, RunContext, Usage
 from runa.agent import Agent, Subagent
+from runa.exceptions import UserError
+from runa.guardrail import guardrail
 from runa.lifecycle import Hooks
 from runa.run_internal.agent_shape import reachable, subagent_edges
 from runa.tool import ToolCall, tool
@@ -44,14 +48,18 @@ class _ScriptedModel:
         )
 
 
-def _lead(delegate: type[Agent], script: list[dict[str, Any]], **settings: Any) -> Agent:
-    """A caller whose model follows `script`, with `delegate` among its tools."""
+def _lead(delegate: type[Agent] | Subagent, script: list[dict[str, Any]], **settings: Any) -> Agent:
+    """A caller whose model follows `script`, with `delegate` among its tools.
+
+    A class is wired as a plain `.delegate`; pass `Cls.delegate(...)` to give it a policy.
+    """
 
     class Lead(Agent):
         name = "Lead"
         model = _ScriptedModel(script)
 
-    return Lead(subagents=[delegate.delegate], **settings)
+    entry = delegate if isinstance(delegate, Subagent) else delegate.delegate
+    return Lead(subagents=[entry], **settings)
 
 
 def test_a_sticky_approval_on_the_caller_covers_the_delegates_matching_tool() -> None:
@@ -312,6 +320,170 @@ def test_a_delegate_called_with_malformed_arguments_answers_an_error_and_runs_no
     assert call.error is not None
     assert call.output == f"error: {call.error}"
     assert not [span for span in run.trace.spans if span.type == "delegate"]
+
+
+class _ToolEvents(Hooks[Any]):
+    """Records each `on_tool_start`/`on_tool_end` as `(event, tool name)`."""
+
+    def __init__(self) -> None:
+        self.log: list[tuple[str, str]] = []
+
+    async def on_tool_start(self, context: Any, agent: Any, tool: Any) -> None:
+        self.log.append(("start", tool.name))
+
+    async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: object) -> None:
+        self.log.append(("end", tool.name))
+
+
+def test_a_delegate_call_fires_the_tool_hooks_like_any_tool_call() -> None:
+    """A run-wide `on_tool_*` sees the delegate call, then the calls the delegate makes."""
+
+    @tool
+    def lookup() -> str:
+        """Look something up."""
+        return "found"
+
+    class Delegate(Agent):
+        name = "Delegate"
+        tools = [lookup]
+        model = _ScriptedModel([_tool_call_message("lookup", "{}", "d1"), _final_message("ok")])
+
+    lead = _lead(
+        Delegate,
+        [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
+    )
+    hooks = _ToolEvents()
+
+    lead.run_sync("go", hooks=hooks)
+
+    assert hooks.log == [
+        ("start", "delegate"),
+        ("start", "lookup"),
+        ("end", "lookup"),
+        ("end", "delegate"),
+    ]
+
+
+def test_a_delegate_that_pauses_starts_and_ends_once_across_the_resume() -> None:
+    """The delegate call fires `on_tool_start` when it starts and `on_tool_end` when it finishes."""
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Needs approval."""
+        return "handled"
+
+    class Delegate(Agent):
+        name = "Delegate"
+        tools = [dangerous]
+        model = _ScriptedModel(
+            [_tool_call_message("dangerous", "{}", "d1"), _final_message("delegate done")]
+        )
+
+    lead = _lead(
+        Delegate,
+        [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
+    )
+    hooks = _ToolEvents()
+
+    paused = lead.run_sync("go", hooks=hooks)
+    state = paused.to_state()
+    state.approve(paused.interruptions[0])
+    run = lead.run_sync(state, hooks=hooks)
+
+    assert run.status == "completed", run.error
+    assert hooks.log == [
+        ("start", "delegate"),
+        ("start", "dangerous"),
+        ("end", "dangerous"),
+        ("end", "delegate"),
+    ]
+
+
+def test_a_delegate_that_needs_approval_pauses_before_it_starts() -> None:
+    """`.delegate(needs_approval=True)` gates the call the way `@tool(needs_approval=True)` does."""
+    started: list[str] = []
+
+    class Delegate(Agent):
+        name = "Delegate"
+        model = _ScriptedModel([_final_message("delegate done")])
+
+    class Recording(Hooks[Any]):
+        async def on_agent_start(self, context: Any, agent: Any) -> None:
+            started.append(agent.name)
+
+    lead = _lead(
+        Delegate.delegate(needs_approval=True),
+        [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
+    )
+
+    paused = lead.run_sync("go", hooks=Recording())
+
+    assert paused.status == "paused"
+    assert [item.name for item in paused.interruptions] == ["delegate"]
+    assert started == ["Lead"]
+
+    state = paused.to_state()
+    state.approve(paused.interruptions[0])
+    run = lead.run_sync(state, hooks=Recording())
+
+    assert run.status == "completed", run.error
+    assert [call.output for call in run.tool_calls] == ["delegate done"]
+    assert "Delegate" in started
+
+
+def test_a_rejected_delegate_never_starts() -> None:
+    """A rejection answers the model in place of the delegate's output, as for a tool."""
+
+    class Delegate(Agent):
+        name = "Delegate"
+        model = _ScriptedModel([])  # never called: the delegate doesn't start
+
+    lead = _lead(
+        Delegate.delegate(needs_approval=True),
+        [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
+    )
+
+    paused = lead.run_sync("go")
+    state = paused.to_state()
+    state.reject(paused.interruptions[0], rejection_message="not now")
+    run = lead.run_sync(state)
+
+    assert run.status == "completed", run.error
+    assert run.tool_calls == ()
+    assert not [span for span in run.trace.spans if span.type == "delegate"]
+
+
+def test_a_delegates_input_guardrail_trips_before_it_starts() -> None:
+    """`.delegate(guardrails=[...])` checks the call's arguments, as a tool guardrail does."""
+
+    @guardrail
+    def no_secrets(args: Any) -> bool:
+        """Trip on a request for secrets."""
+        return "secret" in args["input"]
+
+    class Delegate(Agent):
+        name = "Delegate"
+        model = _ScriptedModel([])  # never called: the guardrail trips first
+
+    lead = _lead(
+        Delegate.delegate(guardrails=[no_secrets.input]),
+        [_tool_call_message("delegate", '{"input": "the secret"}'), _final_message("all done")],
+    )
+
+    run = lead.run_sync("go")
+
+    assert run.status == "error"
+    assert [result.tripped for result in run.tool_input_guardrail_results] == [True]
+
+
+def test_a_handoff_takes_no_approval_or_guardrails() -> None:
+    """A handoff is a switch, not a call, so a policy on one is refused where it's written."""
+
+    class Target(Agent):
+        name = "Target"
+
+    with pytest.raises(UserError, match="delegate"):
+        Target.handoff(needs_approval=True)
 
 
 def test_reachable_names_every_agent_once_even_through_a_cycle() -> None:
