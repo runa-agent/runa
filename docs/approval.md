@@ -125,8 +125,10 @@ Everything the run carries comes back: its conversation and session, `context` a
 tool calls it already made and the time it has already spent against its `timeout`. A `context`
 that was a dataclass comes back as a plain dict, not its original class. The run's
 [guardrail audit trail](guardrails.md#audit-trail) and trace spans are not stored with the pause. Spans are
-already persisted separately (see [Tracing and Hooks](tracing.md)). A pause stored by an
-incompatible version of Runa raises `UserError` on `load` rather than resuming.
+already persisted separately (see [Tracing and Hooks](tracing.md)). A pause outlives an upgrade:
+one kept by an older Runa resumes, with whatever it didn't record yet left at its default. Only a
+pause from a Runa whose stored format changed meaning since, or from a newer Runa, raises
+`UserError` on `load` rather than resuming.
 
 ## Example
 

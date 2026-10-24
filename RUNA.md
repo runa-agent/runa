@@ -206,8 +206,10 @@ still the starting agent's: its ceilings, memory, knowledge and compaction stay 
 run looks each pending call's tool up itself. A `context` that was a dataclass comes back as a
 plain dict, not its original class; the run's guardrail-result audit trail (see below) and trace
 spans aren't stored with the pause: spans are already durably persisted separately (see
-[Tracing](#14-tracing)). A pause stored by an incompatible version of Runa raises `UserError`
-on `load` rather than resuming. A pause nobody resumes stays in the `paused_runs` table until an
+[Tracing](#14-tracing)). A pause outlives an upgrade: one kept by an older Runa resumes, with
+whatever it didn't record yet (a fact a run started carrying since) left at its default. Only a
+pause from a Runa whose stored format changed meaning since, or from a newer Runa, raises
+`UserError` on `load` rather than resuming. A pause nobody resumes stays in the `paused_runs` table until an
 operator prunes it by `created_at`.
 
 **Guardrail audit trail.** Every guardrail that ran (tripped or not, a delegate's included) is

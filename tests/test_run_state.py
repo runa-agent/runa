@@ -7,6 +7,7 @@ original type).
 """
 
 import asyncio
+import copy
 from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any
@@ -19,7 +20,15 @@ from runa.agent import Agent
 from runa.exceptions import UserError
 from runa.lifecycle import Hooks
 from runa.run import Run
-from runa.run_internal.record import Pause, PauseSchema, RunRecord, RunTree, resuming
+from runa.run_internal.record import (
+    READABLE_SINCE,
+    SCHEMA_VERSION,
+    Pause,
+    PauseSchema,
+    RunRecord,
+    RunTree,
+    resuming,
+)
 from runa.run_state import RunState
 from runa.tool import tool
 
@@ -231,13 +240,95 @@ def test_a_pause_is_found_only_through_the_agent_it_started_with() -> None:
     assert RunState.load_sync(other(), result.run_id) is None
 
 
-def test_load_rejects_an_unknown_schema_version() -> None:
-    """An unrecognized `schema_version` raises `UserError`, not a raw Pydantic error."""
+_CALL = {"id": "call_1", "type": "function", "function": {"name": "dangerous", "arguments": "{}"}}
+_PAUSED_ON = {"role": "assistant", "content": None, "tool_calls": [_CALL]}
+_USAGE = {
+    "requests": 1,
+    "input_tokens": 1,
+    "output_tokens": 1,
+    "total_tokens": 2,
+    "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+    "output_tokens_details": {"reasoning_tokens": 0},
+}
+_TREE = {
+    "trace": {
+        "id": "trace_kept",
+        "name": "TestAgent",
+        "start_time": 0.0,
+        "session_id": None,
+        "metadata": {},
+    },
+    "approvals": {
+        "sticky": {},
+        "sticky_messages": {},
+        "calls": {},
+        "call_messages": {},
+        "executed": [],
+    },
+}
+_RUN = {
+    "start": "TestAgent",
+    "agent": "TestAgent",
+    "run_context": {"context": None, "user_id": None, "usage": _USAGE},
+    "session_id": None,
+    "turns": 1,
+    "elapsed": 0.0,
+    "pending": [
+        {"name": "dangerous", "arguments": "{}", "call_id": "call_1", "agent": "TestAgent"}
+    ],
+    "ready_results": [],
+    "delegates": {},
+}
+_TRANSCRIPT = {
+    "_prior": [],
+    "_input": [{"role": "user", "content": "do it"}],
+    "_items": [{"role": "user", "content": "do it"}, _PAUSED_ON],
+    "_generated": [_PAUSED_ON],
+    "_compacted_history": None,
+}
+
+_KEPT_AT = {
+    8: {
+        "schema_version": 8,
+        "tree": _TREE,
+        "run": {**_RUN, "transcript": {**_TRANSCRIPT, "_tool_calls": []}},
+    },
+    9: {
+        "schema_version": 9,
+        "tree": _TREE,
+        "run": {**_RUN, "transcript": _TRANSCRIPT, "tool_calls": []},
+    },
+}
+"""A pause on `dangerous` as each readable `schema_version` wrote it, frozen as stored."""
+
+
+def test_every_readable_schema_version_has_a_row_it_wrote() -> None:
+    """Moving `READABLE_SINCE` or `SCHEMA_VERSION` means saying what the rows in between hold."""
+    assert set(_KEPT_AT) == set(range(READABLE_SINCE, SCHEMA_VERSION + 1))
+
+
+@pytest.mark.parametrize("version", sorted(_KEPT_AT))
+def test_a_pause_kept_by_an_older_runa_still_resumes(version: int) -> None:
+    """A field added since a row was kept reads as its default, so the human's wait isn't lost."""
+    _, gated = _paused_run()
+    fresh = gated()
+    state = _load(fresh, _store(copy.deepcopy(_KEPT_AT[version])))
+    state.approve(state.pending[0])
+
+    resumed = fresh.run_sync(state)
+
+    assert resumed.status == "completed"
+    assert [call.name for call in resumed.tool_calls] == ["dangerous"]
+
+
+@pytest.mark.parametrize("version", [READABLE_SINCE - 1, SCHEMA_VERSION + 1])
+def test_load_rejects_a_schema_version_it_cannot_read(version: int) -> None:
+    """A row from before `READABLE_SINCE`, or from a newer Runa, is a `UserError` naming both."""
     result, gated = _paused_run()
     blob = _stored(result)
-    blob["schema_version"] = 999
+    blob["schema_version"] = version
 
-    with pytest.raises(UserError):
+    with pytest.raises(UserError, match=f"schema version {version}"):
         RunState.load_sync(gated(), _store(blob))
 
 

@@ -16,7 +16,7 @@ module builds a state (`paused`) and is the only one that reads the pause back o
 
 import copy
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import (
     BaseModel,
@@ -26,6 +26,7 @@ from pydantic import (
     PlainValidator,
     ValidationError,
     ValidationInfo,
+    field_validator,
 )
 
 from runa._items import ConversationItem
@@ -43,6 +44,15 @@ if TYPE_CHECKING:
     from runa.run_state import RunState
 
 SCHEMA_VERSION = 9
+"""The version a pause is written at; a row from `READABLE_SINCE` up to it is read as is.
+
+A field added with a default is no new version: an older row reads with the default, so its pause
+still resumes. Bump this, and `READABLE_SINCE` to match, only when a stored field's meaning
+changes, which strands every pause kept before it.
+"""
+
+READABLE_SINCE = 8
+"""The oldest `schema_version` this Runa still resumes."""
 
 
 def _find_agent_by_name(root: Agent, name: str) -> Agent:
@@ -203,9 +213,19 @@ class PauseSchema(BaseModel):
     the run's `Session` object, whose id the record carries.
     """
 
-    schema_version: Literal[9]
+    schema_version: int
     tree: RunTree
     run: RunRecord
+
+    @field_validator("schema_version")
+    @classmethod
+    def _readable(cls, version: int) -> int:
+        if not READABLE_SINCE <= version <= SCHEMA_VERSION:
+            raise ValueError(
+                f"kept at schema version {version}, and this Runa resumes "
+                f"{READABLE_SINCE} to {SCHEMA_VERSION}"
+            )
+        return version
 
 
 @dataclass
@@ -326,6 +346,7 @@ def resume_session(
 
 
 __all__ = [
+    "READABLE_SINCE",
     "SCHEMA_VERSION",
     "Interruption",
     "Pause",
