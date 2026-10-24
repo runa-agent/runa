@@ -33,6 +33,7 @@ from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, Phase, flatten_guardrails
 from runa.handoff import Delegate, Handoff, Mode, Subagent
 from runa.knowledge import Knowledge, KnowledgeLike
+from runa.lifecycle import Hooks
 from runa.memory import Memory, MemoryLike
 from runa.tool import FunctionTool
 
@@ -179,6 +180,8 @@ class Resolved:
     model: str | Model
     model_settings: ModelSettings
     output_type: type | None
+    hooks: Hooks[Any] | None
+    """Its agent-scoped hooks, which a run fires beside the run's own."""
     tools: tuple[FunctionTool, ...]
     """Its `@tool`s and memory's or knowledge's search; `with_mcp_tools` adds its servers'."""
     mcp_servers: tuple[Any, ...]

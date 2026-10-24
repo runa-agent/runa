@@ -869,7 +869,7 @@ def test_the_shape_holds_every_setting_the_agent_stores() -> None:
         "subagents",
     }
 
-    assert stored - {"hooks"} == read, f"stored but read by no run: {sorted(stored - read)}"
+    assert stored == read, f"stored but read by no run: {sorted(stored - read)}"
 
 
 def test_with_mcp_tools_adds_the_servers_tools_for_one_run() -> None:

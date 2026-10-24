@@ -42,9 +42,10 @@ from runa.exceptions import (
 )
 from runa.guardrail import GuardrailResult, Phase
 from runa.handoff import Delegate
-from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
+from runa.lifecycle import Hooks, LoggingHooks
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape, shape_of
+from runa.run_internal.dispatch import _Dispatch
 from runa.run_internal.record import Interruption, RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response

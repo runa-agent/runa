@@ -7,7 +7,8 @@ import pytest
 
 from runa import Agent, LoggingHooks
 from runa._types import ModelResponse, RunContext, Usage
-from runa.lifecycle import Hooks, _Dispatch
+from runa.lifecycle import Hooks
+from runa.run_internal.dispatch import _Dispatch
 from runa.tool import tool as tool_decorator
 from runa.tracing import observe
 
