@@ -45,14 +45,10 @@ from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks, _Dispatch
 from runa.run import Run
 from runa.run_internal.agent_shape import AgentShape, shape_of
-from runa.run_internal.record import RunRecord, RunTree, keep, paused, resuming
+from runa.run_internal.record import Interruption, RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
-from runa.run_internal.tool_execution import (
-    DelegatePaused,
-    _run_message_tool_calls,
-    _TurnOutcome,
-)
+from runa.run_internal.tool_execution import _run_message_tool_calls, _TurnOutcome
 from runa.session import Session
 from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
 from runa.tool import FunctionTool
@@ -162,10 +158,6 @@ class _Run:
         if not self.frame.tree.approvals.claim(call_id):
             raise DuplicateToolCallError(call_id, name)
 
-    def release(self, call_id: str) -> None:
-        """Give `call_id`'s claim back: the call didn't finish, so resuming may run it again."""
-        self.frame.tree.approvals.release(call_id)
-
     async def decide(
         self, tool: FunctionTool, call_id: str, args: dict[str, Any]
     ) -> ApprovalDecision:
@@ -214,8 +206,17 @@ class _Run:
             if verdict.tripped:
                 raise GuardrailTripwireTriggered(result)
 
-    async def delegate(self, delegate: Delegate, input: str, call_id: str, *, under: Span) -> Run:
-        """Run `delegate`'s agent on `input` as a nested run of this one, and return its `Run`.
+    async def delegate(
+        self, delegate: Delegate, input: str, call_id: str, *, under: Span
+    ) -> Run | list[Interruption]:
+        """Run `delegate`'s agent on `input` as call `call_id` of this run, nested in it.
+
+        The whole of a delegate's pause protocol is here. The call is claimed like any tool call.
+        A delegate that pauses for approval gives the claim back, is stashed in this run's record
+        under `call_id` and comes back as its pending `Interruption`s, for this run to pause on;
+        the same call reaching here again, on resume, continues it instead of starting it over,
+        and `input` is not read again. Its usage is merged here as it goes, so a stashed record
+        starts its next leg from none. Otherwise the returned `Run` is completed or errored.
 
         The nested frame is this one's with the delegate's own agent (and its ceilings), a record
         of its own over the same `context` and `user_id`, whose usage is merged back here, and an
@@ -226,13 +227,9 @@ class _Run:
         Not shared: the `session` (a delegate is handed fresh input, not a conversation) and
         `emit` (a stream event doesn't say which agent produced it, so the stream sees the
         delegate call and its output, not the delegate's tokens).
-
-        A delegate that pauses for approval is stashed in this run's record under `call_id` and
-        raises `DelegatePaused`, so this run pauses on its interruptions; the same call reaching
-        here again, on resume, continues it instead of starting it over, and `input` is not read
-        again. The returned `Run` is completed or errored.
         """
         frame = self.frame
+        self.claim(call_id, delegate.tool_name)
         paused = self.record.delegates.pop(call_id, None)
         message: str | None
         if paused is None:
@@ -257,11 +254,12 @@ class _Run:
         )
         run = await _within(nested, message)
         frame.run_context.usage.add(run.usage)
-        if run.status == "paused":
-            record.run_context.usage = Usage()  # already merged into this run's
-            self.record.delegates[call_id] = record
-            raise DelegatePaused(record.pending)
-        return run
+        if run.status != "paused":
+            return run
+        frame.tree.approvals.release(call_id)
+        record.run_context.usage = Usage()
+        self.record.delegates[call_id] = record
+        return record.pending
 
 
 async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
@@ -382,65 +380,70 @@ async def _record_tool_results(
         await run.hooks.on_agent_start(run.run_context, run.current_agent)
 
 
+async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
+    """Call the model once, as one of the run's turns: its message, and the context it filled.
+
+    A turn is counted on the record, so a resumed run goes on from the turns it already took;
+    one past the starting agent's `max_turns` raises `MaxTurnsExceeded` instead. With
+    `run.frame.emit` (a streamed run), the model is streamed. The message is recorded on the
+    run's transcript, after any compaction the response's usage calls for.
+    """
+    transcript, record = run.transcript, run.record
+    max_turns = run.start.max_turns
+    if record.turns >= max_turns:
+        raise MaxTurnsExceeded(f"max turns ({max_turns}) exceeded")
+    record.turns += 1
+    shape = run.shape
+    request = ModelRequest(
+        input=list(transcript.items),
+        system_instructions=await _resolve_instructions(shape, run.run_context),
+        model_settings=shape.model_settings,
+        tools=shape.offered,
+        output_schema=shape.output_type,
+    )
+    model = _RunModel(run, shape, run.start.max_tokens)
+    if run.frame.emit is None:
+        response = await model.get_response(request)
+    else:
+        response = await _stream_response(model, request, run.frame.emit)
+    context_tokens = response.usage.input_tokens + response.usage.output_tokens
+    dropped = transcript.compact(shape.compactor, context_tokens)
+    _note_compaction(run.spans, context_tokens, dropped)
+
+    if not response.output:
+        raise ModelBehaviorError("model returned no output items")
+    message = response.output[0]
+    transcript.record(message)
+    return message, context_tokens
+
+
 async def _run_turns(run: _Run) -> _TurnOutcome:
     """Call the model and run its tool calls until it answers, pauses, or runs out of turns.
 
-    A turn is counted on the record, so a resumed run goes on from the turns it already took.
-
-    With `run.frame.emit` (a streamed run), the model is streamed and every step is emitted as a
-    `StreamEvent`. Every generated item is appended to the run's transcript as it arrives.
+    A resumed run's first message is the one it paused on, already in its transcript and its
+    calls already announced: only the model call is skipped, and the results computed before the
+    pause are reused. With `run.frame.emit`, every step is emitted as a `StreamEvent`.
     """
-    transcript, record, run_context = run.transcript, run.record, run.run_context
-    max_turns, max_tokens = run.start.max_turns, run.start.max_tokens
-
-    if record.pending:
-        results, interruptions, switched = await _run_message_tool_calls(
-            run, record.paused_message, record.ready_results
-        )
-        record.pending, record.ready_results = [], []
-        if interruptions:
-            return _TurnOutcome(None, interruptions, results)
-        await _record_tool_results(run, results, switched)
-
-    while record.turns < max_turns:
-        record.turns += 1
-        shape = run.shape
-        items = list(transcript.items)
-        request = ModelRequest(
-            input=items,
-            system_instructions=await _resolve_instructions(shape, run_context),
-            model_settings=shape.model_settings,
-            tools=shape.offered,
-            output_schema=shape.output_type,
-        )
-        model = _RunModel(run, shape, max_tokens)
-        if run.frame.emit is None:
-            response = await model.get_response(request)
+    record = run.record
+    while True:
+        if record.pending:
+            message, ready = record.paused_message, record.ready_results
+            record.pending, record.ready_results = [], []
         else:
-            response = await _stream_response(model, request, run.frame.emit)
-        context_tokens = response.usage.input_tokens + response.usage.output_tokens
-        dropped = transcript.compact(shape.compactor, context_tokens)
-        _note_compaction(run.spans, context_tokens, dropped)
+            message, context_tokens = await _model_turn(run)
+            ready = []
+            calls = tool_calls(message)
+            if not calls:
+                text = item_text(message)
+                await run.guard(Phase.OUTPUT, text)
+                return _TurnOutcome(_parse_output(run.shape, text), [], [], context_tokens)
+            for call in calls:
+                run.notify(ToolCalled(call))
 
-        if not response.output:
-            raise ModelBehaviorError("model returned no output items")
-        message = response.output[0]
-        transcript.record(message)
-
-        calls = tool_calls(message)
-        if not calls:
-            text = item_text(message)
-            await run.guard(Phase.OUTPUT, text)
-            return _TurnOutcome(_parse_output(shape, text), [], [], context_tokens)
-
-        for call in calls:
-            run.notify(ToolCalled(call))
-        results, interruptions, switched = await _run_message_tool_calls(run, message)
+        results, interruptions, switched = await _run_message_tool_calls(run, message, ready)
         if interruptions:
             return _TurnOutcome(None, interruptions, results)
         await _record_tool_results(run, results, switched)
-
-    raise MaxTurnsExceeded(f"max turns ({max_turns}) exceeded")
 
 
 async def _traced(run: Awaitable[Run], trace: Trace) -> Run:

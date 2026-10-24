@@ -34,15 +34,6 @@ if TYPE_CHECKING:
     from runa.run_internal.run_loop import _Run
 
 
-class DelegatePaused(Exception):  # noqa: N818 -- a signal, not an error
-    """Raised by a delegate call whose nested run paused: carries its `interruptions` up."""
-
-    def __init__(self, interruptions: list[Interruption]) -> None:
-        """Hold the nested run's pending `Interruption`s for the caller's run to surface."""
-        super().__init__(f"delegate paused on {len(interruptions)} approval(s)")
-        self.interruptions = interruptions
-
-
 async def _run_tool_call(
     run: _Run, tool: FunctionTool, call: dict[str, Any], args: dict[str, Any]
 ) -> ConversationItem:
@@ -73,28 +64,24 @@ async def _run_tool_call(
 
 async def _run_delegate_call(
     run: _Run, delegate: Delegate, call: dict[str, Any]
-) -> ConversationItem | DelegatePaused:
+) -> ConversationItem | list[Interruption]:
     """Run one delegate call as a nested run of this one, under the call's `"delegate"` span.
 
     Recorded like a tool call, its `children` the calls the nested run made. Arguments the model
     got wrong, or a delegate that errored, fail the call (see `_failed`); one that paused for
-    approval comes back as its `DelegatePaused`, not a result: the call hasn't finished, so
-    resuming may run it again.
+    approval comes back as its interruptions, not a result: the call hasn't finished.
     """
     call_id = id_of(call)
     args_json = call_arguments(call)
     args = _arguments_or_error(args_json)
     if isinstance(args, str):
         return _answer(run, call_id, _failed(delegate.tool_name, args_json, args))
-    run.claim(call_id, delegate.tool_name)
 
     with run.span(delegate.tool_name, "delegate", input=args_json) as span:
-        try:
-            nested = await run.delegate(delegate, str(args.get("input", "")), call_id, under=span)
-        except DelegatePaused as paused:
-            run.release(call_id)
+        nested = await run.delegate(delegate, str(args.get("input", "")), call_id, under=span)
+        if isinstance(nested, list):
             span.output = "paused for approval"
-            return paused
+            return nested
         if nested.status == "completed":
             span.output = nested.output
             recorded = ToolCall(
@@ -149,7 +136,7 @@ def _answer(run: _Run, call_id: str, call: ToolCall) -> ConversationItem:
     return tool_result(call_id, call.output)
 
 
-type _Thunk = Callable[[], Awaitable[ConversationItem | DelegatePaused]]
+type _Thunk = Callable[[], Awaitable[ConversationItem | list[Interruption]]]
 
 
 @dataclass
@@ -247,8 +234,8 @@ async def _run_message_tool_calls(
     parallel = shape.model_settings.parallel_tool_calls is not False
     outcomes = await _execute([thunk for _, thunk in deferred], parallel)
     for (slot, _), outcome in zip(deferred, outcomes, strict=True):
-        if isinstance(outcome, DelegatePaused):
-            interruptions.extend(outcome.interruptions)  # unfinished: its slot stays empty
+        if isinstance(outcome, list):
+            interruptions.extend(outcome)  # a paused delegate: its slot stays empty
         else:
             slot.item = outcome
     return [slot.item for slot in slots if slot.item is not None], interruptions, switched_agent
@@ -269,7 +256,6 @@ async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -
 
 
 __all__ = [
-    "DelegatePaused",
     "_TurnOutcome",
     "_run_delegate_call",
     "_run_message_tool_calls",

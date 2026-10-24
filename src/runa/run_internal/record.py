@@ -11,7 +11,7 @@ format, never handed out, so no copy of a pause exists that could be resumed a s
 
 `runa.RunState` is the public handle over a `Pause`, and holds it out of a caller's reach: this
 module builds a state (`paused`) and is the only one that reads the pause back out of one
-(`session_for`, `keep`, `resuming`), so nothing else can save, copy or resume a pause by hand.
+(`resume_session`, `keep`, `resuming`), so nothing else can save, copy or resume a pause by hand.
 """
 
 import copy
@@ -284,14 +284,24 @@ def resuming(state: RunState) -> Pause:
     return replace(pause, record=pause.record.resumed(), tree=pause.tree.snapshot())
 
 
-def session_for(state: RunState, passed: Session | str | None) -> Session | None:
-    """The session to resume `state` in: its own, or the `Session` object `passed` for it.
+def resume_session(
+    state: RunState, passed: Session | str | None, *, context: Any, user_id: str | None
+) -> Session | None:
+    """The session to resume `state` in, once what was passed beside it is checked.
 
-    A `Session` object is accepted only for the run's own `session_id`: it names the store a
-    session lives in when `runa.db.session` doesn't reach it, an object a pause loaded in another
-    process doesn't have. Anything else is refused rather than used, since the turn belongs to
-    the conversation it paused in.
+    Every rule about the arguments a `RunState` is run with is here. It carries the `context`,
+    `user_id` and session of the run it paused, so any of them passed beside it is a `UserError`
+    rather than dropped or the turn saved elsewhere, with one exception: a `Session` object for
+    the run's own `session_id`, which names the store a session lives in when `runa.db.session`
+    doesn't reach it, an object a pause loaded in another process doesn't have. With none
+    passed, the session is the run's own.
     """
+    for name, value in (("context", context), ("user_id", user_id)):
+        if value is not None:
+            raise UserError(
+                f"a RunState already carries the {name} of the run it paused, so `{name}=` "
+                f"would be ignored when resuming it: pass `{name}=` to the first run instead."
+            )
     pause = state._pause
     session_id = pause.record.session_id
     if passed is None:
@@ -320,5 +330,5 @@ __all__ = [
     "keep",
     "paused",
     "resuming",
-    "session_for",
+    "resume_session",
 ]

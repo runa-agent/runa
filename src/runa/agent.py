@@ -31,7 +31,7 @@ from runa.lifecycle import Hooks
 from runa.memory import MemoryLike
 from runa.run import Run, RunStream
 from runa.run_internal.agent_shape import AgentShape, Resolved, resolve
-from runa.run_internal.record import session_for
+from runa.run_internal.record import resume_session
 from runa.run_internal.run_loop import _run_async
 from runa.run_state import RunState
 from runa.session import Session
@@ -53,51 +53,34 @@ Typed `Any` so every parameter keeps its own annotation.
 """
 
 
-def _resolve_session(
-    message: MessageContent | RunState, session: Session | str | None, agent: str
-) -> Session | None:
-    """The session this turn runs in: `session`, or the one a paused `message` started in.
+def _turn(
+    agent: Agent,
+    message: MessageContent | RunState,
+    session: Session | str | None,
+    context: Any,
+    user_id: str | None,
+) -> tuple[Session | None, str | list[ConversationItem] | RunState]:
+    """The session this turn of `agent`'s runs in, and the `input` the turn loop is given.
 
-    A string is resolved through `runa.db.session` as `agent`'s, so the backend follows
-    `RUNA_DATABASE_URL`; a `Session` object is passed straight through. A `RunState` carries its
-    own session, so one passed beside it is refused unless it is that session's `Session` object.
+    A paused `RunState` is resumed as is, in the session it started in; what may be passed beside
+    one is `resume_session`'s to say. Otherwise a string `session` is resolved through
+    `runa.db.session` as `agent`'s, so the backend follows `RUNA_DATABASE_URL`, and a `Session`
+    object is passed straight through.
+
+    A list `message` goes through `runa.content.parts`. With no session, the message joins
+    `agent.history`; with one, only the new turn is sent, a plain string as is and a multimodal
+    one as a single user message.
     """
     if isinstance(message, RunState):
-        return session_for(message, session)
+        return resume_session(message, session, context=context, user_id=user_id), message
     if isinstance(session, str):
         from runa import db
 
-        return db.session(session, agent)
-    return session
-
-
-def _turn_input(
-    message: MessageContent | RunState,
-    history: list[ConversationItem],
-    session: Session | None,
-    context: Any = None,
-    user_id: str | None = None,
-) -> str | list[ConversationItem] | RunState:
-    """Build the `input` for the turn loop from this turn's `message`.
-
-    A paused `RunState` passes through to be resumed; it carries its own `context` and
-    `user_id`, so either one alongside it is refused rather than dropped (its session is
-    `_resolve_session`'s). A list `message` goes
-    through `runa.content.parts`. With no `session`, the message joins `history`; with one, only
-    the new turn is sent, a plain string as is and a multimodal one as a single user message.
-    """
-    if isinstance(message, RunState):
-        for name, value in (("context", context), ("user_id", user_id)):
-            if value is not None:
-                raise UserError(
-                    f"a RunState already carries the {name} of the run it paused, so `{name}=` "
-                    f"would be ignored when resuming it: pass `{name}=` to the first run instead."
-                )
-        return message
+        session = db.session(session, agent.name)
     resolved = message if isinstance(message, str) else content.parts(message)
     if session is not None:
-        return resolved if isinstance(resolved, str) else [user_message(resolved)]
-    return [*history, user_message(resolved)]
+        return session, resolved if isinstance(resolved, str) else [user_message(resolved)]
+    return None, [*agent.history, user_message(resolved)]
 
 
 _CAMEL_CASE_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
@@ -508,8 +491,7 @@ class Agent:
         changes once a turn completes; usage is recorded to `self.last_usage` and `self.usage`
         either way.
         """
-        session = _resolve_session(message, session, self.name)
-        turn_input = _turn_input(message, self.history, session, context, user_id)
+        session, turn_input = _turn(self, message, session, context, user_id)
         with self._exclusive(session):
             # A run's own failure comes back as an `"error"` `Run`; only an `OperatorError` or a
             # `CancelledError` gets through, and those are the caller's to see.
@@ -564,8 +546,7 @@ class Agent:
         stops iterating early leaves them unchanged. The instance is held (see `_exclusive`) only
         while the stream is consumed.
         """
-        session = _resolve_session(message, session, self.name)
-        turn_input = _turn_input(message, self.history, session, context, user_id)
+        session, turn_input = _turn(self, message, session, context, user_id)
 
         async def events() -> AsyncIterator[StreamEvent]:
             # Held only while a consumer iterates, so a stream built and dropped holds nothing.

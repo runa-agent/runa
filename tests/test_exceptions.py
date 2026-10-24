@@ -20,8 +20,6 @@ _UNCLASSIFIED_BY_DESIGN = {
     # The two roots themselves.
     "OperatorError",
     "RunaError",
-    # A control-flow signal, not a failure: the turn loop raises it to unwind a paused delegate.
-    "DelegatePaused",
     # The operator typed nothing wrong, their `main.py` is broken, and it earns the message
     # that says so rather than the one every operator error shares. See `runa.project`.
     "AppLoadError",
