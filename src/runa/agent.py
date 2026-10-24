@@ -94,16 +94,6 @@ def snake_case(name: str) -> str:
     return _CAMEL_CASE_BOUNDARY.sub("_", name).lower()
 
 
-def declared_name(agent_cls: type[Agent]) -> str:
-    """The `name` `agent_cls` declares, falling back to the class's own name if it declares none.
-
-    For every surface that reads an `Agent` subclass without building one (`runa ui`, `runa
-    serve`'s routes, `runa chat`), so an agent answers to one name everywhere. An agent without a
-    `name` is still listed this way, though constructing it raises.
-    """
-    return getattr(agent_cls, "name", agent_cls.__name__)
-
-
 def prompt_path(app_dir: Path, name: str) -> Path:
     """Where the agent called `name` keeps its instructions: `<app_dir>/prompts/<name>.md`.
 

@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from runa import project
 from runa._log import logger
-from runa.agent import Agent, declaration, declared_name
+from runa.agent import Agent, declaration
 from runa.exceptions import OperatorError, UserError
 from runa.run import Run
 from runa.run_state import RunState
@@ -217,7 +217,7 @@ def create_app(root: Path, *, api_key: str | None) -> FastAPI:
     # imports the app, so a broken agent module stops the process from starting rather than
     # failing one route, which is the failure a deployment wants -- found by the thing that rolls
     # out, not by a user.
-    agent_classes = {declared_name(cls): cls for cls in project.iter_agent_classes(agents_dir)}
+    agent_classes = {cls.name: cls for cls in project.iter_agent_classes(agents_dir)}
 
     async def _authenticate(request: Request) -> None:
         """Require `Authorization: Bearer <RUNA_API_KEY>` unless the server was started open."""
@@ -353,7 +353,7 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
         if chunks:
             # Only when it actually wrote: zero is the usual answer (a corpus the store already
             # held), and a line per agent per boot saying nothing happened is noise.
-            logger.info("ingested %d knowledge chunks for %s", chunks, declared_name(agent_cls))
+            logger.info("ingested %d knowledge chunks for %s", chunks, agent_cls.name)
 
 
 def _constant_time_equal(left: str, right: str) -> bool:

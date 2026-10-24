@@ -35,8 +35,8 @@ from pathlib import Path
 
 from runa import _app
 from runa._app import use
-from runa.agent import Agent, Subagent, declared_name
-from runa.exceptions import OperatorError
+from runa.agent import Agent, Subagent, snake_case
+from runa.exceptions import OperatorError, UserError
 from runa.guardrail import declared_names
 
 
@@ -163,23 +163,36 @@ def require_agents_dir(root: Path) -> Path:
     return agents_dir
 
 
-def iter_agent_classes(agents_dir: Path) -> Iterator[type[Agent]]:
-    """Yield every `Agent` subclass declared directly in a module under `agents_dir`.
+def iter_agent_classes(agents_dir: Path) -> list[type[Agent]]:
+    """Every `Agent` subclass declared directly in a module under `agents_dir`.
 
     Each module is imported as `app.agents.<stem>`, which is why this is where the app said by
     `use` is imported, on behalf of every caller that reads its agents (see `_ensure_imported`);
     inside a `loaded_app` block the import has already happened. `obj.__module__ ==
     module.__name__` excludes an `Agent` subclass merely imported into the module (e.g. a
     subagent imported for its `.handoff`/`.delegate` reference) from one actually defined there.
+
+    Every class found is an agent the app can run, so each must declare its `name`: one that
+    doesn't is a `UserError` here, before any surface lists, serves or builds it. A shared base
+    class with no `name` of its own belongs outside `app/agents/`.
     """
     _ensure_imported()
+    found: list[type[Agent]] = []
     for agent_file in sorted(agents_dir.glob("*.py")):
         if agent_file.stem == "__init__":
             continue
         module = importlib.import_module(f"app.agents.{agent_file.stem}")
         for _, obj in inspect.getmembers(module, inspect.isclass):
             if issubclass(obj, Agent) and obj is not Agent and obj.__module__ == module.__name__:
-                yield obj
+                found.append(obj)
+    for agent_cls in found:
+        if not hasattr(agent_cls, "name"):
+            raise UserError(
+                f"{agent_cls.__name__} in {agents_dir} declares no 'name'; give it one, e.g. "
+                f"`name = {snake_case(agent_cls.__name__)!r}`, or move a shared base class "
+                f"out of app/agents/"
+            )
+    return found
 
 
 def find_agent_class(agent_name: str, *, agents_dir: Path) -> type[Agent]:
@@ -187,12 +200,10 @@ def find_agent_class(agent_name: str, *, agents_dir: Path) -> type[Agent]:
 
     Matches the `name` class attribute (e.g. `class SupportAgent(Agent): name = "Support"`)
     rather than the Python class name: `name` is the identity Runa itself uses for traces,
-    instructions, and handoffs, so it's what an operator should type too. One that declares none
-    answers to its class name (`declared_name`), which is also how it was listed and served, so
-    an operator types what they were shown either way.
+    instructions, and handoffs, so it's what an operator should type too.
     """
     for agent_cls in iter_agent_classes(agents_dir):
-        if declared_name(agent_cls) == agent_name:
+        if agent_cls.name == agent_name:
             return agent_cls
     raise AgentNotFound(f"no Agent named {agent_name!r} found under {agents_dir}")
 
@@ -218,8 +229,8 @@ def _tool_name(tool: object) -> str:
 def _subagent_label(subagent: Subagent | type[Agent]) -> str:
     """Label one `subagents` entry: `.handoff`/`.delegate`-bound, or bare, which means auto."""
     if isinstance(subagent, Subagent):
-        return f"{declared_name(subagent.agent)} ({subagent.mode})"
-    return f"{declared_name(subagent)} (auto)"
+        return f"{subagent.agent.name} ({subagent.mode})"
+    return f"{subagent.name} (auto)"
 
 
 def _retrieval_label(setting: object) -> str:
@@ -237,7 +248,7 @@ def _describe(agent_cls: type[Agent]) -> AgentInfo:
     the paths a new setting has to join.
     """
     return AgentInfo(
-        name=declared_name(agent_cls),
+        name=agent_cls.name,
         class_name=agent_cls.__name__,
         model=agent_cls.model,
         tools=[_tool_name(tool) for tool in getattr(agent_cls, "tools", [])],

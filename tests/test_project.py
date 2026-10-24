@@ -75,6 +75,19 @@ def test_find_agent_class_raises_when_nothing_matches(tmp_path: Path) -> None:
         find_agent_class("Nope", agents_dir=project_dir / "app" / "agents")
 
 
+def test_an_agent_without_a_name_is_refused_when_discovered(tmp_path: Path) -> None:
+    """A nameless class under `app/agents/` is a `UserError` on every surface, not a listing."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+    _write_agent(
+        project_dir, "nameless.py", "from runa import Agent\n\n\nclass NamelessAgent(Agent): ...\n"
+    )
+
+    with pytest.raises(UserError, match="NamelessAgent .* declares no 'name'.*'nameless_agent'"):
+        list_agents(root=project_dir)
+    with loaded_app(project_dir), pytest.raises(UserError, match="declares no 'name'"):
+        find_agent_class("NamelessAgent", agents_dir=project_dir / "app" / "agents")
+
+
 def test_list_agents_finds_every_declared_agent(tmp_path: Path) -> None:
     """`list_agents` returns one `AgentInfo` per Agent subclass under `app/agents/`."""
     project_dir = scaffold_project("demo", root=tmp_path)
