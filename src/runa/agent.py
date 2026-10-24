@@ -363,22 +363,20 @@ class Agent:
         setting = _settings(cls, passed)
         vars(self).update(setting)
         self._start_conversation()
-        resolved = declaration(cls) if declared else resolve(setting)
-        self._shape = AgentShape.of(self, resolved)
+        self._shape = AgentShape.of(self, declaration(cls) if declared else resolve(setting))
 
     def __setattr__(self, name: str, value: Any) -> None:
-        """Set an attribute, rebuilding the shape a run reads when it is one of the settings.
+        """Set an attribute, building the shape a run reads again when it is one of the settings.
 
-        Only reassigning `subagents` builds the agents below this one again.
+        The agents below this one are built again with it, as when the agent was constructed.
         """
         if name not in _AGENT_FIELDS:
             super().__setattr__(name, value)
             return
         super().__setattr__(name, _stored(name, value))
         if "_shape" in vars(self):
-            resolved = resolve({setting: getattr(self, setting) for setting in _AGENT_FIELDS})
-            previous = None if name == "subagents" else self._shape
-            self._shape = AgentShape.of(self, resolved, previous)
+            settings = {setting: getattr(self, setting) for setting in _AGENT_FIELDS}
+            self._shape = AgentShape.of(self, resolve(settings))
 
     @property
     def graph(self) -> Digraph:

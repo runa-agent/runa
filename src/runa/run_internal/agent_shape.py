@@ -208,24 +208,28 @@ class Resolved:
 def resolve(settings: Mapping[str, Any]) -> Resolved:
     """`settings`, one value per `Agent` setting as an agent holds it, translated for a run.
 
-    A value no run could use is a `UserError`. A field named after a setting and not translated
-    here holds that setting as given.
+    A value no run could use is a `UserError`. Every field is named here, so a setting added to
+    `Agent` and to `Resolved` is a `TypeError` until it is translated here too.
     """
     memory, memory_tools = _retrieval(settings["memory"], Memory)
     knowledge, knowledge_tools = _retrieval(settings["knowledge"], Knowledge)
-    translated: dict[str, Any] = {
-        "instructions": _adapt_instructions(settings["instructions"]),
-        "model": _checked_model(settings["model"]),
-        "model_settings": settings["model_settings"] or ModelSettings(),
-        "tools": (*settings["tools"], *memory_tools, *knowledge_tools),
-        "mcp_servers": tuple(settings["mcp"]),
-        "guardrails": flatten_guardrails(settings["guardrails"]),
-        "compactor": resolve_compactor(settings["compact"]),
-        "memory": memory,
-        "knowledge": knowledge,
-    }
-    given = {f.name: settings[f.name] for f in fields(Resolved) if f.name not in translated}
-    return Resolved(**given, **translated)
+    return Resolved(
+        name=settings["name"],
+        instructions=_adapt_instructions(settings["instructions"]),
+        model=_checked_model(settings["model"]),
+        model_settings=settings["model_settings"] or ModelSettings(),
+        output_type=settings["output_type"],
+        hooks=settings["hooks"],
+        tools=(*settings["tools"], *memory_tools, *knowledge_tools),
+        mcp_servers=tuple(settings["mcp"]),
+        guardrails=flatten_guardrails(settings["guardrails"]),
+        compactor=resolve_compactor(settings["compact"]),
+        memory=memory,
+        knowledge=knowledge,
+        max_turns=settings["max_turns"],
+        max_tokens=settings["max_tokens"],
+        timeout=settings["timeout"],
+    )
 
 
 @dataclass(frozen=True)
@@ -243,18 +247,9 @@ class AgentShape(Resolved):
     """Its `subagents` wired up as delegates, keyed by the tool name that triggers each."""
 
     @classmethod
-    def of(cls, agent: Agent, resolved: Resolved, previous: AgentShape | None = None) -> AgentShape:
-        """`agent`'s shape: its settings as `resolved`, wired into its agent graph.
-
-        `previous` is a shape of the same agent graph whose subagents are kept rather than built
-        again, given when `subagents` isn't what changed, so the agents below this one keep their
-        identity.
-        """
-        handoffs, delegates = (
-            _subagent_graph(agent)
-            if previous is None
-            else ([*previous.handoffs.values()], [*previous.delegates.values()])
-        )
+    def of(cls, agent: Agent, resolved: Resolved) -> AgentShape:
+        """`agent`'s shape: its settings as `resolved`, wired into a subagent graph built for it."""
+        handoffs, delegates = _subagent_graph(agent)
         _checked_unique(
             agent.name,
             (
