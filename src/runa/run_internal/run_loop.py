@@ -9,7 +9,7 @@ import inspect
 import time
 from collections.abc import AsyncIterator, Awaitable, Iterator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -66,14 +66,16 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class _Frame:
-    """One call running a run: the run's record, and everything about the call that isn't resumed.
+class _Run:
+    """One run, from its entry point building it to the moment it becomes the caller's `Run`.
 
     Every entry point builds one, then hands it to `_within`. The record is what the run is, and
-    the `tree` what it shares with every delegate's frame, by reference; a pause hands both back.
-    This call's agent span, session, hooks and `emit` are the call's own, and not resumed. The
-    frame exists before the MCP servers are reached, so a run that fails reaching them still
-    reports.
+    the `tree` what it shares with every delegate's run, by reference; a pause hands both back.
+    This call's agent span, session, hooks and `emit` are the call's own, and not resumed.
+
+    `shape` is readable once `list_tools` has reached the running agent's MCP servers, so a run
+    that fails reaching them still reports, from its record, tree and span. Each turn reads
+    `shape`; the run as a whole reads `start`.
 
     `delegated` is set for a delegate's run, whose pause is its caller's rather than kept in
     `runa.db` on its own.
@@ -86,23 +88,28 @@ class _Frame:
     hooks: _Dispatch[Any]
     emit: Emit | None = None
     delegated: bool = False
+    _listed: AgentShape | None = field(default=None, init=False, repr=False)
 
     @property
-    def run_context(self) -> RunContext[Any]:
-        """The record's `RunContext`: what user code is told about the run."""
-        return self.record.run_context
+    def shape(self) -> AgentShape:
+        """The shape of the agent running now, with its MCP tools."""
+        listed = self._listed
+        assert listed is not None and listed.agent is self.record.agent, "MCP tools not listed"
+        return listed
 
+    async def list_tools(self) -> None:
+        """List the MCP tools of the agent running now, which may start a subprocess."""
+        self._listed = await shape_of(self.record.agent).with_mcp_tools()
 
-@dataclass
-class _Run:
-    """One run, from the moment the loop starts it to the moment it becomes the caller's `Run`.
+    async def hand_off(self, agent: Agent) -> None:
+        """Make `agent` the one running now, its MCP tools listed."""
+        self.record.agent = agent
+        await self.list_tools()
 
-    Its `frame`, plus what needed the MCP servers reached: the `shape` of the agent running now,
-    with their tools. Each turn reads `shape`; the run as a whole reads `start`.
-    """
-
-    frame: _Frame
-    shape: AgentShape
+    @property
+    def current_agent(self) -> Agent:
+        """The agent running now, as user code sees it: a hook's callback, a guardrail, a pause."""
+        return self.record.agent
 
     @property
     def start(self) -> AgentShape:
@@ -110,52 +117,32 @@ class _Run:
         return shape_of(self.record.start)
 
     @property
-    def record(self) -> RunRecord:
-        """What this run is, as it would be resumed."""
-        return self.frame.record
-
-    @property
     def transcript(self) -> Transcript:
         """The run's conversation."""
-        return self.frame.record.transcript
+        return self.record.transcript
 
     @property
-    def current_agent(self) -> Agent:
-        """The agent running now, as user code sees it: a hook's callback, a guardrail, a pause."""
-        return self.shape.agent
-
-    async def hand_off(self, agent: Agent) -> None:
-        """Make `agent` the one running now, its MCP tools listed."""
-        self.shape = await shape_of(agent).with_mcp_tools()
-        self.record.agent = agent
+    def run_context(self) -> RunContext[Any]:
+        """The record's `RunContext`: what user code is told about the run."""
+        return self.record.run_context
 
     @property
     def spans(self) -> _Spans:
         """Where this run's steps put their spans: children of its one agent span, charged to it."""
-        return _Spans(self.frame.tree.trace, self.frame.agent_span.id, self.run_context.usage)
+        return _Spans(self.tree.trace, self.agent_span.id, self.run_context.usage)
 
     def span(self, name: str, span_type: Any, *, input: Any = None) -> AbstractContextManager[Span]:
         """A span under this run's agent span, for a `with` block."""
         return self.spans.span(name, span_type, input=input)
 
-    @property
-    def run_context(self) -> RunContext[Any]:
-        """What user code is told about the run."""
-        return self.frame.run_context
-
     def notify(self, event: StreamEvent) -> None:
         """Hand `event` to a streamed run's consumer; a non-streamed run has nowhere to put it."""
-        if self.frame.emit is not None:
-            self.frame.emit(event)
-
-    @property
-    def hooks(self) -> Hooks[Any]:
-        """The run's lifecycle events, each fired at the run's scope and the agent's own."""
-        return self.frame.hooks
+        if self.emit is not None:
+            self.emit(event)
 
     def claim(self, call_id: str, name: str) -> None:
         """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
-        if not self.frame.tree.approvals.claim(call_id):
+        if not self.tree.approvals.claim(call_id):
             raise DuplicateToolCallError(call_id, name)
 
     async def decide(
@@ -169,7 +156,7 @@ class _Run:
             verdict = tool.needs_approval(self.run_context, args, call_id)
             return bool(await verdict if inspect.isawaitable(verdict) else verdict)
 
-        approvals = self.frame.tree.approvals
+        approvals = self.tree.approvals
         return await approvals.decide(tool.name, call_id, needs_approval=needs_approval)
 
     async def guard(
@@ -202,7 +189,7 @@ class _Run:
                 if verdict.tripped:
                     span.error = "tripwire triggered"
             result = GuardrailResult(entry, verdict, verdict.tripped, phase)
-            self.frame.tree.guardrail_results.record(result)
+            self.tree.guardrail_results.record(result)
             if verdict.tripped:
                 raise GuardrailTripwireTriggered(result)
 
@@ -218,22 +205,21 @@ class _Run:
         and `input` is not read again. Its usage is merged here as it goes, so a stashed record
         starts its next leg from none. Otherwise the returned `Run` is completed or errored.
 
-        The nested frame is this one's with the delegate's own agent (and its ceilings), a record
-        of its own over the same `context` and `user_id`, whose usage is merged back here, and an
-        agent span under `under`. The tree and hooks are shared, as is anything a frame starts
-        carrying unless named below. This run's deadline
+        The nested run is this one with the delegate's own agent (and its ceilings), a record of
+        its own over the same `context` and `user_id`, whose usage is merged back here, and an
+        agent span under `under`. The tree and hooks are shared, as is anything a run starts
+        carrying unless named below. Its MCP tools are its own, listed afresh. This run's deadline
         encloses the delegate's.
 
         Not shared: the `session` (a delegate is handed fresh input, not a conversation) and
         `emit` (a stream event doesn't say which agent produced it, so the stream sees the
         delegate call and its output, not the delegate's tokens).
         """
-        frame = self.frame
         self.claim(call_id, delegate.tool_name)
         paused = self.record.delegates.pop(call_id, None)
         message: str | None
         if paused is None:
-            context = frame.run_context
+            context = self.run_context
             record = RunRecord(
                 start=delegate.agent,
                 agent=delegate.agent,
@@ -243,9 +229,9 @@ class _Run:
         else:
             record, message = paused.resumed(), None
         nested = replace(
-            frame,
+            self,
             record=record,
-            agent_span=_Spans(frame.tree.trace, under.id).open(
+            agent_span=_Spans(self.tree.trace, under.id).open(
                 record.agent.name, "agent", input=message
             ),
             session=None,
@@ -253,10 +239,10 @@ class _Run:
             delegated=True,
         )
         run = await _within(nested, message)
-        frame.run_context.usage.add(run.usage)
+        self.run_context.usage.add(run.usage)
         if run.status != "paused":
             return run
-        frame.tree.approvals.release(call_id)
+        self.tree.approvals.release(call_id)
         record.run_context.usage = Usage()
         self.record.delegates[call_id] = record
         return record.pending
@@ -385,7 +371,7 @@ async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
 
     A turn is counted on the record, so a resumed run goes on from the turns it already took;
     one past the starting agent's `max_turns` raises `MaxTurnsExceeded` instead. With
-    `run.frame.emit` (a streamed run), the model is streamed. The message is recorded on the
+    `run.emit` (a streamed run), the model is streamed. The message is recorded on the
     run's transcript, after any compaction the response's usage calls for.
     """
     transcript, record = run.transcript, run.record
@@ -402,10 +388,10 @@ async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
         output_schema=shape.output_type,
     )
     model = _RunModel(run, shape, run.start.max_tokens)
-    if run.frame.emit is None:
+    if run.emit is None:
         response = await model.get_response(request)
     else:
-        response = await _stream_response(model, request, run.frame.emit)
+        response = await _stream_response(model, request, run.emit)
     context_tokens = response.usage.input_tokens + response.usage.output_tokens
     dropped = transcript.compact(shape.compactor, context_tokens)
     _note_compaction(run.spans, context_tokens, dropped)
@@ -422,7 +408,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
 
     A resumed run's first message is the one it paused on, already in its transcript and its
     calls already announced: only the model call is skipped, and the results computed before the
-    pause are reused. With `run.frame.emit`, every step is emitted as a `StreamEvent`.
+    pause are reused. With `run.emit`, every step is emitted as a `StreamEvent`.
     """
     record = run.record
     while True:
@@ -467,32 +453,33 @@ def _export(trace: Trace) -> None:
     export_trace_later(trace)
 
 
-def _errored(failure: RunaError, frame: _Frame) -> Run:
+def _errored(failure: RunaError, run: _Run) -> Run:
     """Close the run's agent span around `failure` and return the `Run` the caller was promised.
 
-    Reports what the frame holds: the spans, the usage, the tool calls and the guardrails that
-    ran. An unfinished turn is not history, so the `Run` carries an empty `Transcript`.
+    Reports what the record and tree hold, never the `shape`, which a run failing to list its MCP
+    tools doesn't have: the spans, the usage, the tool calls and the guardrails that ran. An
+    unfinished turn is not history, so the `Run` carries an empty `Transcript`.
     """
-    close_span(frame.agent_span, error=str(failure))
+    close_span(run.agent_span, error=str(failure))
     return Run(
         output=None,
-        trace=frame.tree.trace,
-        usage=frame.run_context.usage,
+        trace=run.tree.trace,
+        usage=run.run_context.usage,
         status="error",
         error=str(failure),
-        tool_calls=tuple(frame.record.tool_calls),
-        guardrail_results=frame.tree.guardrail_results.snapshot(),
+        tool_calls=tuple(run.record.tool_calls),
+        guardrail_results=run.tree.guardrail_results.snapshot(),
     )
 
 
-async def _timed(turn: Awaitable[Run], frame: _Frame) -> Run:
+async def _timed(turn: Awaitable[Run], run: _Run) -> Run:
     """Await `turn` within the starting agent's `timeout`, less what the record already spent.
 
     Overrunning it is `RunTimeout`. The time spent here is added to the record on every way out,
     so a pause kept after this returns carries it.
     """
-    record = frame.record
-    timeout = shape_of(record.start).timeout
+    record = run.record
+    timeout = run.start.timeout
     began = time.monotonic()
     try:
         if timeout is None:
@@ -506,66 +493,66 @@ async def _timed(turn: Awaitable[Run], frame: _Frame) -> Run:
         record.elapsed += time.monotonic() - began
 
 
-async def _guarded(turn: Awaitable[Run], frame: _Frame) -> Run:
+async def _guarded(turn: Awaitable[Run], run: _Run) -> Run:
     """Await the whole run and return its `Run`, the `"error"` one included.
 
     The boundary where "errors never raise out of a run" is kept: it encloses everything a run
     does, application code included (a `Hooks` method, a `Session`, a `Compactor`), and catches
     `Exception`. Anything not a `RunaError` becomes `UnexpectedError`, its traceback logged.
-    The frame's span is closed on every way out; exporting the trace is `_traced`'s.
+    The run's span is closed on every way out; exporting the trace is `_traced`'s.
 
     `BaseException` (cancellation) and `OperatorError` pass through, the span still closed.
     """
     try:
         result = await turn
     except OperatorError as exc:
-        close_span(frame.agent_span, error=str(exc))
+        close_span(run.agent_span, error=str(exc))
         raise
     except RunaError as exc:
         failure = exc
     except Exception as exc:
         logger.error(
             "agent %s failed with an unhandled %s",
-            frame.agent_span.name,
+            run.agent_span.name,
             type(exc).__name__,
             exc_info=True,
         )
         failure = UnexpectedError(exc)
     else:
         return result
-    return _errored(failure, frame)
+    return _errored(failure, run)
 
 
 async def _within(
-    frame: _Frame,
+    run: _Run,
     input: str | list[ConversationItem] | None,
     *,
     claiming: Pause | None = None,
 ) -> Run:
     """Run the record's agent on `input`, or with `None`, continue its paused record, guarded.
 
-    Every entry point ends here once its frame is built. Listing the MCP tools (which may start a
+    Every entry point ends here once its run is built. Listing the MCP tools (which may start a
     subprocess), reading the session, claiming the pause a resumed run is `claiming` (see
     `_drive`) and keeping a pause in `runa.db` are inside `_guarded` too, so their failures end
     the run like any other. A pause is kept once the clock has stopped, so it carries all the time
-    it spent, and never by a delegate's frame: a delegate's pause is carried by its caller's.
+    it spent, and never by a delegate's run: a delegate's pause is carried by its caller's.
     """
 
     async def turn() -> Run:
-        shape = await shape_of(frame.record.agent).with_mcp_tools()
+        await run.list_tools()
         if input is not None:
-            session = frame.session
+            session = run.session
             prior = await session.get_items() if session is not None else []
-            frame.record.transcript = Transcript.start(_turn_items(input), prior)
-        return await _drive(_Run(frame, shape), input, claiming)
+            run.record.transcript = Transcript.start(_turn_items(input), prior)
+        return await _drive(run, input, claiming)
 
     async def kept() -> Run:
-        run = await _timed(turn(), frame)
-        if run.status == "paused" and not frame.delegated:
-            await keep(run.to_state())
-        return run
+        result = await _timed(turn(), run)
+        if result.status == "paused" and not run.delegated:
+            await keep(result.to_state())
+        return result
 
-    return await _guarded(kept(), frame)
+    return await _guarded(kept(), run)
 
 
 def _turn_items(input: str | list[ConversationItem]) -> list[ConversationItem]:
@@ -580,7 +567,7 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
     if not sources or query is None:
         return
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
-    beside = _Spans(run.frame.tree.trace, run.frame.agent_span.parent_id, run.run_context.usage)
+    beside = _Spans(run.tree.trace, run.agent_span.parent_id, run.run_context.usage)
     for name, source in sources:
         with (
             beside.span(name, "custom", input=query) as span,
@@ -641,13 +628,12 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     `usage` is the `RunContext`'s, every turn and delegate included. Closes the agent span;
     exporting the trace is `_traced`'s.
     """
-    frame, record, transcript = run.frame, run.record, run.transcript
-    run_context = frame.run_context
-    close_span(frame.agent_span, output=outcome.final_output)
+    record, transcript, run_context = run.record, run.transcript, run.run_context
+    close_span(run.agent_span, output=outcome.final_output)
 
     if outcome.interruptions:
         record.pending, record.ready_results = outcome.interruptions, outcome.ready_results
-        tree = frame.tree.snapshot()
+        tree = run.tree.snapshot()
         return Run(
             output=None,
             trace=tree.trace,
@@ -655,7 +641,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             status="paused",
             interruptions=outcome.interruptions,
             tool_calls=tuple(record.tool_calls),
-            _state=paused(record, tree, frame.session),
+            _state=paused(record, tree, run.session),
             _transcript=transcript,
             guardrail_results=tree.guardrail_results,
         )
@@ -664,21 +650,21 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     tokens = outcome.context_tokens
     dropped = transcript.compact_history(run.start.compactor, tokens)
     _note_compaction(run.spans, tokens, dropped)
-    if frame.session is not None:
+    if run.session is not None:
         if dropped is None:
-            await frame.session.add_items(transcript.unsaved())
+            await run.session.add_items(transcript.unsaved())
         else:
-            await frame.session.set_items(transcript.history())
+            await run.session.set_items(transcript.history())
     await _after_turn(run, outcome.final_output)
 
     await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
     return Run(
         output=outcome.final_output,
-        trace=frame.tree.trace,
+        trace=run.tree.trace,
         usage=run_context.usage,
         tool_calls=tuple(record.tool_calls),
         _transcript=transcript,
-        guardrail_results=frame.tree.guardrail_results.snapshot(),
+        guardrail_results=run.tree.guardrail_results.snapshot(),
     )
 
 
@@ -736,7 +722,7 @@ async def _run_async(
     if group_id is not None:
         trace.metadata = {"group_id": group_id}
 
-    frame = _Frame(
+    run = _Run(
         record=RunRecord(
             start=agent,
             agent=agent,
@@ -751,7 +737,7 @@ async def _run_async(
         hooks=dispatch,
         emit=emit,
     )
-    return await _traced(_within(frame, input), trace)
+    return await _traced(_within(run, input), trace)
 
 
 async def _resume(
@@ -768,7 +754,7 @@ async def _resume(
     `session` is the one the run started in (see `RunState`), never a caller's choice.
     """
     pause = resuming(state)
-    frame = _Frame(
+    run = _Run(
         record=pause.record,
         tree=pause.tree,
         agent_span=_Spans(pause.tree.trace).open(pause.record.agent.name, "agent"),
@@ -776,7 +762,7 @@ async def _resume(
         hooks=dispatch,
         emit=emit,
     )
-    return await _traced(_within(frame, None, claiming=pause), pause.tree.trace)
+    return await _traced(_within(run, None, claiming=pause), pause.tree.trace)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]
