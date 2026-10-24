@@ -80,8 +80,9 @@ class _Run:
     `compactor` stay the starting agent's after a handoff. Every other setting is read from
     `shape`, the agent running now.
 
-    `delegated` is set for a delegate's run, whose pause is its caller's rather than kept in
-    `runa.db` on its own.
+    `callers` are, for a delegate's run, the usages of the runs it is nested in, innermost first:
+    each call it makes is charged to every one of them as well as to its own, as it is made. Empty
+    for a root run.
     """
 
     record: RunRecord
@@ -90,7 +91,7 @@ class _Run:
     session: Session | None
     hooks: _Dispatch[Any]
     emit: Emit | None = None
-    delegated: bool = False
+    callers: tuple[Usage, ...] = ()
     _listed: AgentShape | None = field(default=None, init=False, repr=False)
 
     @property
@@ -108,6 +109,16 @@ class _Run:
         """Make `agent` the one running now, its MCP tools listed."""
         self.record.agent = agent
         await self.list_tools()
+
+    @property
+    def delegated(self) -> bool:
+        """Whether this is a delegate's run, whose pause is its caller's, not kept on its own."""
+        return bool(self.callers)
+
+    @property
+    def payers(self) -> tuple[Usage, ...]:
+        """What a call this run makes is charged to: its own usage, then each caller's."""
+        return (self.run_context.usage, *self.callers)
 
     @property
     def current_agent(self) -> Agent:
@@ -132,7 +143,7 @@ class _Run:
     @property
     def spans(self) -> _Spans:
         """Where this run's steps put their spans: children of its one agent span, charged to it."""
-        return _Spans(self.tree.trace, self.agent_span.id, self.run_context.usage)
+        return _Spans(self.tree.trace, self.agent_span.id, self.payers)
 
     def span(self, name: str, span_type: Any, *, input: Any = None) -> AbstractContextManager[Span]:
         """A span under this run's agent span, for a `with` block."""
@@ -233,14 +244,14 @@ class _Run:
         A delegate that pauses for approval gives the claim back, is stashed in this run's record
         under `call_id` and comes back as its pending `Interruption`s, for this run to pause on;
         the same call reaching here again, on resume, continues it instead of starting it over,
-        and `input` is not read again. Its usage is merged here as it goes, so a stashed record
-        starts its next leg from none. Otherwise the returned `Run` is completed or errored.
+        and `input` is not read again. Otherwise the returned `Run` is completed or errored.
 
         The nested run is this one with the delegate's own agent (and its ceilings), a record of
-        its own over the same `context` and `user_id`, whose usage is merged back here, and an
-        agent span under `under`. The tree and hooks are shared, as is anything a run starts
-        carrying unless named below. Its MCP tools are its own, listed afresh. This run's deadline
-        encloses the delegate's.
+        its own over the same `context` and `user_id`, and an agent span under `under`. Each call
+        it makes is charged to its own usage and to this run's (and so on up) as it is made, so
+        its record's usage, like its turns, is the delegate's whole spend across its resumes. The
+        tree and hooks are shared, as is anything a run starts carrying unless named below. Its
+        MCP tools are its own, listed afresh. This run's deadline encloses the delegate's.
 
         Not shared: the `session` (a delegate is handed fresh input, not a conversation) and
         `emit` (a stream event doesn't say which agent produced it, so the stream sees the
@@ -267,14 +278,12 @@ class _Run:
             ),
             session=None,
             emit=None,
-            delegated=True,
+            callers=self.payers,
         )
         run = await _within(nested, message)
-        self.run_context.usage.add(run.usage)
         if run.status != "paused":
             return run
         self.tree.approvals.release(call_id)
-        record.run_context.usage = Usage()
         self.record.delegates[call_id] = record
         return record.pending
 
@@ -585,7 +594,7 @@ async def _after_turn(run: _Run, final_output: Any) -> None:
     if not sources or query is None:
         return
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
-    beside = _Spans(run.tree.trace, run.agent_span.parent_id, run.run_context.usage)
+    beside = _Spans(run.tree.trace, run.agent_span.parent_id, run.payers)
     for name, source in sources:
         with (
             beside.span(name, "custom", input=query) as span,

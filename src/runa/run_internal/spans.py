@@ -2,7 +2,7 @@
 
 A run's spans are also where its model calls are charged: inside a span the run opens, a
 `metered` call (the loop's own, a context source's, an embedding request anywhere below) is an
-`"llm"` span under it, counted in the run's usage. The innermost open span pays.
+`"llm"` span under the innermost open span, counted in the run's usage and in each caller's.
 """
 
 from collections.abc import Iterator
@@ -24,14 +24,15 @@ class _Spans:
     opens spans inside its own (a tool call, around its guardrails) hands on `under(span)` rather
     than remembering to swap one of two parameters.
 
-    `usage` is the run's the spans belong to. With it, a scope is a `Meter`: each `span` block
-    charges the `metered` calls inside it to `usage`, under that span. Without it (a scope that
-    only opens an agent span), a span charges nothing of its own.
+    `payers` are the usages a call is charged to: that of the run the spans belong to, then those
+    of the runs it is nested in, out to the root. With them, a scope is a `Meter`: each `span`
+    block charges the `metered` calls inside it to every payer, under that span. Without (a scope
+    that only opens an agent span), a span charges nothing of its own.
     """
 
     trace: Trace
     parent_id: str | None = None
-    usage: Usage | None = None
+    payers: tuple[Usage, ...] = ()
 
     def open(self, name: str, span_type: Any, *, input: Any = None) -> Span:
         """Start a span under this scope's parent, recorded on the trace straight away."""
@@ -50,7 +51,7 @@ class _Spans:
         span, unless a span opened inside it takes them.
         """
         with self._span(name, span_type, input=input) as span:
-            if self.usage is None:
+            if not self.payers:
                 yield span
             else:
                 with charging(self.under(span)):
@@ -63,12 +64,13 @@ class _Spans:
         Changes no charging of its own: the block may be an async generator's, which can't
         hold one across a `yield`.
         """
-        usage = self.usage
-        assert usage is not None, "only a run's spans are charged to"
+        payers = self.payers
+        assert payers, "only a run's spans are charged to"
         with self._span(name, "llm", input=input) as span:
 
             def charge(spent: Usage) -> None:
-                usage.add(spent)
+                for usage in payers:
+                    usage.add(spent)
                 span.output = {"usage": spent.__dict__}
 
             yield charge
@@ -89,7 +91,7 @@ class _Spans:
 
     def under(self, span: Span) -> _Spans:
         """This same trace, with `span` as the parent: the scope inside a span just opened."""
-        return _Spans(self.trace, span.id, self.usage)
+        return _Spans(self.trace, span.id, self.payers)
 
 
 __all__ = ["_Spans"]

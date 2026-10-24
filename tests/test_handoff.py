@@ -112,6 +112,37 @@ def test_a_delegates_usage_is_merged_into_its_callers() -> None:
     assert run.usage.total_tokens == 6  # two calls of the caller's, one of the delegate's
 
 
+def test_a_delegates_token_ceiling_counts_its_spend_before_a_pause() -> None:
+    """Resuming a delegate resumes its spend too, so its `max_tokens` isn't reset by a pause."""
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Needs approval."""
+        return "handled"
+
+    class Delegate(Agent):
+        name = "Delegate"
+        tools = [dangerous]
+        max_tokens = 3
+        model = _ScriptedModel(
+            [_tool_call_message("dangerous", "{}", "d1"), _final_message("delegate done")]
+        )
+
+    lead = _lead(
+        Delegate,
+        [_tool_call_message("delegate", '{"input": "go"}'), _final_message("all done")],
+    )
+
+    paused = lead.run_sync("go")
+    state = paused.to_state()
+    state.approve(paused.interruptions[0])
+    run = lead.run_sync(state)
+
+    [call] = run.tool_calls
+    assert call.error is not None and "max tokens (3) exceeded: 4 used" in call.error
+    assert run.usage.total_tokens == 8  # two calls of the caller's, two of the delegate's
+
+
 def test_a_delegate_sees_the_same_context_object_as_its_caller() -> None:
     """The delegate's tools see the exact same `context` object as the caller's, not a copy."""
     seen: list[Any] = []
