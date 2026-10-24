@@ -1482,6 +1482,34 @@ def test_compact_runs_whatever_compactor_the_shape_carries() -> None:
     ]
 
 
+def test_compact_stays_the_starting_agents_after_a_handoff() -> None:
+    """A handoff target's `compact` never runs: the run's compaction is the starting agent's.
+
+    Both the mid-run cut of what the model is sent and the final cut of the history.
+    """
+    consulted: list[str] = []
+
+    def compactor(owner: str) -> Any:
+        def keep_all(items: list[Any], usage_tokens: int) -> None:
+            consulted.append(owner)
+
+        return keep_all
+
+    target = agent_class(
+        "Target", ScriptedModel([text_response("handled")]), compact=compactor("target")
+    )
+    main = scripted_agent(
+        name="Main",
+        subagents=[target.handoff],
+        model=ScriptedModel([tool_call_response("transfer_to_target", "{}")]),
+        compact=compactor("main"),
+    )
+
+    main.run_sync("please transfer")
+
+    assert consulted == ["main", "main", "main"]
+
+
 def test_compact_applies_a_rewrite_that_drops_nothing(tmp_path: Any) -> None:
     """A compactor that only rewrites items (truncating long tool output) still takes effect.
 

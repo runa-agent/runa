@@ -125,7 +125,7 @@ class RunRecord(BaseModel):
     `Session` object, its stream, its open span -- isn't here, and isn't resumed.
 
     * `start`: the agent the run began with. The run as a whole is its: the turn, token and time
-      ceilings, the context sources, the compaction of history, and the key a pause is kept under.
+      ceilings, the context sources, compaction, and the key a pause is kept under.
     * `agent`: the agent running now, the same as `start` until a handoff.
     * `run_context`: what user code is told, its `context`, `user_id` and usage so far.
     * `tool_calls`: every tool call the run answered, across its resumes, in the order they

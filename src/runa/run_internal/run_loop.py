@@ -43,7 +43,7 @@ from runa.exceptions import (
 from runa.guardrail import GuardrailResult, Phase
 from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks
-from runa.run import Run
+from runa.run import Run, RunStatus
 from runa.run_internal.agent_shape import AgentShape, shape_of
 from runa.run_internal.dispatch import _Dispatch
 from runa.run_internal.record import Interruption, RunRecord, RunTree, keep, paused, resuming
@@ -75,8 +75,10 @@ class _Run:
     This call's agent span, session, hooks and `emit` are the call's own, and not resumed.
 
     `shape` is readable once `list_tools` has reached the running agent's MCP servers, so a run
-    that fails reaching them still reports, from its record, tree and span. Each turn reads
-    `shape`; the run as a whole reads `start`.
+    that fails reaching them still reports, from its record, tree and span. The run as a whole
+    reads `start`: its `max_turns`, `max_tokens`, `timeout`, `memory`, `knowledge` and
+    `compactor` stay the starting agent's after a handoff. Every other setting is read from
+    `shape`, the agent running now.
 
     `delegated` is set for a delegate's run, whose pause is its caller's rather than kept in
     `runa.db` on its own.
@@ -114,7 +116,7 @@ class _Run:
 
     @property
     def start(self) -> AgentShape:
-        """The shape of the agent the run began with, whose the run's ceilings and sources are."""
+        """The shape of the agent the run began with, whose ceilings, sources and compaction are."""
         return shape_of(self.record.start)
 
     @property
@@ -135,6 +137,34 @@ class _Run:
     def span(self, name: str, span_type: Any, *, input: Any = None) -> AbstractContextManager[Span]:
         """A span under this run's agent span, for a `with` block."""
         return self.spans.span(name, span_type, input=input)
+
+    def reported(
+        self,
+        output: Any = None,
+        *,
+        status: RunStatus = "completed",
+        error: str | None = None,
+        interruptions: list[Interruption] | None = None,
+    ) -> Run:
+        """The caller's `Run` with `status`, reporting what the record and tree hold now.
+
+        Never reads `shape`, which a run failing to list its MCP tools doesn't have. A paused
+        `Run`'s `RunState` shares its audit trail; an errored one carries an empty `Transcript`,
+        because an unfinished turn is not history.
+        """
+        tree = self.tree.snapshot()
+        return Run(
+            output=output,
+            trace=tree.trace,
+            usage=self.run_context.usage,
+            status=status,
+            error=error,
+            interruptions=interruptions or [],
+            tool_calls=tuple(self.record.tool_calls),
+            guardrail_results=tree.guardrail_results,
+            _state=paused(self.record, tree, self.session) if status == "paused" else None,
+            _transcript=Transcript() if status == "error" else self.transcript,
+        )
 
     def notify(self, event: StreamEvent) -> None:
         """Hand `event` to a streamed run's consumer; a non-streamed run has nowhere to put it."""
@@ -394,7 +424,7 @@ async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
     else:
         response = await _stream_response(model, request, run.emit)
     context_tokens = response.usage.input_tokens + response.usage.output_tokens
-    dropped = transcript.compact(shape.compactor, context_tokens)
+    dropped = transcript.compact(run.start.compactor, context_tokens)
     _note_compaction(run.spans, context_tokens, dropped)
 
     if not response.output:
@@ -455,22 +485,9 @@ def _export(trace: Trace) -> None:
 
 
 def _errored(failure: RunaError, run: _Run) -> Run:
-    """Close the run's agent span around `failure` and return the `Run` the caller was promised.
-
-    Reports what the record and tree hold, never the `shape`, which a run failing to list its MCP
-    tools doesn't have: the spans, the usage, the tool calls and the guardrails that ran. An
-    unfinished turn is not history, so the `Run` carries an empty `Transcript`.
-    """
+    """Close the run's agent span around `failure` and return the `Run` the caller was promised."""
     close_span(run.agent_span, error=str(failure))
-    return Run(
-        output=None,
-        trace=run.tree.trace,
-        usage=run.run_context.usage,
-        status="error",
-        error=str(failure),
-        tool_calls=tuple(run.record.tool_calls),
-        guardrail_results=run.tree.guardrail_results.snapshot(),
-    )
+    return run.reported(status="error", error=str(failure))
 
 
 async def _timed(turn: Awaitable[Run], run: _Run) -> Run:
@@ -629,23 +646,12 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     `usage` is the `RunContext`'s, every turn and delegate included. Closes the agent span;
     exporting the trace is `_traced`'s.
     """
-    record, transcript, run_context = run.record, run.transcript, run.run_context
+    record, transcript = run.record, run.transcript
     close_span(run.agent_span, output=outcome.final_output)
 
     if outcome.interruptions:
         record.pending, record.ready_results = outcome.interruptions, outcome.ready_results
-        tree = run.tree.snapshot()
-        return Run(
-            output=None,
-            trace=tree.trace,
-            usage=run_context.usage,
-            status="paused",
-            interruptions=outcome.interruptions,
-            tool_calls=tuple(record.tool_calls),
-            _state=paused(record, tree, run.session),
-            _transcript=transcript,
-            guardrail_results=tree.guardrail_results,
-        )
+        return run.reported(status="paused", interruptions=outcome.interruptions)
 
     # The next call's history starts from the same cut compaction made mid-run.
     tokens = outcome.context_tokens
@@ -658,15 +664,8 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
             await run.session.set_items(transcript.history())
     await _after_turn(run, outcome.final_output)
 
-    await run.hooks.on_agent_end(run_context, run.current_agent, outcome.final_output)
-    return Run(
-        output=outcome.final_output,
-        trace=run.tree.trace,
-        usage=run_context.usage,
-        tool_calls=tuple(record.tool_calls),
-        _transcript=transcript,
-        guardrail_results=run.tree.guardrail_results.snapshot(),
-    )
+    await run.hooks.on_agent_end(run.run_context, run.current_agent, outcome.final_output)
+    return run.reported(outcome.final_output)
 
 
 async def _drive(
