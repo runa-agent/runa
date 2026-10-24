@@ -16,6 +16,7 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
 from runa._types import RunContext
 from runa.approval import _NeedsApproval as _ApprovalPredicate
+from runa.approval import predicate
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 
 _RESERVED_PARAMS = ("ctx", "call_id")
@@ -35,7 +36,8 @@ class FunctionTool:
     guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     """This tool's guardrails by `Phase`, checked against the call's arguments
     (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
-    needs_approval: _NeedsApproval = False
+    needs_approval: _ApprovalPredicate = field(default=predicate(False))
+    """Called with `(ctx, args, call_id)`: whether this call waits on a human before it runs."""
 
 
 @dataclass(frozen=True)
@@ -189,7 +191,7 @@ def tool(
             params_json_schema=schema,
             on_invoke_tool=on_invoke_tool,
             guardrails=bound,
-            needs_approval=needs_approval,
+            needs_approval=predicate(needs_approval),
         )
 
     return decorator(func) if func is not None else decorator

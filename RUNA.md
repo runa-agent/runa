@@ -383,9 +383,8 @@ Knowledge = application/domain information
 
 **Always built as `MCPServer(...).http(...)` or `MCPServer(...).stdio(...)`,
 listed in `mcp=`.** `MCPServer` is the only exported name:
-the per-transport classes it returns aren't a second call site, and a third
-transport is written by subclassing `_MCPServerBase`, not by constructing
-them. Enforced in code, in the ordinary Python way: every parameter of
+the server it returns isn't a second call site, and a third transport is a
+third method on `MCPServer`, not a class. Enforced in code, in the ordinary Python way: every parameter of
 `MCPServer`/`.http`/`.stdio` is named, so a misspelled or unsupported
 option is a `TypeError` at the call site rather than a server that silently
 ignores it.

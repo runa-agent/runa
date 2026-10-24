@@ -1,6 +1,8 @@
 """approval.py: the approval protocol -- `@approval`, and the ledger that decides each call.
 
-`ApprovalLedger` holds every rule about deciding a call, durable across a process restart:
+`predicate` is what a tool's `needs_approval` means: a `bool` or an `@approval` predicate, made
+into the one async predicate over a call that a run asks. `ApprovalLedger` holds every rule about
+deciding a call, durable across a process restart:
 
 * sticky beats the tool's own `needs_approval` predicate, which beats the per-call decision;
 * a rejection with no message of its own gets `ApprovalLedger.DEFAULT_REJECTION`;
@@ -43,6 +45,26 @@ def approval(func: Callable[..., bool | Awaitable[bool]]) -> _NeedsApproval:
         return bool(result)
 
     return wrapper
+
+
+async def _always(ctx: RunContext[Any], params: dict[str, Any], call_id: str) -> bool:
+    return True
+
+
+async def _never(ctx: RunContext[Any], params: dict[str, Any], call_id: str) -> bool:
+    return False
+
+
+def predicate(needs_approval: bool | _NeedsApproval) -> _NeedsApproval:
+    """`needs_approval` as `@tool`/`MCPServer` take it, as the predicate a run calls.
+
+    A `bool` becomes a predicate answering it for every call; a predicate is already one.
+    """
+    if needs_approval is True:
+        return _always
+    if needs_approval is False:
+        return _never
+    return needs_approval
 
 
 @dataclass
@@ -158,4 +180,4 @@ def _set(
         messages[key] = message
 
 
-__all__ = ["ApprovalDecision", "ApprovalLedger", "approval"]
+__all__ = ["ApprovalDecision", "ApprovalLedger", "approval", "predicate"]

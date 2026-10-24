@@ -5,7 +5,7 @@ import importlib.util
 import json
 import sys
 from collections.abc import AsyncIterator, Sequence
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, nullcontext
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import ModuleType
@@ -25,7 +25,7 @@ from runa.guardrail import Phase, guardrail
 from runa.handoff import Delegate
 from runa.knowledge import Knowledge
 from runa.lifecycle import Hooks, LoggingHooks
-from runa.mcp import _Connection, _MCPServerBase
+from runa.mcp import MCPServer, _Connection, _MCPServer, _Transport
 from runa.memory import Memory
 from runa.run import Run
 from runa.run_internal.agent_shape import shape_of as built_shape
@@ -1338,11 +1338,11 @@ def test_run_sync_returns_a_completed_run(monkeypatch: pytest.MonkeyPatch) -> No
     assert run.usage == Usage(input_tokens=1, output_tokens=2)
 
 
-class _ClosableServer(_MCPServerBase):
+class _ClosableServer(_MCPServer):
     """An MCP server whose connection is a pair of counters: opening and closing cost nothing."""
 
     def __init__(self) -> None:
-        super().__init__(name="fake", address="fake://server")
+        super().__init__(MCPServer(name="fake"), _Transport("fake://server", nullcontext))
         self.opens = 0
         self.closes = 0
 

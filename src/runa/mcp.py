@@ -25,7 +25,8 @@ exits rather than leaving a `.stdio` subprocess behind.
 """
 
 import re
-from contextlib import AsyncExitStack
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,6 +36,7 @@ from mcp_types import TextContent
 
 from runa._loop import LoopCache
 from runa._types import RunContext
+from runa.approval import predicate
 from runa.exceptions import ToolError
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 from runa.tool import FunctionTool, _NeedsApproval
@@ -58,40 +60,32 @@ class _Connection:
         await self.stack.aclose()
 
 
-class _MCPServerBase:
-    """Shared connect/list/call machinery for one MCP server; `.http`/`.stdio` pick a transport."""
+@dataclass(frozen=True)
+class _Transport:
+    """Where a server is reached, and how to open the read/write streams a session speaks over.
 
-    def __init__(
-        self,
-        *,
-        name: str | None = None,
-        address: str,
-        needs_approval: _NeedsApproval = False,
-        guardrails: GuardrailsList | None = None,
-    ) -> None:
-        """Store the server's `name`, the `address` its connections are keyed by, and its policy.
+    `address` -- a URL, or a command line -- is the key a server's per-loop connection is held
+    under, the way `cache/redis.py` keys its client by the Redis URL. `open` returns the async
+    context manager yielding the two streams; nothing is reached until it is entered.
+    """
 
-        `name` prefixes every tool the server lists, so it is the part of a tool's name the app
-        controls: two servers exposing the same tool are told apart by naming them differently.
+    address: str
+    open: Callable[[], AbstractAsyncContextManager[Any]]
 
-        `address` is where this server is reached -- a URL, or a command line -- and is the key
-        its per-loop connection is held under, the way `cache/redis.py` keys its client by the
-        Redis URL. `needs_approval`/`guardrails` are what every tool this server lists carries,
-        flattened once here rather than per tool: a `FunctionTool`'s guardrails are only read, so
-        one mapping is shared by all of them. Nothing connects here; the first
-        `connect`/`list_tools` does.
-        """
-        self.name = name or "mcp"
-        self._tool_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.name).strip("_") or "mcp"
-        self._address = address
-        self._needs_approval = needs_approval
-        self._guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
-            guardrails or [], tool=True
-        )
+
+class _MCPServer:
+    """One MCP server: the connect/list/call machinery for an `MCPServer`'s policy and transport."""
+
+    def __init__(self, policy: MCPServer, transport: _Transport) -> None:
+        """Hold what the server is and how it is reached; nothing connects until `connect`."""
+        self._policy = policy
+        self._transport = transport
         self._connections: LoopCache[str, _Connection] = LoopCache(close=_Connection.close)
 
-    def _transport(self) -> Any:
-        raise NotImplementedError
+    @property
+    def name(self) -> str:
+        """The server's name, which prefixes every tool it lists."""
+        return self._policy.name
 
     async def connect(self) -> _Connection:
         """This server's connection on the *current* event loop, opening one if it has none.
@@ -100,7 +94,7 @@ class _MCPServerBase:
         raise "Event loop is closed" rather than reconnect, so it is never reached from here.
         Two coroutines racing on one loop open one connection between them, not two.
         """
-        return await self._connections.aget(self._address, self._open)
+        return await self._connections.aget(self._transport.address, self._open)
 
     async def _open(self) -> _Connection:
         """Open a session on the current loop and list its tools, as one unit.
@@ -110,7 +104,7 @@ class _MCPServerBase:
         never half-built: a caller that has one has the tools that session exposes.
         """
         stack = AsyncExitStack()
-        read, write = await stack.enter_async_context(self._transport())
+        read, write = await stack.enter_async_context(self._transport.open())
         session = await stack.enter_async_context(ClientSession(read, write))
         await session.initialize()
         listed = await session.list_tools()
@@ -124,7 +118,7 @@ class _MCPServerBase:
         connection lives as long as the loop does, which is as long as the process. Nor does a
         synchronous caller: the connections `Agent.run_sync` opened are closed at exit.
         """
-        connection = self._connections.pop(self._address)
+        connection = self._connections.pop(self._transport.address)
         if connection is not None:
             await connection.close()
 
@@ -150,77 +144,27 @@ class _MCPServerBase:
             return text or result.structured_content
 
         return FunctionTool(
-            name=f"{self._tool_prefix}__{tool.name}",
+            name=f"{self._policy._tool_prefix}__{tool.name}",
             description=tool.description or "",
             params_json_schema=tool.input_schema,
             on_invoke_tool=on_invoke_tool,
-            guardrails=self._guardrails,
-            needs_approval=self._needs_approval,
+            guardrails=self._policy._guardrails,
+            needs_approval=self._policy._needs_approval,
         )
-
-
-class MCPServerStdio(_MCPServerBase):
-    """An MCP server run as a local subprocess, spoken to over stdin/stdout."""
-
-    def __init__(
-        self,
-        command: str,
-        args: list[str] | None = None,
-        *,
-        name: str | None = None,
-        env: dict[str, str] | None = None,
-        cwd: str | None = None,
-        needs_approval: _NeedsApproval = False,
-        guardrails: GuardrailsList | None = None,
-    ) -> None:
-        """Store the command to spawn; nothing runs until the first `connect`/`list_tools`."""
-        super().__init__(
-            name=name,
-            address=" ".join([command, *(args or [])]),
-            needs_approval=needs_approval,
-            guardrails=guardrails,
-        )
-        self._params = StdioServerParameters(command=command, args=args or [], env=env, cwd=cwd)
-
-    def _transport(self) -> Any:
-        return stdio_client(self._params)
-
-
-class MCPServerStreamableHttp(_MCPServerBase):
-    """An MCP server reachable over streamable HTTP."""
-
-    def __init__(
-        self,
-        url: str,
-        *,
-        name: str | None = None,
-        needs_approval: _NeedsApproval = False,
-        guardrails: GuardrailsList | None = None,
-    ) -> None:
-        """Store the server's `url`; nothing connects until the first `connect`/`list_tools`."""
-        super().__init__(
-            name=name, address=url, needs_approval=needs_approval, guardrails=guardrails
-        )
-        self._url = url
-
-    def _transport(self) -> Any:
-        return streamable_http_client(self._url)
 
 
 class MCPServer:
-    """The one way to build a server: shared config here, finalized by picking a transport.
+    """The one way to build a server: its name and policy here, finalized by picking a transport.
 
     What's given here -- the server's name, and the approval/guardrail policy its tools carry --
     is common to every transport; `http`/`stdio` take the params specific to that transport, a
-    URL vs. a command to spawn. Every parameter is
-    spelled out on all three, rather than collected as `**kwargs` and forwarded, so that a
-    misspelled or unsupported option is a `TypeError` naming it at the call site -- the way a
-    mistyped `Agent` attribute is a `UserError` naming it at construction -- instead of a server
-    that quietly ignores it and misbehaves on connect.
+    URL vs. a command to spawn. Every parameter is spelled out, rather than collected as
+    `**kwargs` and forwarded, so that a misspelled or unsupported option is a `TypeError` naming
+    it at the call site -- the way a mistyped `Agent` attribute is a `UserError` naming it at
+    construction -- instead of a server that quietly ignores it and misbehaves on connect.
 
-    The two transport classes are deliberately absent from `__all__`: `MCPServer` is the whole
-    public surface, and a third transport is written by subclassing `_MCPServerBase`, not by
-    reaching for `MCPServerStdio` directly.
+    `MCPServer` is the whole public surface: a transport is a `_Transport` value built by one of
+    its methods, so a third transport is a third method, not a class.
     """
 
     def __init__(
@@ -230,25 +174,28 @@ class MCPServer:
         needs_approval: _NeedsApproval = False,
         guardrails: GuardrailsList | None = None,
     ) -> None:
-        """Hold config shared by every transport, applied when `http`/`stdio` is called.
+        """Hold the name and policy every transport's server shares.
+
+        `name` prefixes every tool the server lists, so it is the part of a tool's name the app
+        controls: two servers exposing the same tool are told apart by naming them differently.
 
         `needs_approval` (a `bool`, or an `@approval` predicate over the remote tool's arguments)
         and `guardrails` (`@guardrail` predicates, bound with `.input`/`.output` against a call's
         arguments and its result) apply to every tool this server exposes -- `@tool`'s two
         parameters, asked of the server because that's where a remote tool's trust is decided.
+        Both are resolved once here and shared by every tool: a `FunctionTool`'s policy is only
+        read.
         """
-        self._name = name
-        self._needs_approval = needs_approval
-        self._guardrails = guardrails
-
-    def http(self, url: str) -> MCPServerStreamableHttp:
-        """Connect over streamable HTTP."""
-        return MCPServerStreamableHttp(
-            url,
-            name=self._name,
-            needs_approval=self._needs_approval,
-            guardrails=self._guardrails,
+        self.name = name or "mcp"
+        self._tool_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.name).strip("_") or "mcp"
+        self._needs_approval = predicate(needs_approval)
+        self._guardrails: dict[Phase, list[BoundGuardrail]] = flatten_guardrails(
+            guardrails or [], tool=True
         )
+
+    def http(self, url: str) -> _MCPServer:
+        """Connect over streamable HTTP."""
+        return _MCPServer(self, _Transport(url, lambda: streamable_http_client(url)))
 
     def stdio(
         self,
@@ -257,17 +204,11 @@ class MCPServer:
         *,
         env: dict[str, str] | None = None,
         cwd: str | None = None,
-    ) -> MCPServerStdio:
-        """Spawn a local process over stdio."""
-        return MCPServerStdio(
-            command,
-            args,
-            name=self._name,
-            env=env,
-            cwd=cwd,
-            needs_approval=self._needs_approval,
-            guardrails=self._guardrails,
-        )
+    ) -> _MCPServer:
+        """Spawn a local process over stdio; nothing runs until the first `connect`."""
+        params = StdioServerParameters(command=command, args=args or [], env=env, cwd=cwd)
+        address = " ".join([command, *(args or [])])
+        return _MCPServer(self, _Transport(address, lambda: stdio_client(params)))
 
 
 __all__ = ["MCPServer"]

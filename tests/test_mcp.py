@@ -13,13 +13,7 @@ from runa import Agent, guardrail, mcp
 from runa._types import ModelResponse, RunContext, Usage
 from runa.exceptions import ToolError
 from runa.guardrail import Phase
-from runa.mcp import (
-    MCPServer,
-    MCPServerStdio,
-    MCPServerStreamableHttp,
-    _Connection,
-    _MCPServerBase,
-)
+from runa.mcp import MCPServer, _Connection, _MCPServer, _Transport
 
 
 class _FakeSession:
@@ -38,15 +32,15 @@ class _FakeSession:
         return self._call_results[name]
 
 
-class _FakeServer(_MCPServerBase):
-    """An `_MCPServerBase` opening onto a `_FakeSession` instead of a real transport.
+class _FakeServer(_MCPServer):
+    """An `_MCPServer` opening onto a `_FakeSession` instead of a real transport.
 
     `_open` is what a transport would supply, so overriding it leaves everything this file is
     testing -- the per-loop caching in `connect`, the tool mapping, `close` -- as written.
     """
 
     def __init__(self, session: _FakeSession, **policy: Any) -> None:
-        super().__init__(name="fake", address="fake://server", **policy)
+        super().__init__(MCPServer(name="fake", **policy), _Transport("fake://server", _no_open))
         self._fake_session = session
         self.opens = 0
         self.closed = 0
@@ -63,6 +57,10 @@ class _FakeServer(_MCPServerBase):
         )
 
 
+def _no_open() -> Any:
+    raise AssertionError("a fake server never opens its transport")
+
+
 @asynccontextmanager
 async def _count_close(server: _FakeServer) -> AsyncIterator[None]:
     """Stand in for a transport, recording that its connection was actually shut down."""
@@ -70,6 +68,11 @@ async def _count_close(server: _FakeServer) -> AsyncIterator[None]:
         yield
     finally:
         server.closed += 1
+
+
+def _run(needs_approval: Any) -> bool:
+    """Ask a tool's `needs_approval` predicate about one call with no arguments."""
+    return asyncio.run(needs_approval(RunContext(), {}, "call_1"))
 
 
 def test_list_tools_maps_mcp_tools_to_function_tools() -> None:
@@ -196,27 +199,32 @@ def test_on_invoke_tool_falls_back_to_structured_content() -> None:
 
 
 def test_mcp_server_stdio_builds_from_the_shared_config() -> None:
-    """`MCPServer(name=...).stdio(...)` forwards shared kwargs into `MCPServerStdio`."""
+    """`MCPServer(name=...).stdio(...)` keys a server named by the shared config by its command."""
     server = MCPServer(name="fs").stdio("npx", ["-y", "server-filesystem"])
 
-    assert isinstance(server, MCPServerStdio)
     assert server.name == "fs"
+    assert server._transport.address == "npx -y server-filesystem"
 
 
 def test_mcp_server_http_builds_from_the_shared_config() -> None:
-    """`MCPServer(name=...).http(...)` carries the shared name onto the HTTP transport."""
+    """`MCPServer(name=...).http(...)` carries the shared name onto a server keyed by its URL."""
     server = MCPServer(name="search").http("https://example.com/mcp")
 
-    assert isinstance(server, MCPServerStreamableHttp)
     assert server.name == "search"
+    assert server._transport.address == "https://example.com/mcp"
 
 
-def test_stdio_passes_its_own_params_to_the_subprocess() -> None:
+def test_stdio_passes_its_own_params_to_the_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     """`env`/`cwd` are `stdio`'s own params, reaching the spawn parameters."""
+    spawned: list[Any] = []
+    monkeypatch.setattr(mcp, "stdio_client", spawned.append)
     server = MCPServer().stdio("npx", ["serve"], env={"TOKEN": "x"}, cwd="/tmp")
 
-    assert server._params.env == {"TOKEN": "x"}
-    assert server._params.cwd == "/tmp"
+    server._transport.open()
+
+    (params,) = spawned
+    assert params.env == {"TOKEN": "x"}
+    assert params.cwd == "/tmp"
 
 
 def test_an_unknown_option_is_rejected_at_the_call_site() -> None:
@@ -247,7 +255,7 @@ def test_a_servers_needs_approval_reaches_every_tool_it_lists() -> None:
 
     listed = asyncio.run(server.list_tools())
 
-    assert [function_tool.needs_approval for function_tool in listed] == [True, True]
+    assert [_run(function_tool.needs_approval) for function_tool in listed] == [True, True]
 
 
 def test_a_servers_guardrails_are_bound_against_the_tool_call() -> None:
@@ -273,8 +281,8 @@ def test_the_builder_carries_the_policy_onto_either_transport() -> None:
     )
 
     for server in (stdio, http):
-        assert server._needs_approval is True
-        assert len(server._guardrails[Phase.TOOL_INPUT]) == 1
+        assert _run(server._policy._needs_approval)
+        assert len(server._policy._guardrails[Phase.TOOL_INPUT]) == 1
 
 
 def test_a_run_pauses_on_an_mcp_tool_that_needs_approval() -> None:

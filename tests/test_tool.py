@@ -7,6 +7,7 @@ import pytest
 from helpers import run as run_awaitable
 
 from runa import guardrail, tool
+from runa._types import RunContext
 from runa.exceptions import UserError
 from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase
 from runa.tool import FunctionTool
@@ -41,7 +42,7 @@ def test_bare_tool_has_no_guardrails_or_approval() -> None:
     assert isinstance(bare, FunctionTool)
     assert bare.guardrails[Phase.TOOL_INPUT] == []
     assert bare.guardrails[Phase.TOOL_OUTPUT] == []
-    assert bare.needs_approval is False
+    assert not run_awaitable(bare.needs_approval(RunContext(), {}, "call_1"))
 
 
 def test_guardrail_list_splits_by_binding() -> None:
@@ -78,15 +79,15 @@ def test_invalid_guardrail_entry_raises() -> None:
             return "now"
 
 
-def test_needs_approval_passes_through_natively() -> None:
-    """`needs_approval=True` forwards straight through to `FunctionTool`, unmodified."""
+def test_needs_approval_true_asks_for_every_call() -> None:
+    """`needs_approval=True` reaches `FunctionTool` as a predicate answering yes."""
 
     @tool(needs_approval=True)
     def now() -> str:
         """Return a constant string."""
         return "now"
 
-    assert now.needs_approval is True
+    assert run_awaitable(now.needs_approval(RunContext(), {}, "call_1"))
 
 
 def test_tool_input_guardrail_sees_the_arguments_dict() -> None:

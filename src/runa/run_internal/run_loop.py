@@ -10,6 +10,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -191,15 +192,8 @@ class _Run:
         self, tool: FunctionTool, call_id: str, args: dict[str, Any]
     ) -> ApprovalDecision:
         """Whether this call to `tool` runs, is rejected, or waits on a human."""
-
-        async def needs_approval() -> bool:
-            if isinstance(tool.needs_approval, bool):
-                return tool.needs_approval
-            verdict = tool.needs_approval(self.run_context, args, call_id)
-            return bool(await verdict if inspect.isawaitable(verdict) else verdict)
-
-        approvals = self.tree.approvals
-        return await approvals.decide(tool.name, call_id, needs_approval=needs_approval)
+        needs_approval = partial(tool.needs_approval, self.run_context, args, call_id)
+        return await self.tree.approvals.decide(tool.name, call_id, needs_approval=needs_approval)
 
     async def guard(
         self,
