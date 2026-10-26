@@ -99,9 +99,8 @@ class _MCPServer:
     async def _open(self) -> _Connection:
         """Open a session on the current loop and list its tools, as one unit.
 
-        Listing here rather than on demand costs nothing -- resolving an agent's shape lists
-        every server's tools at the start of each run anyway -- and means a `_Connection` is
-        never half-built: a caller that has one has the tools that session exposes.
+        A `_Connection` is never half-built: a caller that has one has the tools that session
+        exposes.
         """
         stack = AsyncExitStack()
         read, write = await stack.enter_async_context(self._transport.open())

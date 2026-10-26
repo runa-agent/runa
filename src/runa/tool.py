@@ -1,9 +1,7 @@
 """`@tool` decorator for exposing functions to agents.
 
 `tool` derives a JSON schema for the model to call a plain Python function by, purely by
-reflection over its signature (`_schema_from_signature` below), the same "let types speak for
-themselves" approach the rest of Runa follows, and the one the `pyright` override comment in
-`pyproject.toml` already documents as this codebase's intended design for tool schemas.
+reflection over its signature and docstring.
 """
 
 import asyncio

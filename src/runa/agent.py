@@ -257,17 +257,15 @@ class _Mode:
 
 
 class Agent:
-    """An Agent whose config comes from class attributes instead of __init__ args.
+    """An agent, always subclassed: its settings declared on the class, or passed to `__init__`.
 
     `usage` accumulates token usage across every `run`/`run_sync`/`run_streamed` call made on
     this instance; `last_usage` holds just the most recent call's usage. Both are read from
     `RunContext.usage`, which the turn loop populates regardless of `hooks`.
 
-    One run is bounded by `max_turns` (model calls), `max_tokens` (every token spent on the run's
-    behalf) and `timeout` (wall-clock seconds), `None` meaning no ceiling of that kind.
-
     An instance carries one conversation (`history`, `usage`) at a time; see `_exclusive`. The
-    settings are resolved when the agent is built, and again when one is reassigned.
+    settings are resolved when the agent is built, and again when one is reassigned. RUNA.md §1
+    is the contract for each setting.
     """
 
     handoff = _Mode("handoff")
@@ -314,45 +312,13 @@ class Agent:
         max_tokens: int | None = _UNSET,
         timeout: float | None = _UNSET,
     ) -> None:
-        """Build config from class attributes and wire up any subagents and guardrails.
+        """Build the agent from its settings, wiring up any subagents and guardrails.
 
         These parameters are the closed set of settings: each can be declared on the subclass or
-        passed here, the argument winning. An unknown name is a `TypeError` here, and a
-        `UserError` naming the likely setting when declared in a class body. Each is held under its
-        own name as declared (`agent.memory` is `"auto"`, not the `Memory` it resolves to), and
-        translated into what a run uses only by the shape the agent builds from them.
-
-        `memory` opts this agent into long-term memory, one of:
-          - `"auto"` (or a `Memory(...)` instance, or any object shaped like `runa.memory`'s
-            `MemoryLike`): the turn loop retrieves relevant memories before each run and
-            persists new ones after -- no manual `memory.search`/`.remember` calls.
-          - `"llm"`: the model gets a `search_memory` tool and decides itself when to call it;
-            no automatic retrieval/persistence.
-          - `None` (the default): the agent behaves exactly as if `runa.memory` didn't exist.
-        `"llm"` always uses a default `Memory()`; pass your own instance for a non-default
-        `model`/`store`, or a custom `MemoryLike` object to replace retrieval entirely.
-
-        `knowledge` opts this agent into retrieval from application/domain documents, one of
-        `"auto"`, `"llm"`, a `Knowledge(...)` (or `KnowledgeLike`-shaped) instance, or `None` (the
-        default) -- the same four shapes as `memory`, with the same meaning: `"auto"`/an instance
-        searches automatically once per run, before its first model call (no `tools=[...]` wiring
-        needed); `"llm"` gives the model a `search_knowledge` tool it calls itself; `None` leaves
-        the agent unaffected.
-        `"llm"` always uses a default `Knowledge()`; pass your own instance for a non-default
-        `directory`/`model`/`store`, or a custom `KnowledgeLike` object.
-
-        `compact` keeps `history`/`session` from growing without bound, one of:
-          - `True`: `runa.compact.default_compactor` -- past `DEFAULT_COMPACTION_TOKENS`, keep
-            only the most recent exchange. A rolling window, not a summary.
-          - a `runa.compact.Compactor` (any `(items, usage_tokens) -> items | None` callable):
-            your own strategy -- a different threshold, an LLM summary, whatever you return.
-          - `False` (the default): off.
-        Checked here; anything else is a `UserError`.
-
-        `max_turns` caps how many model calls one run may make before `MaxTurnsExceeded`;
-        `max_tokens` caps the tokens the run may spend before `MaxTokensExceeded`; `timeout` caps
-        the run's wall-clock seconds before `RunTimeout`. All three are optional ceilings, and
-        all three end the run as `Run(status="error")`.
+        passed here. Passing one beats declaring it, and passing `None` means `None`. An unknown
+        name is a `TypeError` here, and a `UserError` naming the likely setting when declared in
+        a class body. Each is held under its own name as given (`agent.memory` is `"auto"`, not
+        the `Memory` it resolves to). What each setting means is RUNA.md's to say (§1, §7, §8).
         """
         cls = type(self)
         if cls is Agent:
