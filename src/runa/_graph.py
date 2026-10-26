@@ -1,9 +1,8 @@
 """_graph.py: `draw_graph`, a small DOT-graph generator behind `Agent.graph`.
 
-Not a port of `agents.extensions.visualization` -- just enough to show an agent's own tools,
-delegates and handoffs (recursively) as a Graphviz digraph, since that's all `Agent.graph` ever
-promised. A delegate is drawn as the agent it wraps (dotted edge), not as a plain tool box; a
-handoff gets a dashed edge.
+Just enough to show an agent's own tools, delegates and handoffs (recursively) as a Graphviz
+digraph, since that's all `Agent.graph` promises. A delegate is drawn as the agent it wraps
+(dotted edge), not as a plain tool box; a handoff gets a dashed edge.
 
 Which agents those are comes from `subagent_edges`, the same walk a resumed run finds its agents
 again through; only the recursion stays here, because drawing needs each agent's tools and MCP

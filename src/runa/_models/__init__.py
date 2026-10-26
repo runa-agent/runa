@@ -1,4 +1,4 @@
-"""`runa._models`: Runa's own model provider, two backends, no `openai-agents`, no `openai` SDK.
+"""`runa._models`: Runa's model provider and its two backends.
 
 `ModelProvider.get_model` maps a model name's prefix to a backend. A name starting with `claude`
 goes through `AnthropicModel`, talking to Anthropic's own SDK directly, Anthropic's Messages API
