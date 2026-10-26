@@ -12,6 +12,7 @@ them, so the same checks hold against a live Postgres whose tables already hold 
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+from runa._types import Usage
 from runa.tracing import Span, Trace
 from runa.tracing.store import TraceStore
 
@@ -143,6 +144,20 @@ async def check_structured_span_input_comes_back_as_text(store: TraceStore, tag:
     assert fetched.spans[0].input == '{"city": "Paris"}'
 
 
+async def check_span_usage_round_trips_as_a_usage(store: TraceStore, tag: str) -> None:
+    """A span's `usage` comes back as the `Usage` it was saved as, details included."""
+    trace = _trace(f"{tag}-1", name=tag)
+    usage = Usage(requests=1, input_tokens=3, output_tokens=2, total_tokens=5)
+    usage.input_tokens_details.cached_tokens = 1
+    trace.spans[0].usage = usage
+
+    await store.save(trace)
+    fetched = await store.get(f"{tag}-1")
+
+    assert fetched is not None
+    assert fetched.spans[0].usage == usage
+
+
 async def check_each_listed_trace_carries_only_its_own_spans(store: TraceStore, tag: str) -> None:
     """A listing never cross-assigns spans, however the backend fetches them.
 
@@ -188,6 +203,7 @@ CONTRACT: list[Check] = [
     check_list_filters_by_agent_and_status,
     check_session_id_round_trips_and_filters_list,
     check_structured_span_input_comes_back_as_text,
+    check_span_usage_round_trips_as_a_usage,
     check_each_listed_trace_carries_only_its_own_spans,
     check_an_empty_listing_is_an_empty_list,
     check_a_trace_a_caller_mutates_does_not_change_the_history,

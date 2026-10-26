@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from opentelemetry.trace import StatusCode
 
+from runa._types import Usage
 from runa.exceptions import UserError
 from runa.tracing.langfuse import LangfuseExporter
 from runa.tracing.spans import Span
@@ -99,7 +100,7 @@ def test_llm_span_carries_model_name_and_usage() -> None:
         type="llm",
         start_time=0.0,
         end_time=1.0,
-        output={"usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}},
+        usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
     )
     exporter, fake = _exporter()
 

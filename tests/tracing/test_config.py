@@ -11,6 +11,7 @@ from runa._loop import run_sync
 from runa._types import ModelResponse, Usage
 from runa.tool import ToolCall, tool
 from runa.tracing import ConsoleExporter, Trace, config, export, observe
+from runa.tracing.spans import INPUT_ALTERED, open_span
 
 
 class _TextModel:
@@ -414,3 +415,32 @@ def test_a_failed_manual_span_records_its_error() -> None:
         raise ValueError("boom")
     assert span.end_time is not None
     assert (span.status, span.error) == ("error", "boom")
+
+
+def test_a_withheld_output_keeps_the_llm_spans_usage() -> None:
+    """Token counts are a measurement, not content: `capture_outputs=False` still keeps them."""
+    agent = scripted_agent(model=_TextModel("hi"))
+
+    with observe.scoped(capture_outputs=False):
+        result = agent.run_sync("hello")
+
+    (llm,) = [s for s in result.trace.spans if s.type == "llm"]
+    assert llm.output is None
+    assert llm.usage is not None and llm.usage.total_tokens == 2
+    assert "tokens: 2" in str(result.trace)
+
+
+def test_a_span_whose_input_the_policy_changed_is_marked() -> None:
+    """A withheld, truncated or redacted input is marked, so nothing replays it as the real one."""
+    trace = Trace(id="t", name="t", start_time=0.0)
+
+    intact = open_span(trace, "intact", "agent", input="hello")
+    with observe.scoped(max_input_bytes=2):
+        truncated = open_span(trace, "truncated", "agent", input="hello")
+    with observe.scoped(capture_inputs=False):
+        withheld = open_span(trace, "withheld", "agent", input="hello")
+    with observe.scoped(redact=["card"]):
+        redacted = open_span(trace, "redacted", "tool", input={"card": "4242"})
+
+    assert INPUT_ALTERED not in intact.attributes
+    assert all(span.attributes[INPUT_ALTERED] for span in (truncated, withheld, redacted))

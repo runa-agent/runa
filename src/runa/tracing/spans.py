@@ -7,13 +7,14 @@ retrieval, a handoff, a delegate call, or a guardrail check are all just a `Span
 
 `open_span`/`close_span` are the one way a span is made and finished, whoever makes it: they put
 its input and output through the privacy policy (`tracing.config.kept`), so a span's content is
-never kept without it.
+never kept without it. A span's `usage` is a measurement, not content, so it never goes through it.
 """
 
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from runa._types import Usage
 from runa.tracing.config import kept
 from runa.tracing.util import gen_span_id
 
@@ -25,13 +26,21 @@ SpanType = Literal[
 ]
 SpanStatus = Literal["ok", "error"]
 
+INPUT_ALTERED = "input_altered"
+"""The `Span.attributes` key, set to `True`, of a span whose `input` the privacy policy changed."""
+
 
 @dataclass
 class Span:
     """One traceable operation: an agent turn, an LLM call, a tool call, a handoff, ...
 
     `input`/`output`/`error` stay `None` when that data isn't available or was withheld by the
-    active privacy policy (see `tracing.config.observe`); missing data is never fabricated.
+    active privacy policy (see `tracing.config.observe`); missing data is never fabricated. They
+    are the display copy: a span whose input the policy withheld, redacted or truncated is marked
+    `attributes[INPUT_ALTERED]`, so nothing replays that input as the real one.
+
+    `usage` is what an `"llm"` span's call spent, `None` on every other span. The policy never
+    touches it, so token counts are read from it, never from `output`.
     """
 
     id: str
@@ -46,6 +55,7 @@ class Span:
     input: Any = None
     output: Any = None
     error: str | None = None
+    usage: Usage | None = None
 
     @property
     def duration(self) -> float | None:
@@ -73,6 +83,8 @@ def open_span(
         start_time=time.time(),
         input=kept(input, "input"),
     )
+    if span.input != input:
+        span.attributes[INPUT_ALTERED] = True
     trace.spans.append(span)
     return span
 
@@ -89,4 +101,4 @@ def close_span(span: Span, *, output: Any = None, error: str | None = None) -> N
         span.error = error
 
 
-__all__ = ["Span", "SpanStatus", "SpanType", "close_span", "open_span"]
+__all__ = ["INPUT_ALTERED", "Span", "SpanStatus", "SpanType", "close_span", "open_span"]

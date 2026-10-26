@@ -71,7 +71,7 @@ class _Spans:
             def charge(spent: Usage) -> None:
                 for usage in payers:
                     usage.add(spent)
-                span.output = {"usage": spent.__dict__}
+                span.usage = spent
 
             yield charge
 

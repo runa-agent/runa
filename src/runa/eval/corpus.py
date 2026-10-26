@@ -16,7 +16,8 @@ from runa import db
 from runa.eval.dataset import Dataset
 from runa.exceptions import OperatorError
 from runa.project import NotARunaProject
-from runa.tracing import Trace, require_trace
+from runa.tracing import Span, Trace, require_trace
+from runa.tracing.spans import INPUT_ALTERED
 
 EVAL_METADATA_KEY = "eval"
 """The `Trace.metadata` key marking an eval run's group trace; its value is the agent's name."""
@@ -41,21 +42,28 @@ def require_evals_dir(root: Path) -> Path:
     return evals_dir
 
 
+def _root_agent_span(trace: Trace) -> Span | None:
+    return next(
+        (span for span in trace.spans if span.parent_id is None and span.type == "agent"), None
+    )
+
+
 async def traced_input(trace: Trace) -> tuple[str, str] | None:
     """The `(agent_name, user input)` a trace's run started with, `None` if it has none to add.
 
     A run grouped under an eval's trace has none: its input is already a case, or is a judge's
-    grading prompt, and neither is a real failure to grow a dataset from.
+    grading prompt, and neither is a real failure to grow a dataset from. Nor does a run whose
+    input the tracing policy withheld, redacted or truncated: the trace holds no faithful copy.
     """
     group_id = trace.metadata.get("group_id")
     if group_id is not None:
         group = await db.traces().get(group_id)
         if group is not None and EVAL_METADATA_KEY in group.metadata:
             return None
-    agent_span = next(
-        (span for span in trace.spans if span.parent_id is None and span.type == "agent"), None
-    )
-    if agent_span is None or not isinstance(agent_span.input, str) or not agent_span.input:
+    agent_span = _root_agent_span(trace)
+    if agent_span is None or agent_span.attributes.get(INPUT_ALTERED):
+        return None
+    if not isinstance(agent_span.input, str) or not agent_span.input:
         return None
     return agent_span.name, agent_span.input
 
@@ -77,6 +85,12 @@ async def add_trace_to_evals(trace_id: str, *, root: Path, expected: str | None 
     trace = await require_trace(db.traces(), trace_id)
     traced = await traced_input(trace)
     if traced is None:
+        agent_span = _root_agent_span(trace)
+        if agent_span is not None and agent_span.attributes.get(INPUT_ALTERED):
+            raise TraceHasNoInput(
+                f"trace {trace_id!r} holds no faithful copy of its input to add as a case: "
+                "the tracing policy (observe) withheld, redacted or truncated it"
+            )
         raise TraceHasNoInput(f"trace {trace_id!r} has no user input to add as a case")
     agent_name, input = traced
 

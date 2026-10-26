@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from runa._types import Usage
 from runa.tracing.spans import Span, SpanStatus
 
 _TYPE_LABELS: dict[str, str] = {
@@ -32,19 +33,8 @@ def _display_name(span: Span) -> str:
     return span.name.removeprefix("transfer_to_") if span.type == "handoff" else span.name
 
 
-def _fmt_tokens(output: Any) -> str | None:
-    if not isinstance(output, dict):
-        return None
-    usage = output.get("usage")
-    if not isinstance(usage, dict):
-        return None
-    total = usage.get("total_tokens")
-    if total is None:
-        input_tokens, output_tokens = usage.get("input_tokens"), usage.get("output_tokens")
-        if input_tokens is None or output_tokens is None:
-            return None
-        total = input_tokens + output_tokens
-    return f"tokens: {total:,}"
+def _fmt_tokens(usage: Usage | None) -> str | None:
+    return None if usage is None else f"tokens: {usage.total_tokens:,}"
 
 
 @dataclass(frozen=True)
@@ -136,7 +126,7 @@ class Trace:
                     label=_TYPE_LABELS.get(span.type, span.type),
                     name=_display_name(span),
                     duration=_fmt_duration(span.duration),
-                    tokens=_fmt_tokens(span.output) if span.type == "llm" else None,
+                    tokens=_fmt_tokens(span.usage),
                     children=rows(span.id),
                 )
                 for span in children.get(parent_id, [])

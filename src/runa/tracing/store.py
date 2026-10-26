@@ -17,8 +17,12 @@ how ties break are this module's rule.
 
 import builtins
 import json
+from dataclasses import asdict
 from typing import Any
 
+from pydantic import TypeAdapter
+
+from runa._types import Usage
 from runa.db.handle import Database, Row
 from runa.db.schema import Column, Index, Table
 from runa.exceptions import OperatorError
@@ -57,9 +61,12 @@ SPANS = Table(
         Column("input", "text", null=True),
         Column("output", "text", null=True),
         Column("error", "text", null=True),
+        Column("usage_json", "text", null=True),
     ),
     indexes=(Index("trace_id", "trace_id"),),
 )
+
+_USAGE = TypeAdapter(Usage)
 
 
 class TraceNotFound(OperatorError):
@@ -224,6 +231,7 @@ def _span_values(span: Span) -> tuple[Any, ...]:
         _as_text(span.input),
         _as_text(span.output),
         span.error,
+        None if span.usage is None else json.dumps(asdict(span.usage)),
     )
 
 
@@ -242,6 +250,7 @@ def _to_span(row: Row) -> Span:
         input=row["input"],
         output=row["output"],
         error=row["error"],
+        usage=None if row["usage_json"] is None else _USAGE.validate_json(row["usage_json"]),
     )
 
 

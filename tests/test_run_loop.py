@@ -450,7 +450,7 @@ def test_an_exceeded_token_budget_closes_the_llm_span_with_its_usage() -> None:
     assert llm_span.end_time is not None
     assert llm_span.status == "error"
     assert "max tokens (3) exceeded" in (llm_span.error or "")
-    assert llm_span.output["usage"]["total_tokens"] == 10
+    assert llm_span.usage is not None and llm_span.usage.total_tokens == 10
 
 
 def test_a_guardrail_that_raises_closes_its_span_with_the_error() -> None:
@@ -1718,7 +1718,7 @@ def test_a_sources_model_call_is_one_of_the_runs() -> None:
     (source_span,) = [s for s in result.trace.spans if s.type == "custom"]
     (extraction_span,) = [s for s in result.trace.spans if s.parent_id == source_span.id]
     assert extraction_span.type == "llm"
-    assert extraction_span.output["usage"]["total_tokens"] == 50
+    assert extraction_span.usage is not None and extraction_span.usage.total_tokens == 50
 
 
 def test_a_sources_streamed_model_call_is_one_of_the_runs() -> None:
@@ -1734,7 +1734,7 @@ def test_a_sources_streamed_model_call_is_one_of_the_runs() -> None:
     assert result.status == "completed"
     assert result.usage.total_tokens == 5
     llm_spans = [s for s in result.trace.spans if s.type == "llm"]
-    assert [s.output["usage"]["total_tokens"] for s in llm_spans] == [0, 5]
+    assert [s.usage.total_tokens for s in llm_spans if s.usage] == [0, 5]
 
 
 def test_memory_is_scoped_by_the_runs_user_id_without_a_session() -> None:

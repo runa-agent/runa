@@ -28,6 +28,7 @@ from contracts import trace as trace_contract
 
 from runa import db
 from runa._loop import run_sync
+from runa._types import Usage
 from runa.db.pool import PostgresDatabase
 from runa.eval.store import CASES, RUNS, EvalStore
 from runa.project import use
@@ -99,7 +100,7 @@ def _trace(name: str) -> Trace:
             end_time=1001.0,
             status="ok",
             input={"prompt": "hi"},
-            output={"usage": {"total_tokens": 7}},
+            usage=Usage(total_tokens=7),
         )
     )
     return trace

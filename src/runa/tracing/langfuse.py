@@ -35,6 +35,7 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.status import Status, StatusCode
 
+from runa._types import Usage
 from runa.exceptions import UserError
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -93,16 +94,10 @@ def _as_json(value: Any) -> str | None:
     return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
-def _usage_details(output: Any) -> str | None:
-    usage = output.get("usage") if isinstance(output, dict) else None
-    if not isinstance(usage, dict):
-        return None
-    details = {
-        "input": usage.get("input_tokens"),
-        "output": usage.get("output_tokens"),
-        "total": usage.get("total_tokens"),
-    }
-    return json.dumps({k: v for k, v in details.items() if v is not None})
+def _usage_details(usage: Usage) -> str:
+    return json.dumps(
+        {"input": usage.input_tokens, "output": usage.output_tokens, "total": usage.total_tokens}
+    )
 
 
 class LangfuseExporter:
@@ -177,9 +172,8 @@ class LangfuseExporter:
             attributes["langfuse.observation.output"] = output_json
         if span.type == "llm":
             attributes["langfuse.observation.model.name"] = span.name
-            usage_json = _usage_details(span.output)
-            if usage_json is not None:
-                attributes["langfuse.observation.usage_details"] = usage_json
+            if span.usage is not None:
+                attributes["langfuse.observation.usage_details"] = _usage_details(span.usage)
         if span.status == "error" and span.error:
             attributes["langfuse.observation.level"] = "ERROR"
             attributes["langfuse.observation.status_message"] = span.error

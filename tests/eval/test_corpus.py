@@ -11,10 +11,16 @@ from runa.eval import Case, Dataset
 from runa.eval.corpus import CaseAlreadyInEvals, TraceHasNoInput, add_trace_to_evals
 from runa.project import use
 from runa.tracing import Span, Trace, TraceNotFound
+from runa.tracing.spans import INPUT_ALTERED
 
 
 def _save_agent_trace(
-    project_dir: Path, trace_id: str, input: str | None, *, group_id: str | None = None
+    project_dir: Path,
+    trace_id: str,
+    input: str | None,
+    *,
+    group_id: str | None = None,
+    altered: bool = False,
 ) -> None:
     trace = Trace(id=trace_id, name="SupportAgent", start_time=0.0, end_time=1.0)
     if group_id is not None:
@@ -29,6 +35,7 @@ def _save_agent_trace(
             start_time=0.0,
             end_time=1.0,
             input=input,
+            attributes={INPUT_ALTERED: True} if altered else {},
         )
     ]
     use(project_dir)
@@ -68,6 +75,16 @@ def test_add_trace_to_evals_rejects_an_unknown_trace_or_one_without_input(
     with pytest.raises(TraceNotFound):
         run_sync(add_trace_to_evals("nope", root=project_dir))
     with pytest.raises(TraceHasNoInput):
+        run_sync(add_trace_to_evals("t1", root=project_dir))
+    assert not (project_dir / "evals" / "support_agent.jsonl").exists()
+
+
+def test_add_trace_to_evals_rejects_an_input_the_tracing_policy_changed(tmp_path: Path) -> None:
+    """A truncated or redacted input is a damaged case, so it is refused rather than saved."""
+    project_dir = scaffold_project("demo", root=tmp_path)
+    _save_agent_trace(project_dir, "t1", "Where is my... [truncated]", altered=True)
+
+    with pytest.raises(TraceHasNoInput, match="tracing policy"):
         run_sync(add_trace_to_evals("t1", root=project_dir))
     assert not (project_dir / "evals" / "support_agent.jsonl").exists()
 

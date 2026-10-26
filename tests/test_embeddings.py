@@ -235,7 +235,7 @@ def test_an_embedding_made_inside_a_run_is_charged_to_it(monkeypatch: pytest.Mon
     (embedding,) = [s for s in result.trace.spans if s.parent_id == retrieval.id]
     assert embedding.type == "llm"
     assert embedding.name == "text-embedding-3-small"
-    assert embedding.output["usage"]["input_tokens"] == 7
+    assert embedding.usage is not None and embedding.usage.input_tokens == 7
 
 
 def test_an_embedding_counts_against_the_runs_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
