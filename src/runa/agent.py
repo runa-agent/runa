@@ -12,7 +12,6 @@ import inspect
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -404,13 +403,14 @@ class Agent:
     def __copy__(self) -> Agent:
         """Another conversation with this agent's settings: `copy.copy(agent)`.
 
-        The copy shares the settings' values (its tools, subagents and model) and starts with
-        empty `history` and `usage`, so it can run beside the original.
+        The copy shares the settings' values (its tools and model) and starts with empty
+        `history` and `usage`, so it can run beside the original. Its subagent graph is its own, so
+        a subagent handing back reaches the copy, never the original.
         """
         clone = type(self).__new__(type(self))
         vars(clone).update(vars(self))
         clone._start_conversation()
-        clone._shape = replace(self._shape, agent=clone)
+        clone._shape = AgentShape.of(clone, self._shape)
         return clone
 
     def _start_conversation(self) -> None:

@@ -1,6 +1,7 @@
 """Tests for the handoff / delegate / auto subagent wiring, and `Agent.run`/`run_sync`."""
 
 import asyncio
+import copy
 import importlib.util
 import json
 import sys
@@ -253,6 +254,30 @@ def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
     (billing,) = [delegate.agent for delegate in built_shape(triage).delegates.values()]
     assert billing is not None
     assert [handoff.agent for handoff in built_shape(billing).handoffs.values()] == [triage]
+
+
+def test_a_copy_has_a_subagent_graph_of_its_own() -> None:
+    """A subagent of `copy.copy(agent)` handing back reaches the copy, not the original."""
+
+    class Triage(Agent):
+        name = "Triage"
+        instructions = "triage"
+        subagents: Sequence[type[Agent] | Subagent] = ()  # filled in below, once `Billing` exists
+
+    class Billing(Agent):
+        name = "Billing"
+        instructions = "billing"
+        subagents = [Triage.handoff]
+
+    Triage.subagents = [Billing.delegate]
+
+    original = Triage()
+    clone = copy.copy(original)
+
+    (billing,) = [delegate.agent for delegate in built_shape(clone).delegates.values()]
+    (original_billing,) = [delegate.agent for delegate in built_shape(original).delegates.values()]
+    assert billing is not original_billing
+    assert [handoff.agent for handoff in built_shape(billing).handoffs.values()] == [clone]
 
 
 def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
