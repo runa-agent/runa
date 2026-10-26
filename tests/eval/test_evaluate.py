@@ -8,7 +8,6 @@ from helpers import ScriptedModel, finished_run
 
 from runa import db
 from runa._loop import run_sync
-from runa._types import Usage
 from runa.agent import Agent
 from runa.eval.case import Case
 from runa.eval.evaluate import evaluate_agent
@@ -30,11 +29,7 @@ _AGENT = _TestAgent()
 
 def _run(output: Any) -> Run:
     """The `Run` a faked `Agent.run` hands `_evaluate_case`."""
-    return Run(
-        output=output,
-        trace=Trace(id="t", name="t", start_time=0.0, spans=[]),
-        usage=Usage(),
-    )
+    return finished_run(output, trace=Trace(id="t", name="t", start_time=0.0, spans=[]))
 
 
 def _patch_run_and_storage(monkeypatch: pytest.MonkeyPatch, outputs: dict[str, Any]) -> None:

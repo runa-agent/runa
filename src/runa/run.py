@@ -1,7 +1,7 @@
 """`Run`: the result of `Agent.run()`/`run_sync()`, and `RunStream`, of `Agent.run_streamed()`.
 
 One result shape, built once by the turn loop and handed back unchanged. The run's `Transcript`,
-which the loop needs and a caller doesn't, is an underscore-prefixed field on it.
+which the loop needs and a caller doesn't, is an underscore-prefixed property on it.
 """
 
 from collections.abc import AsyncIterator
@@ -10,16 +10,13 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
-from runa._types import Usage
 from runa.exceptions import UserError
-from runa.guardrail import GuardrailAudit, GuardrailResults
+from runa.run_internal.record import Interruption, RunRecord, RunTree, RunView
 from runa.stream_events import StreamEvent
-from runa.tool import ToolCall
-from runa.tracing import Trace
 from runa.transcript import Transcript
 
 if TYPE_CHECKING:
-    from runa.run_state import Interruption, RunState
+    from runa.run_state import RunState
 
 RunStatus = Literal["completed", "paused", "error"]
 """What `Run.status` can be: see `Run`."""
@@ -41,7 +38,7 @@ def _jsonable(value: Any) -> Any:
 
 
 @dataclass
-class Run(GuardrailAudit):
+class Run(RunView):
     """The outcome of a single `Agent.run()`/`run_sync()` call.
 
     `output` is the agent's final output (parsed into `Agent.output_type` when it declares one),
@@ -50,6 +47,13 @@ class Run(GuardrailAudit):
     the `status`, because the trace is opened before anything a run can fail on. `usage` is this
     call's token usage, every model and embedding call made on its behalf included, same value
     as `Agent.last_usage` after the call.
+
+    `tool_calls` is every tool call this run answered, in the order they finished (see
+    `ToolCall`), whatever the `status`: a run that errored after eight calls reports all eight.
+    What the tool was actually given and returned, unlike a `"tool"` span in `trace`, whose input
+    and output the tracing privacy policy may withhold or redact: this is the record to grade a
+    run's tool use on. A failed call is one of them, its `error` saying why, and so is a
+    `.delegate` call, the calls its own run made as its `children`, a failed delegate's included.
 
     `status` is `"paused"` when a tool call needs human approval: resolve each of
     `interruptions` on `to_state()`, then pass that state back to `run`/`run_sync` in place of a
@@ -65,30 +69,32 @@ class Run(GuardrailAudit):
 
     `to_payload()` is how a transport renders all of this as JSON -- one wire shape, owned here
     rather than re-derived per transport.
+
+    Everything but `output`, `status` and `error` is read through to `_record` and `_tree`, the
+    run's record and tree as they stood when it reported, so a finished `Run` doesn't change.
     """
 
     output: Any
-    trace: Trace
-    usage: Usage
-    status: RunStatus = "completed"
-    error: str | None = None
-    interruptions: list[Interruption] = field(default_factory=list)
-    guardrail_results: GuardrailResults = field(default_factory=GuardrailResults)
-    tool_calls: tuple[ToolCall, ...] = ()
-    """Every tool call this run answered, in the order they finished (see `ToolCall`), whatever
-    the `status`: a run that errored after eight calls reports all eight.
-
-    What the tool was actually given and returned, unlike a `"tool"` span in `trace`, whose
-    input and output the tracing privacy policy may withhold or redact: this is the record to
-    grade a run's tool use on. A failed call is one of them, its `error` saying why, and so is a
-    `.delegate` call, the calls its own run made as its `children`, a failed delegate's included.
-    """
+    status: RunStatus
+    error: str | None
+    _record: RunRecord = field(repr=False)
+    _tree: RunTree = field(repr=False)
     _state: RunState | None = field(default=None, repr=False)
-    _transcript: Transcript = field(default_factory=Transcript, repr=False)
-    """The run's conversation (see `Transcript`): `history()` is what `Agent.run` writes back to
-    `Agent.history`. Private because `trace` is how a caller inspects a run, and a session holds
-    a session-backed run's history. Empty for a run that failed: an unfinished turn is not
-    history."""
+
+    @property
+    def interruptions(self) -> list[Interruption]:
+        """The calls a paused run waits on; empty unless `status` is `"paused"`."""
+        return self._record.pending if self.status == "paused" else []
+
+    @property
+    def _transcript(self) -> Transcript:
+        """The run's conversation (see `Transcript`), empty for a run that failed.
+
+        `history()` is what `Agent.run` writes back to `Agent.history`. Private because `trace`
+        is how a caller inspects a run, and a session holds a session-backed run's history. An
+        unfinished turn is not history.
+        """
+        return Transcript() if self.status == "error" else self._record.transcript
 
     @property
     def run_id(self) -> str | None:

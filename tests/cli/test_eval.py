@@ -28,15 +28,9 @@ def _eval_module_source(class_name: str, agent_name: str) -> str:
 
 def _patch_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run(self: Any, message: Any, *args: Any, **kwargs: Any) -> Any:
-        from runa._types import Usage
-        from runa.run import Run
-        from runa.tracing import Trace
+        from helpers import finished_run
 
-        return Run(
-            output=message,
-            trace=Trace(id="t", name="t", start_time=0.0, spans=[]),
-            usage=Usage(),
-        )
+        return finished_run(message)
 
     async def fake_evaluate_semantic(*args: Any, **kwargs: Any) -> list[Any]:
         return []

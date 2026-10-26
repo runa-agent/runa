@@ -4,6 +4,8 @@ A run is one `RunRecord`, the facts about it that outlive the call running it, h
 loop as it goes and serialized as is. What every run in one tree shares, the root's and each
 delegate's alike, is one `RunTree`. A fact a run starts carrying is a field on one of the two, and
 nowhere else: it reaches a paused state, its stored row and a resumed run with no further edit.
+A caller reads it through `RunView`, which `runa.Run` and `runa.RunState` both are: one property
+there shows it on a finished run and a paused one alike.
 
 A pause is kept in `runa.db.paused_runs()` the moment it happens, under a `run_id`, and resuming
 it claims that row (see `PausedRunStore.claim`). The blob a row holds is this module's own
@@ -30,10 +32,10 @@ from pydantic import (
 )
 
 from runa._items import ConversationItem
-from runa._types import RunContext
+from runa._types import RunContext, Usage
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
-from runa.guardrail import GuardrailResults
+from runa.guardrail import GuardrailAudit, GuardrailResults
 from runa.session import Session
 from runa.tool import ToolCall
 from runa.tracing.traces import Trace
@@ -185,6 +187,14 @@ class RunRecord(BaseModel):
             }
         )
 
+    def snapshot(self) -> RunRecord:
+        """A copy for a finished `Run` to read: what the loop records after it doesn't reach it.
+
+        Its transcript and usage are this record's own, which nothing changes once the run has
+        reported: a resumed run works on `resumed`'s copies.
+        """
+        return self.model_copy(update={"tool_calls": list(self.tool_calls)})
+
 
 class RunTree(BaseModel):
     """What every run in one tree shares by reference: the root run's and each delegate's.
@@ -204,6 +214,42 @@ class RunTree(BaseModel):
     def snapshot(self) -> RunTree:
         """The same trace and ledger, with a copy of the audit trail as it stands now."""
         return self.model_copy(update={"guardrail_results": self.guardrail_results.snapshot()})
+
+
+class RunView(GuardrailAudit):
+    """What a caller reads about a run, through to its record and tree, never copied out of them.
+
+    `runa.Run` and `runa.RunState` are both one, each answering `_record` and `_tree` with its
+    own: a fact a caller sees on both is a property here, and nowhere else.
+    """
+
+    if TYPE_CHECKING:
+
+        @property
+        def _record(self) -> RunRecord: ...
+
+        @property
+        def _tree(self) -> RunTree: ...
+
+    @property
+    def trace(self) -> Trace:
+        """The run's `Trace`, the one every run in its tree adds spans to."""
+        return self._tree.trace
+
+    @property
+    def guardrail_results(self) -> GuardrailResults:
+        """Every guardrail that ran, a delegate's included, keyed by the `Phase` it ran in."""
+        return self._tree.guardrail_results
+
+    @property
+    def usage(self) -> Usage:
+        """The run's token usage, every model and embedding call made on its behalf included."""
+        return self._record.run_context.usage
+
+    @property
+    def tool_calls(self) -> tuple[ToolCall, ...]:
+        """Every tool call the run answered, across its resumes, in the order they finished."""
+        return tuple(self._record.tool_calls)
 
 
 class PauseSchema(BaseModel):
@@ -353,6 +399,7 @@ __all__ = [
     "PauseSchema",
     "RunRecord",
     "RunTree",
+    "RunView",
     "keep",
     "paused",
     "resuming",

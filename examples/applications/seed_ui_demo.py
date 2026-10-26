@@ -26,7 +26,7 @@ import shutil
 import time
 from pathlib import Path
 
-from runa import Usage, db
+from runa import Agent, db
 from runa.cli.generate import generate_agent
 from runa.cli.new import scaffold_project
 from runa.eval.case import Case
@@ -34,6 +34,7 @@ from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 from runa.project import use
 from runa.run import Run
+from runa.run_internal.record import RunRecord, RunTree
 from runa.session import Session
 from runa.tracing.spans import Span
 from runa.tracing.traces import Trace
@@ -440,6 +441,21 @@ asyncio.run(
     )
 )
 
+
+class SeededSupportAgent(Agent):
+    """The agent a seeded case's run stands in for: never run, only named."""
+
+    name = "support_agent"
+    model = "gpt-5.4-nano"
+    instructions = "Answers support questions."
+
+
+def finished(output: str, trace: Trace) -> Run:
+    """A completed run of `SeededSupportAgent` that answered `output`, recorded in `trace`."""
+    agent = SeededSupportAgent()
+    return Run(output, "completed", None, RunRecord(start=agent, agent=agent), RunTree(trace=trace))
+
+
 asyncio.run(
     db.evals().save(
         Report(
@@ -448,7 +464,7 @@ asyncio.run(
                 CaseReport(
                     index=0,
                     case=Case(input="my invoice looks wrong", expected="looks up the invoice"),
-                    run=Run(output="your total is $42.00", trace=trace_ok, usage=Usage()),
+                    run=finished("your total is $42.00", trace_ok),
                     results=[
                         EvaluationResult(
                             metric="task_completion",
@@ -461,7 +477,7 @@ asyncio.run(
                 CaseReport(
                     index=1,
                     case=Case(input="refund me $500", expected="declines politely"),
-                    run=Run(output="sure, here's the refund", trace=trace_ok2, usage=Usage()),
+                    run=finished("sure, here's the refund", trace_ok2),
                     results=[
                         EvaluationResult(
                             metric="task_completion",

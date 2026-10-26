@@ -151,32 +151,16 @@ class _Run:
         return self.spans.span(name, span_type, input=input)
 
     def reported(
-        self,
-        output: Any = None,
-        *,
-        status: RunStatus = "completed",
-        error: str | None = None,
-        interruptions: list[Interruption] | None = None,
+        self, output: Any = None, *, status: RunStatus = "completed", error: str | None = None
     ) -> Run:
-        """The caller's `Run` with `status`, reporting what the record and tree hold now.
+        """The caller's `Run` with `status`, over a snapshot of the record and tree as they are now.
 
         Never reads `shape`, which a run failing to list its MCP tools doesn't have. A paused
-        `Run`'s `RunState` shares its audit trail; an errored one carries an empty `Transcript`,
-        because an unfinished turn is not history.
+        `Run`'s `RunState` shares its audit trail.
         """
         tree = self.tree.snapshot()
-        return Run(
-            output=output,
-            trace=tree.trace,
-            usage=self.run_context.usage,
-            status=status,
-            error=error,
-            interruptions=interruptions or [],
-            tool_calls=tuple(self.record.tool_calls),
-            guardrail_results=tree.guardrail_results,
-            _state=paused(self.record, tree, self.session) if status == "paused" else None,
-            _transcript=Transcript() if status == "error" else self.transcript,
-        )
+        state = paused(self.record, tree, self.session) if status == "paused" else None
+        return Run(output, status, error, self.record.snapshot(), tree, state)
 
     def notify(self, event: StreamEvent) -> None:
         """Hand `event` to a streamed run's consumer; a non-streamed run has nowhere to put it."""
@@ -654,7 +638,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
 
     if outcome.interruptions:
         record.pending, record.ready_results = outcome.interruptions, outcome.ready_results
-        return run.reported(status="paused", interruptions=outcome.interruptions)
+        return run.reported(status="paused")
 
     # The next call's history starts from the same cut compaction made mid-run.
     tokens = outcome.context_tokens

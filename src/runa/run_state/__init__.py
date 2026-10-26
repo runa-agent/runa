@@ -8,24 +8,22 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from runa._loop import run_sync
-from runa.guardrail import GuardrailAudit
-from runa.run_internal.record import Interruption, Pause
+from runa.run_internal.record import Interruption, Pause, RunRecord, RunTree, RunView
 
 if TYPE_CHECKING:
     from runa._items import ConversationItem
     from runa._types import RunContext
     from runa.agent import Agent
-    from runa.guardrail import GuardrailResults
-    from runa.tracing.traces import Trace
     from runa.transcript import Transcript
 
 
 @dataclass
-class RunState(GuardrailAudit):
+class RunState(RunView):
     """Enough of a paused run to resume it once its `interruptions` are approved or rejected.
 
     The run itself, and what every run in its tree shares with it: the `trace`, the approval
-    ledger `approve`/`reject` write to, and the guardrail audit trail. `transcript` is the
+    ledger `approve`/`reject` write to, and the guardrail audit trail. Its `usage` and
+    `tool_calls` are the run's so far, read the same way a finished `Run`'s are. `transcript` is the
     conversation as it stood at the pause (see `Transcript`): its `items` end with the assistant
     message that requested the `pending` calls. `run_context` is the paused run's `RunContext`,
     its `context`, user and usage so far.
@@ -48,14 +46,12 @@ class RunState(GuardrailAudit):
     _pause: Pause
 
     @property
-    def trace(self) -> Trace:
-        """The paused run's trace, which the resumed run goes on adding spans to."""
-        return self._pause.tree.trace
+    def _record(self) -> RunRecord:
+        return self._pause.record
 
     @property
-    def guardrail_results(self) -> GuardrailResults:
-        """Every guardrail that ran before the pause, keyed by the `Phase` it ran in."""
-        return self._pause.tree.guardrail_results
+    def _tree(self) -> RunTree:
+        return self._pause.tree
 
     @property
     def run_id(self) -> str:

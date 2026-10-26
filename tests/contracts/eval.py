@@ -21,12 +21,19 @@ from runa.tracing import Trace
 Check = Callable[[EvalStore, str], Coroutine[Any, Any, None]]
 
 
-def _graded(input: str, status: EvalStatus, *, index: int = 0, output: str = "ok") -> CaseReport:
+def _graded(
+    input: str,
+    status: EvalStatus,
+    *,
+    index: int = 0,
+    output: str = "ok",
+    trace: Trace | None = None,
+) -> CaseReport:
     """One graded case, the unit a `Report` is a list of."""
     return CaseReport(
         index=index,
         case=Case(input=input),
-        run=finished_run(output),
+        run=finished_run(output, trace=trace),
         results=[EvaluationResult(metric="task_completion", status=status, reason="r")],
     )
 
@@ -120,10 +127,10 @@ async def check_baseline_is_none_for_an_agent_that_has_never_run(
 
 async def check_save_links_each_case_to_its_runs_trace(store: EvalStore, tag: str) -> None:
     """A case's `trace_id` is its run's trace, so a failing case opens straight onto its spans."""
-    first = _graded("hi", EvalStatus.PASS)
-    first.run.trace = Trace(id=f"{tag}-first", name=tag, start_time=0.0)
-    second = _graded("yo", EvalStatus.PASS, index=1)
-    second.run.trace = Trace(id=f"{tag}-second", name=tag, start_time=0.0)
+    first = _graded("hi", EvalStatus.PASS, trace=Trace(id=f"{tag}-first", name=tag, start_time=0.0))
+    second = _graded(
+        "yo", EvalStatus.PASS, index=1, trace=Trace(id=f"{tag}-second", name=tag, start_time=0.0)
+    )
 
     run_id = await store.save(Report(tag, [first, second]))
 

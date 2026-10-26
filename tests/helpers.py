@@ -4,12 +4,15 @@ import asyncio
 from collections.abc import Awaitable
 from typing import Any
 
-from runa._types import ModelResponse, Usage
+from runa._types import ModelResponse, RunContext, Usage
 from runa.agent import Agent
-from runa.run import Run
+from runa.run import Run, RunStatus
 from runa.run_internal.agent_shape import AgentShape
 from runa.run_internal.agent_shape import shape_of as shape_of_agent
+from runa.run_internal.record import RunRecord, RunTree
+from runa.tool import ToolCall
 from runa.tracing import Trace
+from runa.transcript import Transcript
 
 
 def text_response(text: str, usage: Usage | None = None) -> ModelResponse:
@@ -110,18 +113,40 @@ def shape_of(agent: Agent) -> AgentShape:
     return asyncio.run(shape_of_agent(agent).with_mcp_tools())
 
 
-def finished_run(output: Any = "ok", *, trace: Trace | None = None, **overrides: Any) -> Run:
+class _StandInAgent(Agent):
+    name = "stand_in"
+    model = "gpt-5.4-nano"
+    instructions = "Stands in for the agent of a run no test drives."
+
+
+def finished_run(
+    output: Any = "ok",
+    *,
+    status: RunStatus = "completed",
+    error: str | None = None,
+    trace: Trace | None = None,
+    usage: Usage | None = None,
+    tool_calls: tuple[ToolCall, ...] = (),
+    transcript: Transcript | None = None,
+) -> Run:
     """A finished `Run`, for a test that grades or renders one without driving the turn loop.
 
-    `Run`'s required fields are the turn loop's to fill (`run_internal/run_loop._finish`), and a
-    test asserting on an eval metric or an evaluation page cares about one or two of them. Pass
-    `status=`/`error=`/`tool_calls=` for the rest, or `trace=` for a test that reads the trace
-    itself -- a run always has one, so an anonymous stand-in stands in when it doesn't matter.
+    A `Run` reads through to the record and tree the turn loop fills, and a test asserting on an
+    eval metric or an evaluation page cares about one or two of their facts. Pass those; the
+    rest stand in -- a run always has a trace, so an anonymous one when it doesn't matter.
     """
-    stand_in = Trace(id="trace_stub", name="stub", start_time=0.0)
-    return Run(
-        output=output, trace=trace if trace is not None else stand_in, usage=Usage(), **overrides
+    agent = _StandInAgent()
+    record = RunRecord(
+        start=agent,
+        agent=agent,
+        transcript=transcript if transcript is not None else Transcript(),
+        run_context=RunContext(usage=usage if usage is not None else Usage()),
+        tool_calls=list(tool_calls),
     )
+    tree = RunTree(
+        trace=trace if trace is not None else Trace(id="trace_stub", name="stub", start_time=0.0)
+    )
+    return Run(output, status, error, record, tree)
 
 
 def run[T](awaitable: Awaitable[T]) -> T:

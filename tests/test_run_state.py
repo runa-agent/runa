@@ -594,3 +594,29 @@ def test_a_handed_off_run_keeps_the_starting_agents_ceilings_across_a_pause() ->
 
     assert resumed.status == "error"
     assert resumed.error == "max turns (2) exceeded"
+
+
+def test_a_paused_state_reads_the_same_facts_as_its_run() -> None:
+    """A `RunState` and the `Run` it paused report one run: its trace, usage and tool calls."""
+    run, _ = _paused_run()
+    state = run.to_state()
+
+    assert state.trace is run.trace
+    assert state.usage == run.usage
+    assert state.tool_calls == run.tool_calls
+    assert state.pending == run.interruptions
+
+
+def test_a_paused_run_does_not_change_once_it_resumes() -> None:
+    """Resuming works on copies, so the paused `Run` still reads as it paused."""
+    run, gated = _paused_run()
+    state = run.to_state()
+    state.approve(state.pending[0])
+
+    resumed = gated().run_sync(state)
+
+    assert resumed.status == "completed"
+    assert [call.name for call in resumed.tool_calls] == ["dangerous"]
+    assert run.status == "paused"
+    assert run.tool_calls == ()
+    assert [item.name for item in run.interruptions] == ["dangerous"]

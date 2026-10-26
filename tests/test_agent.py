@@ -12,7 +12,7 @@ from types import ModuleType
 from typing import Any, TypedDict, cast
 
 import pytest
-from helpers import scripted_agent, shape_of
+from helpers import finished_run, scripted_agent, shape_of
 from pydantic import BaseModel
 
 from runa import Agent, _loop, db, tracing
@@ -1227,11 +1227,9 @@ def _loop_run(**overrides: Any) -> Run:
     receives rather than a second class shaped approximately like it. What `Agent.run` still does
     on top of this is the bookkeeping these tests are about: `last_usage`, `usage`, `history`.
     """
-    defaults: dict[str, Any] = dict(
-        output="ok", trace=None, usage=Usage(input_tokens=1, output_tokens=2)
-    )
+    defaults: dict[str, Any] = dict(output="ok", usage=Usage(input_tokens=1, output_tokens=2))
     defaults.update(overrides)
-    return Run(**defaults)
+    return finished_run(**defaults)
 
 
 def _async(fake: Any) -> Any:
@@ -1642,7 +1640,7 @@ def test_run_streamed_yields_events_and_updates_history(monkeypatch: pytest.Monk
             "event-1",
             "event-2",
             usage=Usage(input_tokens=3, output_tokens=4),
-            _transcript=_transcript_of(
+            transcript=_transcript_of(
                 [{"role": "user", "content": "hi"}], {"role": "assistant", "content": "ok"}
             ),
         ),
@@ -1674,7 +1672,7 @@ def test_run_streamed_with_a_session_sends_only_the_new_turn(
         captured["input"] = turn_input
         captured["session"] = session
         emit("event")
-        return _loop_run(_transcript=Transcript.start([{"role": "user", "content": "hi"}]))
+        return _loop_run(transcript=Transcript.start([{"role": "user", "content": "hi"}]))
 
     monkeypatch.setattr("runa.agent._run_async", fake_run)
     agent = Researcher()
@@ -1721,7 +1719,7 @@ def test_run_streamed_resolves_a_session_id_string_too(monkeypatch: pytest.Monke
     async def fake_run(agent: Any, turn_input: Any, *, session: Any, emit: Any, **kwargs: Any):
         captured["session"] = session
         emit("event")
-        return _loop_run(_transcript=Transcript.start([{"role": "user", "content": "hi"}]))
+        return _loop_run(transcript=Transcript.start([{"role": "user", "content": "hi"}]))
 
     monkeypatch.setattr("runa.agent._run_async", fake_run)
 
