@@ -123,8 +123,8 @@ _DELEGATE_INPUT = {
 class Delegate:
     """A sub-agent registered as a tool: calling it runs `agent` on the `input` the model wrote.
 
-    `run_internal` sees a `Delegate` in an agent's `delegates` list and runs a call to its `tool`
-    as a nested run of the caller's, whose output goes back to the caller as the call's result.
+    A call to it is looked up to the `Delegate` itself, not its `tool`, and runs as a nested run
+    of the caller's, whose output goes back to the caller as the call's result.
     """
 
     agent: Agent

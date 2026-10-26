@@ -35,17 +35,16 @@ if TYPE_CHECKING:
 
 async def _run_call(
     run: _Run,
-    tool: FunctionTool,
+    callee: FunctionTool | Delegate,
     call: dict[str, Any],
     args: dict[str, Any],
-    delegate: Delegate | None = None,
     paused: RunRecord | None = None,
 ) -> ConversationItem | list[Interruption]:
     """Run one approved call end to end. Every tool call and delegate call goes through this.
 
     In order, the steps are: claim the call, fire `on_tool_start`, guard its input, invoke it,
     guard its output, record it, then fire `on_tool_end`. Only the invoke step differs: a tool
-    runs its function, and `delegate` runs a nested run of this one. A delegate that pauses for
+    runs its function, and a `Delegate` runs a nested run of this one. A delegate that pauses for
     approval comes back as its interruptions, because the call hasn't finished. Its call is run
     again with the delegate's `paused` record and continues where it stopped, so its start is not
     repeated and it ends once.
@@ -53,18 +52,21 @@ async def _run_call(
     `args` are the call's arguments as the gate already parsed them; the raw JSON is kept only
     for the span and the `ToolCall`, which record what the model wrote.
     """
+    tool = _gated(callee)
     call_id = id_of(call)
     run.claim(call_id, tool.name)
 
     args_json = call_arguments(call)
-    with run.span(tool.name, "tool" if delegate is None else "delegate", input=args_json) as span:
+    with run.span(
+        tool.name, "delegate" if isinstance(callee, Delegate) else "tool", input=args_json
+    ) as span:
         if paused is None:
             await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
             await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
-        if delegate is None:
-            outcome = await _invoked(run, tool, call_id, args, args_json, span)
+        if isinstance(callee, Delegate):
+            outcome = await _delegated(run, callee, call_id, args, args_json, span, paused)
         else:
-            outcome = await _delegated(run, delegate, call_id, args, args_json, span, paused)
+            outcome = await _invoked(run, tool, call_id, args, args_json, span)
         if isinstance(outcome, list):
             span.output = "paused for approval"
             return outcome
@@ -74,6 +76,11 @@ async def _run_call(
     item = _answer(run, call_id, recorded)
     await run.hooks.on_tool_end(run.run_context, run.current_agent, tool, result)
     return item
+
+
+def _gated(callee: FunctionTool | Delegate) -> FunctionTool:
+    """What a call to `callee` is approved, guarded and handed to hooks as: a delegate's `tool`."""
+    return callee.tool if isinstance(callee, Delegate) else callee
 
 
 async def _invoked(
@@ -220,8 +227,8 @@ class _Answers:
             return
 
         args_json = call_arguments(call)
-        tool = shape.callables.get(name)
-        if tool is None:
+        callee = shape.callables.get(name)
+        if callee is None:
             self.answer(_answer(run, call_id, _failed(name, args_json, f"unknown tool {name}")))
             return
         args = _arguments_or_error(args_json)
@@ -229,7 +236,7 @@ class _Answers:
             self.answer(_answer(run, call_id, _failed(name, args_json, args)))
             return
 
-        gate = await run.decide(tool, call_id, args)
+        gate = await run.decide(_gated(callee), call_id, args)
         if gate.action == "interrupt":
             self.interruptions.append(
                 Interruption(name=name, arguments=args_json, call_id=call_id, agent=shape.agent)
@@ -237,13 +244,13 @@ class _Answers:
         elif gate.action == "reject":
             self.answer(tool_result(call_id, gate.message))
         else:
-            self.defer(partial(_run_call, run, tool, call, args, shape.delegates.get(name)))
+            self.defer(partial(_run_call, run, callee, call, args))
 
     def go_on(self, call: dict[str, Any], paused: RunRecord) -> None:
         """Defer `call`, a delegate's that paused with `paused` as its record, to continue it."""
         delegate = self.run.shape.delegates[call_name(call)]
         args = parsed_arguments(call_arguments(call))
-        self.defer(partial(_run_call, self.run, delegate.tool, call, args, delegate, paused))
+        self.defer(partial(_run_call, self.run, delegate, call, args, paused))
 
     async def settled(self) -> _Answered:
         """Run the deferred calls, and return the message's answers."""
