@@ -15,11 +15,13 @@ from pydantic import BaseModel
 from runa import content
 from runa._items import assistant_message, provider_blocks, tool_call, tool_result
 from runa._models import (
+    OPENAI,
     AnthropicModel,
     ModelProvider,
     ModelRequest,
     OpenAICompatibleModel,
     ToolSchema,
+    transport,
 )
 from runa._types import ModelSettings
 from runa.exceptions import ModelBehaviorError, RunaError, ServiceUnavailable, UserError
@@ -39,13 +41,32 @@ def _clear_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(env, raising=False)
 
 
+_HANDLERS: dict[str, Any] = {}
+"""The mock transport behind each `_mock_model`, by the `base_url` it was given."""
+
+_TEST_KEY_ENV = "RUNA_TEST_API_KEY"
+
+
+@pytest.fixture(autouse=True)
+def _mock_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every client `transport` builds answers through its `base_url`'s handler, never the net."""
+    _HANDLERS.clear()
+    monkeypatch.setenv(_TEST_KEY_ENV, "sk-test")
+
+    def new_client(base_url: str, api_key: str) -> httpx.AsyncClient:
+        handler = _HANDLERS.get(base_url, lambda _: _ok_response())
+        return httpx.AsyncClient(base_url=base_url, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(transport, "_new_client", new_client)
+
+
 def test_routes_gpt_to_openai_compatible_directly(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `gpt-*` model gets `OpenAICompatibleModel` pointed at OpenAI's own endpoint."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     model = ModelProvider().get_model("gpt-5.4-nano")
 
     assert isinstance(model, OpenAICompatibleModel)
-    assert str(model._client.base_url) == "https://api.openai.com/v1/"
+    assert (model.base_url, model.api_key_env) == (OPENAI.base_url, OPENAI.api_key_env)
 
 
 @pytest.mark.parametrize("model_name", ["o3-mini", "o4-mini", "chatgpt-4o-latest", "codex-mini"])
@@ -57,7 +78,7 @@ def test_openais_non_gpt_families_route_to_openai(
     model = ModelProvider().get_model(model_name)
 
     assert isinstance(model, OpenAICompatibleModel)
-    assert str(model._client.base_url) == "https://api.openai.com/v1/"
+    assert (model.base_url, model.api_key_env) == (OPENAI.base_url, OPENAI.api_key_env)
 
 
 def test_a_misspelled_provider_prefix_is_an_error_naming_the_prefix() -> None:
@@ -118,7 +139,7 @@ def test_routes_each_openai_compatible_provider(
     model = ModelProvider().get_model(model_name)
 
     assert isinstance(model, OpenAICompatibleModel)
-    assert str(model._client.base_url) == base_url
+    assert (model.base_url, model.api_key_env) == (base_url, env)
 
 
 def test_routes_claude_to_the_anthropic_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,22 +151,63 @@ def test_routes_claude_to_the_anthropic_adapter(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_missing_provider_key_raises_a_clear_error() -> None:
-    """An unset provider-specific key names itself, not OPENAI_API_KEY, in the error."""
+    """An unset provider-specific key names itself, not OPENAI_API_KEY, when the model is called."""
+    model = ModelProvider().get_model("deepseek-chat")
+
     with pytest.raises(UserError, match="DEEPSEEK_API_KEY"):
-        ModelProvider().get_model("deepseek-chat")
+        _get_response(model)  # type: ignore[arg-type]
 
 
 def test_reuses_one_client_per_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two calls for the same provider share a client instead of opening a new one each time."""
+    """Two models of one provider share a loop's client instead of opening a new one each."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "key")
     provider = ModelProvider()
 
     first = provider.get_model("deepseek-chat")
     second = provider.get_model("deepseek-coder")
-
     assert isinstance(first, OpenAICompatibleModel)
     assert isinstance(second, OpenAICompatibleModel)
-    assert first._client is second._client
+
+    async def clients() -> tuple[httpx.AsyncClient, httpx.AsyncClient]:
+        return first._client(), second._client()
+
+    one, other = asyncio.run(clients())
+    assert one is other
+
+
+def test_a_custom_endpoint_names_its_unset_key_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gateway's key is read like a named provider's: an unset one says which variable."""
+    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
+    gateway = OpenAICompatibleModel(
+        "mixtral-8x7b", base_url="https://gateway.internal/v1/", api_key_env="GATEWAY_API_KEY"
+    )
+
+    with pytest.raises(UserError, match="GATEWAY_API_KEY.*mixtral-8x7b"):
+        _get_response(gateway)
+
+
+def test_one_model_serves_every_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One instance, declared once on a class, works from a second loop on a client of its own.
+
+    Two `asyncio.run` calls stand for `run_sync`'s loop beside an app's own, or two tests.
+    """
+    built: list[httpx.AsyncClient] = []
+
+    def new_client(base_url: str, api_key: str) -> httpx.AsyncClient:
+        built.append(
+            httpx.AsyncClient(
+                base_url=base_url, transport=httpx.MockTransport(lambda _: _ok_response())
+            )
+        )
+        return built[-1]
+
+    monkeypatch.setattr(transport, "_new_client", new_client)
+    model = _mock_model(lambda _: _ok_response())
+
+    assert _get_response(model).output[0]["content"] == "ok"
+    assert _get_response(model).output[0]["content"] == "ok"
+    assert len(built) == 2
+    assert built[0] is not built[1]
 
 
 def _tool(name: str) -> ToolSchema:
@@ -154,10 +216,11 @@ def _tool(name: str) -> ToolSchema:
     )
 
 
-def _mock_client(handler: Any) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        base_url="https://example.test/v1/", transport=httpx.MockTransport(handler)
-    )
+def _mock_model(handler: Any) -> OpenAICompatibleModel:
+    """A `gpt-5.4-nano` backend whose requests `handler` answers."""
+    base_url = f"https://example.test/{len(_HANDLERS)}/v1/"
+    _HANDLERS[base_url] = handler
+    return OpenAICompatibleModel("gpt-5.4-nano", base_url=base_url, api_key_env=_TEST_KEY_ENV)
 
 
 def test_openai_compatible_get_response_parses_text_and_tool_calls() -> None:
@@ -190,7 +253,7 @@ def test_openai_compatible_get_response_parses_text_and_tool_calls() -> None:
             },
         )
 
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    model = _mock_model(handler)
 
     async def call() -> Any:
         return await model.get_response(
@@ -224,7 +287,7 @@ def test_openai_compatible_get_response_raises_on_error_status() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "bad request"})
 
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    model = _mock_model(handler)
 
     async def call() -> Any:
         return await model.get_response(ModelRequest(input=[{"role": "user", "content": "hi"}]))
@@ -247,7 +310,7 @@ def test_openai_compatible_stream_response_yields_text_and_tool_call_deltas() ->
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
 
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    model = _mock_model(handler)
 
     async def collect() -> list[Any]:
         return [
@@ -299,7 +362,7 @@ def test_openai_compatible_retries_rate_limits_and_server_errors(no_backoff: lis
         httpx.Response(503),
         _ok_response(),
     ]
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: replies.pop(0)))
+    model = _mock_model(lambda _: replies.pop(0))
 
     assert _get_response(model).output[0]["content"] == "ok"
     assert no_backoff[0] == 3.0
@@ -310,7 +373,7 @@ def test_openai_compatible_gives_up_after_max_retries(no_backoff: list[float]) -
     """Still failing after the retries, the last status surfaces as a `ServiceUnavailable`."""
     from runa.exceptions import ServiceUnavailable
 
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: httpx.Response(500)))
+    model = _mock_model(lambda _: httpx.Response(500))
 
     with pytest.raises(ServiceUnavailable, match="500"):
         _get_response(model)
@@ -324,7 +387,7 @@ def test_openai_compatible_retries_connection_errors(no_backoff: list[float]) ->
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    model = _mock_model(handler)
 
     with pytest.raises(ServiceUnavailable, match="ConnectError"):
         _get_response(model)
@@ -333,9 +396,7 @@ def test_openai_compatible_retries_connection_errors(no_backoff: list[float]) ->
 
 def test_openai_compatible_refused_key_is_a_user_error(no_backoff: list[float]) -> None:
     """A 401 is a key that was sent and refused: not retried, and not taken as a service outage."""
-    model = OpenAICompatibleModel(
-        "gpt-5.4-nano", _mock_client(lambda _: httpx.Response(401, json={"error": "bad key"}))
-    )
+    model = _mock_model(lambda _: httpx.Response(401, json={"error": "bad key"}))
 
     with pytest.raises(UserError, match="401"):
         _get_response(model)
@@ -352,7 +413,7 @@ def test_openai_compatible_stream_retries_before_the_first_event(no_backoff: lis
             content=b'data: {"choices": [{"delta": {"content": "Hi"}}]}\n\ndata: [DONE]\n\n',
         ),
     ]
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: replies.pop(0)))
+    model = _mock_model(lambda _: replies.pop(0))
 
     async def collect() -> list[Any]:
         return [
@@ -379,7 +440,7 @@ def test_openai_compatible_asks_for_the_output_types_json_schema() -> None:
         seen.append(json.loads(request.content))
         return _ok_response()
 
-    _get_response(OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler)), _Answer)
+    _get_response(_mock_model(handler), _Answer)
 
     response_format = seen[0]["response_format"]
     assert response_format["type"] == "json_schema"
@@ -685,7 +746,7 @@ def test_openai_compatible_never_sends_another_backends_blocks() -> None:
         assistant_message("sunny", None, [{"type": "thinking", "thinking": "hmm"}]),
         {"role": "user", "content": "and tomorrow?"},
     ]
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    model = _mock_model(handler)
     asyncio.run(model.get_response(ModelRequest(input=history)))
 
     assert seen[0]["messages"] == [
@@ -906,7 +967,7 @@ def test_openai_compatible_sends_reasoning_effort() -> None:
         seen.append(json.loads(request.content))
         return _ok_response()
 
-    model = OpenAICompatibleModel("gpt-5.4-nano", _mock_client(handler))
+    model = _mock_model(handler)
     asyncio.run(
         model.get_response(
             ModelRequest(
@@ -953,7 +1014,7 @@ def _body(backend: Any, **settings: Any) -> dict[str, Any]:
 
 
 def _openai_backend() -> OpenAICompatibleModel:
-    return OpenAICompatibleModel("gpt-5.4-nano", _mock_client(lambda _: _ok_response()))
+    return _mock_model(lambda _: _ok_response())
 
 
 def test_no_reasoning_effort_sends_neither_backend_anything() -> None:

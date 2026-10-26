@@ -305,8 +305,8 @@ class AgentShape(Resolved):
     def resolve_model(self) -> Model:
         """This agent's `model`: a string names a provider's model, anything else is one.
 
-        A name builds its provider's client, which is a `UserError` when the API key is unset, so
-        it waits for a run: an `Agent` is constructible without one.
+        A name resolves its provider's backend, which reads the API key, so it waits for a run:
+        an `Agent` is constructible without one.
         """
         model = self.model
         return _MODEL_PROVIDER.get_model(model) if isinstance(model, str) else model

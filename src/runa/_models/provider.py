@@ -1,14 +1,10 @@
 """provider.py: `ModelProvider`, routing a model name to one of two backends by its prefix."""
 
 import difflib
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import httpx2 as httpx
-
 from runa._loop import LoopCache
-from runa._models import transport
 from runa._models.interface import Model
 from runa.exceptions import UserError
 
@@ -23,18 +19,12 @@ class Endpoint:
     """One chat-completions-shaped provider: whose names are its, where it lives, where its key is.
 
     `prefixes` is every model-name prefix the provider answers to. Usually one, but OpenAI's
-    reasoning and codex families aren't spelled `gpt-*`, so it takes several; the first is the
-    canonical one, naming the provider in an error message and keying its client.
+    reasoning and codex families aren't spelled `gpt-*`, so it takes several.
     """
 
     prefixes: tuple[str, ...]
     base_url: str
     api_key_env: str
-
-    @property
-    def name(self) -> str:
-        """What to call this provider when talking to a developer about it."""
-        return self.prefixes[0]
 
 
 _ANTHROPIC_PREFIX = "claude"
@@ -84,20 +74,6 @@ def _prefix_hint(name: str) -> str:
     return f" Model names start with one of: {', '.join(f'{p}-*' for p in _PREFIXES)}."
 
 
-def _client_for(endpoint: Endpoint) -> httpx.AsyncClient:
-    """This loop's HTTP client for `endpoint`, carrying the key its env var holds.
-
-    Raises `UserError` when that variable is unset; the client is built lazily, so an app that
-    never names a `gemini-*` model needs no `GEMINI_API_KEY`.
-    """
-    api_key = os.environ.get(endpoint.api_key_env)
-    if api_key is None:
-        raise UserError(
-            f"{endpoint.api_key_env} is not set. Set it to use a {endpoint.name}-* model."
-        )
-    return transport.client(endpoint.base_url, api_key)
-
-
 class ModelProvider:
     """Routes a model name to one of two backends by its prefix.
 
@@ -114,7 +90,8 @@ class ModelProvider:
         """Start with no Anthropic client; it is created lazily, on first use, and then reused.
 
         A client's connections are bound to the event loop that first uses it, so it is held per
-        loop by a `LoopCache`. Every other provider's client is `runa._models.transport`'s.
+        loop by a `LoopCache`. Every other provider's client is `runa._models.transport`'s, resolved
+        by `OpenAICompatibleModel` on each request.
         """
         self._anthropic_clients: LoopCache[str, AsyncAnthropic] = LoopCache()
 
@@ -133,7 +110,9 @@ class ModelProvider:
 
         # Total: `_PREFIXES` is these endpoints' prefixes plus Anthropic's, both handled above.
         endpoint = next(e for e in _ENDPOINTS if lower.startswith(e.prefixes))
-        return OpenAICompatibleModel(name, _client_for(endpoint))
+        return OpenAICompatibleModel(
+            name, base_url=endpoint.base_url, api_key_env=endpoint.api_key_env
+        )
 
     def _get_anthropic_client(self) -> AsyncAnthropic:
         from anthropic import AsyncAnthropic

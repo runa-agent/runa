@@ -41,20 +41,23 @@ instead of a name.
 
 For a gateway, a proxy, or something self-hosted (an endpoint Runa has no name for), pass a
 `Model` instead of a name. `model` takes any object with the two methods a backend has, so
-Runa's own chat-completions backend works, pointed at your `base_url`:
+Runa's own chat-completions backend works, pointed at your `base_url` and the environment
+variable holding its key:
 
 ```python
-import httpx2 as httpx
 from runa import Agent, OpenAICompatibleModel
 
 
 class SupportAgent(Agent):
     name = "support_agent"
     model = OpenAICompatibleModel(
-        "mixtral-8x7b",
-        httpx.AsyncClient(base_url="https://gateway.internal/v1/", headers={...}),
+        "mixtral-8x7b", base_url="https://gateway.internal/v1/", api_key_env="GATEWAY_API_KEY"
     )
 ```
+
+It gets everything a named provider does: the key is read when a run calls the model (an unset
+one is a `UserError` naming the variable), and requests share the same connections, timeout and
+retries.
 
 This is the sharp knife, and it is deliberately spelled differently from a name: a bare name
 can't tell "a model Runa has never heard of" and "I mistyped" apart, so the first one has to say

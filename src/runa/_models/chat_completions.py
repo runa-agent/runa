@@ -3,6 +3,7 @@
 Covers OpenAI, Gemini, Llama, DeepSeek, and Qwen, every provider that speaks this wire format.
 """
 
+import os
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, cast
 
@@ -23,7 +24,7 @@ from runa._types import (
     ToolChoice,
     Usage,
 )
-from runa.exceptions import ServiceUnavailable
+from runa.exceptions import ServiceUnavailable, UserError
 
 _CHAT_COMPLETIONS_PATH = "chat/completions"
 
@@ -91,12 +92,32 @@ def _openai_deltas(chunk: dict[str, Any]) -> Iterator[StreamDelta]:
 
 
 class OpenAICompatibleModel:
-    """Talks to any chat-completions-shaped provider directly over HTTP, via `httpx2`."""
+    """Talks to any chat-completions-shaped provider directly over HTTP, via `httpx2`.
 
-    def __init__(self, model: str, client: httpx.AsyncClient) -> None:
-        """Store the model name and the shared, provider-scoped HTTP client to call it through."""
+    Built from where the provider lives and which environment variable holds its key, never from
+    a client: each request goes through `runa._models.transport`'s client for the running event
+    loop, so one instance serves `run_sync`'s loop, an app's own and a test's `asyncio.run` alike,
+    with the same timeout and retries as every provider Runa names.
+    """
+
+    def __init__(self, model: str, *, base_url: str, api_key_env: str) -> None:
+        """Call `model` at `base_url`, sending the key in `api_key_env` as a bearer token.
+
+        The variable is read on each request, not here, so an instance is declarable on a class
+        body before the key is set, and a rotated key is picked up by the next request.
+        """
         self.model = model
-        self._client = client
+        self.base_url = base_url
+        self.api_key_env = api_key_env
+
+    def _client(self) -> httpx.AsyncClient:
+        """This loop's client for `base_url`; raises `UserError` when `api_key_env` is unset."""
+        api_key = os.environ.get(self.api_key_env)
+        if api_key is None:
+            raise UserError(
+                f"{self.api_key_env} is not set. Set it to call {self.model} at {self.base_url}."
+            )
+        return transport.client(self.base_url, api_key)
 
     def _body(self, request: ModelRequest) -> dict[str, Any]:
         """The JSON body one `request` puts on the wire."""
@@ -128,8 +149,9 @@ class OpenAICompatibleModel:
     async def get_response(self, request: ModelRequest) -> ModelResponse:
         """Send one turn to the model and return its full response."""
         body = self._body(request)
+        client = self._client()
         response = await transport.send(
-            lambda: self._client.post(_CHAT_COMPLETIONS_PATH, json=body),
+            lambda: client.post(_CHAT_COMPLETIONS_PATH, json=body),
             request.model_settings.max_retries,
         )
         transport.raise_for_status(response.status_code, response.text)
@@ -146,9 +168,10 @@ class OpenAICompatibleModel:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        http_request = self._client.build_request("POST", _CHAT_COMPLETIONS_PATH, json=body)
+        client = self._client()
+        http_request = client.build_request("POST", _CHAT_COMPLETIONS_PATH, json=body)
         response = await transport.send(
-            lambda: self._client.send(http_request, stream=True),
+            lambda: client.send(http_request, stream=True),
             request.model_settings.max_retries,
         )
         try:

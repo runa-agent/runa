@@ -750,12 +750,10 @@ def test_a_model_instance_is_the_escape_hatch_for_an_unnamed_endpoint() -> None:
     The sanctioned shape for a gateway, a proxy or something self-hosted, and the reason an
     unroutable *name* can afford to be an error: there is another way to say "not one of these".
     """
-    import httpx2 as httpx
-
     from runa._models import OpenAICompatibleModel
 
     gateway = OpenAICompatibleModel(
-        "mixtral-8x7b", httpx.AsyncClient(base_url="https://gateway.internal/v1/")
+        "mixtral-8x7b", base_url="https://gateway.internal/v1/", api_key_env="GATEWAY_API_KEY"
     )
 
     class Gatewayed(Agent):
