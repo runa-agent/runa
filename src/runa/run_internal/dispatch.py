@@ -6,7 +6,7 @@ from runa._items import ConversationItem
 from runa._types import RunContext
 from runa.lifecycle import Hooks
 from runa.run_internal.agent_shape import shape_of
-from runa.tool import FunctionTool
+from runa.tool import Tool
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -46,14 +46,12 @@ class _Dispatch[TContext](Hooks[TContext]):
         for hooks in self._scopes(to_agent):
             await hooks.on_handoff(context, from_agent, to_agent)
 
-    async def on_tool_start(
-        self, context: RunContext[TContext], agent: Agent, tool: FunctionTool
-    ) -> None:
+    async def on_tool_start(self, context: RunContext[TContext], agent: Agent, tool: Tool) -> None:
         for hooks in self._scopes(agent):
             await hooks.on_tool_start(context, agent, tool)
 
     async def on_tool_end(
-        self, context: RunContext[TContext], agent: Agent, tool: FunctionTool, result: object
+        self, context: RunContext[TContext], agent: Agent, tool: Tool, result: object
     ) -> None:
         for hooks in self._scopes(agent):
             await hooks.on_tool_end(context, agent, tool, result)

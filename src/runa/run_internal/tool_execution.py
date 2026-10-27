@@ -29,7 +29,7 @@ from runa.exceptions import ToolError
 from runa.guardrail import Phase
 from runa.handoff import Delegate, Handoff
 from runa.run_internal.record import Interruption, RunRecord
-from runa.tool import FunctionTool, ToolCall
+from runa.tool import FunctionTool, Tool, ToolCall
 from runa.tracing.spans import Span
 
 if TYPE_CHECKING:
@@ -72,7 +72,7 @@ async def _run_call(
         if isinstance(callee, Delegate):
             outcome = await _delegated(run, callee, call_id, args, args_json, span, suspended)
         else:
-            outcome = await _invoked(run, tool, call_id, args, args_json, span)
+            outcome = await _invoked(run, callee, call_id, args, args_json, span)
         if outcome is None:
             span.output = "paused for approval"
             return None
@@ -84,7 +84,7 @@ async def _run_call(
     return item
 
 
-def _gated(callee: FunctionTool | Delegate) -> FunctionTool:
+def _gated(callee: FunctionTool | Delegate) -> Tool:
     """What a call to `callee` is approved, guarded and handed to hooks as: a delegate's `tool`."""
     return callee.tool if isinstance(callee, Delegate) else callee
 

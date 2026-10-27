@@ -53,7 +53,7 @@ from runa.run_internal.streaming import Emit, _Assembly, _stream_response
 from runa.run_internal.tool_execution import _Answered, _run_message_tool_calls, _TurnOutcome
 from runa.session import Session
 from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
-from runa.tool import FunctionTool
+from runa.tool import Tool
 from runa.tracing.export import export_trace_later
 from runa.tracing.manual import current_trace
 from runa.tracing.spans import Span, close_span
@@ -175,9 +175,7 @@ class _Run:
         if not self.tree.approvals.claim(call_id):
             raise DuplicateToolCallError(call_id, name)
 
-    async def decide(
-        self, tool: FunctionTool, call_id: str, args: dict[str, Any]
-    ) -> ApprovalDecision:
+    async def decide(self, tool: Tool, call_id: str, args: dict[str, Any]) -> ApprovalDecision:
         """Whether this call to `tool` runs, is rejected, or waits on a human."""
         needs_approval = partial(tool.needs_approval, self.run_context, args, call_id)
         return await self.tree.approvals.decide(tool.name, call_id, needs_approval=needs_approval)
@@ -187,7 +185,7 @@ class _Run:
         phase: Phase,
         value: Any,
         *,
-        tool: FunctionTool | None = None,
+        tool: Tool | None = None,
         under: Span | None = None,
     ) -> None:
         """Run `phase`'s guardrails over `value` in list order, raising on the first that trips.

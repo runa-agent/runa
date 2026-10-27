@@ -21,21 +21,32 @@ _RESERVED_PARAMS = ("ctx", "call_id")
 _NeedsApproval = bool | _ApprovalPredicate
 
 
-@dataclass
-class FunctionTool:
-    """A tool the model can call: its schema, and the callable that actually runs it."""
+@dataclass(kw_only=True)
+class Tool:
+    """What the model is offered and a run gates a call by: a schema, and the call's policy.
+
+    It is what a hook is handed as a call's `tool`. A `FunctionTool` is one that also runs
+    itself; a delegate's `tool` is a plain `Tool`, because its call is a nested run of the
+    caller's (see `runa.handoff.Delegate`).
+    """
 
     name: str
     description: str
     params_json_schema: dict[str, Any]
-    on_invoke_tool: Callable[[RunContext, dict[str, Any], str], Awaitable[Any]]
-    """Called with `(ctx, args, call_id)`, `args` the model's arguments already parsed into a
-    dict; returns what the tool does."""
     guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     """This tool's guardrails by `Phase`, checked against the call's arguments
     (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
     needs_approval: _ApprovalPredicate = field(default=predicate(False))
     """Called with `(ctx, args, call_id)`: whether this call waits on a human before it runs."""
+
+
+@dataclass(kw_only=True)
+class FunctionTool(Tool):
+    """A tool the model can call: its schema and policy, and the callable that actually runs it."""
+
+    on_invoke_tool: Callable[[RunContext, dict[str, Any], str], Awaitable[Any]]
+    """Called with `(ctx, args, call_id)`, `args` the model's arguments already parsed into a
+    dict; returns what the tool does."""
 
 
 @dataclass(frozen=True)
@@ -220,4 +231,4 @@ def tool(
     return decorator(func) if func is not None else decorator
 
 
-__all__ = ["FunctionTool", "ToolCall", "tool"]
+__all__ = ["FunctionTool", "Tool", "ToolCall", "tool"]

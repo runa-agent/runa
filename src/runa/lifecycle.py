@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from runa._items import ConversationItem
 from runa._log import logger
 from runa._types import RunContext
-from runa.tool import FunctionTool
+from runa.tool import Tool
 from runa.tracing.config import kept
 
 if TYPE_CHECKING:
@@ -64,16 +64,14 @@ class Hooks[TContext]:
     ) -> None:
         """Called when `from_agent` hands the run off to `to_agent`."""
 
-    async def on_tool_start(
-        self, context: RunContext[TContext], agent: Agent, tool: FunctionTool
-    ) -> None:
+    async def on_tool_start(self, context: RunContext[TContext], agent: Agent, tool: Tool) -> None:
         """Called right before `tool` runs."""
 
     async def on_tool_end(
         self,
         context: RunContext[TContext],
         agent: Agent,
-        tool: FunctionTool,
+        tool: Tool,
         result: object,
     ) -> None:
         """Called once `tool` has returned (or raised) `result`."""
@@ -115,14 +113,12 @@ class LoggingHooks(Hooks[Any]):
         """Log a handoff as `from_agent -> to_agent`."""
         logger.info("handoff: %s -> %s", from_agent.name, to_agent.name)
 
-    async def on_tool_start(
-        self, context: RunContext[Any], agent: Agent, tool: FunctionTool
-    ) -> None:
+    async def on_tool_start(self, context: RunContext[Any], agent: Agent, tool: Tool) -> None:
         """Log that `tool` is about to run."""
         logger.info("tool start: %s (%s)", tool.name, agent.name)
 
     async def on_tool_end(
-        self, context: RunContext[Any], agent: Agent, tool: FunctionTool, result: object
+        self, context: RunContext[Any], agent: Agent, tool: Tool, result: object
     ) -> None:
         """Log that `tool` finished; its result only at DEBUG, under the tracing policy."""
         logger.info("tool end: %s (%s)", tool.name, agent.name)

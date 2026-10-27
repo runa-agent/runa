@@ -23,11 +23,10 @@ import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
-from runa._types import RunContext
 from runa.approval import predicate
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailsList, flatten_guardrails
-from runa.tool import FunctionTool, _NeedsApproval
+from runa.tool import Tool, _NeedsApproval
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -128,11 +127,10 @@ class Delegate:
     """
 
     agent: Agent
-    tool: FunctionTool
+    tool: Tool
     """The delegate as the model is offered it and a run gates it: its name, description, `input`
     schema, `needs_approval` and guardrails. It is also what a hook is handed as the call's
-    `tool`. Its `on_invoke_tool` refuses to run, because a delegate's call is a nested run of its
-    caller's and only that run can start it."""
+    `tool`."""
 
     @classmethod
     def from_agent(
@@ -145,21 +143,12 @@ class Delegate:
         guardrails: GuardrailsList = (),
     ) -> Delegate:
         """Build a `Delegate` for `agent`, its name/description derived from it unless given."""
-        name = tool_name or _slugify(agent.name)
-
-        async def on_invoke_tool(ctx: RunContext, args: dict[str, Any], call_id: str) -> Any:
-            raise UserError(
-                f"{name} delegates to {agent.name}, which runs only as a call of its caller's "
-                f"run. Run {type(agent).__name__}() itself to call it directly."
-            )
-
         return cls(
             agent=agent,
-            tool=FunctionTool(
-                name=name,
+            tool=Tool(
+                name=tool_name or _slugify(agent.name),
                 description=tool_description or f"Delegate a task to {agent.name}.",
                 params_json_schema=_DELEGATE_INPUT,
-                on_invoke_tool=on_invoke_tool,
                 guardrails=flatten_guardrails(guardrails, tool=True),
                 needs_approval=predicate(needs_approval),
             ),

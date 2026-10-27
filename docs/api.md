@@ -12,6 +12,8 @@ signature-level reference.
 
 ::: runa.tool.tool
 
+::: runa.tool.Tool
+
 ::: runa.tool.FunctionTool
 
 ## Guardrail
