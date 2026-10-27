@@ -9,12 +9,19 @@ from helpers import shape_of
 
 from runa import Agent, guardrail
 from runa.exceptions import UserError
-from runa.guardrail import BoundGuardrail, GuardrailVerdict, Phase, declared_names
+from runa.guardrail import (
+    Guardrail,
+    GuardrailVerdict,
+    Phase,
+    declared_names,
+    flatten_guardrails,
+)
 
 
-def _run(g: BoundGuardrail, value: Any) -> GuardrailVerdict:
-    """Call a wrapped guardrail's function directly, awaiting its always-async wrapper."""
-    coro = cast(Awaitable[GuardrailVerdict], g.guardrail_function(value))
+def _run(g: Guardrail, value: Any) -> GuardrailVerdict:
+    """Call a guardrail on its one side of an agent, awaiting its always-async wrapper."""
+    (bound,) = [entry for entries in flatten_guardrails([g]).values() for entry in entries]
+    coro = cast(Awaitable[GuardrailVerdict], bound.guardrail_function(value))
     return run_awaitable(coro)
 
 
@@ -32,17 +39,16 @@ def block_long(output: str) -> bool:
 
 def test_guardrails_split_into_input_and_output() -> None:
     """A `guardrails` list is sorted into `Phase.INPUT`/`Phase.OUTPUT` entries by binding."""
-    bound_input, bound_output = block_empty.input, block_long.output
 
     class Support(Agent):
         name = "Support"
         instructions = "support"
-        guardrails = [bound_input, bound_output]
+        guardrails = [block_empty.input, block_long.output]
 
     agent = Support()
 
-    assert shape_of(agent).guardrails[Phase.INPUT] == [bound_input]
-    assert shape_of(agent).guardrails[Phase.OUTPUT] == [bound_output]
+    assert [g.name for g in shape_of(agent).guardrails[Phase.INPUT]] == ["block_empty"]
+    assert [g.name for g in shape_of(agent).guardrails[Phase.OUTPUT]] == ["block_long"]
 
 
 def test_no_guardrails_leaves_both_lists_empty() -> None:

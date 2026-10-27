@@ -145,18 +145,15 @@ class GuardrailAudit:
 
 @dataclass
 class BoundGuardrail:
-    """A predicate bound to one `Phase`: what an `Agent`'s or a `@tool`'s guardrail list holds.
+    """A predicate wrapped for one `Phase`: what an `Agent`'s or a `@tool`'s resolved lists hold.
 
     One entry type for all four cells of the 2x2: `phase` is the entire difference between them.
-    `predicate` is the raw `(value) -> bool` that was wrapped, kept so the same bound object can be
-    rebound against a tool call when it's listed in `@tool(guardrails=[...])` instead of on an
-    agent.
+    Built by `flatten_guardrails` from a declared `Guardrail`, never declared itself.
     """
 
     guardrail_function: _GuardrailFunction
     phase: Phase
     name: str | None = None
-    predicate: _Predicate | None = None
 
     def get_name(self) -> str:
         """This guardrail's name: the one `@guardrail` set, or its wrapped function's."""
@@ -199,58 +196,64 @@ def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:
 
 
 class Guardrail:
-    """A predicate bound to neither side yet; `.input`/`.output` (or `.i`/`.o`) picks which.
+    """A predicate and the side it guards; `.input`/`.output` (or `.i`/`.o`) picks the side.
 
     `@guardrail` wraps a plain `(value) -> bool` predicate (tripping the guardrail on `True`)
     into this, the same way `@tool` wraps a plain function into a `FunctionTool`. Read `.input`
-    to bind it to the input side, `.output` for the output side; `.i`/`.o` are the exact same
-    binding under a shorter name, there is no third spelling. The same bound object works in
-    both places it's listed:
+    for the input side, `.output` for the output side; `.i`/`.o` are the exact same binding under
+    a shorter name, there is no third spelling. Listed bare, it guards both sides. Whether a side
+    means the agent or a tool call is the list's to say, so the same object works in both:
 
-    - In an `Agent.guardrails` list, it's bound to `Phase.INPUT`/`Phase.OUTPUT`: the predicate
-      sees the latest user message as plain text (regardless of whether the run was passed a
-      string or the running list of input items) on `.input`, or the agent's final output on
-      `.output`.
-    - In a `@tool(guardrails=[...])` list, the same object is rebound to `Phase.TOOL_INPUT`/
-      `Phase.TOOL_OUTPUT`: the predicate sees the tool call's arguments (parsed from JSON into a
-      dict) on `.input`, or the tool's raw return value on `.output`.
+    - In an `Agent.guardrails` list, it runs in `Phase.INPUT`/`Phase.OUTPUT`: the predicate sees
+      the latest user message as plain text (regardless of whether the run was passed a string or
+      the running list of input items) on `.input`, or the agent's final output on `.output`.
+    - In a `@tool(guardrails=[...])` list, it runs in `Phase.TOOL_INPUT`/`Phase.TOOL_OUTPUT`: the
+      predicate sees the tool call's arguments (parsed from JSON into a dict) on `.input`, or the
+      tool's raw return value on `.output`.
 
-    The predicate's docstring becomes `output_info`. Listed bare (no `.input`/`.output`), it's
-    wired as both sides of whichever pair applies.
+    The predicate's docstring becomes `output_info`.
     """
 
-    def __init__(self, func: _Predicate) -> None:
-        """Store the predicate to bind on `.input`/`.output` access."""
+    def __init__(self, func: _Predicate, sides: tuple[bool, ...] = (False, True)) -> None:
+        """Store the predicate and the sides it guards, each `True` for the output side."""
         self._func = func
+        self._sides = sides
 
-    def _bind(self, phase: Phase) -> BoundGuardrail:
-        """This predicate as a `phase` entry, wrapped into the call shape that phase is given."""
-        return BoundGuardrail(
-            guardrail_function=_wrap(self._func, phase),
-            phase=phase,
-            name=self._func.__name__,
-            predicate=self._func,
-        )
-
-    @property
-    def input(self) -> BoundGuardrail:
-        """Bind this predicate to the input side."""
-        return self._bind(Phase.INPUT)
+    def bind(self, phases: tuple[Phase, Phase]) -> list[BoundGuardrail]:
+        """This predicate wrapped for each of its sides, given the `(input, output)` phase pair."""
+        return [
+            BoundGuardrail(
+                guardrail_function=_wrap(self._func, phases[on_output]),
+                phase=phases[on_output],
+                name=self._func.__name__,
+            )
+            for on_output in self._sides
+        ]
 
     @property
-    def output(self) -> BoundGuardrail:
-        """Bind this predicate to the output side."""
-        return self._bind(Phase.OUTPUT)
+    def input(self) -> Guardrail:
+        """This predicate on the input side."""
+        return Guardrail(self._func, (False,))
 
     @property
-    def i(self) -> BoundGuardrail:
+    def output(self) -> Guardrail:
+        """This predicate on the output side."""
+        return Guardrail(self._func, (True,))
+
+    @property
+    def i(self) -> Guardrail:
         """Shorthand for `.input`."""
         return self.input
 
     @property
-    def o(self) -> BoundGuardrail:
+    def o(self) -> Guardrail:
         """Shorthand for `.output`."""
         return self.output
+
+    @property
+    def name(self) -> str:
+        """The predicate's name, which every entry bound from it carries."""
+        return self._func.__name__
 
 
 def guardrail(func: _Predicate) -> Guardrail:
@@ -258,84 +261,54 @@ def guardrail(func: _Predicate) -> Guardrail:
     return Guardrail(func)
 
 
-GuardrailsList = Sequence["BoundGuardrail | Guardrail"]
+GuardrailsList = Sequence[Guardrail]
 
 
-def _entries(guardrails: Any) -> list[Any]:
-    """The `guardrails=` declaration as a list, the one shape it takes.
+def _entries(guardrails: Any) -> list[Guardrail]:
+    """The `guardrails=` declaration as a list of `Guardrail`s, the one shape it takes.
 
     A dict grouping entries by side is a `UserError` naming the list it should be, rather than
-    its keys reaching `flatten_guardrails` as entries.
+    its keys reaching `flatten_guardrails` as entries, and so is an entry `@guardrail` didn't make.
     """
     if not isinstance(guardrails, list | tuple):
         raise UserError(
             f"guardrails must be a list, e.g. [block_empty.input, contains_pii.output], "
             f"got {type(guardrails).__name__}"
         )
+    for entry in guardrails:
+        if not isinstance(entry, Guardrail):
+            raise UserError(
+                f"guardrails entries must be @guardrail predicates, bare or bound via "
+                f".input/.output, got {type(entry).__name__}"
+            )
     return list(guardrails)
-
-
-def _rebound(entry: BoundGuardrail, phase: Phase) -> BoundGuardrail:
-    """`entry` as a `phase` entry: itself if it already is one, its predicate rebound if not.
-
-    Rebinding is what lets one `@guardrail` object mean "check the agent" on an agent and "check
-    the tool call" on a tool. It needs the raw predicate the entry wrapped, so a hand-built entry
-    -- which reads its value the way its own phase does, and carries nothing to re-wrap -- can't
-    cross over.
-    """
-    if entry.phase is phase:
-        return entry
-    if entry.predicate is None:
-        raise UserError(
-            f"guardrails entries must be @guardrail predicates bound via .input/.output, "
-            f"got one bound to {entry.phase.value!r} with no predicate to rebind"
-        )
-    return Guardrail(entry.predicate)._bind(phase)
 
 
 def flatten_guardrails(
     guardrails: GuardrailsList, *, tool: bool = False
 ) -> dict[Phase, list[BoundGuardrail]]:
-    """Sort a `guardrails=` list into entries by `Phase`; a bare entry wires as both sides.
+    """Wrap a `guardrails=` list into entries by `Phase`, in declared order within each.
 
     One function for both lists Runa accepts -- an `Agent`'s, checked against its input and its
     final output, and a `@tool`'s, checked against the call's arguments and its return value --
     because they differ only in which pair of phases they bind to, which is what `tool` picks.
     """
-    sides = (Phase.TOOL_INPUT, Phase.TOOL_OUTPUT) if tool else (Phase.INPUT, Phase.OUTPUT)
-    bound: dict[Phase, list[BoundGuardrail]] = {phase: [] for phase in sides}
+    phases = (Phase.TOOL_INPUT, Phase.TOOL_OUTPUT) if tool else (Phase.INPUT, Phase.OUTPUT)
+    bound: dict[Phase, list[BoundGuardrail]] = {phase: [] for phase in phases}
     for entry in _entries(guardrails):
-        if isinstance(entry, Guardrail):
-            for phase in sides:
-                bound[phase].append(entry._bind(phase))
-        elif isinstance(entry, BoundGuardrail):
-            phase = sides[1] if entry.phase.on_output else sides[0]
-            bound[phase].append(_rebound(entry, phase))
-        else:
-            raise UserError(
-                f"guardrails entries must be @guardrail predicates bound via "
-                f".input/.output, got {type(entry).__name__}"
-            )
+        for wrapped in entry.bind(phases):
+            bound[wrapped.phase].append(wrapped)
     return bound
-
-
-def _entry_name(entry: Any) -> str:
-    """One declared entry's name: a bound entry's own, or a bare `Guardrail`'s predicate's."""
-    if isinstance(entry, Guardrail):
-        return entry._func.__name__
-    if isinstance(entry, BoundGuardrail):
-        return entry.get_name()
-    return str(entry)
 
 
 def declared_names(guardrails: GuardrailsList) -> list[str]:
     """Name every guardrail a `guardrails=` declaration lists, in the order it lists them.
 
-    What such a declaration may hold -- bound entries or bare `Guardrail`s -- is this module's
-    own knowledge, so naming them for display lives here beside `flatten_guardrails` rather than
-    in whichever caller (`runa ui`'s Agents page, today) needs it next.
+    What such a declaration may hold is this module's own knowledge, so naming them for display
+    lives here beside `flatten_guardrails` rather than in whichever caller (`runa ui`'s Agents
+    page, today) needs it next.
     """
-    return [_entry_name(entry) for entry in _entries(guardrails)]
+    return [entry.name for entry in _entries(guardrails)]
 
 
 __all__ = [
