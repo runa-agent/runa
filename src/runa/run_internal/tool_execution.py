@@ -4,10 +4,10 @@ What happens to each call of a model message lives here, a pause included: which
 answered and which wait on a human, written to the run's record as each one settles, so a pause
 on the message finds it recorded and resuming answers that message again from there. Once the
 message is answered, its answers enter the run's transcript and its handoff, if any, is made,
-so which agent runs next is decided here too. These steps are passed the loop's run, imported
-for its type only, and use what it and its record can do (claim a call, decide its approval,
-guard it, fire a hook, run a delegate, hand off; record a call, an answer or a wait), never
-assigning a field of either.
+so which agent runs next is decided here too, as is each call's claim and approval, against the
+run tree's ledger. These steps are passed the loop's run, imported for its type only, and use
+what it and its record can do (guard a call, fire a hook, run a delegate, hand off; record a
+call, an answer or a wait), never assigning a field of either.
 """
 
 import asyncio
@@ -27,7 +27,8 @@ from runa._items import (
 )
 from runa._items import call_id as id_of  # `call_id` here is the id of the call at hand
 from runa._log import logger
-from runa.exceptions import ToolError
+from runa.approval import ApprovalDecision
+from runa.exceptions import DuplicateToolCallError, ToolError
 from runa.guardrail import Phase
 from runa.handoff import Delegate, Handoff
 from runa.run_internal.record import Interruption, RunRecord
@@ -61,7 +62,7 @@ async def _run_call(
     for the span and the `ToolCall`, which record what the model wrote.
     """
     tool, call_id = _gated(callee), id_of(call)
-    run.claim(call_id, tool.name)
+    _claim(run, call_id, tool.name)
 
     async def invoked(span: Span) -> _Outcome:
         await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
@@ -119,6 +120,18 @@ async def _closed(
 def _gated(callee: FunctionTool | Delegate) -> Tool:
     """What a call to `callee` is approved, guarded and handed to hooks as: a delegate's `tool`."""
     return callee.tool if isinstance(callee, Delegate) else callee
+
+
+def _claim(run: _Run, call_id: str, name: str) -> None:
+    """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
+    if not run.tree.approvals.claim(call_id):
+        raise DuplicateToolCallError(call_id, name)
+
+
+async def _decide(run: _Run, tool: Tool, call_id: str, args: dict[str, Any]) -> ApprovalDecision:
+    """Whether this call to `tool` runs, is rejected, or waits on a human."""
+    needs_approval = partial(tool.needs_approval, run.run_context, args, call_id)
+    return await run.tree.approvals.decide(tool.name, call_id, needs_approval=needs_approval)
 
 
 async def _invoked(
@@ -283,7 +296,7 @@ class _Answers:
             self.answer(_answer(run, call_id, _failed(name, args_json, args)))
             return
 
-        gate = await run.decide(_gated(callee), call_id, args)
+        gate = await _decide(run, _gated(callee), call_id, args)
         if gate.action == "interrupt":
             run.record.wait(
                 Interruption(name=name, arguments=args_json, call_id=call_id, agent=shape.agent)

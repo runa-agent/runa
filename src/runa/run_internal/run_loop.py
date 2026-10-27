@@ -9,7 +9,6 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
-from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
@@ -26,10 +25,8 @@ from runa._log import logger
 from runa._metering import charging, metered
 from runa._models import ModelRequest, StreamDelta
 from runa._types import ModelResponse, RunContext, Usage
-from runa.approval import ApprovalDecision
 from runa.context_source import ContextSource
 from runa.exceptions import (
-    DuplicateToolCallError,
     GuardrailTripwireTriggered,
     MaxTokensExceeded,
     MaxTurnsExceeded,
@@ -169,16 +166,6 @@ class _Run:
         """Hand `event` to a streamed run's consumer; a non-streamed run has nowhere to put it."""
         if self.emit is not None:
             self.emit(event)
-
-    def claim(self, call_id: str, name: str) -> None:
-        """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
-        if not self.tree.approvals.claim(call_id):
-            raise DuplicateToolCallError(call_id, name)
-
-    async def decide(self, tool: Tool, call_id: str, args: dict[str, Any]) -> ApprovalDecision:
-        """Whether this call to `tool` runs, is rejected, or waits on a human."""
-        needs_approval = partial(tool.needs_approval, self.run_context, args, call_id)
-        return await self.tree.approvals.decide(tool.name, call_id, needs_approval=needs_approval)
 
     async def guard(
         self,
