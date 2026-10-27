@@ -271,6 +271,35 @@ def test_handoff_switches_current_agent() -> None:
     assert len(handoff_spans) == 1
 
 
+def test_a_message_hands_off_once_to_its_first_handoff() -> None:
+    """A second handoff in the same message is answered with an error, and never made."""
+    handed: list[str] = []
+
+    class Recording(Hooks):
+        async def on_handoff(self, context: Any, from_agent: Any, to_agent: Any) -> None:
+            handed.append(to_agent.name)
+
+    first_model = ScriptedModel([text_response("handled by first")])
+    first = agent_class("First", first_model)
+    second = agent_class("Second", ScriptedModel([text_response("handled by second")]))
+    main = scripted_agent(
+        name="Main",
+        subagents=[first.handoff, second.handoff],
+        model=ScriptedModel([_two_calls_response("transfer_to_first", "transfer_to_second")]),
+    )
+
+    result = main.run_sync("please transfer", hooks=Recording())
+
+    assert result.output == "handled by first"
+    assert handed == ["First"]
+    assert len([s for s in result.trace.spans if s.type == "handoff"]) == 1
+    answers = [item for item in first_model.calls[0] if item.get("role") == "tool"]
+    assert [answer["content"] for answer in answers] == [
+        "Transferred to First.",
+        "error: this message already handed off to First",
+    ]
+
+
 def test_delegate_call_is_traced_as_a_delegate_span_not_a_tool_span() -> None:
     """A `.delegate` call traces as `type="delegate"`, unlike a plain tool call.
 

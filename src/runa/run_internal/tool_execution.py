@@ -1,11 +1,13 @@
-"""tool_execution.py: one message's tool calls, delegates and handoffs, and where they stand.
+"""tool_execution.py: answering one model message, its tool calls, delegates and handoff.
 
 What happens to each call of a model message lives here, a pause included: which calls were
 answered and which wait on a human, written to the run's record as each one settles, so a pause
-on the message finds it recorded and resuming answers that message again from there. These
-steps are passed the loop's run, imported for its type only, and use what it and its record can
-do (claim a call, decide its approval, guard it, fire a hook, run a delegate; record a call, an
-answer or a wait), never assigning a field of either.
+on the message finds it recorded and resuming answers that message again from there. Once the
+message is answered, its answers enter the run's transcript and its handoff, if any, is made,
+so which agent runs next is decided here too. These steps are passed the loop's run, imported
+for its type only, and use what it and its record can do (claim a call, decide its approval,
+guard it, fire a hook, run a delegate, hand off; record a call, an answer or a wait), never
+assigning a field of either.
 """
 
 import asyncio
@@ -29,6 +31,7 @@ from runa.exceptions import ToolError
 from runa.guardrail import Phase
 from runa.handoff import Delegate, Handoff
 from runa.run_internal.record import Interruption, RunRecord
+from runa.stream_events import AgentChanged, ToolOutput
 from runa.tool import FunctionTool, Tool, ToolCall
 from runa.tracing.spans import Span
 
@@ -185,10 +188,6 @@ class _Slot:
     item: ConversationItem | None = None
 
 
-type _Answered = tuple[list[ConversationItem], Agent | None]
-"""One message's answers, in its call order, and the agent handed off to."""
-
-
 @dataclass
 class _Answers:
     """One message's tool calls on their way to answers: each one admitted, then all settled.
@@ -276,13 +275,18 @@ class _Answers:
         else:
             self.defer(call_id, partial(_run_call, run, callee, call, args))
 
-    async def settled(self) -> _Answered | None:
-        """Run the deferred calls, then the handoffs: the answers and the agent switched to.
+    async def settled(self) -> bool:
+        """Run the deferred calls, then make the handoff, and fold the answers into the run.
 
-        `None` if a call still waits on a human, a paused delegate's included, after the calls
+        `False` if a call still waits on a human, a paused delegate's included, after the calls
         the message waits on directly: the run pauses on the message, its record already showing
-        where every call stands. A handoff is made only past that point, after the message's other
-        calls ran, so a pause leaves it unmade, and resuming makes it once. Making it fires
+        where every call stands, and its transcript without the message's answers. Otherwise the
+        answers go into the transcript in call order, each one emitted, and the run switches to
+        the agent handed off to.
+
+        A handoff is made only past the pause, after the message's other calls ran, so a pause
+        leaves it unmade, and resuming makes it once. A message hands off once, to its first
+        handoff: a later one is answered with an error instead, and never made. Making it fires
         `on_handoff`, not the tool hooks, and it is not one of `run.tool_calls`.
         """
         run, record = self.run, self.run.record
@@ -292,40 +296,41 @@ class _Answers:
             if item is not None:
                 self._give(slot, item)
         if record.pending:
-            return None
-        switched = None
+            return False
+        switched: Agent | None = None
         for slot, handoff in self.handoffs:
+            if switched is not None:
+                error = f"error: this message already handed off to {switched.name}"
+                slot.item = tool_result(slot.call_id, error)
+                continue
             with run.span(handoff.tool_name, "handoff"):
                 await run.hooks.on_handoff(run.run_context, run.current_agent, handoff.agent)
             slot.item = tool_result(slot.call_id, f"Transferred to {handoff.agent.name}.")
             switched = handoff.agent
         record.settle_message()
-        return [slot.item for slot in self.slots if slot.item is not None], switched
+
+        results = [slot.item for slot in self.slots if slot.item is not None]
+        run.transcript.record(*results)
+        for result in results:
+            run.notify(ToolOutput(result))
+        if switched is not None:
+            await run.hand_off(switched)
+            run.notify(AgentChanged(switched))
+            await run.hooks.on_agent_start(run.run_context, run.current_agent)
+        return True
 
 
-async def _run_message_tool_calls(run: _Run, message: dict[str, Any]) -> _Answered | None:
-    """Answer every tool call in `message` as `_Answers` admits them; `None` if the run pauses.
+async def _answer_message(run: _Run, message: dict[str, Any]) -> bool:
+    """Answer every tool call in `message` and fold the answers into the run (see `_Answers`).
 
-    The message a resumed run paused on goes through here too, its calls continuing from where
-    the pause left them.
+    The one way tool results enter a run, resumed or fresh: the message a resumed run paused on
+    goes through here too, its calls continuing from where the pause left them. `True` once the
+    message is answered, `False` if the run pauses on it.
     """
     answers = _Answers(run)
     for call in tool_calls(message):
         await answers.admit(call)
     return await answers.settled()
-
-
-@dataclass
-class _TurnOutcome:
-    """How the turn loop came out: an answer, or a pause on calls waiting on a human.
-
-    Only what the loop couldn't record on the run as it went; the generated items, which agent
-    ended up answering and what a pause waits on are read off the run itself.
-    """
-
-    final_output: Any
-    paused: bool = False
-    context_tokens: int = 0
 
 
 async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -> list[T]:
@@ -343,7 +348,6 @@ async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -
 
 
 __all__ = [
-    "_TurnOutcome",
+    "_answer_message",
     "_run_call",
-    "_run_message_tool_calls",
 ]

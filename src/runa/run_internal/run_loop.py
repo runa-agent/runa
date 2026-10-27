@@ -50,9 +50,9 @@ from runa.run_internal.dispatch import _Dispatch
 from runa.run_internal.record import RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
-from runa.run_internal.tool_execution import _Answered, _run_message_tool_calls, _TurnOutcome
+from runa.run_internal.tool_execution import _answer_message
 from runa.session import Session
-from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
+from runa.stream_events import StreamEvent, ToolCalled
 from runa.tool import Tool
 from runa.tracing.export import export_trace_later
 from runa.tracing.manual import current_trace
@@ -373,23 +373,17 @@ def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
         raise MaxTokensExceeded(f"max tokens ({max_tokens}) exceeded: {spent} used")
 
 
-async def _record_answers(run: _Run, answered: _Answered | None) -> _TurnOutcome | None:
-    """Fold one message's answers into the run, following a handoff if there was one.
+@dataclass
+class _TurnOutcome:
+    """How the turn loop came out: an answer, or a pause on calls waiting on a human.
 
-    The one way tool results enter a run, resumed or fresh. A message with a call still waiting
-    on a human (`None`) records nothing in the transcript and is the paused outcome instead.
+    Only what the loop couldn't record on the run as it went; the generated items, which agent
+    ended up answering and what a pause waits on are read off the run itself.
     """
-    if answered is None:
-        return _TurnOutcome(None, paused=True)
-    results, switched = answered
-    run.transcript.record(*results)
-    for result in results:
-        run.notify(ToolOutput(result))
-    if switched is not None:
-        await run.hand_off(switched)
-        run.notify(AgentChanged(switched))
-        await run.hooks.on_agent_start(run.run_context, run.current_agent)
-    return None
+
+    final_output: Any
+    paused: bool = False
+    context_tokens: int = 0
 
 
 async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
@@ -443,9 +437,8 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             return _TurnOutcome(_parse_output(run.shape, text), context_tokens=context_tokens)
         for call in calls:
             run.notify(ToolCalled(call))
-        paused = await _record_answers(run, await _run_message_tool_calls(run, message))
-        if paused is not None:
-            return paused
+        if not await _answer_message(run, message):
+            return _TurnOutcome(None, paused=True)
 
 
 async def _continue_paused(run: _Run) -> _TurnOutcome | None:
@@ -460,8 +453,11 @@ async def _continue_paused(run: _Run) -> _TurnOutcome | None:
     pause = run.claims
     if pause is not None and not await pause.claim():
         raise RunAlreadyResumed(pause.run_id)
-    message = run.record.paused_message
-    return await _record_answers(run, await _run_message_tool_calls(run, message))
+    return (
+        None
+        if await _answer_message(run, run.record.paused_message)
+        else _TurnOutcome(None, paused=True)
+    )
 
 
 async def _traced(run: Awaitable[Run], trace: Trace) -> Run:
