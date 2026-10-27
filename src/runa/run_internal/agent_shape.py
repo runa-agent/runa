@@ -298,13 +298,9 @@ class AgentShape(Resolved):
         return shape
 
     @cached_property
-    def callables(self) -> dict[str, FunctionTool | Delegate]:
-        """Every tool and delegate by the name the model calls it, which is what gates a call.
-
-        A delegate is listed as itself, so the lookup that finds a call's callee also says how
-        it runs. Handoffs are not listed, because a handoff is a switch rather than a call.
-        """
-        return {**{tool.name: tool for tool in self.tools}, **self.delegates}
+    def tools_by_name(self) -> dict[str, FunctionTool]:
+        """Every tool, its MCP servers' included once listed, by the name the model calls it."""
+        return {tool.name: tool for tool in self.tools}
 
     @cached_property
     def offered(self) -> list[ToolSchema]:

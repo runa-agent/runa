@@ -39,6 +39,7 @@ from runa.tracing.spans import Span
 if TYPE_CHECKING:
     from runa.agent import Agent
     from runa.run import Run
+    from runa.run_internal.agent_shape import AgentShape
     from runa.run_internal.run_loop import _Run
 
 
@@ -46,8 +47,31 @@ type _Outcome = tuple[Any, ToolCall] | None
 """What invoking a call came to: its result and the record of it, or `None` while it's paused."""
 
 
+@dataclass(frozen=True)
+class _Callee:
+    """What a call's name resolves to, so the gate runs every callee alike without asking which.
+
+    `tool` is what the call is approved, guarded and handed to hooks as, `kind` its span's type,
+    and `invoke` the gate's one varying step: given the run, the call, its parsed arguments and
+    its span, what invoking it came to.
+    """
+
+    tool: Tool
+    kind: str
+    invoke: Callable[[_Run, dict[str, Any], dict[str, Any], Span], Awaitable[_Outcome]]
+
+
+def _callee(shape: AgentShape, name: str) -> _Callee | None:
+    """The tool or delegate the model calls `name`, or `None` when neither answers to it."""
+    delegate = shape.delegates.get(name)
+    if delegate is not None:
+        return _Callee(delegate.tool, "delegate", partial(_delegate_invoked, delegate))
+    tool = shape.tools_by_name.get(name)
+    return None if tool is None else _Callee(tool, "tool", partial(_invoked, tool))
+
+
 async def _run_call(
-    run: _Run, callee: FunctionTool | Delegate, call: dict[str, Any], args: dict[str, Any]
+    run: _Run, callee: _Callee, call: dict[str, Any], args: dict[str, Any]
 ) -> ConversationItem | None:
     """Run one approved call through the gate. Every tool call and delegate call goes through this.
 
@@ -61,18 +85,15 @@ async def _run_call(
     `args` are the call's arguments as the gate already parsed them; the raw JSON is kept only
     for the span and the `ToolCall`, which record what the model wrote.
     """
-    tool, call_id = _gated(callee), id_of(call)
-    _claim(run, call_id, tool.name)
+    tool = callee.tool
+    _claim(run, id_of(call), tool.name)
 
     async def invoked(span: Span) -> _Outcome:
         await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
         await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
-        if isinstance(callee, Delegate):
-            nested = await run.delegate(callee, str(args.get("input", "")), call_id, under=span)
-            return _delegated(callee, nested, call_arguments(call), span)
-        return await _invoked(run, callee, call_id, args, call_arguments(call), span)
+        return await callee.invoke(run, call, args, span)
 
-    return await _closed(run, callee, call, invoked)
+    return await _closed(run, tool, callee.kind, call, invoked)
 
 
 async def _resume_call(
@@ -88,22 +109,21 @@ async def _resume_call(
         nested = await run.resume_delegate(suspended, id_of(call), under=span)
         return _delegated(delegate, nested, call_arguments(call), span)
 
-    return await _closed(run, delegate, call, continued)
+    return await _closed(run, delegate.tool, "delegate", call, continued)
 
 
 async def _closed(
     run: _Run,
-    callee: FunctionTool | Delegate,
+    tool: Tool,
+    kind: str,
     call: dict[str, Any],
     invoke: Callable[[Span], Awaitable[_Outcome]],
 ) -> ConversationItem | None:
     """`invoke` the call in its span, then close it: guard its output, record it, `on_tool_end`.
 
-    The second half of the gate `_run_call` states. A call `invoke` leaves paused (`None`) isn't
-    closed, and is left unanswered.
+    `tool` and `kind` are what `_Callee` says they are. The second half of the gate `_run_call`
+    states. A call `invoke` leaves paused (`None`) isn't closed, and is left unanswered.
     """
-    tool = _gated(callee)
-    kind = "delegate" if isinstance(callee, Delegate) else "tool"
     with run.span(tool.name, kind, input=call_arguments(call)) as span:
         outcome = await invoke(span)
         if outcome is None:
@@ -115,11 +135,6 @@ async def _closed(
     item = _answer(run, id_of(call), recorded)
     await run.hooks.on_tool_end(run.run_context, run.current_agent, tool, result)
     return item
-
-
-def _gated(callee: FunctionTool | Delegate) -> Tool:
-    """What a call to `callee` is approved, guarded and handed to hooks as: a delegate's `tool`."""
-    return callee.tool if isinstance(callee, Delegate) else callee
 
 
 def _claim(run: _Run, call_id: str, name: str) -> None:
@@ -135,15 +150,24 @@ async def _decide(run: _Run, tool: Tool, call_id: str, args: dict[str, Any]) -> 
 
 
 async def _invoked(
-    run: _Run, tool: FunctionTool, call_id: str, args: dict[str, Any], args_json: str, span: Span
-) -> tuple[Any, ToolCall]:
+    tool: FunctionTool, run: _Run, call: dict[str, Any], args: dict[str, Any], span: Span
+) -> _Outcome:
     """Invoke `tool`: its result, and the record of the call. A tool that raises fails the call."""
+    call_id, args_json = id_of(call), call_arguments(call)
     try:
         result = await tool.on_invoke_tool(run.run_context, args, call_id)
     except Exception as exc:  # noqa: BLE001 -- a tool failing is data, not a run-ending error
         failed = _failed(tool.name, args_json, str(exc) or type(exc).__name__, exc, span)
         return failed.output, failed
     return result, ToolCall(tool.name, args_json, str(result))
+
+
+async def _delegate_invoked(
+    delegate: Delegate, run: _Run, call: dict[str, Any], args: dict[str, Any], span: Span
+) -> _Outcome:
+    """Invoke `delegate`: a nested run of this one, given the call's `input`."""
+    nested = await run.delegate(delegate, str(args.get("input", "")), id_of(call), under=span)
+    return _delegated(delegate, nested, call_arguments(call), span)
 
 
 def _delegated(delegate: Delegate, nested: Run | None, args_json: str, span: Span) -> _Outcome:
@@ -287,7 +311,7 @@ class _Answers:
             return
 
         args_json = call_arguments(call)
-        callee = shape.callables.get(name)
+        callee = _callee(shape, name)
         if callee is None:
             self.answer(_answer(run, call_id, _failed(name, args_json, f"unknown tool {name}")))
             return
@@ -296,7 +320,7 @@ class _Answers:
             self.answer(_answer(run, call_id, _failed(name, args_json, args)))
             return
 
-        gate = await _decide(run, _gated(callee), call_id, args)
+        gate = await _decide(run, callee.tool, call_id, args)
         if gate.action == "interrupt":
             run.record.wait(
                 Interruption(name=name, arguments=args_json, call_id=call_id, agent=shape.agent)

@@ -22,7 +22,7 @@ from runa._items import (
     user_message,
 )
 from runa._log import logger
-from runa._metering import charging, metered
+from runa._metering import Charge, charging, metered
 from runa._models import ModelRequest, StreamDelta
 from runa._types import ModelResponse, RunContext, Usage
 from runa.context_source import ContextSource
@@ -595,37 +595,54 @@ class _RunModel:
 
         A streamed call hands `on_delta` each delta as it arrives and returns them assembled.
         """
-        with metered(str(self.shape.model), input=list(request.input)) as charge:
-            await self._on_llm_start(request)
-            model = self.shape.resolve_model()
-            if on_delta is None:
-                response = await model.get_response(request)
-            else:
-                assembly = _Assembly()
-                async for delta in model.stream_response(request):
-                    assembly.add(delta)
-                    on_delta(delta)
-                response = assembly.response()
-            charge(response.usage)
-            _check_token_budget(self.run.run_context.usage, self.max_tokens)
-        await self.run.hooks.on_llm_end(self.run.run_context, self.shape.agent, response)
-        return response
+        if on_delta is None:
+            return await self.get_response(request)
+        assembly = _Assembly()
+        async for delta in self._streamed(request, assembly):
+            on_delta(delta)
+        return assembly.response()
 
     async def get_response(self, request: ModelRequest) -> ModelResponse:
-        """`respond`, unstreamed."""
-        return await self.respond(request)
+        """One call to the agent's model, unstreamed, charged to the run."""
+        with metered(str(self.shape.model), input=list(request.input)) as charge:
+            await self._on_llm_start(request)
+            response = await self.shape.resolve_model().get_response(request)
+            self._charge(charge, response)
+        await self._on_llm_end(response)
+        return response
 
     async def stream_response(self, request: ModelRequest) -> AsyncIterator[StreamDelta]:
-        """`respond`, streamed, yielding the call's deltas once it is complete and charged."""
-        deltas: list[StreamDelta] = []
-        await self.respond(request, deltas.append)
-        for delta in deltas:
+        """One call to the agent's model, yielding each delta as it arrives.
+
+        The call is charged, and held to `max_tokens`, once its last delta is in.
+        """
+        async for delta in self._streamed(request, _Assembly()):
             yield delta
+
+    async def _streamed(
+        self, request: ModelRequest, assembly: _Assembly
+    ) -> AsyncIterator[StreamDelta]:
+        """The call's deltas as they arrive, each added to `assembly`, then the call charged."""
+        with metered(str(self.shape.model), input=list(request.input)) as charge:
+            await self._on_llm_start(request)
+            async for delta in self.shape.resolve_model().stream_response(request):
+                assembly.add(delta)
+                yield delta
+            response = assembly.response()
+            self._charge(charge, response)
+        await self._on_llm_end(response)
+
+    def _charge(self, charge: Charge, response: ModelResponse) -> None:
+        charge(response.usage)
+        _check_token_budget(self.run.run_context.usage, self.max_tokens)
 
     async def _on_llm_start(self, request: ModelRequest) -> None:
         await self.run.hooks.on_llm_start(
             self.run.run_context, self.shape.agent, request.system_instructions, list(request.input)
         )
+
+    async def _on_llm_end(self, response: ModelResponse) -> None:
+        await self.run.hooks.on_llm_end(self.run.run_context, self.shape.agent, response)
 
 
 async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
