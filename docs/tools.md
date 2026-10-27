@@ -9,11 +9,15 @@ from runa import tool
 
 @tool
 def get_weather(city: str) -> str:
-    """Return the current weather for a city."""
+    """Return the current weather for a city.
+
+    city: city name
+    """
     ...
 ```
 
-* The docstring becomes the tool's description.
+* The docstring becomes the tool's description, except a `<param>: <text>` line, which
+  becomes that parameter's description in the schema instead.
 * Type hints become the JSON schema. `str`, `int`, `float`, `bool`, `list[T]`, `dict`,
   `Literal[...]`, `Enum` subclasses, and `T | None` are all understood. Anything else falls back
   to an unconstrained schema.

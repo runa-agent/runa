@@ -1,4 +1,4 @@
-"""Tests for the `@tool` decorator's `guardrails=` wiring."""
+"""Tests for the `@tool` decorator: its schema and its `guardrails=` wiring."""
 
 from collections.abc import Awaitable
 from typing import Any, cast
@@ -114,3 +114,23 @@ def test_tool_output_guardrail_sees_return_value() -> None:
     (bound,) = now.guardrails[Phase.TOOL_OUTPUT]
     assert _run(bound, "x" * 101).tripped
     assert not _run(bound, "short").tripped
+
+
+@tool
+def get_weather(city: str, units: str = "c") -> str:
+    """Return the current weather for a city.
+
+    city: city name
+    Note: units default to Celsius.
+    """
+    return city
+
+
+def test_param_lines_describe_parameters_not_the_tool() -> None:
+    """A `<param>: <text>` line moves to that parameter's schema; other lines stay."""
+    assert get_weather.description == (
+        "Return the current weather for a city.\n\nNote: units default to Celsius."
+    )
+    properties = get_weather.params_json_schema["properties"]
+    assert properties["city"] == {"type": "string", "description": "city name"}
+    assert properties["units"] == {"type": "string"}

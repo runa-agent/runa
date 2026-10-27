@@ -100,12 +100,30 @@ def _json_type(annotation: Any) -> dict[str, Any]:
     return {"type": json_type} if json_type else {}
 
 
+def _split_docstring(doc: str, param_names: list[str]) -> tuple[str, dict[str, str]]:
+    """Split a docstring into the tool's description and each of `param_names`' (see `tool`).
+
+    A line is a parameter's only if its name is one of `param_names` and text follows the colon;
+    any other line (`Note: ...`) stays in the description. A parameter's first line wins.
+    """
+    kept: list[str] = []
+    described: dict[str, str] = {}
+    for line in doc.splitlines():
+        name, sep, text = line.strip().partition(":")
+        if sep and name in param_names and text.strip() and name not in described:
+            described[name] = text.strip()
+        else:
+            kept.append(line)
+    return "\n".join(kept).strip(), described
+
+
 def _schema_from_signature(func: Callable[..., Any]) -> tuple[dict[str, Any], list[str]]:
     """Build a `{"type": "object", "properties": {...}}` schema from `func`'s parameters.
 
     `ctx`/`call_id` are Runa's reserved parameter names (see `runa.approval`) for the run context
     and the tool call's id; they're never part of the model-facing schema. Returns the schema
-    alongside the ordered list of the remaining (model-facing) parameter names.
+    alongside the ordered list of the remaining (model-facing) parameter names. A parameter
+    described in the docstring (see `tool`) carries that text as its `description`.
     """
     signature = inspect.signature(func)
     hints = get_type_hints(func)
@@ -119,6 +137,9 @@ def _schema_from_signature(func: Callable[..., Any]) -> tuple[dict[str, Any], li
         properties[param_name] = _json_type(hints.get(param_name, param.annotation))
         if param.default is inspect.Parameter.empty:
             required.append(param_name)
+    _, described = _split_docstring(inspect.getdoc(func) or "", param_names)
+    for param_name, text in described.items():
+        properties[param_name] = {**properties[param_name], "description": text}
     schema: dict[str, Any] = {"type": "object", "properties": properties}
     if required:
         schema["required"] = required
@@ -164,6 +185,9 @@ def tool(
 ) -> FunctionTool | Callable[[Callable[..., Any]], FunctionTool]:
     """Wrap a plain function as a `FunctionTool`, deriving its schema from its signature.
 
+    The docstring is the tool's description, except a `<param>: <text>` line, which describes
+    that parameter in the schema instead.
+
     `guardrails=[...]` wires `@guardrail` predicates, bare (wired as both sides)
     or bound via `.input`/`.output`, against the tool call's parsed arguments and its return
     value, respectively.
@@ -171,7 +195,8 @@ def tool(
     bound = flatten_guardrails(guardrails or [], tool=True)
 
     def decorator(fn: Callable[..., Any]) -> FunctionTool:
-        schema, _ = _schema_from_signature(fn)
+        schema, param_names = _schema_from_signature(fn)
+        description, _ = _split_docstring(inspect.getdoc(fn) or "", param_names)
 
         async def on_invoke_tool(ctx: RunContext, args: dict[str, Any], call_id: str) -> Any:
             kwargs = _bind_arguments(fn, args, ctx, call_id)
@@ -185,7 +210,7 @@ def tool(
 
         return FunctionTool(
             name=name_override or fn.__name__,
-            description=description_override or (inspect.getdoc(fn) or "").strip(),
+            description=description_override or description,
             params_json_schema=schema,
             on_invoke_tool=on_invoke_tool,
             guardrails=bound,

@@ -8,6 +8,7 @@ conventions: @RUNA.md
 - `make check` (format, lint, typecheck, test) must pass before work is done.
 - Commits: one line, `<type>: <summary>`. Type is feat, fix, docs, refactor, or test.
 - Docstrings and comments state what the code promises now, and any constraint a reader couldn't see from the code. History ("used to", "the old ..."), rejected alternatives and which test enforces what belong in the commit message, not the source. Never name a private symbol of another module.
+- A contract has one home: RUNA.md for the user-facing rule, or the docstring of the one symbol that enforces it. Every other docstring states only its own local promise and points to that home (`see Agent.run`) instead of restating it. A change to a contract edits its home, never a copy.
 
 ## Principles
 - Optimize for programmer happiness: Prefer APIs and designs that make the common path obvious, pleasant, and productive.
