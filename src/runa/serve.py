@@ -337,7 +337,7 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
     missing embeddings credential is the same trade: found by the thing that rolls out.
 
     Each class's `declaration` is what's warmed, the very `Knowledge` its runs consult, so no
-    agent or subagent graph is built; a class no agent could be built from fails startup here
+    agent is built; a class no agent could be built from fails startup here
     rather than its first request. Agents sharing one corpus cost nothing
     extra: `ingest` asks the store whether it already holds what it would write, so the second
     one pays a `stat` per file and a version read. An agent in `knowledge="llm"` mode keeps its

@@ -34,6 +34,7 @@ from runa.eval.evaluation.core import EvalStatus, EvaluationResult
 from runa.eval.report import CaseReport, Report
 from runa.project import use
 from runa.run import Run
+from runa.run_internal.agent_shape import Agents
 from runa.run_internal.record import RunRecord, RunTree
 from runa.session import Session
 from runa.tracing.spans import Span
@@ -453,7 +454,8 @@ class SeededSupportAgent(Agent):
 def finished(output: str, trace: Trace) -> Run:
     """A completed run of `SeededSupportAgent` that answered `output`, recorded in `trace`."""
     agent = SeededSupportAgent()
-    return Run(output, "completed", None, RunRecord(start=agent, agent=agent), RunTree(trace=trace))
+    record = RunRecord(start=agent, agent=agent)
+    return Run(output, "completed", None, record, RunTree(trace=trace, agents=Agents(agent)))
 
 
 asyncio.run(

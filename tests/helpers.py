@@ -7,7 +7,7 @@ from typing import Any
 from runa._types import ModelResponse, RunContext, Usage
 from runa.agent import Agent
 from runa.run import Run, RunStatus
-from runa.run_internal.agent_shape import AgentShape
+from runa.run_internal.agent_shape import Agents, AgentShape
 from runa.run_internal.agent_shape import shape_of as shape_of_agent
 from runa.run_internal.record import RunRecord, RunTree
 from runa.tool import ToolCall
@@ -144,7 +144,8 @@ def finished_run(
         tool_calls=list(tool_calls),
     )
     tree = RunTree(
-        trace=trace if trace is not None else Trace(id="trace_stub", name="stub", start_time=0.0)
+        trace=trace if trace is not None else Trace(id="trace_stub", name="stub", start_time=0.0),
+        agents=Agents(agent),
     )
     return Run(output, status, error, record, tree)
 

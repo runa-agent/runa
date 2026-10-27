@@ -12,6 +12,7 @@ import inspect
 import re
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, dataclass_transform, get_origin
 
@@ -314,10 +315,7 @@ class Agent(_Settings):
             self._shape = AgentShape.of(self, resolve(setting) if settings else declaration(cls))
 
     def __setattr__(self, name: str, value: Any) -> None:
-        """Set an attribute, building the shape a run reads again when it is one of the settings.
-
-        The agents below this one are built again with it, as when the agent was constructed.
-        """
+        """Set an attribute, building the shape a run reads again when it is one of the settings."""
         if name not in _AGENT_FIELDS:
             super().__setattr__(name, value)
             return
@@ -353,13 +351,13 @@ class Agent(_Settings):
         """Another conversation with this agent's settings: `copy.copy(agent)`.
 
         The copy shares the settings' values (its tools and model) and starts with empty
-        `history` and `usage`, so it can run beside the original. Its subagent graph is its own, so
-        a subagent handing back reaches the copy, never the original.
+        `history` and `usage`, so it can run beside the original. A subagent handing back during
+        the copy's run reaches the copy, never the original.
         """
         clone = type(self).__new__(type(self))
         vars(clone).update(vars(self))
         clone._start_conversation()
-        clone._shape = AgentShape.of(clone, self._shape)
+        clone._shape = replace(self._shape, agent=clone)
         return clone
 
     def _start_conversation(self) -> None:

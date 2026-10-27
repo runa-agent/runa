@@ -29,6 +29,7 @@ from pydantic import (
     ValidationError,
     ValidationInfo,
     field_validator,
+    model_validator,
 )
 
 from runa._items import ConversationItem
@@ -36,6 +37,7 @@ from runa._types import RunContext, Usage
 from runa.approval import ApprovalLedger
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailAudit, GuardrailResults
+from runa.run_internal.agent_shape import Agents
 from runa.session import Session
 from runa.tool import ToolCall
 from runa.tracing.traces import Trace
@@ -57,27 +59,15 @@ READABLE_SINCE = 11
 """The oldest `schema_version` this Runa still resumes."""
 
 
-def _find_agent_by_name(root: Agent, name: str) -> Agent:
-    """`root`, or the agent reachable from it, that is named `name`.
-
-    Deserialization carries an agent as a name string, so resuming has to find the instance
-    again: a handoff may have switched the current agent before the pause, or the paused call
-    may belong to a delegate, so the match isn't necessarily `root` itself. `reachable` is the
-    same walk `Agent.graph` draws, imported here because only a load walks the graph.
-    """
-    from runa.run_internal.agent_shape import reachable
-
-    for candidate in reachable(root):
-        if candidate.name == name:
-            return candidate
-    raise UserError(f"no agent named {name!r} reachable from {root.name!r}")
-
-
 def _agent_from_json(value: Any, info: ValidationInfo) -> Any:
-    """A live agent passes through; a name is found again from the `root` a load was given."""
+    """A live agent passes through; a name is found again among the `agents` a load was given.
+
+    The match isn't necessarily the root: a handoff may have switched the current agent before
+    the pause, or the paused call may belong to a delegate.
+    """
     if not isinstance(value, str):
         return value
-    return _find_agent_by_name((info.context or {})["root"], value)
+    return (info.context or {})["agents"].named(value)
 
 
 def _trace_from_json(value: Any) -> Trace:
@@ -273,13 +263,24 @@ class RunTree(BaseModel):
     * `approvals`: the ledger a decision is written to, and each run reads its calls' from.
     * `guardrail_results`: the audit trail of every guardrail any of them ran. Not serialized:
       each result is already a span in the trace.
+    * `agents`: the instance each agent class runs as, the root run's starting agent among them.
+      Not serialized: a load is given its root, and builds the rest again.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     trace: _TraceRef
+    agents: Agents = Field(exclude=True)
     approvals: ApprovalLedger = Field(default_factory=ApprovalLedger)
     guardrail_results: GuardrailResults = Field(default_factory=GuardrailResults, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _loaded_agents(cls, data: Any, info: ValidationInfo) -> Any:
+        """A tree read back from a pause runs the `agents` its load was given."""
+        if isinstance(data, dict) and info.context is not None and "agents" not in data:
+            return {**data, "agents": info.context["agents"]}
+        return data
 
     def snapshot(self) -> RunTree:
         """The same trace and ledger, with a copy of the audit trail as it stands now."""
@@ -398,7 +399,7 @@ class Pause:
     def from_json(cls, root: Agent, state_json: dict[str, Any]) -> Pause:
         """Rebuild the pause `to_json` wrote, its agents found again from `root` by name."""
         try:
-            schema = PauseSchema.model_validate(state_json, context={"root": root})
+            schema = PauseSchema.model_validate(state_json, context={"agents": Agents(root)})
         except ValidationError as exc:
             raise UserError(f"invalid paused run: {exc}") from exc
         return cls(schema.run, schema.tree)

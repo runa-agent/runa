@@ -1,11 +1,12 @@
 """handoff.py: `Handoff` (agent-as-a-switch) and `Delegate` (agent-as-a-tool).
 
-Both wrap a sub-`Agent` as something the model can call, differing in what happens next: calling a
-`Handoff`'s tool switches `run_internal`'s current agent for the rest of the run (`Agent.subagents`'
-`.handoff` mode); calling a `Delegate`'s tool runs the sub-agent to completion, as a nested run of
-the caller's, and hands its output back to the *calling* agent, which keeps going (`.delegate`
-mode). A `Subagent` is one entry of an agent's `subagents` list: a class and the mode it is wired
-up in.
+Both wrap a sub-`Agent` class as something the model can call, differing in what happens next:
+calling a `Handoff`'s tool switches `run_internal`'s current agent for the rest of the run
+(`Agent.subagents`' `.handoff` mode); calling a `Delegate`'s tool runs the sub-agent to completion,
+as a nested run of the caller's, and hands its output back to the *calling* agent, which keeps
+going (`.delegate` mode). A `Subagent` is one entry of an agent's `subagents` list: a class and the
+mode it is wired up in. Each holds the class it reaches; which instance of it runs is the run's
+to say (`runa.run_internal.agent_shape.Agents`).
 
 A delegate is a tool and a handoff is not. A delegate's call is gated, run and recorded the way a
 `@tool`'s is, so it takes the same `needs_approval` and `guardrails`
@@ -91,22 +92,27 @@ class Handoff:
     """A sub-agent registered as a switch: calling its tool hands the run over to it.
 
     `run_internal` sees a `Handoff` in an agent's `handoffs` list and recognizes a call to
-    `tool_name` as a request to switch `current_agent` to `agent`, rather than a normal tool call.
+    `tool_name` as a request to switch `current_agent` to the run's `agent`, rather than a normal
+    tool call.
     """
 
-    agent: Agent
+    agent: type[Agent]
     tool_name: str
     tool_description: str
 
     @classmethod
     def from_agent(
-        cls, agent: Agent, tool_name: str | None = None, tool_description: str | None = None
+        cls,
+        agent: type[Agent],
+        name: str,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
     ) -> Handoff:
-        """Build a `Handoff` for `agent`, its name/description derived from it unless given."""
+        """Build a `Handoff` to `agent`, its tool named and described for `name` unless given."""
         return cls(
             agent=agent,
-            tool_name=tool_name or f"transfer_to_{_slugify(agent.name)}",
-            tool_description=tool_description or f"Transfer the conversation to {agent.name}.",
+            tool_name=tool_name or f"transfer_to_{_slugify(name)}",
+            tool_description=tool_description or f"Transfer the conversation to {name}.",
         )
 
 
@@ -120,13 +126,13 @@ _DELEGATE_INPUT = {
 
 @dataclass(frozen=True)
 class Delegate:
-    """A sub-agent registered as a tool: calling it runs `agent` on the `input` the model wrote.
+    """A sub-agent registered as a tool: calling it runs the run's `agent` on the model's `input`.
 
     A call to it is looked up to the `Delegate` itself, not its `tool`, and runs as a nested run
     of the caller's, whose output goes back to the caller as the call's result.
     """
 
-    agent: Agent
+    agent: type[Agent]
     tool: Tool
     """The delegate as the model is offered it and a run gates it: its name, description, `input`
     schema, `needs_approval` and guardrails. It is also what a hook is handed as the call's
@@ -135,19 +141,20 @@ class Delegate:
     @classmethod
     def from_agent(
         cls,
-        agent: Agent,
+        agent: type[Agent],
+        name: str,
         tool_name: str | None = None,
         tool_description: str | None = None,
         *,
         needs_approval: NeedsApproval = False,
         guardrails: GuardrailsList = (),
     ) -> Delegate:
-        """Build a `Delegate` for `agent`, its name/description derived from it unless given."""
+        """Build a `Delegate` to `agent`, its tool named and described for `name` unless given."""
         return cls(
             agent=agent,
             tool=Tool(
-                name=tool_name or _slugify(agent.name),
-                description=tool_description or f"Delegate a task to {agent.name}.",
+                name=tool_name or _slugify(name),
+                description=tool_description or f"Delegate a task to {name}.",
                 params_json_schema=_DELEGATE_INPUT,
                 guardrails=flatten_guardrails(guardrails, tool=True),
                 needs_approval=predicate(needs_approval),

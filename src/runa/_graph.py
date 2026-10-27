@@ -4,15 +4,14 @@ Just enough to show an agent's own tools, delegates and handoffs (recursively) a
 digraph, since that's all `Agent.graph` promises. A delegate is drawn as the agent it wraps
 (dotted edge), not as a plain tool box; a handoff gets a dashed edge.
 
-Which agents those are comes from `subagent_edges`, the same walk a resumed run finds its agents
-again through; only the recursion stays here, because drawing needs each agent's tools and MCP
-servers too, which a walk over agents alone doesn't carry.
+Which agents those are comes from `reachable`, the same walk a resumed run finds its agents again
+through, each agent class drawn once with the settings a run gives it.
 """
 
 from typing import TYPE_CHECKING
 
 from runa.handoff import Mode
-from runa.run_internal.agent_shape import shape_of, subagent_edges
+from runa.run_internal.agent_shape import reachable, subagent_edges
 
 if TYPE_CHECKING:
     from graphviz import Digraph
@@ -24,36 +23,8 @@ _EDGE_STYLE: dict[Mode, str] = {"handoff": "dashed", "delegate": "dotted"}
 here, not a plausible-looking edge in the wrong style."""
 
 
-def _agent_node_id(agent: Agent) -> str:
-    return f"agent_{id(agent)}"
-
-
-def _add_agent(dot: Digraph, agent: Agent, seen: set[int]) -> None:
-    if id(agent) in seen:
-        return
-    seen.add(id(agent))
-    node_id = _agent_node_id(agent)
-    dot.node(node_id, agent.name, shape="ellipse", style="filled", fillcolor="lightblue")
-
-    for tool in shape_of(agent).tools:
-        tool_id = f"tool_{id(tool)}"
-        dot.node(tool_id, tool.name, shape="box", style="filled", fillcolor="lightyellow")
-        dot.edge(node_id, tool_id)
-
-    for server in shape_of(agent).mcp_servers:
-        server_id = f"mcp_{id(server)}"
-        dot.node(
-            server_id,
-            server.name,
-            shape="box",
-            style="filled,dashed",
-            fillcolor="lightgrey",
-        )
-        dot.edge(node_id, server_id)
-
-    for mode, target in subagent_edges(agent):
-        dot.edge(node_id, _agent_node_id(target), style=_EDGE_STYLE[mode])
-        _add_agent(dot, target, seen)
+def _agent_node_id(agent_cls: type[Agent]) -> str:
+    return f"agent_{id(agent_cls)}"
 
 
 def draw_graph(agent: Agent) -> Digraph:
@@ -65,7 +36,28 @@ def draw_graph(agent: Agent) -> Digraph:
     from graphviz import Digraph
 
     dot = Digraph()
-    _add_agent(dot, agent, set())
+    for agent_cls, resolved in reachable(agent):
+        node_id = _agent_node_id(agent_cls)
+        dot.node(node_id, resolved.name, shape="ellipse", style="filled", fillcolor="lightblue")
+
+        for tool in resolved.tools:
+            tool_id = f"tool_{id(tool)}"
+            dot.node(tool_id, tool.name, shape="box", style="filled", fillcolor="lightyellow")
+            dot.edge(node_id, tool_id)
+
+        for server in resolved.mcp_servers:
+            server_id = f"mcp_{id(server)}"
+            dot.node(
+                server_id,
+                server.name,
+                shape="box",
+                style="filled,dashed",
+                fillcolor="lightgrey",
+            )
+            dot.edge(node_id, server_id)
+
+        for mode, target in subagent_edges(resolved):
+            dot.edge(node_id, _agent_node_id(target), style=_EDGE_STYLE[mode])
     return dot
 
 

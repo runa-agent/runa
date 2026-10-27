@@ -41,7 +41,7 @@ from runa.exceptions import (
 from runa.guardrail import GuardrailResult, Phase
 from runa.lifecycle import Hooks, LoggingHooks
 from runa.run import Run, RunStatus
-from runa.run_internal.agent_shape import AgentShape, RunPolicy, shape_of
+from runa.run_internal.agent_shape import Agents, AgentShape, RunPolicy, shape_of
 from runa.run_internal.dispatch import _Dispatch
 from runa.run_internal.record import RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
@@ -714,7 +714,7 @@ async def _run_async(
             run_context=RunContext(context=context, user_id=user_id),
             session_id=session_id,
         ),
-        tree=RunTree(trace=trace),
+        tree=RunTree(trace=trace, agents=Agents(agent)),
         agent_span=_Spans(trace).open(
             agent.name, "agent", input=latest_user_text(_turn_items(input))
         ),

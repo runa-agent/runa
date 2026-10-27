@@ -5,7 +5,7 @@ import copy
 import importlib.util
 import json
 import sys
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AsyncExitStack, nullcontext
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -217,7 +217,7 @@ def test_delegate_adds_only_to_tools() -> None:
     agent = Main()
 
     assert built_shape(agent).handoffs == ()
-    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool.name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Researcher, Researcher.name).tool.name]
 
 
 def test_h_and_d_are_shorthand_for_handoff_and_delegate() -> None:
@@ -231,80 +231,101 @@ def test_h_and_d_are_shorthand_for_handoff_and_delegate() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool.name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator, Translator.name).tool.name]
 
 
-def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
-    """A specialist handing back to triage closes onto the triage agent being built."""
+def _triage_handed_back_to() -> tuple[Agent, Callable[[Agent], list[Agent]]]:
+    """A `Triage` handing off to `Billing`, which hands straight back, and how to run one.
+
+    Running an agent returns the agents the run handed off to, in order.
+    """
 
     class Triage(Agent):
         name = "Triage"
         instructions = "triage"
         subagents: Sequence[type[Agent] | Subagent] = ()  # filled in below, once `Billing` exists
+        model = _ScriptedModel(
+            [_tool_call_message("transfer_to_billing", "{}", "out"), _final_message("done")]
+        )
 
     class Billing(Agent):
         name = "Billing"
         instructions = "billing"
         subagents = [Triage.handoff]
+        model = _ScriptedModel([_tool_call_message("transfer_to_triage", "{}", "back")])
 
-    Triage.subagents = [Billing.delegate]
+    Triage.subagents = [Billing.handoff]
 
-    triage = Triage()
+    def handed_to(agent: Agent) -> list[Agent]:
+        seen: list[Agent] = []
 
-    (billing,) = [delegate.agent for delegate in built_shape(triage).delegates]
-    assert billing is not None
-    assert [handoff.agent for handoff in built_shape(billing).handoffs] == [triage]
+        class _Seen(Hooks[Any]):
+            async def on_handoff(self, context: Any, from_agent: Agent, to_agent: Agent) -> None:
+                seen.append(to_agent)
+
+        assert agent.run_sync("hi", hooks=_Seen()).status == "completed"
+        return seen
+
+    return Triage(), handed_to
 
 
-def test_a_copy_has_a_subagent_graph_of_its_own() -> None:
+def test_a_subagent_handing_back_reaches_the_agent_the_run_started_on() -> None:
+    """A cycle closes onto the very instance a run started on, not a fresh one of its class."""
+    triage, handed_to = _triage_handed_back_to()
+
+    billing, back = handed_to(triage)
+
+    assert type(billing).__name__ == "Billing"
+    assert back is triage
+
+
+def test_a_subagent_of_a_copy_handing_back_reaches_the_copy() -> None:
     """A subagent of `copy.copy(agent)` handing back reaches the copy, not the original."""
-
-    class Triage(Agent):
-        name = "Triage"
-        instructions = "triage"
-        subagents: Sequence[type[Agent] | Subagent] = ()  # filled in below, once `Billing` exists
-
-    class Billing(Agent):
-        name = "Billing"
-        instructions = "billing"
-        subagents = [Triage.handoff]
-
-    Triage.subagents = [Billing.delegate]
-
-    original = Triage()
+    original, handed_to = _triage_handed_back_to()
     clone = copy.copy(original)
 
-    (billing,) = [delegate.agent for delegate in built_shape(clone).delegates]
-    (original_billing,) = [delegate.agent for delegate in built_shape(original).delegates]
-    assert billing is not original_billing
-    assert [handoff.agent for handoff in built_shape(billing).handoffs] == [clone]
+    _, back = handed_to(clone)
+
+    assert back is clone
 
 
-def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
-    """A leaf shared by two subagents is one instance, not one per path to it."""
-
-    class Left(Agent):
-        name = "Left"
-        instructions = "left"
-        subagents = [Translator.delegate]
-
-    class Right(Agent):
-        name = "Right"
-        instructions = "right"
-        subagents = [Translator.delegate]
+def test_building_an_agent_builds_none_of_its_subagents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A subagent is an edge to a class: only a run reaching it builds one."""
 
     class Main(Agent):
         name = "Main"
         instructions = "main"
-        subagents = [Left.delegate, Right.delegate]
+        subagents = [Researcher.handoff, Translator.delegate]
 
-    left, right = [delegate.agent for delegate in built_shape(Main()).delegates]
+    def refuse(self: Agent, **settings: Any) -> None:
+        raise AssertionError(f"built {type(self).__name__}")
 
-    assert left is not None and right is not None
-    assert (
-        next(iter(built_shape(left).delegates)).agent
-        is next(iter(built_shape(right).delegates)).agent
-    )
+    monkeypatch.setattr(Researcher, "__init__", refuse)
+    monkeypatch.setattr(Translator, "__init__", refuse)
+
+    shape = built_shape(Main())
+
+    assert [handoff.agent for handoff in shape.handoffs] == [Researcher]
+    assert [delegate.agent for delegate in shape.delegates] == [Translator]
+
+
+def test_a_run_tree_builds_each_agent_class_once() -> None:
+    """The tree's root is the agent given it; any other class is one instance per tree."""
+    from runa.run_internal.agent_shape import Agents
+
+    class Main(Agent):
+        name = "Main"
+        instructions = "main"
+        subagents = [Translator.delegate]
+
+    main = Main()
+    agents = Agents(main)
+
+    assert agents[Main] is main
+    assert isinstance(agents[Translator], Translator)
+    assert agents[Translator] is agents[Translator]
+    assert agents.named("Translator") is agents[Translator]
+    assert Agents(main)[Translator] is not agents[Translator]
 
 
 def test_two_classes_sharing_a_name_in_one_graph_is_a_user_error() -> None:
@@ -369,7 +390,7 @@ def test_bare_subagent_wires_both_handoff_and_delegate() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool.name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Researcher, Researcher.name).tool.name]
 
 
 def test_mixed_modes_wire_independently() -> None:
@@ -383,7 +404,7 @@ def test_mixed_modes_wire_independently() -> None:
     agent = Main()
 
     assert _handoff_names(agent) == ["Researcher"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool.name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator, Translator.name).tool.name]
 
 
 def test_no_subagents_leaves_handoffs_and_tools_empty() -> None:
@@ -453,6 +474,12 @@ def test_a_tools_entry_that_is_not_a_tool_is_rejected() -> None:
 
     with pytest.raises(UserError, match="tools entries must be @tool functions"):
         scripted_agent(_ScriptedModel([]), tools=cast(Any, [ping]))
+
+
+def test_a_subagents_entry_that_is_not_an_agent_class_is_rejected() -> None:
+    """A subagent is an `Agent` subclass, bare or bound: an instance is a `UserError`."""
+    with pytest.raises(UserError, match="subagents entries must be Agent subclasses"):
+        scripted_agent(_ScriptedModel([]), subagents=cast(Any, [Researcher()]))
 
 
 def test_an_mcp_server_without_a_transport_is_rejected() -> None:
@@ -982,17 +1009,14 @@ class _Declared(Agent):
     subagents = [Researcher.handoff]
 
 
-def test_instances_of_a_class_share_what_it_declares_but_not_their_graph() -> None:
-    """Two plain instances share one `Memory` and `Knowledge`, each with subagents of its own."""
+def test_instances_of_a_class_share_what_it_declares() -> None:
+    """Two plain instances share one `Memory` and `Knowledge`, each its own agent."""
     first, second = _Declared(), _Declared()
 
     assert built_shape(first).policy.memory is built_shape(second).policy.memory
     assert built_shape(first).policy.knowledge is built_shape(second).policy.knowledge
     assert built_shape(first).agent is first
     assert built_shape(second).agent is second
-    (first_researcher,) = [handoff.agent for handoff in built_shape(first).handoffs]
-    (second_researcher,) = [handoff.agent for handoff in built_shape(second).handoffs]
-    assert first_researcher is not second_researcher
 
 
 def test_an_override_resolves_on_its_own_instance_alone() -> None:
@@ -1098,7 +1122,7 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert agent.model == "claude-sonnet-5"
     assert agent.model_settings is model_settings
     assert _tool_names(agent) == ["ping"]
-    assert _delegate_names(agent) == [Delegate.from_agent(Translator()).tool.name]
+    assert _delegate_names(agent) == [Delegate.from_agent(Translator, Translator.name).tool.name]
     assert agent.guardrails == tuple(passed["guardrails"])
     assert built_shape(agent).mcp_servers == tuple(passed["mcp"])
     assert agent.output_type is Answer
@@ -2109,27 +2133,25 @@ def test_run_streamed_reports_an_error_as_an_error_run() -> None:
     assert run.error is not None
 
 
-class _Child(Agent):
-    name = "Child"
-    instructions = "Refund when asked."
-
-
 def _parent_with_paused_delegate(calls: list[float]) -> Agent:
     """A parent whose `.delegate` child calls an approval-gated tool."""
+
+    class Child(Agent):
+        name = "Child"
+        instructions = "Refund when asked."
+        tools = [_refund_tool(calls)]
+        model = _ScriptedModel(
+            [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
+        )
 
     class Parent(Agent):
         name = "Parent"
         instructions = "Delegate refunds."
-        subagents = [_Child.delegate]
+        subagents = [Child.delegate]
 
     parent = Parent()
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
-    )
-    child = next(iter(built_shape(parent).delegates)).agent
-    child.tools = [_refund_tool(calls)]
-    child.model = _ScriptedModel(
-        [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
     )
     return parent
 
@@ -2175,11 +2197,21 @@ def _parent_with_a_paused_grandchild(calls: list[float]) -> Agent:
     class Grandchild(Agent):
         name = "Grandchild"
         instructions = "Refund when asked."
+        tools = [_refund_tool(calls)]
+        model = _ScriptedModel(
+            [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
+        )
 
     class Child(Agent):
         name = "Child"
         instructions = "Pass refunds down."
         subagents = [Grandchild.delegate]
+        model = _ScriptedModel(
+            [
+                _tool_call_message("grandchild", '{"input": "refund $5"}', "mid_1"),
+                _final_message("passed on"),
+            ]
+        )
 
     class Parent(Agent):
         name = "Parent"
@@ -2189,18 +2221,6 @@ def _parent_with_a_paused_grandchild(calls: list[float]) -> Agent:
     parent = Parent()
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
-    )
-    child = next(iter(built_shape(parent).delegates)).agent
-    child.model = _ScriptedModel(
-        [
-            _tool_call_message("grandchild", '{"input": "refund $5"}', "mid_1"),
-            _final_message("passed on"),
-        ]
-    )
-    grandchild = next(iter(built_shape(child).delegates)).agent
-    grandchild.tools = [_refund_tool(calls)]
-    grandchild.model = _ScriptedModel(
-        [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
     )
     return parent
 
@@ -2360,19 +2380,25 @@ def test_a_delegates_guardrails_show_up_on_its_callers_run() -> None:
         """Look up an order."""
         return "shipped"
 
+    class Child(Agent):
+        name = "Child"
+        instructions = "Look orders up."
+        tools = [lookup]
+        model = _ScriptedModel(
+            [
+                _tool_call_message("lookup", '{"order_id": "A1"}', "inner_1"),
+                _final_message("shipped"),
+            ]
+        )
+
     class Parent(Agent):
         name = "Parent"
         instructions = "Delegate lookups."
-        subagents = [_Child.delegate]
+        subagents = [Child.delegate]
 
     parent = Parent()
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "find A1"}', "outer_1"), _final_message("ok")]
-    )
-    child = next(iter(built_shape(parent).delegates)).agent
-    child.tools = [lookup]
-    child.model = _ScriptedModel(
-        [_tool_call_message("lookup", '{"order_id": "A1"}', "inner_1"), _final_message("shipped")]
     )
 
     run = parent.run_sync("where is A1?")

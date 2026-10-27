@@ -105,10 +105,13 @@ def test_every_run_record_field_is_serialized() -> None:
 
 
 def test_every_run_tree_field_but_the_audit_trail_is_serialized() -> None:
-    """What the tree shares survives a restart, but for guardrails already kept as spans."""
+    """What the tree shares survives a restart, but for spans and the agents a load is given."""
     result, _ = _paused_run()
 
-    assert set(_stored(result)["tree"]) == set(RunTree.model_fields) - {"guardrail_results"}
+    assert set(_stored(result)["tree"]) == set(RunTree.model_fields) - {
+        "guardrail_results",
+        "agents",
+    }
 
 
 def test_a_paused_run_is_kept_under_its_run_id() -> None:

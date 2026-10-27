@@ -1,17 +1,20 @@
 """agent_shape.py: `AgentShape`, an agent as the runtime reads it.
 
 An `Agent` holds its settings as declared (`subagents`, `mcp`, `memory = "auto"`), and its shape
-is the one place they are translated into what a run uses: the subagent graph built, `memory` and
-`knowledge` resolved to a source and the model's search tools. The agent builds its shape when it
-is constructed, and again whenever one of its settings is reassigned, so the two always agree and
-a bad value is a `UserError` at the line that set it. What a class declares is translated once per
-process (`runa.agent.declaration`) and shared by every instance built without overrides, so
-building one costs only its subagent graph, whose agents are still its own. The turn loop reads an
-agent's settings from its shape and nowhere else: `shape.agent` is the identity handed to user
-code (a hook, an `instructions` callable, a pause), never read for a setting.
+is the one place they are translated into what a run uses: its tools, delegates and handoffs
+offered by name, `memory` and `knowledge` resolved to a source and the model's search tools. The
+agent builds its shape when it is constructed, and again whenever one of its settings is
+reassigned, so the two always agree and a bad value is a `UserError` at the line that set it. What
+a class declares is translated once per process (`runa.agent.declaration`) and shared by every
+instance built without overrides. The turn loop reads an agent's settings from its shape and
+nowhere else: `shape.agent` is the identity handed to user code (a hook, an `instructions`
+callable, a pause), never read for a setting.
 
-`shape_of` is how anything outside the agent reads one, and `subagent_edges`/`reachable` walk the
-graph the shape builds, so a third subagent mode is a change in this module alone.
+The agent graph is one of classes: a subagent is an edge to a class, never an instance, so
+building an agent builds no other. `Agents` is the one place a run turns a class into the
+instance it runs, once per class per run tree. `shape_of` is how anything outside the agent reads
+a shape, and `subagent_edges`/`reachable` walk the graph, so a third subagent mode is a change in
+this module alone.
 
 Two things wait for a run: the tools an agent's MCP servers list (`with_mcp_tools`, which may
 start a subprocess) and the model client (`resolve_model`, which needs the provider's API key).
@@ -19,8 +22,6 @@ start a subprocess) and the model client (`resolve_model`, which needs the provi
 
 import inspect
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass, fields, replace
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
@@ -41,62 +42,12 @@ if TYPE_CHECKING:
 
 _MODEL_PROVIDER = ModelProvider()
 
-_under_construction: ContextVar[dict[type[Agent], Agent] | None] = ContextVar(
-    "_under_construction", default=None
-)
 
+def _declaration(agent_cls: type[Agent]) -> Resolved:
+    """`runa.agent.declaration`, imported when called because `runa.agent` imports this module."""
+    from runa.agent import declaration
 
-@contextmanager
-def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
-    """Yield the one way `agent`'s shape builds a subagent: each class once per graph.
-
-    A class listed twice below one root is built once, and a cycle (a specialist handing back to
-    triage) closes onto `agent` itself. Construction is eager, so a broken subagent declaration
-    fails where `subagents` is set. An agent is found again by its `name` when a paused run
-    resumes, so two classes in one graph sharing a name is a `UserError`.
-    """
-    built = _under_construction.get()
-    token = _under_construction.set(built := {}) if built is None else None
-    try:
-        for other in built.values():
-            if other is not agent and other.name == agent.name:
-                raise UserError(
-                    f"{type(other).__name__} and {type(agent).__name__} are both named "
-                    f"{agent.name!r} in one agent graph, so a paused run could resume the "
-                    f"wrong one. Give each agent a name of its own."
-                )
-        built[type(agent)] = agent
-        yield lambda cls: built[cls] if cls in built else cls()
-    finally:
-        if token is not None:
-            _under_construction.reset(token)
-
-
-def _subagent_graph(agent: Agent) -> tuple[list[Handoff], list[Delegate]]:
-    """`agent.subagents` built: each entry bare (auto, so both modes) or `.handoff`/`.delegate`."""
-    handoffs: list[Handoff] = []
-    delegates: list[Delegate] = []
-    with _agent_graph(agent) as build:
-        for sub in agent.subagents:
-            if isinstance(sub, Subagent):
-                target = build(sub.agent)
-                if sub.mode == "handoff":
-                    handoffs.append(Handoff.from_agent(target, sub.tool_name, sub.tool_description))
-                else:
-                    delegates.append(
-                        Delegate.from_agent(
-                            target,
-                            sub.tool_name,
-                            sub.tool_description,
-                            needs_approval=sub.needs_approval,
-                            guardrails=sub.guardrails,
-                        )
-                    )
-            else:
-                target = build(sub)
-                handoffs.append(Handoff.from_agent(target))
-                delegates.append(Delegate.from_agent(target))
-    return handoffs, delegates
+    return declaration(agent_cls)
 
 
 def _retrieval(setting: Any, cls: type[Memory] | type[Knowledge]) -> tuple[Any, list[FunctionTool]]:
@@ -154,6 +105,21 @@ def _checked_tools(tools: tuple[Any, ...]) -> tuple[FunctionTool, ...]:
         if not isinstance(entry, FunctionTool):
             raise UserError(f"tools entries must be @tool functions, got {entry!r}")
     return tools
+
+
+def _checked_subagents(entries: tuple[Any, ...]) -> tuple[type[Agent] | Subagent, ...]:
+    """Check every `subagents` entry is an `Agent` subclass, bare or bound to a mode."""
+    from runa.agent import Agent
+
+    for entry in entries:
+        if not isinstance(entry, Subagent) and not (
+            isinstance(entry, type) and issubclass(entry, Agent)
+        ):
+            raise UserError(
+                f"subagents entries must be Agent subclasses, bare or as .handoff/.delegate, "
+                f"got {entry!r}"
+            )
+    return entries
 
 
 def _checked_mcp(servers: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -221,7 +187,7 @@ class RunPolicy:
 
 @dataclass(frozen=True)
 class Resolved:
-    """Every setting of an agent but `subagents`, each in the form the turn loop uses it.
+    """Every setting of an agent, each in the form the turn loop uses it.
 
     Holds no agent, so every instance of a class that declares the same settings shares one.
     """
@@ -236,6 +202,8 @@ class Resolved:
     """Its agent-scoped hooks, which a run fires beside the run's own."""
     tools: tuple[FunctionTool, ...]
     """Its `@tool`s and memory's or knowledge's search; `with_mcp_tools` adds its servers'."""
+    subagents: tuple[type[Agent] | Subagent, ...]
+    """Its `subagents` setting: its edges in the agent graph, each to a class."""
     mcp_servers: tuple[Any, ...]
     """Its `mcp` setting."""
     guardrails: dict[Phase, list[BoundGuardrail]]
@@ -260,6 +228,7 @@ def resolve(settings: Mapping[str, Any]) -> Resolved:
         output_type=settings["output_type"],
         hooks=settings["hooks"],
         tools=(*_checked_tools(settings["tools"]), *memory_tools, *knowledge_tools),
+        subagents=_checked_subagents(settings["subagents"]),
         mcp_servers=_checked_mcp(settings["mcp"]),
         guardrails=flatten_guardrails(settings["guardrails"]),
         policy=RunPolicy(
@@ -273,9 +242,73 @@ def resolve(settings: Mapping[str, Any]) -> Resolved:
     )
 
 
+def subagent_edges(resolved: Resolved) -> Iterator[tuple[Mode, type[Agent]]]:
+    """The outgoing edges of an agent resolved as `resolved`: one `(mode, class)` per mode.
+
+    In declaration order. A bare entry is wired up as both modes, so it is yielded twice, once
+    per mode -- which is what it is: two tools the model picks between.
+    """
+    for entry in resolved.subagents:
+        if isinstance(entry, Subagent):
+            yield entry.mode, entry.agent
+        else:
+            yield "handoff", entry
+            yield "delegate", entry
+
+
+def _graph(root: type[Agent], resolved: Resolved) -> dict[type[Agent], Resolved]:
+    """`root` resolved as `resolved`, then every class reachable from it, breadth-first.
+
+    Each class once, so a cycle (a specialist handing back to triage) terminates, and `root` is
+    `resolved` wherever it is reached again; every other class is as it declares itself. A class
+    is found again by its `name` when a paused run resumes, so two classes in one graph sharing a
+    name is a `UserError`, as is a subagent no agent could be built from.
+    """
+    graph = {root: resolved}
+    named = {resolved.name: root}
+    queue = [root]
+    while queue:
+        for _, target in subagent_edges(graph[queue.pop(0)]):
+            if target in graph:
+                continue
+            graph[target] = declared = _declaration(target)
+            other = named.setdefault(declared.name, target)
+            if other is not target:
+                raise UserError(
+                    f"{other.__name__} and {target.__name__} are both named {declared.name!r} "
+                    f"in one agent graph, so a paused run could resume the wrong one. Give each "
+                    f"agent a name of its own."
+                )
+            queue.append(target)
+    return graph
+
+
+def _subagent_callees(
+    resolved: Resolved, graph: Mapping[type[Agent], Resolved]
+) -> Iterator[Delegate | Handoff]:
+    """`resolved.subagents` wired up, each named for its target as `graph` resolves it."""
+    for entry in resolved.subagents:
+        if not isinstance(entry, Subagent):
+            name = graph[entry].name
+            yield Handoff.from_agent(entry, name)
+            yield Delegate.from_agent(entry, name)
+        elif entry.mode == "handoff":
+            name = graph[entry.agent].name
+            yield Handoff.from_agent(entry.agent, name, entry.tool_name, entry.tool_description)
+        else:
+            yield Delegate.from_agent(
+                entry.agent,
+                graph[entry.agent].name,
+                entry.tool_name,
+                entry.tool_description,
+                needs_approval=entry.needs_approval,
+                guardrails=entry.guardrails,
+            )
+
+
 @dataclass(frozen=True)
 class AgentShape(Resolved):
-    """One agent's settings as the turn loop uses them, wired into its agent graph."""
+    """One agent's settings as the turn loop uses them, its subagents offered as callees."""
 
     agent: Agent
     callees: dict[str, Callee]
@@ -285,8 +318,10 @@ class AgentShape(Resolved):
 
     @classmethod
     def of(cls, agent: Agent, resolved: Resolved) -> AgentShape:
-        """`agent`'s shape: its settings as `resolved`, wired into a subagent graph built for it."""
-        handoffs, delegates = _subagent_graph(agent)
+        """`agent`'s shape: its settings as `resolved`, its whole agent graph checked."""
+        wired = list(_subagent_callees(resolved, _graph(type(agent), resolved)))
+        delegates = [callee for callee in wired if isinstance(callee, Delegate)]
+        handoffs = [callee for callee in wired if isinstance(callee, Handoff)]
         return cls(
             **{field.name: getattr(resolved, field.name) for field in fields(Resolved)},
             agent=agent,
@@ -345,39 +380,47 @@ def shape_of(agent: Agent) -> AgentShape:
     return agent._shape
 
 
-def subagent_edges(agent: Agent) -> Iterator[tuple[Mode, Agent]]:
-    """`agent`'s outgoing edges in the agent graph: one `(mode, target)` per subagent of it.
+def reachable(agent: Agent) -> Iterator[tuple[type[Agent], Resolved]]:
+    """`agent`'s class as `agent` resolves it, then every class reachable from it, breadth-first.
 
-    Handoffs first, then delegates, each in declaration order. An `auto`-mode subagent is wired
-    up as both, so it is yielded twice, once per mode -- which is what it is: two tools the model
-    picks between.
+    Each class once, with the settings a run of `agent` gives it: `agent`'s own for its class,
+    wherever a subagent hands back to it, and what each other class declares.
     """
-    shape = shape_of(agent)
-    for handoff in shape.handoffs:
-        yield "handoff", handoff.agent
-    for delegate in shape.delegates:
-        yield "delegate", delegate.agent
+    yield from _graph(type(agent), shape_of(agent)).items()
 
 
-def reachable(agent: Agent) -> Iterator[Agent]:
-    """`agent`, then every agent reachable from it through handoffs and delegates, breadth-first.
+class Agents:
+    """The agents one run tree runs: each class reachable from its root, built once.
 
-    Each agent once, by identity, so a cycle (two agents listing each other, an agent listing
-    itself) terminates rather than recursing forever.
+    `root` is the agent the tree's run started on, so a subagent handing back to its class
+    reaches that very instance (a copy, or one built with overrides). Any other class is built,
+    with no overrides, the first time a handoff or delegate reaches it.
     """
-    seen: set[int] = set()
-    queue: list[Agent] = [agent]
-    while queue:
-        candidate = queue.pop(0)
-        if id(candidate) in seen:
-            continue
-        seen.add(id(candidate))
-        yield candidate
-        queue.extend(target for _, target in subagent_edges(candidate))
+
+    def __init__(self, root: Agent) -> None:
+        """The agents of a run tree started on `root`, none other built yet."""
+        self.root = root
+        self._built: dict[type[Agent], Agent] = {type(root): root}
+
+    def __getitem__(self, agent_cls: type[Agent]) -> Agent:
+        """The tree's one instance of `agent_cls`."""
+        if agent_cls not in self._built:
+            self._built[agent_cls] = agent_cls()
+        return self._built[agent_cls]
+
+    def named(self, name: str) -> Agent:
+        """The tree's agent named `name`, which a resumed run finds a paused one by."""
+        if self.root.name == name:
+            return self.root
+        for agent_cls, resolved in reachable(self.root):
+            if resolved.name == name:
+                return self[agent_cls]
+        raise UserError(f"no agent named {name!r} reachable from {self.root.name!r}")
 
 
 __all__ = [
     "AgentShape",
+    "Agents",
     "Callee",
     "Resolved",
     "RunPolicy",

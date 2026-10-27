@@ -15,7 +15,6 @@ from runa import Agent, db
 from runa._models import StreamDelta
 from runa._types import ModelResponse, Usage
 from runa.exceptions import UserError
-from runa.run_internal.agent_shape import shape_of as built_shape
 from runa.tool import tool
 
 
@@ -315,14 +314,10 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
             ]
         )
 
-    boss = Boss()
-    (delegate,) = built_shape(boss).delegates
-    worker = delegate.agent
-    run = boss.run_sync("go")
+    run = Boss().run_sync("go")
 
     assert run.status == "completed"
     assert seen == [1, 1]  # the second delegation saw one item, not the first one's leftovers
-    assert worker.history == []
 
 
 def test_a_tool_that_runs_the_same_agent_concurrently_is_refused() -> None:

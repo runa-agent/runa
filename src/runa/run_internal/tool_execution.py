@@ -172,13 +172,14 @@ async def _delegate_invoked(
 ) -> _Outcome:
     """Invoke `delegate`: a nested run of this one, given the call's `input`.
 
-    The delegate's run has a record of its own, started on its agent, over the same `context`
-    and `user_id` as this run.
+    The delegate's run has a record of its own, started on the tree's agent of its class, over
+    the same `context` and `user_id` as this run.
     """
     context = run.run_context
+    agent = run.tree.agents[delegate.agent]
     record = RunRecord(
-        start=delegate.agent,
-        agent=delegate.agent,
+        start=agent,
+        agent=agent,
         run_context=RunContext(context=context.context, user_id=context.user_id),
     )
     given = str(args.get("input", ""))
@@ -360,10 +361,11 @@ class _Answers:
                 error = f"error: this message already handed off to {switched.name}"
                 handed[call_id] = tool_result(call_id, error)
                 continue
+            target = run.tree.agents[handoff.agent]
             with run.span(handoff.tool_name, "handoff"):
-                await run.hooks.on_handoff(run.run_context, run.current_agent, handoff.agent)
-            handed[call_id] = tool_result(call_id, f"Transferred to {handoff.agent.name}.")
-            switched = handoff.agent
+                await run.hooks.on_handoff(run.run_context, run.current_agent, target)
+            handed[call_id] = tool_result(call_id, f"Transferred to {target.name}.")
+            switched = target
 
         results = [
             item

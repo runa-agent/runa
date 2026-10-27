@@ -16,7 +16,7 @@ from runa.agent import Agent, Subagent
 from runa.exceptions import UserError
 from runa.guardrail import guardrail
 from runa.lifecycle import Hooks
-from runa.run_internal.agent_shape import reachable, subagent_edges
+from runa.run_internal.agent_shape import reachable, shape_of, subagent_edges
 from runa.tool import ToolCall, tool
 from runa.tracing import add_exporter
 
@@ -506,7 +506,7 @@ def test_reachable_names_every_agent_once_even_through_a_cycle() -> None:
     First.subagents = [Second.handoff]
     first = First()
 
-    assert [agent.name for agent in reachable(first)] == ["first", "second"]
+    assert [resolved.name for _, resolved in reachable(first)] == ["first", "second"]
 
 
 def test_subagent_edges_reports_an_auto_subagent_under_both_modes() -> None:
@@ -521,7 +521,7 @@ def test_subagent_edges_reports_an_auto_subagent_under_both_modes() -> None:
         instructions = "Lead."
         subagents = [Helper]
 
-    edges = list(subagent_edges(Lead()))
+    edges = list(subagent_edges(shape_of(Lead())))
 
     assert [mode for mode, _ in edges] == ["handoff", "delegate"]
-    assert {agent.name for _, agent in edges} == {"helper"}
+    assert {agent for _, agent in edges} == {Helper}
