@@ -345,7 +345,7 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
     lands on a tool call the model chose, not on every turn.
     """
     for agent_cls in agent_classes:
-        knowledge = declaration(agent_cls).knowledge
+        knowledge = declaration(agent_cls).policy.knowledge
         if knowledge is None:
             continue
         chunks = await knowledge.ingest()

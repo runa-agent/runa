@@ -45,7 +45,7 @@ from runa.guardrail import GuardrailResult, Phase
 from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks
 from runa.run import Run, RunStatus
-from runa.run_internal.agent_shape import AgentShape, shape_of
+from runa.run_internal.agent_shape import AgentShape, RunPolicy, shape_of
 from runa.run_internal.dispatch import _Dispatch
 from runa.run_internal.record import RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
@@ -77,8 +77,7 @@ class _Run:
 
     `shape` is readable once `list_tools` has reached the running agent's MCP servers, so a run
     that fails reaching them still reports, from its record, tree and span. The run as a whole
-    reads `start`: its `max_turns`, `max_tokens`, `timeout`, `memory`, `knowledge` and
-    `compactor` stay the starting agent's after a handoff. Every other setting is read from
+    reads `policy`, the starting agent's even after a handoff, and every other setting from
     `shape`, the agent running now.
 
     `callers` are, for a delegate's run, the usages of the runs it is nested in, innermost first:
@@ -131,9 +130,9 @@ class _Run:
         return self.record.agent
 
     @property
-    def start(self) -> AgentShape:
-        """The shape of the agent the run began with, whose ceilings, sources and compaction are."""
-        return shape_of(self.record.start)
+    def policy(self) -> RunPolicy:
+        """What the run holds to throughout: its starting agent's, see `RunPolicy`."""
+        return shape_of(self.record.start).policy
 
     @property
     def transcript(self) -> Transcript:
@@ -301,9 +300,9 @@ def _parse_output(shape: AgentShape, text: str) -> Any:
         ) from exc
 
 
-def _context_sources(shape: AgentShape) -> list[tuple[str, ContextSource]]:
-    """`shape`'s memory and knowledge, those it has, each with the name its spans go by."""
-    sources = [("memory", shape.memory), ("knowledge", shape.knowledge)]
+def _context_sources(policy: RunPolicy) -> list[tuple[str, ContextSource]]:
+    """`policy`'s memory and knowledge, those it has, each with the name its spans go by."""
+    sources = [("memory", policy.memory), ("knowledge", policy.knowledge)]
     return [(name, source) for name, source in sources if source is not None]
 
 
@@ -328,7 +327,7 @@ async def _consult(
     block = None
     with (
         run.span(name, "retrieval", input=query) as span,
-        _fails_open(span, f"{name} retrieval", run.start.name),
+        _fails_open(span, f"{name} retrieval", run.record.start.name),
     ):
         block = await source.retrieve(query, run.run_context)
         span.output = block
@@ -341,7 +340,7 @@ async def _inject_retrieved(run: _Run, query: str) -> None:
     The sources are consulted concurrently, and each block goes right before the message it was
     retrieved for, memory's before knowledge's.
     """
-    sources = _context_sources(run.start)
+    sources = _context_sources(run.policy)
     blocks = await asyncio.gather(*(_consult(run, name, source, query) for name, source in sources))
     found = [block for block in blocks if block is not None]
     if found:
@@ -404,7 +403,7 @@ async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
     run's transcript, after any compaction the response's usage calls for.
     """
     transcript, record = run.transcript, run.record
-    max_turns = run.start.max_turns
+    max_turns = run.policy.max_turns
     if record.turns >= max_turns:
         raise MaxTurnsExceeded(f"max turns ({max_turns}) exceeded")
     record.turns += 1
@@ -416,13 +415,13 @@ async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
         tools=shape.offered,
         output_schema=shape.output_type,
     )
-    model = _RunModel(run, shape, run.start.max_tokens)
+    model = _RunModel(run, shape, run.policy.max_tokens)
     if run.emit is None:
         response = await model.get_response(request)
     else:
         response = await _stream_response(model, request, run.emit)
     context_tokens = response.usage.input_tokens + response.usage.output_tokens
-    dropped = transcript.compact(run.start.compactor, context_tokens)
+    dropped = transcript.compact(run.policy.compactor, context_tokens)
     _note_compaction(run.spans, context_tokens, dropped)
 
     if not response.output:
@@ -501,7 +500,7 @@ async def _timed(turn: Awaitable[Run], run: _Run) -> Run:
     so a pause kept after this returns carries it.
     """
     record = run.record
-    timeout = run.start.timeout
+    timeout = run.policy.timeout
     began = time.monotonic()
     try:
         if timeout is None:
@@ -579,18 +578,19 @@ def _turn_items(input: str | list[ConversationItem]) -> list[ConversationItem]:
 
 async def _after_turn(run: _Run, final_output: Any) -> None:
     """Hand the completed exchange to each of the starting agent's context sources, in turn."""
-    sources = _context_sources(run.start)
+    sources = _context_sources(run.policy)
     query = run.transcript.latest_user_text()
     if not sources or query is None:
         return
+    start = shape_of(run.record.start)
     # Beside the agent span, which is closed: at the root, or under a delegate's call.
     beside = _Spans(run.tree.trace, run.agent_span.parent_id, run.payers)
     for name, source in sources:
         with (
             beside.span(name, "custom", input=query) as span,
-            _fails_open(span, f"{name} after_turn", run.start.name),
+            _fails_open(span, f"{name} after_turn", start.name),
         ):
-            model = _RunModel(run, run.start)
+            model = _RunModel(run, start)
             kept = await source.after_turn(query, final_output, run.run_context, model)
             span.output = {"stored": len(kept)}
 
@@ -653,7 +653,7 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
 
     # The next call's history starts from the same cut compaction made mid-run.
     tokens = outcome.context_tokens
-    dropped = transcript.compact_history(run.start.compactor, tokens)
+    dropped = transcript.compact_history(run.policy.compactor, tokens)
     _note_compaction(run.spans, tokens, dropped)
     if run.session is not None:
         if dropped is None:

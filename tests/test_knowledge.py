@@ -639,12 +639,12 @@ def test_a_declaration_holds_the_knowledge_its_agents_runs_consult() -> None:
     class NoKnowledge(Agent):
         name = "no_knowledge"
 
-    warmed = declaration(Searches).knowledge
+    warmed = declaration(Searches).policy.knowledge
     assert isinstance(warmed, Knowledge)
-    assert shape_of(Searches()).knowledge is warmed
-    assert declaration(OwnCorpus).knowledge is corpus
-    assert declaration(ModelSearches).knowledge is None
-    assert declaration(NoKnowledge).knowledge is None
+    assert shape_of(Searches()).policy.knowledge is warmed
+    assert declaration(OwnCorpus).policy.knowledge is corpus
+    assert declaration(ModelSearches).policy.knowledge is None
+    assert declaration(NoKnowledge).policy.knowledge is None
 
 
 def test_a_class_no_agent_could_be_built_from_has_no_declaration() -> None:

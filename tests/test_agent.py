@@ -507,7 +507,7 @@ def test_memory_defaults_to_none() -> None:
     """Without `memory=`, an agent behaves exactly as if `runa.memory` didn't exist."""
     agent = Researcher()
 
-    assert built_shape(agent).memory is None
+    assert built_shape(agent).policy.memory is None
     assert "search_memory" not in _tool_names(agent)
 
 
@@ -525,7 +525,7 @@ def test_memory_auto_gives_a_default_memory_instance_and_no_tool() -> None:
 
     agent = AutoMemory()
 
-    assert isinstance(built_shape(agent).memory, Memory)
+    assert isinstance(built_shape(agent).policy.memory, Memory)
     assert "search_memory" not in _tool_names(agent)
 
 
@@ -539,7 +539,7 @@ def test_memory_llm_adds_a_tool_and_leaves_self_memory_none() -> None:
 
     agent = LLMMemory()
 
-    assert built_shape(agent).memory is None
+    assert built_shape(agent).policy.memory is None
     assert "search_memory" in _tool_names(agent)
 
 
@@ -592,7 +592,7 @@ def test_memory_kwarg_also_works_as_a_constructor_argument() -> None:
 
     agent = WithMemory(memory="auto")
 
-    assert isinstance(built_shape(agent).memory, Memory)
+    assert isinstance(built_shape(agent).policy.memory, Memory)
 
 
 def test_memory_rejects_an_unknown_string() -> None:
@@ -612,7 +612,7 @@ def test_knowledge_defaults_to_none() -> None:
     """Without `knowledge=`, an agent behaves exactly as if `runa.knowledge` didn't exist."""
     agent = Researcher()
 
-    assert built_shape(agent).knowledge is None
+    assert built_shape(agent).policy.knowledge is None
     assert "search_knowledge" not in _tool_names(agent)
 
 
@@ -630,7 +630,7 @@ def test_knowledge_auto_gives_a_default_knowledge_instance_and_no_tool() -> None
 
     agent = AutoKnowledge()
 
-    assert isinstance(built_shape(agent).knowledge, Knowledge)
+    assert isinstance(built_shape(agent).policy.knowledge, Knowledge)
     assert "search_knowledge" not in _tool_names(agent)
 
 
@@ -647,7 +647,7 @@ def test_knowledge_llm_adds_a_tool_and_leaves_self_knowledge_none() -> None:
 
     agent = LLMKnowledge()
 
-    assert built_shape(agent).knowledge is None
+    assert built_shape(agent).policy.knowledge is None
     assert "search_knowledge" in _tool_names(agent)
 
 
@@ -703,7 +703,7 @@ def test_knowledge_kwarg_also_works_as_a_constructor_argument() -> None:
 
     agent = WithKnowledge(knowledge="auto")
 
-    assert isinstance(built_shape(agent).knowledge, Knowledge)
+    assert isinstance(built_shape(agent).policy.knowledge, Knowledge)
 
 
 def test_knowledge_rejects_an_unknown_string() -> None:
@@ -721,7 +721,7 @@ def test_knowledge_rejects_an_unknown_string() -> None:
 
 def test_compact_defaults_to_no_compactor() -> None:
     """Without `compact=`, an agent behaves exactly as if `runa.compact` didn't exist."""
-    assert shape_of(Researcher()).compactor is None
+    assert shape_of(Researcher()).policy.compactor is None
 
 
 def test_compact_true_resolves_to_the_default_compactor() -> None:
@@ -737,7 +737,7 @@ def test_compact_true_resolves_to_the_default_compactor() -> None:
         instructions = "compacts"
         compact = True
 
-    assert shape_of(Compacting()).compactor is default_compactor
+    assert shape_of(Compacting()).policy.compactor is default_compactor
 
 
 def test_compact_accepts_a_custom_compactor_callable() -> None:
@@ -751,7 +751,7 @@ def test_compact_accepts_a_custom_compactor_callable() -> None:
         instructions = "compacts"
         compact = drop_oldest_item
 
-    assert shape_of(Compacting()).compactor is drop_oldest_item
+    assert shape_of(Compacting()).policy.compactor is drop_oldest_item
 
 
 def test_compact_false_resolves_to_no_compactor() -> None:
@@ -762,7 +762,7 @@ def test_compact_false_resolves_to_no_compactor() -> None:
         instructions = "does not compact"
         compact = False
 
-    assert shape_of(NotCompacting()).compactor is None
+    assert shape_of(NotCompacting()).policy.compactor is None
 
 
 def test_compact_rejects_a_value_that_is_neither_a_bool_nor_a_callable() -> None:
@@ -928,14 +928,15 @@ def test_the_shape_holds_every_setting_the_agent_stores() -> None:
 
     The turn loop reads an agent only through its shape, so a setting stored on the instance and
     missing from the shape is accepted, validated -- and reaches no run. Derived fields go by the
-    setting they come from (`compactor` is `compact`'s).
+    setting they come from (`compactor` is `compact`'s), and `policy` by the ones it groups.
     """
-    from runa.run_internal.agent_shape import AgentShape
+    from runa.run_internal.agent_shape import AgentShape, RunPolicy
 
     agent = _every_setting_agent()
     stored = {name for name in vars(agent) if not name.startswith("_")} - _PER_RUN_STATE
-    translated = {"agent", "compactor", "mcp_servers", "handoffs", "delegates"}
-    read = {field.name for field in fields(AgentShape)} - translated | {
+    translated = {"agent", "policy", "compactor", "mcp_servers", "handoffs", "delegates"}
+    shape_fields = {field.name for field in (*fields(AgentShape), *fields(RunPolicy))}
+    read = shape_fields - translated | {
         "compact",
         "mcp",
         "subagents",
@@ -985,8 +986,8 @@ def test_instances_of_a_class_share_what_it_declares_but_not_their_graph() -> No
     """Two plain instances share one `Memory` and `Knowledge`, each with subagents of its own."""
     first, second = _Declared(), _Declared()
 
-    assert built_shape(first).memory is built_shape(second).memory
-    assert built_shape(first).knowledge is built_shape(second).knowledge
+    assert built_shape(first).policy.memory is built_shape(second).policy.memory
+    assert built_shape(first).policy.knowledge is built_shape(second).policy.knowledge
     assert built_shape(first).agent is first
     assert built_shape(second).agent is second
     (first_researcher,) = [handoff.agent for handoff in built_shape(first).handoffs.values()]
@@ -1001,11 +1002,11 @@ def test_an_override_resolves_on_its_own_instance_alone() -> None:
     reassigned = _Declared()
     reassigned.max_turns = 3
 
-    assert built_shape(passed).memory is None
-    assert built_shape(reassigned).max_turns == 3
-    assert built_shape(reassigned).memory is not built_shape(plain).memory
-    assert built_shape(_Declared()).memory is built_shape(plain).memory
-    assert built_shape(_Declared()).max_turns == 10
+    assert built_shape(passed).policy.memory is None
+    assert built_shape(reassigned).policy.max_turns == 3
+    assert built_shape(reassigned).policy.memory is not built_shape(plain).policy.memory
+    assert built_shape(_Declared()).policy.memory is built_shape(plain).policy.memory
+    assert built_shape(_Declared()).policy.max_turns == 10
 
 
 def test_a_run_reuses_the_shape_built_at_construction() -> None:
@@ -1025,7 +1026,7 @@ def test_reassigning_a_setting_rebuilds_the_shape_a_run_reads() -> None:
 
     agent.max_turns = 3
 
-    assert built_shape(agent).max_turns == 3
+    assert built_shape(agent).policy.max_turns == 3
     with pytest.raises(UserError, match="compact must be"):
         agent.compact = cast(Any, "yes")
 
@@ -1102,8 +1103,8 @@ def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() ->
     assert built_shape(agent).mcp_servers == tuple(passed["mcp"])
     assert agent.output_type is Answer
     assert agent.hooks is hooks
-    assert isinstance(built_shape(agent).memory, Memory)
-    assert isinstance(built_shape(agent).knowledge, Knowledge)
+    assert isinstance(built_shape(agent).policy.memory, Memory)
+    assert isinstance(built_shape(agent).policy.knowledge, Knowledge)
     assert agent.compact is True
     assert (agent.max_turns, agent.max_tokens, agent.timeout) == (3, 100, 5.0)
 

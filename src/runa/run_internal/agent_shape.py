@@ -184,6 +184,24 @@ def _checked_unique(agent_name: str, names: Iterable[str]) -> None:
 
 
 @dataclass(frozen=True)
+class RunPolicy:
+    """The settings a run holds to for its whole length, so a handoff never changes them.
+
+    A run reads its starting agent's: see RUNA.md, Human Approval.
+    """
+
+    compactor: Compactor | None
+    """What trims the conversation, or `None` when nothing does."""
+    memory: MemoryLike | None
+    """The source a run consults before each turn: `None` for `"llm"`, whose search is a tool."""
+    knowledge: KnowledgeLike | None
+    """The same as `memory`, for the `knowledge` setting."""
+    max_turns: int
+    max_tokens: int | None
+    timeout: float | None
+
+
+@dataclass(frozen=True)
 class Resolved:
     """Every setting of an agent but `subagents`, each in the form the turn loop uses it.
 
@@ -204,15 +222,8 @@ class Resolved:
     """Its `mcp` setting."""
     guardrails: dict[Phase, list[BoundGuardrail]]
     """By the phase each one runs in, each phase's in list order."""
-    compactor: Compactor | None
-    """What trims the conversation, or `None` when nothing does."""
-    memory: MemoryLike | None
-    """The source a run consults before each turn: `None` for `"llm"`, whose search is a tool."""
-    knowledge: KnowledgeLike | None
-    """The same as `memory`, for the `knowledge` setting."""
-    max_turns: int
-    max_tokens: int | None
-    timeout: float | None
+    policy: RunPolicy
+    """What a run it starts holds to; a run handed to it keeps its starting agent's."""
 
 
 def resolve(settings: Mapping[str, Any]) -> Resolved:
@@ -233,12 +244,14 @@ def resolve(settings: Mapping[str, Any]) -> Resolved:
         tools=(*_checked_tools(settings["tools"]), *memory_tools, *knowledge_tools),
         mcp_servers=_checked_mcp(settings["mcp"]),
         guardrails=flatten_guardrails(settings["guardrails"]),
-        compactor=resolve_compactor(settings["compact"]),
-        memory=memory,
-        knowledge=knowledge,
-        max_turns=settings["max_turns"],
-        max_tokens=settings["max_tokens"],
-        timeout=settings["timeout"],
+        policy=RunPolicy(
+            compactor=resolve_compactor(settings["compact"]),
+            memory=memory,
+            knowledge=knowledge,
+            max_turns=settings["max_turns"],
+            max_tokens=settings["max_tokens"],
+            timeout=settings["timeout"],
+        ),
     )
 
 
@@ -358,4 +371,12 @@ def reachable(agent: Agent) -> Iterator[Agent]:
         queue.extend(target for _, target in subagent_edges(candidate))
 
 
-__all__ = ["AgentShape", "Resolved", "reachable", "resolve", "shape_of", "subagent_edges"]
+__all__ = [
+    "AgentShape",
+    "Resolved",
+    "RunPolicy",
+    "reachable",
+    "resolve",
+    "shape_of",
+    "subagent_edges",
+]
