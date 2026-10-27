@@ -268,8 +268,8 @@ _TREE = {
         "sticky_messages": {},
         "calls": {},
         "call_messages": {},
-        "executed": [],
     },
+    "claimed_calls": [],
 }
 _RUN = {
     "start": "TestAgent",
@@ -494,7 +494,7 @@ def test_a_loaded_pause_carries_the_sticky_approval_ledger() -> None:
 
     assert resumed.output == "all done"
     assert resuming(restored).tree.approvals.sticky == {"dangerous": True}
-    assert "call_1" in resuming(restored).tree.approvals.executed
+    assert "call_1" in resuming(restored).tree.claimed_calls
 
 
 def _paused_after_a_safe_call(**settings: Any) -> tuple[Run, type[Agent]]:

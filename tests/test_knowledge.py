@@ -617,7 +617,7 @@ def test_custom_store_can_be_injected() -> None:
 
 
 def test_a_declaration_holds_the_knowledge_its_agents_runs_consult() -> None:
-    """`runa serve` warms the very corpus a built agent's runs search, without building one."""
+    """A class's declaration holds the very corpus a built agent's runs search."""
     from runa import Agent
     from runa.agent import declaration
     from runa.run_internal.agent_shape import shape_of
@@ -647,13 +647,52 @@ def test_a_declaration_holds_the_knowledge_its_agents_runs_consult() -> None:
     assert declaration(NoKnowledge).policy.knowledge is None
 
 
-def test_a_class_no_agent_could_be_built_from_has_no_declaration() -> None:
-    """Reading a broken class fails the way constructing it would, so `runa serve` won't start."""
+def test_warm_ingests_the_knowledge_a_class_runs_search_up_front() -> None:
+    """`warm` ingests a class's own corpus, and nothing for a class whose runs search none first."""
     from runa import Agent
-    from runa.agent import declaration
+    from runa.agent import warm
+
+    class CountingKnowledge:
+        ingested = 0
+
+        async def retrieve(self, query: str, run_context: Any) -> Any:
+            return None
+
+        async def after_turn(
+            self, query: str, output: Any, run_context: Any, model: Any
+        ) -> list[str]:
+            return []
+
+        async def ingest(self) -> int:
+            self.ingested += 1
+            return 3
+
+    corpus = CountingKnowledge()
+
+    class OwnCorpus(Agent):
+        name = "own_corpus"
+        knowledge = corpus
+
+    class ModelSearches(Agent):
+        name = "model_searches"
+        knowledge = "llm"
+
+    class NoKnowledge(Agent):
+        name = "no_knowledge"
+
+    assert asyncio.run(warm(OwnCorpus)) == 3
+    assert corpus.ingested == 1
+    assert asyncio.run(warm(ModelSearches)) == 0
+    assert asyncio.run(warm(NoKnowledge)) == 0
+
+
+def test_warming_a_class_no_agent_could_be_built_from_fails() -> None:
+    """Warming a broken class fails the way constructing it would, so `runa serve` won't start."""
+    from runa import Agent
+    from runa.agent import warm
 
     class Nameless(Agent):
         knowledge = "auto"
 
     with pytest.raises(UserError, match="missing the required 'name'"):
-        declaration(Nameless)
+        asyncio.run(warm(Nameless))

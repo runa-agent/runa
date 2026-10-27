@@ -144,7 +144,7 @@ async def _closed(
 
 def _claim(run: _Run, call_id: str, name: str) -> None:
     """Mark `call_id` as executing, raising `DuplicateToolCallError` if it already ran."""
-    if not run.tree.approvals.claim(call_id):
+    if not run.tree.claim(call_id):
         raise DuplicateToolCallError(call_id, name)
 
 

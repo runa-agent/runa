@@ -198,14 +198,6 @@ def test_recording_a_decision_clears_the_previous_ones_message() -> None:
     assert ledger.sticky_messages == {}
 
 
-def test_a_claimed_call_id_cannot_be_claimed_twice() -> None:
-    """The replay guard: an executed call id never runs again."""
-    ledger = ApprovalLedger()
-
-    assert ledger.claim("call_1") is True
-    assert ledger.claim("call_1") is False
-
-
 def test_the_ctx_app_code_receives_carries_no_governance() -> None:
     """A predicate's (or tool's, or hook's) `ctx` is its `context`, user and usage, no more.
 

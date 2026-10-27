@@ -261,6 +261,7 @@ class RunTree(BaseModel):
 
     * `trace`: the one trace every run's spans go in.
     * `approvals`: the ledger a decision is written to, and each run reads its calls' from.
+    * `claimed_calls`: the id of every call that started running, written through `claim`.
     * `guardrail_results`: the audit trail of every guardrail any of them ran. Not serialized:
       each result is already a span in the trace.
     * `agents`: the instance each agent class runs as, the root run's starting agent among them.
@@ -272,6 +273,7 @@ class RunTree(BaseModel):
     trace: _TraceRef
     agents: Agents = Field(exclude=True)
     approvals: ApprovalLedger = Field(default_factory=ApprovalLedger)
+    claimed_calls: set[str] = Field(default_factory=set)
     guardrail_results: GuardrailResults = Field(default_factory=GuardrailResults, exclude=True)
 
     @model_validator(mode="before")
@@ -282,8 +284,15 @@ class RunTree(BaseModel):
             return {**data, "agents": info.context["agents"]}
         return data
 
+    def claim(self, call_id: str) -> bool:
+        """Claim `call_id` to run it; `False` if it already ran, so it must not run again."""
+        if call_id in self.claimed_calls:
+            return False
+        self.claimed_calls.add(call_id)
+        return True
+
     def snapshot(self) -> RunTree:
-        """The same trace and ledger, with a copy of the audit trail as it stands now."""
+        """The same trace, ledger and claims, with a copy of the audit trail as it stands now."""
         return self.model_copy(update={"guardrail_results": self.guardrail_results.snapshot()})
 
 

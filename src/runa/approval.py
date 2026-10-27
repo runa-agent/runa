@@ -5,8 +5,7 @@ into the one async predicate over a call that a run asks. `ApprovalLedger` holds
 deciding a call, durable across a process restart:
 
 * sticky beats the tool's own `needs_approval` predicate, which beats the per-call decision;
-* a rejection with no message of its own gets `ApprovalLedger.DEFAULT_REJECTION`;
-* a call id is claimed before it runs, and a claimed id never runs again.
+* a rejection with no message of its own gets `ApprovalLedger.DEFAULT_REJECTION`.
 
 A run holds one ledger, shared by reference with every delegate the run starts, so a caller's
 "always" covers the delegate's matching tool, and a decision about a delegate's paused call reaches
@@ -87,9 +86,8 @@ class ApprovalLedger:
     `sticky`/`sticky_messages` are the "always approve"/"always reject" decisions, keyed by tool
     *name*: once recorded they cover every later call to that tool, in this run or a delegate's.
     `calls`/`call_messages` are the one-off decisions, keyed by call id: each settles only the
-    call it names. `executed` is the set of call ids that have already run in this run tree, so
-    a call id the model sends again is not run a second time. That a pause resumes only once is
-    `RunState`'s to keep, not the ledger's: a ledger loaded from a stored pause is a snapshot.
+    call it names. That a pause resumes only once is `RunState`'s to keep, not the ledger's: a
+    ledger loaded from a stored pause is a snapshot.
     """
 
     DEFAULT_REJECTION: ClassVar[str] = "rejected by the operator"
@@ -99,7 +97,6 @@ class ApprovalLedger:
     sticky_messages: dict[str, str] = field(default_factory=dict)
     calls: dict[str, bool] = field(default_factory=dict)
     call_messages: dict[str, str] = field(default_factory=dict)
-    executed: set[str] = field(default_factory=set)
 
     async def decide(
         self,
@@ -145,16 +142,6 @@ class ApprovalLedger:
         Its message slot behaves as `record`'s does.
         """
         _set(self.calls, self.call_messages, call_id, approved, message)
-
-    def claim(self, call_id: str) -> bool:
-        """Claim `call_id` for execution; `False` if it already ran and must not run again.
-
-        The caller turns that into a `DuplicateToolCallError`.
-        """
-        if call_id in self.executed:
-            return False
-        self.executed.add(call_id)
-        return True
 
     def _rejection(self, message: str | None) -> ApprovalDecision:
         """A `"reject"` decision carrying `message`, or the default text when there isn't one."""

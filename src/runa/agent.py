@@ -204,14 +204,26 @@ def declaration(agent_cls: type[Agent]) -> Resolved:
     """What `agent_cls` declares, resolved as every run of an agent built without overrides uses it.
 
     Resolved once per class per process and shared, the very `memory` and `knowledge` sources
-    included, so a surface reading a class (`runa serve` warming its corpus) needs no instance.
-    A declaration no agent could be built from is a `UserError`, as constructing one would be.
+    included. A declaration no agent could be built from is a `UserError`, as constructing one
+    would be.
     """
     declarations = _app.held(_DECLARATIONS, dict[type, Resolved])
     if agent_cls not in declarations:
         declared = _settings(agent_cls, {})
         declarations.setdefault(agent_cls, resolve(declared))
     return declarations[agent_cls]
+
+
+async def warm(agent_cls: type[Agent]) -> int:
+    """Ingest the knowledge every run of `agent_cls` searches before its first model call.
+
+    The very source those runs consult, reached without building an agent, so a caller warming
+    it ahead of the first run pays the cost once. Returns the chunks written: zero when the store
+    already holds the corpus, or when no run searches one up front (`knowledge="llm"` searches
+    only when the model asks). A class no agent could be built from is a `UserError`.
+    """
+    knowledge = declaration(agent_cls).policy.knowledge
+    return 0 if knowledge is None else await knowledge.ingest()
 
 
 def _stored(name: str, value: Any) -> Any:

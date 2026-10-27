@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from runa import project
 from runa._log import logger
-from runa.agent import Agent, declaration
+from runa.agent import Agent, warm
 from runa.exceptions import OperatorError, UserError
 from runa.run import Run
 from runa.run_state import RunState
@@ -336,19 +336,13 @@ async def _ingest_knowledge(agent_classes: Iterable[type[Agent]]) -> None:
     to a `retrieval` span rather than to the deploy that caused it. A startup that fails on a
     missing embeddings credential is the same trade: found by the thing that rolls out.
 
-    Each class's `declaration` is what's warmed, the very `Knowledge` its runs consult, so no
-    agent is built; a class no agent could be built from fails startup here
-    rather than its first request. Agents sharing one corpus cost nothing
-    extra: `ingest` asks the store whether it already holds what it would write, so the second
-    one pays a `stat` per file and a version read. An agent in `knowledge="llm"` mode keeps its
-    `Knowledge` inside the search tool it hands the model and so isn't warmed here -- that cost
-    lands on a tool call the model chose, not on every turn.
+    What each class warms is `warm`'s; a class no agent could be built from fails startup here
+    rather than its first request. Agents sharing one corpus cost nothing extra: `ingest` asks
+    the store whether it already holds what it would write, so the second one pays a `stat` per
+    file and a version read.
     """
     for agent_cls in agent_classes:
-        knowledge = declaration(agent_cls).policy.knowledge
-        if knowledge is None:
-            continue
-        chunks = await knowledge.ingest()
+        chunks = await warm(agent_cls)
         if chunks:
             # Only when it actually wrote: zero is the usual answer (a corpus the store already
             # held), and a line per agent per boot saying nothing happened is noise.
