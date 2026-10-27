@@ -18,7 +18,7 @@ module builds a state (`paused`) and is the only one that reads the pause back o
 
 import copy
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from runa.agent import Agent
     from runa.run_state import RunState
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 """The version a pause is written at; a row from `READABLE_SINCE` up to it is read as is.
 
 A field added with a default is no new version: an older row reads with the default, so its pause
@@ -53,7 +53,7 @@ still resumes. Bump this, and `READABLE_SINCE` to match, only when a stored fiel
 changes, which strands every pause kept before it.
 """
 
-READABLE_SINCE = 10
+READABLE_SINCE = 11
 """The oldest `schema_version` this Runa still resumes."""
 
 
@@ -128,13 +128,38 @@ class Interruption:
     agent: _AgentRef
 
 
+class Answered(BaseModel):
+    """A call answered with `item`, reused rather than run again."""
+
+    kind: Literal["answered"] = "answered"
+    item: ConversationItem
+
+
+class Waiting(BaseModel):
+    """A call waiting on a human to decide `interruption`."""
+
+    kind: Literal["waiting"] = "waiting"
+    interruption: Interruption
+
+
+class Suspended(BaseModel):
+    """A `.delegate` call whose run paused, kept as `record` to continue where it stopped."""
+
+    kind: Literal["suspended"] = "suspended"
+    record: RunRecord
+
+
+type CallStanding = Annotated[Answered | Waiting | Suspended, Field(discriminator="kind")]
+"""Where one call of a paused message stands, tagged by `kind`."""
+
+
 class RunRecord(BaseModel):
     """One run, as it would be resumed: everything it is that outlives the call running it.
 
     The turn loop works on one directly; a `Pause` holds it, and so does a paused delegate's
-    entry in its caller's `settled`. Every field is data or written as data (an agent by its
-    name), so all of it is serialized. What only the call running it holds -- its hooks, its
-    `Session` object, its stream, its open span -- isn't here, and isn't resumed.
+    `Suspended` standing in its caller's record. Every field is data or written as data (an
+    agent by its name), so all of it is serialized. What only the call running it holds -- its
+    hooks, its `Session` object, its stream, its open span -- isn't here, and isn't resumed.
 
     * `start`: the agent the run began with. The run as a whole is its: the turn, token and time
       ceilings, the context sources, compaction, and the key a pause is kept under.
@@ -148,15 +173,13 @@ class RunRecord(BaseModel):
       measured against.
     * `elapsed`: the seconds the run has spent running, across its resumes: what its `timeout`
       is measured against. Time spent paused doesn't count.
-    * `pending`: the calls a paused run waits on, a paused delegate's included, all in its
-      `paused_message`.
-    * `settled`: where the rest of that message's calls stand, by call id: the result one was
-      already answered with, reused rather than run again, or a paused `.delegate` call's own
-      record, continued where it stopped. A handoff is in neither: a run pauses before
-      making one, so resuming makes it.
+    * `standings`: where the calls of the message being answered stand, by call id, each one
+      `Answered`, `Waiting` or `Suspended`. A call with no standing yet is gated afresh, and a
+      handoff never has one: a run pauses before making one, so resuming makes it.
 
-    Both are written as the message's calls settle and emptied once it is answered, so only a
-    paused run's are read; an errored run's may show the message it failed on part-way.
+    Standings are written through `answer`, `wait` and `suspend` as the message's calls settle,
+    and cleared by `settle_message` once it is answered, so only a paused run's are read; an
+    errored run's may show the message it failed on part-way.
     """
 
     start: _AgentRef
@@ -167,20 +190,55 @@ class RunRecord(BaseModel):
     session_id: str | None = None
     turns: int = 0
     elapsed: float = 0.0
-    pending: list[Interruption] = Field(default_factory=list)
-    settled: dict[
-        str, Annotated[RunRecord | ConversationItem, Field(union_mode="left_to_right")]
-    ] = Field(default_factory=dict)
+    standings: dict[str, CallStanding] = Field(default_factory=dict)
 
     @property
     def paused_message(self) -> ConversationItem:
         """The assistant message whose calls paused the run: the transcript's last, always."""
         return self.transcript.items[-1]
 
+    @property
+    def pending(self) -> list[Interruption]:
+        """The calls the run waits on, each suspended delegate's in its place among them."""
+        waiting: list[Interruption] = []
+        for standing in self.standings.values():
+            if isinstance(standing, Waiting):
+                waiting.append(standing.interruption)
+            elif isinstance(standing, Suspended):
+                waiting.extend(standing.record.pending)
+        return waiting
+
+    def answer(self, call_id: str, item: ConversationItem) -> None:
+        """Record call `call_id` as answered with `item`."""
+        self.standings[call_id] = Answered(item=item)
+
+    def wait(self, interruption: Interruption) -> None:
+        """Record `interruption`'s call as waiting on a human."""
+        self.standings[interruption.call_id] = Waiting(interruption=interruption)
+
+    def suspend(self, call_id: str, record: RunRecord) -> None:
+        """Record delegate call `call_id` as paused, its run kept as `record`."""
+        self.standings[call_id] = Suspended(record=record)
+
+    def answered(self, call_id: str) -> ConversationItem | None:
+        """What call `call_id` was already answered with, if it was."""
+        standing = self.standings.get(call_id)
+        return standing.item if isinstance(standing, Answered) else None
+
+    def suspended(self, call_id: str) -> RunRecord | None:
+        """The run of delegate call `call_id` if it paused, to continue where it stopped."""
+        standing = self.standings.get(call_id)
+        return standing.record if isinstance(standing, Suspended) else None
+
+    def settle_message(self) -> None:
+        """Forget the standings of a message now answered."""
+        self.standings = {}
+
     def resumed(self) -> RunRecord:
         """A copy for a resumed run to work on, so this one still reads as it paused.
 
-        The copy waits on nothing: answering the paused message again finds what still waits.
+        A call still `Waiting` keeps its place until it is gated again, which a resumed run does
+        before it reads `pending`.
         """
         usage = copy.deepcopy(self.run_context.usage)
         return self.model_copy(
@@ -190,8 +248,7 @@ class RunRecord(BaseModel):
                 "run_context": RunContext(
                     self.run_context.context, self.run_context.user_id, usage
                 ),
-                "pending": [],
-                "settled": dict(self.settled),
+                "standings": dict(self.standings),
             }
         )
 
@@ -402,12 +459,16 @@ def resume_session(
 __all__ = [
     "READABLE_SINCE",
     "SCHEMA_VERSION",
+    "Answered",
+    "CallStanding",
     "Interruption",
     "Pause",
     "PauseSchema",
     "RunRecord",
     "RunTree",
     "RunView",
+    "Suspended",
+    "Waiting",
     "keep",
     "paused",
     "resuming",

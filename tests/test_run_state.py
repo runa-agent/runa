@@ -117,7 +117,9 @@ def test_a_paused_run_is_kept_under_its_run_id() -> None:
 
     assert result.run_id == result.to_state().run_id
     assert result.to_payload()["run_id"] == result.run_id
-    assert _stored(result)["run"]["pending"][0]["name"] == "dangerous"
+    standing = _stored(result)["run"]["standings"]["call_1"]
+    assert standing["kind"] == "waiting"
+    assert standing["interruption"]["name"] == "dangerous"
 
 
 def test_a_completed_run_has_no_run_id() -> None:
@@ -273,10 +275,17 @@ _RUN = {
     "session_id": None,
     "turns": 1,
     "elapsed": 0.0,
-    "pending": [
-        {"name": "dangerous", "arguments": "{}", "call_id": "call_1", "agent": "TestAgent"}
-    ],
-    "settled": {},
+    "standings": {
+        "call_1": {
+            "kind": "waiting",
+            "interruption": {
+                "name": "dangerous",
+                "arguments": "{}",
+                "call_id": "call_1",
+                "agent": "TestAgent",
+            },
+        }
+    },
 }
 _TRANSCRIPT = {
     "_prior": [],
@@ -287,8 +296,8 @@ _TRANSCRIPT = {
 }
 
 _KEPT_AT = {
-    10: {
-        "schema_version": 10,
+    11: {
+        "schema_version": 11,
         "tree": _TREE,
         "run": {**_RUN, "transcript": _TRANSCRIPT, "tool_calls": []},
     },

@@ -224,14 +224,15 @@ class _Run:
         call_id: str,
         *,
         under: Span,
+        suspended: RunRecord | None,
     ) -> Run | None:
         """Run `delegate`'s agent on `input` as call `call_id` of this run, nested in it.
 
         The call arrives claimed, like any tool call. A delegate that pauses for approval is
-        `None`, its record left in this run's `settled` as the call's standing, for this run to
-        pause on (see `RunRecord`); the same call reaching here again, on resume, continues it
-        from there instead of starting it over, and `input` is not read. Otherwise the returned
-        `Run` is completed or errored.
+        `None`, its record suspended on this run's as the call's standing, for this run to pause
+        on (see `RunRecord.suspend`). Given that `suspended` record again, on resume, it
+        continues from there instead of starting over, and `input` is not read. Otherwise the
+        returned `Run` is completed or errored.
 
         The nested run is this one with the delegate's own agent (and its ceilings), a record of
         its own over the same `context` and `user_id`, and an agent span under `under`. Each call
@@ -245,8 +246,7 @@ class _Run:
         delegate call and its output, not the delegate's tokens).
         """
         given: str | None
-        paused = self.paused_delegate(call_id)
-        if paused is None:
+        if suspended is None:
             context = self.run_context
             record = RunRecord(
                 start=delegate.agent,
@@ -255,7 +255,7 @@ class _Run:
             )
             given = input
         else:
-            record, given = paused.resumed(), None
+            record, given = suspended.resumed(), None
         nested = replace(
             self,
             record=record,
@@ -270,13 +270,8 @@ class _Run:
         run = await _within(nested, given)
         if run.status != "paused":
             return run
-        self.record.settled[call_id] = record
+        self.record.suspend(call_id, record)
         return None
-
-    def paused_delegate(self, call_id: str) -> RunRecord | None:
-        """The record of delegate call `call_id` if a pause left it running, to continue it."""
-        standing = self.record.settled.get(call_id)
-        return standing if isinstance(standing, RunRecord) else None
 
 
 async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
@@ -460,7 +455,7 @@ async def _continue_paused(run: _Run) -> _TurnOutcome | None:
     """Answer the message a resumed run paused on, so the turn loop goes on from there.
 
     The message is the transcript's last, its calls already announced, so there is no model
-    call; each call continues from where the pause left it (see `RunRecord.settled`). The root
+    call; each call continues from where the pause left it (see `RunRecord.standings`). The root
     run's pause is claimed first, just before its decided calls run: a run that fails before
     then leaves the pause in `runa.db`, resumable again. `None` once the message is answered;
     the paused outcome if a call still waits on a human.
