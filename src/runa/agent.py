@@ -233,14 +233,17 @@ _LIST_SETTINGS = frozenset({"tools", "subagents", "guardrails", "mcp"})
 def _stored(name: str, value: Any) -> Any:
     """`value` as the agent holds its `name` setting: a list setting's list as a tuple.
 
-    `None` for a list setting is the empty tuple. Anything but a list stays as given, for the
-    shape to refuse by name.
+    `None` for a list setting is the empty tuple, and a tuple (one an agent already holds,
+    extended by reassignment) is taken as the list it was. Anything else, a dict grouping the
+    entries say, is a `UserError` naming the setting.
     """
     if name not in _LIST_SETTINGS:
         return value
     if value is None:
         return ()
-    return tuple(value) if isinstance(value, list) else value
+    if not isinstance(value, list | tuple):
+        raise UserError(f"{name} must be a list, got {type(value).__name__}")
+    return tuple(value)
 
 
 class _Mode:

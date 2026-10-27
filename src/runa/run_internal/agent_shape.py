@@ -74,20 +74,11 @@ def _agent_graph(agent: Agent) -> Iterator[Callable[[type[Agent]], Agent]]:
 
 
 def _subagent_graph(agent: Agent) -> tuple[list[Handoff], list[Delegate]]:
-    """`agent.subagents` built: each entry bare (auto, so both modes) or `.handoff`/`.delegate`.
-
-    Anything but a list (a dict grouping entries by mode, say) is a `UserError`.
-    """
-    declared = agent.subagents
-    if not isinstance(declared, list | tuple):
-        raise UserError(
-            f"subagents must be a list, e.g. [Billing.handoff, Researcher.delegate, Helper], "
-            f"got {type(declared).__name__}"
-        )
+    """`agent.subagents` built: each entry bare (auto, so both modes) or `.handoff`/`.delegate`."""
     handoffs: list[Handoff] = []
     delegates: list[Delegate] = []
     with _agent_graph(agent) as build:
-        for sub in declared:
+        for sub in agent.subagents:
             if isinstance(sub, Subagent):
                 target = build(sub.agent)
                 if sub.mode == "handoff":
@@ -158,6 +149,25 @@ def _checked_model(model: Any) -> Any:
     return model
 
 
+def _checked_tools(tools: tuple[Any, ...]) -> tuple[FunctionTool, ...]:
+    """Check every `tools` entry is a `@tool`, which is the one shape a tool takes."""
+    for entry in tools:
+        if not isinstance(entry, FunctionTool):
+            raise UserError(f"tools entries must be @tool functions, got {entry!r}")
+    return tools
+
+
+def _checked_mcp(servers: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Check every `mcp` entry is a server, as `MCPServer(...).http`/`.stdio` returns one."""
+    for entry in servers:
+        if not hasattr(entry, "list_tools"):
+            raise UserError(
+                f"mcp entries must be servers built as MCPServer(...).http(url) or "
+                f"MCPServer(...).stdio(command), got {entry!r}"
+            )
+    return servers
+
+
 def _checked_unique(agent_name: str, names: Iterable[str]) -> None:
     """Refuse two callables offered under one name: a call could only ever reach one of them.
 
@@ -220,8 +230,8 @@ def resolve(settings: Mapping[str, Any]) -> Resolved:
         model_settings=settings["model_settings"] or ModelSettings(),
         output_type=settings["output_type"],
         hooks=settings["hooks"],
-        tools=(*settings["tools"], *memory_tools, *knowledge_tools),
-        mcp_servers=tuple(settings["mcp"]),
+        tools=(*_checked_tools(settings["tools"]), *memory_tools, *knowledge_tools),
+        mcp_servers=_checked_mcp(settings["mcp"]),
         guardrails=flatten_guardrails(settings["guardrails"]),
         compactor=resolve_compactor(settings["compact"]),
         memory=memory,

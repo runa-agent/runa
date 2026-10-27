@@ -411,6 +411,56 @@ def test_dict_subagents_are_rejected() -> None:
         Main()
 
 
+@pytest.mark.parametrize("setting", ["tools", "subagents", "guardrails", "mcp"])
+def test_every_list_setting_refuses_a_dict(setting: str) -> None:
+    """Each list setting is a list, declared or passed: a dict is a `UserError` naming it."""
+
+    class Main(Agent):
+        name = "Main"
+        instructions = "main"
+
+    Declared = type("Declared", (Main,), {setting: {"grouped": []}})
+
+    with pytest.raises(UserError, match=f"{setting} must be a list"):
+        Declared()
+    with pytest.raises(UserError, match=f"{setting} must be a list"):
+        Main(**{setting: cast(Any, {"grouped": []})})
+
+
+def test_list_setting_reassigned_as_a_tuple_is_taken() -> None:
+    """A tuple an agent holds, extended by reassignment, is the list it was."""
+
+    @tool
+    def ping() -> str:
+        """Ping."""
+        return "pong"
+
+    class Main(Agent):
+        name = "Main"
+        instructions = "main"
+
+    agent = Main()
+    agent.tools = (*agent.tools, ping)
+
+    assert built_shape(agent).tools == (ping,)
+
+
+def test_a_tools_entry_that_is_not_a_tool_is_rejected() -> None:
+    """Only a `@tool` is a tool: a plain function is a `UserError` where it is set."""
+
+    def ping() -> str:
+        return "pong"
+
+    with pytest.raises(UserError, match="tools entries must be @tool functions"):
+        scripted_agent(_ScriptedModel([]), tools=cast(Any, [ping]))
+
+
+def test_an_mcp_server_without_a_transport_is_rejected() -> None:
+    """`MCPServer(...)` with no `.http`/`.stdio` is a `UserError` at construction, not every run."""
+    with pytest.raises(UserError, match=r"MCPServer\(\.\.\.\)\.http"):
+        scripted_agent(_ScriptedModel([]), mcp=[cast(Any, MCPServer(name="files"))])
+
+
 def test_mcp_servers_is_not_a_setting() -> None:
     """`mcp` is the one way to declare MCP servers; `mcp_servers` is only what it resolved to."""
 
