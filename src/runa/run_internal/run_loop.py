@@ -215,21 +215,14 @@ class _Run:
                 raise GuardrailTripwireTriggered(result)
 
     async def delegate(
-        self,
-        delegate: Delegate,
-        input: str,
-        call_id: str,
-        *,
-        under: Span,
-        suspended: RunRecord | None,
+        self, delegate: Delegate, input: str, call_id: str, *, under: Span
     ) -> Run | None:
         """Run `delegate`'s agent on `input` as call `call_id` of this run, nested in it.
 
         The call arrives claimed, like any tool call. A delegate that pauses for approval is
         `None`, its record suspended on this run's as the call's standing, for this run to pause
-        on (see `RunRecord.suspend`). Given that `suspended` record again, on resume, it
-        continues from there instead of starting over, and `input` is not read. Otherwise the
-        returned `Run` is completed or errored.
+        on (see `RunRecord.suspend`), and continued by `resume_delegate`. Otherwise the returned
+        `Run` is completed or errored.
 
         The nested run is this one with the delegate's own agent (and its ceilings), a record of
         its own over the same `context` and `user_id`, and an agent span under `under`. Each call
@@ -242,17 +235,27 @@ class _Run:
         `emit` (a stream event doesn't say which agent produced it, so the stream sees the
         delegate call and its output, not the delegate's tokens).
         """
-        given: str | None
-        if suspended is None:
-            context = self.run_context
-            record = RunRecord(
-                start=delegate.agent,
-                agent=delegate.agent,
-                run_context=RunContext(context=context.context, user_id=context.user_id),
-            )
-            given = input
-        else:
-            record, given = suspended.resumed(), None
+        context = self.run_context
+        record = RunRecord(
+            start=delegate.agent,
+            agent=delegate.agent,
+            run_context=RunContext(context=context.context, user_id=context.user_id),
+        )
+        return await self._nested(record, input, call_id, under)
+
+    async def resume_delegate(
+        self, suspended: RunRecord, call_id: str, *, under: Span
+    ) -> Run | None:
+        """Continue delegate call `call_id`'s run, which paused as `suspended`, where it stopped.
+
+        Otherwise as `delegate`, and it may pause again the same way.
+        """
+        return await self._nested(suspended.resumed(), None, call_id, under)
+
+    async def _nested(
+        self, record: RunRecord, given: str | None, call_id: str, under: Span
+    ) -> Run | None:
+        """Run `record` on `given` as delegate call `call_id`'s nested run (see `delegate`)."""
         nested = replace(
             self,
             record=record,

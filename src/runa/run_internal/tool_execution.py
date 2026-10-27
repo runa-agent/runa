@@ -37,52 +37,81 @@ from runa.tracing.spans import Span
 
 if TYPE_CHECKING:
     from runa.agent import Agent
+    from runa.run import Run
     from runa.run_internal.run_loop import _Run
 
 
+type _Outcome = tuple[Any, ToolCall] | None
+"""What invoking a call came to: its result and the record of it, or `None` while it's paused."""
+
+
 async def _run_call(
-    run: _Run,
-    callee: FunctionTool | Delegate,
-    call: dict[str, Any],
-    args: dict[str, Any],
-    suspended: RunRecord | None = None,
+    run: _Run, callee: FunctionTool | Delegate, call: dict[str, Any], args: dict[str, Any]
 ) -> ConversationItem | None:
-    """Run one approved call end to end. Every tool call and delegate call goes through this.
+    """Run one approved call through the gate. Every tool call and delegate call goes through this.
 
     In order, the steps are: claim the call, fire `on_tool_start`, guard its input, invoke it,
-    guard its output, record it, then fire `on_tool_end`. Only the invoke step differs: a tool
-    runs its function, and a `Delegate` runs a nested run of this one. A delegate that pauses for
-    approval leaves the call unanswered (`None`), like a call waiting on a human. Resuming runs
-    the call again with its `suspended` record and it continues where it stopped: claimed and
-    started before the pause, it isn't claimed or started again, and it ends once.
+    guard its output, record it, then fire `on_tool_end`. This function opens the call, up to
+    the invoke step, and `_closed` takes it from there. Only the invoke step differs: a tool runs
+    its function, and a `Delegate` runs a nested run of this one. A delegate that pauses for
+    approval leaves the call unanswered (`None`), like a call waiting on a human, and is
+    continued by `_resume_call`.
 
     `args` are the call's arguments as the gate already parsed them; the raw JSON is kept only
     for the span and the `ToolCall`, which record what the model wrote.
     """
-    tool = _gated(callee)
-    call_id = id_of(call)
-    started = suspended is not None
-    if not started:
-        run.claim(call_id, tool.name)
+    tool, call_id = _gated(callee), id_of(call)
+    run.claim(call_id, tool.name)
 
-    args_json = call_arguments(call)
-    with run.span(
-        tool.name, "delegate" if isinstance(callee, Delegate) else "tool", input=args_json
-    ) as span:
-        if not started:
-            await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
-            await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
+    async def invoked(span: Span) -> _Outcome:
+        await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
+        await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
         if isinstance(callee, Delegate):
-            outcome = await _delegated(run, callee, call_id, args, args_json, span, suspended)
-        else:
-            outcome = await _invoked(run, callee, call_id, args, args_json, span)
+            nested = await run.delegate(callee, str(args.get("input", "")), call_id, under=span)
+            return _delegated(callee, nested, call_arguments(call), span)
+        return await _invoked(run, callee, call_id, args, call_arguments(call), span)
+
+    return await _closed(run, callee, call, invoked)
+
+
+async def _resume_call(
+    run: _Run, delegate: Delegate, call: dict[str, Any], suspended: RunRecord
+) -> ConversationItem | None:
+    """Continue delegate call `call`, whose run paused as `suspended`, from its invoke step.
+
+    `_run_call` opened it before the pause, so it isn't claimed, started or guarded again; it
+    closes once, through `_closed`, like any call.
+    """
+
+    async def continued(span: Span) -> _Outcome:
+        nested = await run.resume_delegate(suspended, id_of(call), under=span)
+        return _delegated(delegate, nested, call_arguments(call), span)
+
+    return await _closed(run, delegate, call, continued)
+
+
+async def _closed(
+    run: _Run,
+    callee: FunctionTool | Delegate,
+    call: dict[str, Any],
+    invoke: Callable[[Span], Awaitable[_Outcome]],
+) -> ConversationItem | None:
+    """`invoke` the call in its span, then close it: guard its output, record it, `on_tool_end`.
+
+    The second half of the gate `_run_call` states. A call `invoke` leaves paused (`None`) isn't
+    closed, and is left unanswered.
+    """
+    tool = _gated(callee)
+    kind = "delegate" if isinstance(callee, Delegate) else "tool"
+    with run.span(tool.name, kind, input=call_arguments(call)) as span:
+        outcome = await invoke(span)
         if outcome is None:
             span.output = "paused for approval"
             return None
         result, recorded = outcome
         await run.guard(Phase.TOOL_OUTPUT, result, tool=tool, under=span)
         span.output = result
-    item = _answer(run, call_id, recorded)
+    item = _answer(run, id_of(call), recorded)
     await run.hooks.on_tool_end(run.run_context, run.current_agent, tool, result)
     return item
 
@@ -104,22 +133,12 @@ async def _invoked(
     return result, ToolCall(tool.name, args_json, str(result))
 
 
-async def _delegated(
-    run: _Run,
-    delegate: Delegate,
-    call_id: str,
-    args: dict[str, Any],
-    args_json: str,
-    span: Span,
-    suspended: RunRecord | None,
-) -> tuple[Any, ToolCall] | None:
-    """Invoke `delegate` as a nested run under `span`: its output and the record of the call.
+def _delegated(delegate: Delegate, nested: Run | None, args_json: str, span: Span) -> _Outcome:
+    """What `delegate`'s `nested` run came to: its output and the record of the call.
 
     The record's `children` are the calls the nested run made. A delegate that errored fails the
-    call, and one that paused for approval has no output yet (`None`).
+    call, and one that paused for approval (`None`) has no output yet.
     """
-    input = str(args.get("input", ""))
-    nested = await run.delegate(delegate, input, call_id, under=span, suspended=suspended)
     if nested is None:
         return None
     name = delegate.tool.name
@@ -239,9 +258,8 @@ class _Answers:
         name, call_id = call_name(call), id_of(call)
         suspended = run.record.suspended(call_id)
         if suspended is not None:
-            args = parsed_arguments(call_arguments(call))
             delegate = shape.delegates[name]
-            self.defer(call_id, partial(_run_call, run, delegate, call, args, suspended))
+            self.defer(call_id, partial(_resume_call, run, delegate, call, suspended))
             return
         earlier = run.record.answered(call_id)
         if earlier is not None:
