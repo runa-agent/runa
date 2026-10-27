@@ -4,7 +4,7 @@
 an app already talks to instead of requiring a separate client or API key, and through the same
 one door as everything else: the provider, the run's ceilings and the tracing are the Agent's, not a
 second copy assembled here. Reading the JSON object out of a reply isn't here either: that's
-`runa._items.parsed_json_object`, shared with every other caller that asks a model for JSON.
+`runa._items.parsed_json_object`.
 """
 
 from dataclasses import dataclass

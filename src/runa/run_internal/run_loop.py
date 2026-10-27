@@ -748,8 +748,7 @@ async def _resume(
 ) -> Run:
     """Continue a paused run once its interruptions are resolved, on a copy of its record.
 
-    The run claims the pause before running anything it decided (`_continue_paused`), so a pause
-    resumed already ends in `RunAlreadyResumed`. A
+    The run claims the pause just before running anything it decided (`_continue_paused`). A
     pause the resumed run comes to is its own, kept under the agent the run started with.
     `session` is the one the run started in (see `RunState`), never a caller's choice.
     """

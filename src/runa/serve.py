@@ -136,8 +136,7 @@ async def _turn(agent: Agent, agent_name: str, body: RunRequest) -> str | RunSta
     A `run_id` this agent has no pause under -- unknown, or already resumed -- is a `404`. A pause
     that no longer rebuilds (a schema version this Runa doesn't know, an agent renamed since it
     paused) is a `409`, and a decision for a call the pause doesn't have is a `422`; none of them
-    spends the pause, which only the resumed run claims. A request that loses that claim to
-    another one resuming the same pause gets the run's `RunAlreadyResumed` error back.
+    spends the pause. A request that loses a race to resume it gets back an `"error"` run.
     An `Interruption` left undecided keeps pausing the run, which the next response reports the
     same way as the first: the decisions a client sends are the ones a human has actually made,
     and nothing here invents the rest.

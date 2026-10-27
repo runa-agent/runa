@@ -39,8 +39,7 @@ class RunState(RunView):
     `Run`. `load(agent, run_id)` is how another process, or a later request, gets it back.
 
     `_pause` is the runtime's own record of all of this, which every property here reads. It is
-    private because a copy of a pause, saved or resumed by hand, would be a second chance to run
-    it: only the runtime builds one, keeps it and resumes from it.
+    private so that no copy of a pause exists to resume a second time.
     """
 
     _pause: Pause

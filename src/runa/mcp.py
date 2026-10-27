@@ -13,15 +13,12 @@ else's process, with its own filesystem, shell or API reach -- and a remote tool
 of its own to declare them on.
 
 As long as it *can* be is one event loop. A `ClientSession`'s streams -- a subprocess's pipes
-under `.stdio`, an HTTP connection under `.http` -- belong to the loop that was running when they
-were opened, and do not survive it being closed, which is the lifetime `runa._loop.LoopCache`
-exists to state and which `db/pool.py`'s pools, `cache/redis.py`'s client and `ModelProvider`'s
-HTTP clients already hold themselves to. A session is the fourth such resource, so it is held the
-same way: per loop, built on first use there. An app's own loop and the background loop every
-`Agent.run_sync` shares both live as long as the process, so either gets the persistent
-connection the paragraph above promises. The cache is built with a `close`, so the background
-loop shuts every server it connected -- a subagent's included -- down before the interpreter
-exits rather than leaving a `.stdio` subprocess behind.
+under `.stdio`, an HTTP connection under `.http` -- belong to the loop they were opened on and do
+not survive it closing, so a session is held per loop by a `LoopCache`, built on first use there.
+An app's own loop and the loop every `Agent.run_sync` shares both live as long as the process, so
+either gets the persistent connection the paragraph above promises. Each session is cached with
+its `close`, so the `run_sync` loop shuts every server it connected -- a subagent's included --
+down before the interpreter exits rather than leaving a `.stdio` subprocess behind.
 """
 
 import re

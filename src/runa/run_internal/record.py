@@ -9,7 +9,7 @@ there shows it on a finished run and a paused one alike.
 
 A pause is kept in `runa.db.paused_runs()` the moment it happens, under a `run_id`, and resuming
 it claims that row (see `PausedRunStore.claim`). The blob a row holds is this module's own
-format, never handed out, so no copy of a pause exists that could be resumed a second time.
+format, never handed out (see `runa.RunState` for why).
 
 `runa.RunState` is the public handle over a `Pause`, and holds it out of a caller's reach: this
 module builds a state (`paused`) and is the only one that reads the pause back out of one
