@@ -2,9 +2,9 @@
 
 `run_streamed` runs the same turn loop as `run` (with an `emit` callback),
 so guardrails, approvals, tracing, hooks and sessions behave identically. The only
-streaming-specific step is here: consuming `Model.stream_response` instead of `get_response`,
-emitting each piece of text as a `TextDelta` as it arrives. A provider's delta never reaches the
-stream's consumer itself.
+streaming-specific pieces are here: putting `Model.stream_response`'s deltas back together into
+the response `get_response` would have returned, and emitting each piece of text as a `TextDelta`
+as it arrives. A provider's delta never reaches the stream's consumer itself.
 """
 
 from collections.abc import Callable
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from runa._items import assistant_message, tool_call
-from runa._models import Model, ModelRequest, StreamDelta
+from runa._models import StreamDelta
 from runa._types import ModelResponse, Usage
 from runa.stream_events import StreamEvent, TextDelta
 
@@ -65,14 +65,14 @@ class _Assembly:
         return ModelResponse(output=[message], usage=self.usage)
 
 
-async def _stream_response(model: Model, request: ModelRequest, emit: Emit) -> ModelResponse:
-    """Consume `model.stream_response(request)` into a `ModelResponse`, emitting its text."""
-    assembly = _Assembly()
-    async for delta in model.stream_response(request):
-        assembly.add(delta)
+def _emitting_text(emit: Emit) -> Callable[[StreamDelta], None]:
+    """A handler for each arriving delta that emits its text, if any, as a `TextDelta`."""
+
+    def on_delta(delta: StreamDelta) -> None:
         if delta.text:
             emit(TextDelta(delta.text))
-    return assembly.response()
+
+    return on_delta
 
 
-__all__ = ["Emit", "_Assembly", "_stream_response"]
+__all__ = ["Emit", "_Assembly", "_emitting_text"]

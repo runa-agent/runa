@@ -6,7 +6,7 @@ The implementation behind `Agent.run`/`run_streamed`, not a seam of its own. Eve
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Awaitable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -49,7 +49,7 @@ from runa.run_internal.agent_shape import AgentShape, RunPolicy, shape_of
 from runa.run_internal.dispatch import _Dispatch
 from runa.run_internal.record import RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
-from runa.run_internal.streaming import Emit, _Assembly, _stream_response
+from runa.run_internal.streaming import Emit, _Assembly, _emitting_text
 from runa.run_internal.tool_execution import _answer_message
 from runa.session import Session
 from runa.stream_events import StreamEvent, ToolCalled
@@ -406,11 +406,8 @@ async def _model_turn(run: _Run) -> tuple[ConversationItem, int]:
         tools=shape.offered,
         output_schema=shape.output_type,
     )
-    model = _RunModel(run, shape, run.policy.max_tokens)
-    if run.emit is None:
-        response = await model.get_response(request)
-    else:
-        response = await _stream_response(model, request, run.emit)
+    on_delta = None if run.emit is None else _emitting_text(run.emit)
+    response = await _RunModel(run, shape, run.policy.max_tokens).respond(request, on_delta)
     context_tokens = response.usage.input_tokens + response.usage.output_tokens
     dropped = transcript.compact(run.policy.compactor, context_tokens)
     _note_compaction(run.spans, context_tokens, dropped)
@@ -601,27 +598,39 @@ class _RunModel:
     shape: AgentShape
     max_tokens: int | None = None
 
-    async def get_response(self, request: ModelRequest) -> ModelResponse:
-        """One call to the agent's model, charged to the run."""
+    async def respond(
+        self, request: ModelRequest, on_delta: Callable[[StreamDelta], None] | None = None
+    ) -> ModelResponse:
+        """One call to the agent's model, charged to the run, streamed when `on_delta` is given.
+
+        A streamed call hands `on_delta` each delta as it arrives and returns them assembled.
+        """
         with metered(str(self.shape.model), input=list(request.input)) as charge:
             await self._on_llm_start(request)
-            response = await self.shape.resolve_model().get_response(request)
+            model = self.shape.resolve_model()
+            if on_delta is None:
+                response = await model.get_response(request)
+            else:
+                assembly = _Assembly()
+                async for delta in model.stream_response(request):
+                    assembly.add(delta)
+                    on_delta(delta)
+                response = assembly.response()
             charge(response.usage)
             _check_token_budget(self.run.run_context.usage, self.max_tokens)
         await self.run.hooks.on_llm_end(self.run.run_context, self.shape.agent, response)
         return response
 
+    async def get_response(self, request: ModelRequest) -> ModelResponse:
+        """`respond`, unstreamed."""
+        return await self.respond(request)
+
     async def stream_response(self, request: ModelRequest) -> AsyncIterator[StreamDelta]:
-        """One streamed call to the agent's model, charged to the run once the stream ends."""
-        assembly = _Assembly()
-        with metered(str(self.shape.model), input=list(request.input)) as charge:
-            await self._on_llm_start(request)
-            async for delta in self.shape.resolve_model().stream_response(request):
-                assembly.add(delta)
-                yield delta
-            charge(assembly.usage)
-            _check_token_budget(self.run.run_context.usage, self.max_tokens)
-        await self.run.hooks.on_llm_end(self.run.run_context, self.shape.agent, assembly.response())
+        """`respond`, streamed, yielding the call's deltas once it is complete and charged."""
+        deltas: list[StreamDelta] = []
+        await self.respond(request, deltas.append)
+        for delta in deltas:
+            yield delta
 
     async def _on_llm_start(self, request: ModelRequest) -> None:
         await self.run.hooks.on_llm_start(
