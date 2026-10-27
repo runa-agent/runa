@@ -87,18 +87,23 @@ def _slugify(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
 
 
-@dataclass
+_HANDOFF_INPUT: dict[str, Any] = {"type": "object", "properties": {}}
+"""What the model calls a handoff with: nothing, since calling it is itself the signal to switch."""
+
+
+@dataclass(frozen=True)
 class Handoff:
     """A sub-agent registered as a switch: calling its tool hands the run over to it.
 
-    `run_internal` sees a `Handoff` in an agent's `handoffs` list and recognizes a call to
-    `tool_name` as a request to switch `current_agent` to the run's `agent`, rather than a normal
-    tool call.
+    `run_internal` recognizes a call to its `tool` as a request to switch `current_agent` to the
+    run's `agent`, rather than a normal tool call.
     """
 
     agent: type[Agent]
-    tool_name: str
-    tool_description: str
+    tool: Tool
+    """The handoff as the model is offered it: its name, description and empty input schema. Only
+    offered, never gated: its `needs_approval` and guardrails stay at their defaults (see
+    `Subagent.__call__`)."""
 
     @classmethod
     def from_agent(
@@ -111,8 +116,11 @@ class Handoff:
         """Build a `Handoff` to `agent`, its tool named and described for `name` unless given."""
         return cls(
             agent=agent,
-            tool_name=tool_name or f"transfer_to_{_slugify(name)}",
-            tool_description=tool_description or f"Transfer the conversation to {name}.",
+            tool=Tool(
+                name=tool_name or f"transfer_to_{_slugify(name)}",
+                description=tool_description or f"Transfer the conversation to {name}.",
+                params_json_schema=_HANDOFF_INPUT,
+            ),
         )
 
 

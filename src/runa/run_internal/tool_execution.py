@@ -362,7 +362,7 @@ class _Answers:
                 handed[call_id] = tool_result(call_id, error)
                 continue
             target = run.tree.agents[handoff.agent]
-            with run.span(handoff.tool_name, "handoff"):
+            with run.span(handoff.tool.name, "handoff"):
                 await run.hooks.on_handoff(run.run_context, run.current_agent, target)
             handed[call_id] = tool_result(call_id, f"Transferred to {target.name}.")
             switched = target

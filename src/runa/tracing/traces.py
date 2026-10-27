@@ -25,7 +25,7 @@ def _fmt_duration(seconds: float | None) -> str:
 
 
 def _display_name(span: Span) -> str:
-    """`span.name`, minus the `"transfer_to_"` a `Handoff.tool_name` always carries for the model.
+    """`span.name`, minus the `"transfer_to_"` a handoff tool's name always carries for the model.
 
     The prefix is real and stays on the wire -- the model calls the tool by that name -- it is
     just noise in a person-readable row, where the target agent's name says enough.

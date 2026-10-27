@@ -981,7 +981,7 @@ def test_with_mcp_tools_adds_the_servers_tools_for_one_run() -> None:
     assert shape.agent is agent
     assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
     assert [t.name for t in built_shape(agent).tools] == _tool_names(agent)
-    assert [h.tool_name for h in shape.handoffs] == ["transfer_to_researcher"]
+    assert [h.tool.name for h in shape.handoffs] == ["transfer_to_researcher"]
 
 
 def test_an_mcp_tool_named_like_the_agents_own_is_a_user_error() -> None:

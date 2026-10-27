@@ -35,7 +35,7 @@ from runa.handoff import Delegate, Handoff, Mode, Subagent
 from runa.knowledge import Knowledge, KnowledgeLike
 from runa.lifecycle import Hooks
 from runa.memory import Memory, MemoryLike
-from runa.tool import FunctionTool
+from runa.tool import FunctionTool, Tool
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -137,15 +137,9 @@ type Callee = FunctionTool | Delegate | Handoff
 """What a name an agent offers the model refers to: a tool, a delegate or a handoff."""
 
 
-def _name_of(callee: Callee) -> str:
-    """The name the model calls `callee` by."""
-    match callee:
-        case Handoff():
-            return callee.tool_name
-        case Delegate():
-            return callee.tool.name
-        case _:
-            return callee.name
+def _tool_of(callee: Callee) -> Tool:
+    """`callee` as the model is offered it: its name, description and input schema."""
+    return callee if isinstance(callee, Tool) else callee.tool
 
 
 def _callees(agent_name: str, entries: Iterable[Callee]) -> dict[str, Callee]:
@@ -156,7 +150,7 @@ def _callees(agent_name: str, entries: Iterable[Callee]) -> dict[str, Callee]:
     """
     callees: dict[str, Callee] = {}
     for entry in entries:
-        name = _name_of(entry)
+        name = _tool_of(entry).name
         if name in callees:
             raise UserError(
                 f"{agent_name} offers the model more than one tool named {name!r}, so only "
@@ -349,20 +343,14 @@ class AgentShape(Resolved):
 
     @cached_property
     def offered(self) -> list[ToolSchema]:
-        """Every callee, in the order the model is offered them.
-
-        A handoff takes no structured input from the model: calling it is itself the signal to
-        switch agents, so its schema's `parameters` is always an empty object.
-        """
+        """Every callee, in the order the model is offered them."""
         no_input = {"type": "object", "properties": {}}
         offered: list[ToolSchema] = []
         for name, callee in self.callees.items():
-            if isinstance(callee, Handoff):
-                offered.append(ToolSchema(name, callee.tool_description or "", no_input))
-                continue
-            tool = callee.tool if isinstance(callee, Delegate) else callee
-            schema = tool.params_json_schema or no_input
-            offered.append(ToolSchema(name, tool.description or "", schema))
+            tool = _tool_of(callee)
+            offered.append(
+                ToolSchema(name, tool.description or "", tool.params_json_schema or no_input)
+            )
         return offered
 
     def resolve_model(self) -> Model:
