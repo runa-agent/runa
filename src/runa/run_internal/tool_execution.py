@@ -1,13 +1,15 @@
 """tool_execution.py: answering one model message, its tool calls, delegates and handoff.
 
 What happens to each call of a model message lives here, a pause included: which calls were
-answered and which wait on a human, written to the run's record as each one settles, so a pause
-on the message finds it recorded and resuming answers that message again from there. Once the
-message is answered, its answers enter the run's transcript and its handoff, if any, is made,
-so which agent runs next is decided here too, as is each call's claim and approval, against the
-run tree's ledger. These steps are passed the loop's run, imported for its type only, and use
-what it and its record can do (guard a call, fire a hook, run a delegate, hand off; record a
-call, an answer or a wait), never assigning a field of either.
+answered, which wait on a human and which delegates paused, written to the run's record as each
+one settles, so a pause on the message finds it recorded and resuming answers that message again
+from there. This is the only module that writes a call's standing. Once the message is
+answered, its answers enter the run's transcript and its handoff, if any, is made, so which
+agent runs next is decided here too, as is each call's claim and approval, against the run
+tree's ledger, and the record a delegate's run starts from. These steps are passed the loop's
+run, imported for its type only, and use what it and its record can do (guard a call, fire a
+hook, run a record nested in it, list its tools; record a call, an answer, a wait or a
+suspension). The one field assigned is the record's `agent`, by a handoff.
 """
 
 import asyncio
@@ -27,6 +29,7 @@ from runa._items import (
 )
 from runa._items import call_id as id_of  # `call_id` here is the id of the call at hand
 from runa._log import logger
+from runa._types import RunContext
 from runa.approval import ApprovalDecision
 from runa.exceptions import DuplicateToolCallError, ToolError
 from runa.guardrail import Phase
@@ -106,8 +109,7 @@ async def _resume_call(
     """
 
     async def continued(span: Span) -> _Outcome:
-        nested = await run.resume_delegate(suspended, id_of(call), under=span)
-        return _delegated(delegate, nested, call_arguments(call), span)
+        return await _delegate_run(run, delegate, suspended.resumed(), None, call, span)
 
     return await _closed(run, delegate.tool, "delegate", call, continued)
 
@@ -165,19 +167,45 @@ async def _invoked(
 async def _delegate_invoked(
     delegate: Delegate, run: _Run, call: dict[str, Any], args: dict[str, Any], span: Span
 ) -> _Outcome:
-    """Invoke `delegate`: a nested run of this one, given the call's `input`."""
-    nested = await run.delegate(delegate, str(args.get("input", "")), id_of(call), under=span)
+    """Invoke `delegate`: a nested run of this one, given the call's `input`.
+
+    The delegate's run has a record of its own, started on its agent, over the same `context`
+    and `user_id` as this run.
+    """
+    context = run.run_context
+    record = RunRecord(
+        start=delegate.agent,
+        agent=delegate.agent,
+        run_context=RunContext(context=context.context, user_id=context.user_id),
+    )
+    given = str(args.get("input", ""))
+    return await _delegate_run(run, delegate, record, given, call, span)
+
+
+async def _delegate_run(
+    run: _Run,
+    delegate: Delegate,
+    record: RunRecord,
+    given: str | None,
+    call: dict[str, Any],
+    span: Span,
+) -> _Outcome:
+    """Run `delegate`'s `record` nested in `run` (see its `nested`) as `call`: what it came to.
+
+    A delegate's run that pauses for approval is `None`, its record suspended on `run`'s as the
+    call's standing (see `RunRecord.suspend`), for `run` to pause on and `_resume_call` to
+    continue. Otherwise its output and the record of the call, whose `children` are the calls
+    the nested run made; a delegate that errored fails the call.
+    """
+    nested = await run.nested(record, given, under=span)
+    if nested.status == "paused":
+        run.record.suspend(id_of(call), record)
+        return None
     return _delegated(delegate, nested, call_arguments(call), span)
 
 
-def _delegated(delegate: Delegate, nested: Run | None, args_json: str, span: Span) -> _Outcome:
-    """What `delegate`'s `nested` run came to: its output and the record of the call.
-
-    The record's `children` are the calls the nested run made. A delegate that errored fails the
-    call, and one that paused for approval (`None`) has no output yet.
-    """
-    if nested is None:
-        return None
+def _delegated(delegate: Delegate, nested: Run, args_json: str, span: Span) -> _Outcome:
+    """What `delegate`'s completed or errored `nested` run came to (see `_delegate_run`)."""
     name = delegate.tool.name
     if nested.status == "completed":
         output = nested.output
@@ -253,9 +281,9 @@ class _Answers:
     order either way.
 
     Where the calls stand is the record's own, written as each one settles (see
-    `RunRecord.standings`): an answer or a wait on a human here, a paused delegate's run by the
-    delegate itself. A message the run pauses on is so already recorded as it stands, and the
-    message a resumed run paused on starts from there.
+    `RunRecord.standings`): an answer, a wait on a human or a paused delegate's run. A message
+    the run pauses on is so already recorded as it stands, and the message a resumed run paused
+    on starts from there.
     """
 
     run: _Run
@@ -369,7 +397,8 @@ class _Answers:
         for result in results:
             run.notify(ToolOutput(result))
         if switched is not None:
-            await run.hand_off(switched)
+            record.agent = switched
+            await run.list_tools()
             run.notify(AgentChanged(switched))
             await run.hooks.on_agent_start(run.run_context, run.current_agent)
         return True

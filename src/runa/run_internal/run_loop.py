@@ -39,7 +39,6 @@ from runa.exceptions import (
     UnexpectedError,
 )
 from runa.guardrail import GuardrailResult, Phase
-from runa.handoff import Delegate
 from runa.lifecycle import Hooks, LoggingHooks
 from runa.run import Run, RunStatus
 from runa.run_internal.agent_shape import AgentShape, RunPolicy, shape_of
@@ -105,11 +104,6 @@ class _Run:
     async def list_tools(self) -> None:
         """List the MCP tools of the agent running now, which may start a subprocess."""
         self._listed = await shape_of(self.record.agent).with_mcp_tools()
-
-    async def hand_off(self, agent: Agent) -> None:
-        """Make `agent` the one running now, its MCP tools listed."""
-        self.record.agent = agent
-        await self.list_tools()
 
     @property
     def delegated(self) -> bool:
@@ -201,48 +195,20 @@ class _Run:
             if verdict.tripped:
                 raise GuardrailTripwireTriggered(result)
 
-    async def delegate(
-        self, delegate: Delegate, input: str, call_id: str, *, under: Span
-    ) -> Run | None:
-        """Run `delegate`'s agent on `input` as call `call_id` of this run, nested in it.
+    async def nested(self, record: RunRecord, given: str | None, *, under: Span) -> Run:
+        """Run `record` nested in this run, on `given` or (`None`) resuming its pause, to its `Run`.
 
-        The call arrives claimed, like any tool call. A delegate that pauses for approval is
-        `None`, its record suspended on this run's as the call's standing, for this run to pause
-        on (see `RunRecord.suspend`), and continued by `resume_delegate`. Otherwise the returned
-        `Run` is completed or errored.
+        The nested run is this one with `record`'s agent (and its ceilings), and an agent span
+        under `under`. Each call it makes is charged to its own usage and to this run's (and so
+        on up) as it is made, so its record's usage, like its turns, is its whole spend across
+        its resumes. The tree and hooks are shared, as is anything a run starts carrying unless
+        named below. Its MCP tools are its own, listed afresh. This run's deadline encloses its.
 
-        The nested run is this one with the delegate's own agent (and its ceilings), a record of
-        its own over the same `context` and `user_id`, and an agent span under `under`. Each call
-        it makes is charged to its own usage and to this run's (and so on up) as it is made, so
-        its record's usage, like its turns, is the delegate's whole spend across its resumes. The
-        tree and hooks are shared, as is anything a run starts carrying unless named below. Its
-        MCP tools are its own, listed afresh. This run's deadline encloses the delegate's.
-
-        Not shared: the `session` (a delegate is handed fresh input, not a conversation) and
+        Not shared: the `session` (a nested run is handed fresh input, not a conversation) and
         `emit` (a stream event doesn't say which agent produced it, so the stream sees the
-        delegate call and its output, not the delegate's tokens).
+        call the nested run answers and its output, not its tokens). A paused `Run` is not kept
+        in `runa.db`: carrying it is the caller's.
         """
-        context = self.run_context
-        record = RunRecord(
-            start=delegate.agent,
-            agent=delegate.agent,
-            run_context=RunContext(context=context.context, user_id=context.user_id),
-        )
-        return await self._nested(record, input, call_id, under)
-
-    async def resume_delegate(
-        self, suspended: RunRecord, call_id: str, *, under: Span
-    ) -> Run | None:
-        """Continue delegate call `call_id`'s run, which paused as `suspended`, where it stopped.
-
-        Otherwise as `delegate`, and it may pause again the same way.
-        """
-        return await self._nested(suspended.resumed(), None, call_id, under)
-
-    async def _nested(
-        self, record: RunRecord, given: str | None, call_id: str, under: Span
-    ) -> Run | None:
-        """Run `record` on `given` as delegate call `call_id`'s nested run (see `delegate`)."""
         nested = replace(
             self,
             record=record,
@@ -254,11 +220,7 @@ class _Run:
             callers=self.payers,
             claims=None,
         )
-        run = await _within(nested, given)
-        if run.status != "paused":
-            return run
-        self.record.suspend(call_id, record)
-        return None
+        return await _within(nested, given)
 
 
 async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
@@ -715,9 +677,8 @@ async def _run_async(
     """Run `agent` on `input`, or resume the paused `RunState` it is, and return its `Run`.
 
     The run behind `Agent.run`: it owns its tree, which a delegate's nested run shares with its
-    caller instead (`_Run.delegate`). The trace is
-    named for `agent`'s declared `name` and grouped under an enclosing `tracing.trace` block, else
-    under `session`.
+    caller instead (`_Run.nested`). The trace is named for `agent`'s declared `name` and grouped
+    under an enclosing `tracing.trace` block, else under `session`.
     """
     dispatch = _Dispatch(hooks or LoggingHooks())
 
