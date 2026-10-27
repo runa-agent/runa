@@ -177,8 +177,8 @@ class _Run:
     ) -> None:
         """Run `phase`'s guardrails over `value` in list order, raising on the first that trips.
 
-        The ordering rule is stated here and nowhere else: the first tripwire stops the entries
-        after it, but every entry that already ran is in the run's audit trail, so a tripped run's
+        The ordering rule is RUNA.md's (see Guardrail); what it leaves to this method is that
+        every entry that already ran is in the run's audit trail, so a tripped run's
         trail is complete up to the stop.
 
         `phase` decides whose list to read (the running agent's, or `tool`'s), and which phase the

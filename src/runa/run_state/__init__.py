@@ -1,7 +1,7 @@
 """run_state: `RunState`, the public handle on a paused run, to resolve and resume it.
 
 How a pause is stored and claimed is `runa.run_internal.record`'s; this is what a caller reads
-and decides on, and where the rules a caller relies on are stated.
+and decides on. The rules a caller relies on are RUNA.md's (see Human Approval).
 """
 
 from dataclasses import dataclass
@@ -30,9 +30,8 @@ class RunState(RunView):
 
     It carries the session the run started in too, so resuming saves the turn there with no
     `session=` passed: by id, resolved through `runa.db.session`, or, resumed in the process that
-    paused, as the very `Session` object the run was given. A `context`, `user_id` or session
-    passed beside it is a `UserError` rather than dropped, unless it is that session's own
-    `Session` object.
+    paused, as the very `Session` object the run was given. What may be passed beside it: see
+    RUNA.md, Human Approval.
 
     `run_id` is the handle the pause is kept under in `runa.db`, and a pause resumes once: the
     resumed run claims it, and resuming it again, from this object or from `load`, is an error

@@ -430,12 +430,9 @@ def resume_session(
 ) -> Session | None:
     """The session to resume `state` in, once what was passed beside it is checked.
 
-    Every rule about the arguments a `RunState` is run with is here. It carries the `context`,
-    `user_id` and session of the run it paused, so any of them passed beside it is a `UserError`
-    rather than dropped or the turn saved elsewhere, with one exception: a `Session` object for
-    the run's own `session_id`, which names the store a session lives in when `runa.db.session`
-    doesn't reach it, an object a pause loaded in another process doesn't have. With none
-    passed, the session is the run's own.
+    What may be passed beside a `RunState`: see RUNA.md, Human Approval. With no session
+    passed, the session is the run's own: the `Session` object it was given when resumed in the
+    process that paused, otherwise its id resolved through `runa.db.session`.
     """
     for name, value in (("context", context), ("user_id", user_id)):
         if value is not None:
