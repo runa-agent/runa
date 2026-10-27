@@ -224,15 +224,14 @@ class _Run:
         call_id: str,
         *,
         under: Span,
-        paused: RunRecord | None = None,
-    ) -> Run | RunRecord:
+    ) -> Run | None:
         """Run `delegate`'s agent on `input` as call `call_id` of this run, nested in it.
 
-        The call arrives claimed, like any tool call. A delegate that pauses for approval gives
-        the claim back and comes back as its paused record, for this run to pause on; the same
-        call reaching here again, on resume, with that record as `paused`, continues it instead
-        of starting it over, and `input` is not read. Otherwise the returned `Run` is completed
-        or errored.
+        The call arrives claimed, like any tool call. A delegate that pauses for approval is
+        `None`, its record left in this run's `settled` as the call's standing, for this run to
+        pause on (see `RunRecord`); the same call reaching here again, on resume, continues it
+        from there instead of starting it over, and `input` is not read. Otherwise the returned
+        `Run` is completed or errored.
 
         The nested run is this one with the delegate's own agent (and its ceilings), a record of
         its own over the same `context` and `user_id`, and an agent span under `under`. Each call
@@ -246,6 +245,7 @@ class _Run:
         delegate call and its output, not the delegate's tokens).
         """
         given: str | None
+        paused = self.paused_delegate(call_id)
         if paused is None:
             context = self.run_context
             record = RunRecord(
@@ -270,8 +270,13 @@ class _Run:
         run = await _within(nested, given)
         if run.status != "paused":
             return run
-        self.tree.approvals.release(call_id)
-        return record
+        self.record.settled[call_id] = record
+        return None
+
+    def paused_delegate(self, call_id: str) -> RunRecord | None:
+        """The record of delegate call `call_id` if a pause left it running, to continue it."""
+        standing = self.record.settled.get(call_id)
+        return standing if isinstance(standing, RunRecord) else None
 
 
 async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:

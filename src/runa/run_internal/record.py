@@ -149,11 +149,14 @@ class RunRecord(BaseModel):
     * `elapsed`: the seconds the run has spent running, across its resumes: what its `timeout`
       is measured against. Time spent paused doesn't count.
     * `pending`: the calls a paused run waits on, a paused delegate's included, all in its
-      `paused_message`. Empty while the run is going.
+      `paused_message`.
     * `settled`: where the rest of that message's calls stand, by call id: the result one was
       already answered with, reused rather than run again, or a paused `.delegate` call's own
       record, continued where it stopped. A handoff is in neither: a run pauses before
-      making one, so resuming makes it. Empty while the run is going.
+      making one, so resuming makes it.
+
+    Both are written as the message's calls settle and emptied once it is answered, so only a
+    paused run's are read; an errored run's may show the message it failed on part-way.
     """
 
     start: _AgentRef
@@ -175,7 +178,10 @@ class RunRecord(BaseModel):
         return self.transcript.items[-1]
 
     def resumed(self) -> RunRecord:
-        """A copy for a resumed run to work on, so this one still reads as it paused."""
+        """A copy for a resumed run to work on, so this one still reads as it paused.
+
+        The copy waits on nothing: answering the paused message again finds what still waits.
+        """
         usage = copy.deepcopy(self.run_context.usage)
         return self.model_copy(
             update={
@@ -184,6 +190,7 @@ class RunRecord(BaseModel):
                 "run_context": RunContext(
                     self.run_context.context, self.run_context.user_id, usage
                 ),
+                "pending": [],
                 "settled": dict(self.settled),
             }
         )

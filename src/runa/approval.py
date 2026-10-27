@@ -156,10 +156,6 @@ class ApprovalLedger:
         self.executed.add(call_id)
         return True
 
-    def release(self, call_id: str) -> None:
-        """Give a claim back: the call didn't finish, so resuming may legitimately run it again."""
-        self.executed.discard(call_id)
-
     def _rejection(self, message: str | None) -> ApprovalDecision:
         """A `"reject"` decision carrying `message`, or the default text when there isn't one."""
         return ApprovalDecision("reject", message or self.DEFAULT_REJECTION)

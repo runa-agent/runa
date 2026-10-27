@@ -1,8 +1,8 @@
 """tool_execution.py: one message's tool calls, delegates and handoffs, and where they stand.
 
 What happens to each call of a model message lives here, a pause included: which calls were
-answered, which wait on a human and which delegate paused, written to the run's record when it
-pauses on the message and taken back from it when resuming answers that message again. These
+answered and which wait on a human, written to the run's record as each one settles, so a pause
+on the message finds it recorded and resuming answers that message again from there. These
 steps are passed the loop's run, imported for its type only, and use what it can do (claim a
 call, decide its approval, guard it, fire a hook, run a delegate), not how it is laid out.
 """
@@ -41,38 +41,39 @@ async def _run_call(
     callee: FunctionTool | Delegate,
     call: dict[str, Any],
     args: dict[str, Any],
-    paused: RunRecord | None = None,
-) -> ConversationItem | RunRecord:
+) -> ConversationItem | None:
     """Run one approved call end to end. Every tool call and delegate call goes through this.
 
     In order, the steps are: claim the call, fire `on_tool_start`, guard its input, invoke it,
     guard its output, record it, then fire `on_tool_end`. Only the invoke step differs: a tool
     runs its function, and a `Delegate` runs a nested run of this one. A delegate that pauses for
-    approval comes back as its paused record, because the call hasn't finished. Its call is run
-    again with that record as `paused` and continues where it stopped, so its start is not
-    repeated and it ends once.
+    approval leaves the call unanswered (`None`), like a call waiting on a human. Resuming runs
+    the call again and it continues where it stopped: claimed and started before the pause, it
+    isn't claimed or started again, and it ends once.
 
     `args` are the call's arguments as the gate already parsed them; the raw JSON is kept only
     for the span and the `ToolCall`, which record what the model wrote.
     """
     tool = _gated(callee)
     call_id = id_of(call)
-    run.claim(call_id, tool.name)
+    started = run.paused_delegate(call_id) is not None
+    if not started:
+        run.claim(call_id, tool.name)
 
     args_json = call_arguments(call)
     with run.span(
         tool.name, "delegate" if isinstance(callee, Delegate) else "tool", input=args_json
     ) as span:
-        if paused is None:
+        if not started:
             await run.hooks.on_tool_start(run.run_context, run.current_agent, tool)
             await run.guard(Phase.TOOL_INPUT, args, tool=tool, under=span)
         if isinstance(callee, Delegate):
-            outcome = await _delegated(run, callee, call_id, args, args_json, span, paused)
+            outcome = await _delegated(run, callee, call_id, args, args_json, span)
         else:
             outcome = await _invoked(run, tool, call_id, args, args_json, span)
-        if isinstance(outcome, RunRecord):
+        if outcome is None:
             span.output = "paused for approval"
-            return outcome
+            return None
         result, recorded = outcome
         await run.guard(Phase.TOOL_OUTPUT, result, tool=tool, under=span)
         span.output = result
@@ -105,17 +106,16 @@ async def _delegated(
     args: dict[str, Any],
     args_json: str,
     span: Span,
-    paused: RunRecord | None,
-) -> tuple[Any, ToolCall] | RunRecord:
+) -> tuple[Any, ToolCall] | None:
     """Invoke `delegate` as a nested run under `span`: its output and the record of the call.
 
     The record's `children` are the calls the nested run made. A delegate that errored fails the
-    call, and one that paused for approval comes back as its paused record.
+    call, and one that paused for approval has no output yet (`None`).
     """
     input = str(args.get("input", ""))
-    nested = await run.delegate(delegate, input, call_id, under=span, paused=paused)
-    if isinstance(nested, RunRecord):
-        return nested
+    nested = await run.delegate(delegate, input, call_id, under=span)
+    if nested is None:
+        return None
     name = delegate.tool.name
     if nested.status == "completed":
         output = nested.output
@@ -165,7 +165,7 @@ def _answer(run: _Run, call_id: str, call: ToolCall) -> ConversationItem:
     return tool_result(call_id, call.output)
 
 
-type _Thunk = Callable[[], Awaitable[ConversationItem | RunRecord]]
+type _Thunk = Callable[[], Awaitable[ConversationItem | None]]
 
 
 @dataclass
@@ -173,15 +173,13 @@ class _Slot:
     """One tool call's place in the message's answers, in the message's call order.
 
     A call that was rejected, unknown, malformed or reused from a pause has its `item` from the
-    start; an approved one is given one once it has run, and a handoff once the message settles
-    with nothing left waiting. A delegate that paused has its record as `paused` instead, and no
-    item: it hasn't finished, so it has no result to send the model. A call waiting on a human
-    never gets a slot.
+    start; an approved one is given one once it has run, unless it is a delegate that paused, and
+    a handoff once the message settles with nothing left waiting. A call waiting on a human never
+    gets a slot.
     """
 
     call_id: str
     item: ConversationItem | None = None
-    paused: RunRecord | None = None
 
 
 type _Answered = tuple[list[ConversationItem], Agent | None]
@@ -196,25 +194,27 @@ class _Answers:
     agent's `model_settings.parallel_tool_calls` is `False`. Answers keep the message's call
     order either way.
 
-    The only place that knows where a message's calls stand across a pause: built, it takes the
-    record's `settled` (and `pending`) off it, which only the message a resumed run paused on has;
-    pausing on a message writes them back.
+    Where the calls stand is the record's own, written as each one settles: an answer to its
+    `settled`, beside the record a paused delegate leaves there itself, and a call waiting on a
+    human to its `pending`. A message the run pauses on is so already recorded as it stands, and
+    the message a resumed run paused on starts from there. Both are emptied once it is answered.
     """
 
     run: _Run
-    earlier: dict[str, ConversationItem | RunRecord] = field(init=False)
     slots: list[_Slot] = field(default_factory=list)
     deferred: list[tuple[_Slot, _Thunk]] = field(default_factory=list)
-    interruptions: list[Interruption] = field(default_factory=list)
     handoffs: list[tuple[_Slot, Handoff]] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        record = self.run.record
-        self.earlier, record.settled, record.pending = record.settled, {}, []
 
     def answer(self, item: ConversationItem) -> None:
         """Answer the next call with `item` as it is."""
-        self.slots.append(_Slot(answered_call_id(item), item))
+        slot = _Slot(answered_call_id(item))
+        self.slots.append(slot)
+        self._give(slot, item)
+
+    def _give(self, slot: _Slot, item: ConversationItem) -> None:
+        """Answer `slot`'s call with `item`, written to the record as that call's standing."""
+        slot.item = item
+        self.run.record.settled[slot.call_id] = item
 
     def defer(self, call_id: str, thunk: _Thunk) -> None:
         """Answer the next call, `call_id`, by running `thunk` once every call is admitted."""
@@ -235,11 +235,10 @@ class _Answers:
         """
         run, shape = self.run, self.run.shape
         name, call_id = call_name(call), id_of(call)
-        earlier = self.earlier.get(call_id)
+        earlier = run.record.settled.get(call_id)
         if isinstance(earlier, RunRecord):
             args = parsed_arguments(call_arguments(call))
-            delegate = shape.delegates[name]
-            self.defer(call_id, partial(_run_call, run, delegate, call, args, earlier))
+            self.defer(call_id, partial(_run_call, run, shape.delegates[name], call, args))
             return
         if earlier is not None:
             self.answer(earlier)
@@ -264,7 +263,7 @@ class _Answers:
 
         gate = await run.decide(_gated(callee), call_id, args)
         if gate.action == "interrupt":
-            self.interruptions.append(
+            run.record.pending.append(
                 Interruption(name=name, arguments=args_json, call_id=call_id, agent=shape.agent)
             )
         elif gate.action == "reject":
@@ -275,23 +274,22 @@ class _Answers:
     async def settled(self) -> _Answered | None:
         """Run the deferred calls, then the handoffs: the answers and the agent switched to.
 
-        `None` if a call still waits on a human, a paused delegate's included: the run pauses on
-        the message, and every call's standing is written to its record (see `RunRecord`). A
-        handoff is made only past that point, after the message's other calls ran, so a pause
-        leaves it unmade, and resuming makes it once. Making it fires `on_handoff`, not the tool
-        hooks, and it is not one of `run.tool_calls`.
+        `None` if a call still waits on a human, a paused delegate's included, after the calls
+        the message waits on directly: the run pauses on the message, its record already showing
+        where every call stands. A handoff is made only past that point, after the message's other
+        calls ran, so a pause leaves it unmade, and resuming makes it once. Making it fires
+        `on_handoff`, not the tool hooks, and it is not one of `run.tool_calls`.
         """
-        run = self.run
+        run, record = self.run, self.run.record
         parallel = run.shape.model_settings.parallel_tool_calls is not False
         outcomes = await _execute([thunk for _, thunk in self.deferred], parallel)
-        for (slot, _), outcome in zip(self.deferred, outcomes, strict=True):
-            if isinstance(outcome, RunRecord):
-                slot.paused = outcome
-                self.interruptions.extend(outcome.pending)
-            else:
-                slot.item = outcome
-        if self.interruptions:
-            self._pause()
+        for (slot, _), item in zip(self.deferred, outcomes, strict=True):
+            paused = run.paused_delegate(slot.call_id) if item is None else None
+            if paused is not None:
+                record.pending.extend(paused.pending)
+            elif item is not None:
+                self._give(slot, item)
+        if record.pending:
             return None
         switched = None
         for slot, handoff in self.handoffs:
@@ -299,16 +297,8 @@ class _Answers:
                 await run.hooks.on_handoff(run.run_context, run.current_agent, handoff.agent)
             slot.item = tool_result(slot.call_id, f"Transferred to {handoff.agent.name}.")
             switched = handoff.agent
+        record.settled = {}
         return [slot.item for slot in self.slots if slot.item is not None], switched
-
-    def _pause(self) -> None:
-        """Write where the message's calls stand to the record, for resuming to take back."""
-        record = self.run.record
-        record.pending = self.interruptions
-        for slot in self.slots:
-            standing = slot.item if slot.paused is None else slot.paused
-            if standing is not None:
-                record.settled[slot.call_id] = standing
 
 
 async def _run_message_tool_calls(run: _Run, message: dict[str, Any]) -> _Answered | None:

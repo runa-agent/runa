@@ -175,14 +175,11 @@ def test_recording_a_decision_clears_the_previous_ones_message() -> None:
 
 
 def test_a_claimed_call_id_cannot_be_claimed_twice() -> None:
-    """The replay guard: an executed call id never runs again, until it's released."""
+    """The replay guard: an executed call id never runs again."""
     ledger = ApprovalLedger()
 
     assert ledger.claim("call_1") is True
     assert ledger.claim("call_1") is False
-
-    ledger.release("call_1")
-    assert ledger.claim("call_1") is True
 
 
 def test_the_ctx_app_code_receives_carries_no_governance() -> None:
