@@ -6,13 +6,12 @@ exception reports it, and a run's audit trail is one mapping keyed by it, so a p
 adding a member to `Phase`.
 """
 
-import asyncio
-import inspect
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+from runa._calling import call_app
 from runa._items import ConversationItem, latest_text
 from runa.exceptions import UserError
 
@@ -183,13 +182,7 @@ def _wrap(func: _Predicate, phase: Phase) -> _GuardrailFunction:
     """Wrap a `(value) -> bool` predicate into the guardrail function the runner calls."""
 
     async def wrapper(value: Any) -> GuardrailVerdict:
-        checked = _checked(phase, value)
-        if inspect.iscoroutinefunction(func):
-            tripped = await func(checked)
-        else:
-            # Off the event loop: a sync predicate that does blocking I/O (a moderation API
-            # call, ...) would otherwise stall every other concurrent run/tool call.
-            tripped = await asyncio.to_thread(func, checked)
+        tripped = await call_app(func, _checked(phase, value))
         return GuardrailVerdict(output_info=func.__doc__, tripped=bool(tripped))
 
     return wrapper

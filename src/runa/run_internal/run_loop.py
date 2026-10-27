@@ -5,7 +5,6 @@ The implementation behind `Agent.run`/`run_streamed`, not a seam of its own. Eve
 """
 
 import asyncio
-import inspect
 import time
 from collections.abc import AsyncIterator, Awaitable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -15,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter, ValidationError
 
+from runa._calling import call_app
 from runa._items import (
     ConversationItem,
     item_text,
@@ -272,12 +272,11 @@ class _Run:
 
 
 async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
-    """Resolve `shape.instructions`: a string passes through, a callable is called and awaited."""
+    """Resolve `shape.instructions`: a string passes through, a callable is run by `call_app`."""
     instructions = shape.instructions
     if not callable(instructions):
         return instructions
-    resolved: Any = instructions(run_context, shape.agent)
-    return await resolved if inspect.isawaitable(resolved) else resolved
+    return await call_app(instructions, run_context, shape.agent)
 
 
 def _parse_output(shape: AgentShape, text: str) -> Any:

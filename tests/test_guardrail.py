@@ -146,6 +146,17 @@ def test_async_predicate_is_awaited() -> None:
     assert result.tripped is True
 
 
+def test_an_awaitable_a_sync_predicate_returns_is_awaited() -> None:
+    """A predicate that returns a coroutine trips on what it resolves to, not on the coroutine."""
+
+    async def never(value: str) -> bool:
+        return False
+
+    result = _run(guardrail(lambda value: never(value)).input, "x")
+
+    assert result.tripped is False
+
+
 def test_declared_names_covers_every_declaration_shape() -> None:
     """`declared_names` names a bound entry and a bare `Guardrail` alike, in declared order."""
     assert declared_names([block_empty.input]) == ["block_empty"]

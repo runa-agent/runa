@@ -1,6 +1,7 @@
 """Tests for the `@approval` decorator and the `ApprovalLedger` that decides each call."""
 
 import asyncio
+import threading
 from dataclasses import fields
 from typing import Any, cast
 
@@ -97,15 +98,38 @@ def test_approval_wires_into_tool() -> None:
     assert _run(send_email.needs_approval, {"subject": "Refund request", "body": "hi"})
 
 
-def test_approval_unknown_param_raises_key_error() -> None:
-    """A predicate parameter that matches no tool argument fails loudly, not silently."""
+def test_approval_unknown_param_raises_type_error() -> None:
+    """A required predicate parameter that matches no tool argument fails loudly, not silently."""
 
     @approval
     def requires_review(subjct: str) -> bool:  # typo, on purpose
         return bool(subjct)
 
-    with pytest.raises(KeyError):
+    with pytest.raises(TypeError, match="subjct"):
         _run(requires_review, {"subject": "x"})
+
+
+def test_approval_lets_a_missing_argument_take_its_default() -> None:
+    """An argument the model left out takes the predicate's default, as it would for a `@tool`."""
+
+    @approval
+    def large(amount: float, note: str = "") -> bool:
+        return amount >= 50 and not note
+
+    assert _run(large, {"amount": 75})
+
+
+def test_a_sync_approval_runs_off_the_event_loop() -> None:
+    """A sync predicate runs in a worker thread, so blocking I/O in it can't stall the loop."""
+    threads: list[Any] = []
+
+    @approval
+    def blocking(amount: float) -> bool:
+        threads.append(threading.current_thread())
+        return True
+
+    assert _run(blocking, {"amount": 1})
+    assert threads[0] is not threading.main_thread()
 
 
 def test_a_call_with_no_decision_yet_interrupts() -> None:

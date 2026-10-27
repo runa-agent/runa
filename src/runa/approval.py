@@ -13,13 +13,15 @@ A run holds one ledger, shared by reference with every delegate the run starts, 
 the delegate whichever state it was made on. Both rest on a call id being unique across the whole
 run tree.
 
-Imports nothing from `runa` at runtime: `runa.tool` and `runa.run_internal.record` both import it.
+Imports nothing from `runa` at runtime but the leaf `runa._calling`: `runa.tool` and
+`runa.run_internal.record` both import it.
 """
 
-import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+from runa._calling import by_name
 
 if TYPE_CHECKING:
     from runa._types import RunContext
@@ -30,19 +32,13 @@ _NeedsApproval = Callable[["RunContext[Any]", dict[str, Any], str], Awaitable[bo
 def approval(func: Callable[..., bool | Awaitable[bool]]) -> _NeedsApproval:
     """Turn a predicate into a `@tool(needs_approval=...)` callable.
 
-    Write the predicate like the tool it guards: parameters are looked up by name from the
-    tool call's parsed arguments. Name a parameter `ctx` or `call_id` to receive the run
-    context or call id instead of a tool argument. Works on `def`, `async def`, and `lambda`.
+    Write the predicate like the tool it guards: it is bound and called exactly as `@tool` calls
+    its function. Works on `def`, `async def`, and `lambda`.
     """
-    names = list(inspect.signature(func).parameters)
+    invoke = by_name(func)
 
     async def wrapper(ctx: RunContext[Any], params: dict[str, Any], call_id: str) -> bool:
-        reserved = {"ctx": ctx, "call_id": call_id}
-        bound = {name: reserved[name] if name in reserved else params[name] for name in names}
-        result = func(**bound)
-        if inspect.isawaitable(result):
-            result = await result
-        return bool(result)
+        return bool(await invoke(ctx, params, call_id))
 
     return wrapper
 

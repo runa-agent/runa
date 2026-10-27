@@ -4,7 +4,6 @@
 reflection over its signature and docstring.
 """
 
-import asyncio
 import enum
 import inspect
 from collections.abc import Awaitable, Callable, Iterator
@@ -12,12 +11,12 @@ from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
+from runa._calling import RESERVED_PARAMS, by_name
 from runa._types import RunContext
 from runa.approval import _NeedsApproval as _ApprovalPredicate
 from runa.approval import predicate
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
 
-_RESERVED_PARAMS = ("ctx", "call_id")
 _NeedsApproval = bool | _ApprovalPredicate
 
 
@@ -142,7 +141,7 @@ def _schema_from_signature(func: Callable[..., Any]) -> tuple[dict[str, Any], li
     required: list[str] = []
     param_names: list[str] = []
     for param_name, param in signature.parameters.items():
-        if param_name in _RESERVED_PARAMS:
+        if param_name in RESERVED_PARAMS:
             continue
         param_names.append(param_name)
         properties[param_name] = _json_type(hints.get(param_name, param.annotation))
@@ -155,20 +154,6 @@ def _schema_from_signature(func: Callable[..., Any]) -> tuple[dict[str, Any], li
     if required:
         schema["required"] = required
     return schema, param_names
-
-
-def _bind_arguments(
-    func: Callable[..., Any], args: dict[str, Any], ctx: RunContext, call_id: str
-) -> dict[str, Any]:
-    """Build `func`'s call kwargs from the model's parsed `args`, plus any reserved parameters."""
-    reserved = {"ctx": ctx, "call_id": call_id}
-    bound: dict[str, Any] = {}
-    for name in inspect.signature(func).parameters:
-        if name in reserved:
-            bound[name] = reserved[name]
-        elif name in args:
-            bound[name] = args[name]
-    return bound
 
 
 @overload
@@ -209,21 +194,11 @@ def tool(
         schema, param_names = _schema_from_signature(fn)
         description, _ = _split_docstring(inspect.getdoc(fn) or "", param_names)
 
-        async def on_invoke_tool(ctx: RunContext, args: dict[str, Any], call_id: str) -> Any:
-            kwargs = _bind_arguments(fn, args, ctx, call_id)
-            if inspect.iscoroutinefunction(fn):
-                result = await fn(**kwargs)
-            else:
-                # Off the event loop: a sync tool that does blocking I/O (a sync HTTP call, a
-                # blocking DB driver) would otherwise stall every other concurrent run/tool call.
-                result = await asyncio.to_thread(fn, **kwargs)
-            return await result if inspect.isawaitable(result) else result
-
         return FunctionTool(
             name=name_override or fn.__name__,
             description=description_override or description,
             params_json_schema=schema,
-            on_invoke_tool=on_invoke_tool,
+            on_invoke_tool=by_name(fn),
             guardrails=bound,
             needs_approval=predicate(needs_approval),
         )
