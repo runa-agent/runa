@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any
 
 from runa._items import (
     ConversationItem,
-    answered_call_id,
     call_arguments,
     call_name,
     parsed_arguments,
@@ -259,20 +258,6 @@ type _Thunk = Callable[[], Awaitable[ConversationItem | None]]
 
 
 @dataclass
-class _Slot:
-    """One tool call's place in the message's answers, in the message's call order.
-
-    A call that was rejected, unknown, malformed or reused from a pause has its `item` from the
-    start; an approved one is given one once it has run, unless it is a delegate that paused, and
-    a handoff once the message settles with nothing left waiting. A call waiting on a human never
-    gets a slot.
-    """
-
-    call_id: str
-    item: ConversationItem | None = None
-
-
-@dataclass
 class _Answers:
     """One message's tool calls on their way to answers: each one admitted, then all settled.
 
@@ -281,32 +266,20 @@ class _Answers:
     order either way.
 
     Where the calls stand is the record's own, written as each one settles (see
-    `RunRecord.standings`): an answer, a wait on a human or a paused delegate's run. A message
-    the run pauses on is so already recorded as it stands, and the message a resumed run paused
-    on starts from there.
+    `RunRecord.standings`): an answer, a wait on a human or a paused delegate's run. The record
+    is the one store of the message's answers; only a handoff's, which never has a standing, is
+    held here until the message settles. A message the run pauses on is so already recorded as
+    it stands, and the message a resumed run paused on starts from there.
     """
 
     run: _Run
-    slots: list[_Slot] = field(default_factory=list)
-    deferred: list[tuple[_Slot, _Thunk]] = field(default_factory=list)
-    handoffs: list[tuple[_Slot, Handoff]] = field(default_factory=list)
+    message: dict[str, Any]
+    deferred: list[tuple[str, _Thunk]] = field(default_factory=list)
+    handoffs: list[tuple[str, Handoff]] = field(default_factory=list)
 
-    def answer(self, item: ConversationItem) -> None:
-        """Answer the next call with `item` as it is."""
-        slot = _Slot(answered_call_id(item))
-        self.slots.append(slot)
-        self._give(slot, item)
-
-    def _give(self, slot: _Slot, item: ConversationItem) -> None:
-        """Answer `slot`'s call with `item`, written to the record as that call's standing."""
-        slot.item = item
-        self.run.record.answer(slot.call_id, item)
-
-    def defer(self, call_id: str, thunk: _Thunk) -> None:
-        """Answer the next call, `call_id`, by running `thunk` once every call is admitted."""
-        slot = _Slot(call_id)
-        self.slots.append(slot)
-        self.deferred.append((slot, thunk))
+    def answer(self, call_id: str, item: ConversationItem) -> None:
+        """Answer call `call_id` with `item`, written to the record as its standing."""
+        self.run.record.answer(call_id, item)
 
     async def admit(self, call: dict[str, Any]) -> None:
         """Gate `call`, and answer it, defer it, or leave it waiting on a human.
@@ -324,28 +297,25 @@ class _Answers:
         suspended = run.record.suspended(call_id)
         if suspended is not None:
             delegate = shape.delegates[name]
-            self.defer(call_id, partial(_resume_call, run, delegate, call, suspended))
+            self.deferred.append((call_id, partial(_resume_call, run, delegate, call, suspended)))
             return
-        earlier = run.record.answered(call_id)
-        if earlier is not None:
-            self.answer(earlier)
+        if run.record.answered(call_id) is not None:
             return
 
         handoff = shape.handoffs.get(name)
         if handoff is not None:
-            slot = _Slot(call_id)
-            self.slots.append(slot)
-            self.handoffs.append((slot, handoff))
+            self.handoffs.append((call_id, handoff))
             return
 
         args_json = call_arguments(call)
         callee = _callee(shape, name)
         if callee is None:
-            self.answer(_answer(run, call_id, _failed(name, args_json, f"unknown tool {name}")))
+            failed = _failed(name, args_json, f"unknown tool {name}")
+            self.answer(call_id, _answer(run, call_id, failed))
             return
         args = _arguments_or_error(args_json)
         if isinstance(args, str):
-            self.answer(_answer(run, call_id, _failed(name, args_json, args)))
+            self.answer(call_id, _answer(run, call_id, _failed(name, args_json, args)))
             return
 
         gate = await _decide(run, callee.tool, call_id, args)
@@ -354,9 +324,9 @@ class _Answers:
                 Interruption(name=name, arguments=args_json, call_id=call_id, agent=shape.agent)
             )
         elif gate.action == "reject":
-            self.answer(tool_result(call_id, gate.message))
+            self.answer(call_id, tool_result(call_id, gate.message))
         else:
-            self.defer(call_id, partial(_run_call, run, callee, call, args))
+            self.deferred.append((call_id, partial(_run_call, run, callee, call, args)))
 
     async def settled(self) -> bool:
         """Run the deferred calls, then make the handoff, and fold the answers into the run.
@@ -375,24 +345,29 @@ class _Answers:
         run, record = self.run, self.run.record
         parallel = run.shape.model_settings.parallel_tool_calls is not False
         outcomes = await _execute([thunk for _, thunk in self.deferred], parallel)
-        for (slot, _), item in zip(self.deferred, outcomes, strict=True):
+        for (call_id, _), item in zip(self.deferred, outcomes, strict=True):
             if item is not None:
-                self._give(slot, item)
+                self.answer(call_id, item)
         if record.pending:
             return False
         switched: Agent | None = None
-        for slot, handoff in self.handoffs:
+        handed: dict[str, ConversationItem] = {}
+        for call_id, handoff in self.handoffs:
             if switched is not None:
                 error = f"error: this message already handed off to {switched.name}"
-                slot.item = tool_result(slot.call_id, error)
+                handed[call_id] = tool_result(call_id, error)
                 continue
             with run.span(handoff.tool_name, "handoff"):
                 await run.hooks.on_handoff(run.run_context, run.current_agent, handoff.agent)
-            slot.item = tool_result(slot.call_id, f"Transferred to {handoff.agent.name}.")
+            handed[call_id] = tool_result(call_id, f"Transferred to {handoff.agent.name}.")
             switched = handoff.agent
-        record.settle_message()
 
-        results = [slot.item for slot in self.slots if slot.item is not None]
+        results = [
+            item
+            for call_id in map(id_of, tool_calls(self.message))
+            if (item := handed.get(call_id) or record.answered(call_id)) is not None
+        ]
+        record.settle_message()
         run.transcript.record(*results)
         for result in results:
             run.notify(ToolOutput(result))
@@ -411,7 +386,7 @@ async def _answer_message(run: _Run, message: dict[str, Any]) -> bool:
     goes through here too, its calls continuing from where the pause left them. `True` once the
     message is answered, `False` if the run pauses on it.
     """
-    answers = _Answers(run)
+    answers = _Answers(run, message)
     for call in tool_calls(message):
         await answers.admit(call)
     return await answers.settled()
