@@ -17,7 +17,6 @@ from pydantic import TypeAdapter, ValidationError
 
 from runa._items import (
     ConversationItem,
-    answered_call_id,
     item_text,
     latest_user_text,
     tool_calls,
@@ -48,15 +47,10 @@ from runa.lifecycle import Hooks, LoggingHooks
 from runa.run import Run, RunStatus
 from runa.run_internal.agent_shape import AgentShape, shape_of
 from runa.run_internal.dispatch import _Dispatch
-from runa.run_internal.record import Interruption, RunRecord, RunTree, keep, paused, resuming
+from runa.run_internal.record import RunRecord, RunTree, keep, paused, resuming
 from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _stream_response
-from runa.run_internal.tool_execution import (
-    _Answered,
-    _continue_message_tool_calls,
-    _run_message_tool_calls,
-    _TurnOutcome,
-)
+from runa.run_internal.tool_execution import _Answered, _run_message_tool_calls, _TurnOutcome
 from runa.session import Session
 from runa.stream_events import AgentChanged, StreamEvent, ToolCalled, ToolOutput
 from runa.tool import FunctionTool
@@ -90,6 +84,9 @@ class _Run:
     `callers` are, for a delegate's run, the usages of the runs it is nested in, innermost first:
     each call it makes is charged to every one of them as well as to its own, as it is made. Empty
     for a root run.
+
+    `claims` is, for a resumed root run, the pause kept in `runa.db` it continues, and claims just
+    before its decided calls run. A delegate's run is never kept, so it claims nothing.
     """
 
     record: RunRecord
@@ -99,6 +96,7 @@ class _Run:
     hooks: _Dispatch[Any]
     emit: Emit | None = None
     callers: tuple[Usage, ...] = ()
+    claims: Pause | None = None
     _listed: AgentShape | None = field(default=None, init=False, repr=False)
 
     @property
@@ -227,15 +225,14 @@ class _Run:
         *,
         under: Span,
         paused: RunRecord | None = None,
-    ) -> Run | list[Interruption]:
+    ) -> Run | RunRecord:
         """Run `delegate`'s agent on `input` as call `call_id` of this run, nested in it.
 
-        The whole of a delegate's pause protocol is here. The call arrives claimed, like any
-        tool call. A delegate that pauses for approval gives the claim back, is stashed in this
-        run's record under `call_id` and comes back as its pending `Interruption`s, for this run
-        to pause on; the same call reaching here again, on resume, with that record as `paused`,
-        continues it instead of starting it over, and `input` is not read. Otherwise the returned
-        `Run` is completed or errored.
+        The call arrives claimed, like any tool call. A delegate that pauses for approval gives
+        the claim back and comes back as its paused record, for this run to pause on; the same
+        call reaching here again, on resume, with that record as `paused`, continues it instead
+        of starting it over, and `input` is not read. Otherwise the returned `Run` is completed
+        or errored.
 
         The nested run is this one with the delegate's own agent (and its ceilings), a record of
         its own over the same `context` and `user_id`, and an agent span under `under`. Each call
@@ -248,7 +245,7 @@ class _Run:
         `emit` (a stream event doesn't say which agent produced it, so the stream sees the
         delegate call and its output, not the delegate's tokens).
         """
-        given: str | _Resumed
+        given: str | None
         if paused is None:
             context = self.run_context
             record = RunRecord(
@@ -258,49 +255,23 @@ class _Run:
             )
             given = input
         else:
-            record = paused.resumed()
-            given = _Resumed.take(record)
+            record, given = paused.resumed(), None
         nested = replace(
             self,
             record=record,
             agent_span=_Spans(self.tree.trace, under.id).open(
-                record.agent.name, "agent", input=given if paused is None else None
+                record.agent.name, "agent", input=given
             ),
             session=None,
             emit=None,
             callers=self.payers,
+            claims=None,
         )
         run = await _within(nested, given)
         if run.status != "paused":
             return run
         self.tree.approvals.release(call_id)
-        self.record.delegates[call_id] = record
-        return record.pending
-
-
-@dataclass(frozen=True)
-class _Resumed:
-    """What a paused run is given to continue, in place of a message: what its pause set aside.
-
-    A paused record is the one fact that says a run resumes. `take` moves what it set aside off
-    the record, so the record reads as a run going on again, and a pause it comes to is its own:
-    `ready`, the results computed before the pause for calls that needed no approval, by call
-    id; `delegates`, each paused `.delegate` call's record, by call id; and, for a root run,
-    `pause`, the one kept in `runa.db` it claims. A delegate's run is never kept, so it claims
-    nothing.
-    """
-
-    ready: dict[str, ConversationItem]
-    delegates: dict[str, RunRecord]
-    pause: Pause | None = None
-
-    @classmethod
-    def take(cls, record: RunRecord, pause: Pause | None = None) -> _Resumed:
-        """What `record`'s pause set aside, taken off it."""
-        ready = {answered_call_id(result): result for result in record.ready_results}
-        resumed = cls(ready, record.delegates, pause)
-        record.pending, record.ready_results, record.delegates = [], [], {}
-        return resumed
+        return record
 
 
 async def _resolve_instructions(shape: AgentShape, run_context: RunContext) -> str | None:
@@ -405,15 +376,15 @@ def _check_token_budget(usage: Usage, max_tokens: int | None) -> None:
         raise MaxTokensExceeded(f"max tokens ({max_tokens}) exceeded: {spent} used")
 
 
-async def _record_answers(run: _Run, answered: _Answered) -> _TurnOutcome | None:
+async def _record_answers(run: _Run, answered: _Answered | None) -> _TurnOutcome | None:
     """Fold one message's answers into the run, following a handoff if there was one.
 
     The one way tool results enter a run, resumed or fresh. A message with a call still waiting
-    on a human records nothing and is the paused outcome instead, its answers so far carried in it.
+    on a human (`None`) records nothing in the transcript and is the paused outcome instead.
     """
-    results, interruptions, switched = answered
-    if interruptions:
-        return _TurnOutcome(None, interruptions, results)
+    if answered is None:
+        return _TurnOutcome(None, paused=True)
+    results, switched = answered
     run.transcript.record(*results)
     for result in results:
         run.notify(ToolOutput(result))
@@ -472,7 +443,7 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
         if not calls:
             text = item_text(message)
             await run.guard(Phase.OUTPUT, text)
-            return _TurnOutcome(_parse_output(run.shape, text), [], [], context_tokens)
+            return _TurnOutcome(_parse_output(run.shape, text), context_tokens=context_tokens)
         for call in calls:
             run.notify(ToolCalled(call))
         paused = await _record_answers(run, await _run_message_tool_calls(run, message))
@@ -480,22 +451,20 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             return paused
 
 
-async def _continue_paused(run: _Run, resumed: _Resumed) -> _TurnOutcome | None:
-    """Settle the message a resumed run paused on, so the turn loop goes on from there.
+async def _continue_paused(run: _Run) -> _TurnOutcome | None:
+    """Answer the message a resumed run paused on, so the turn loop goes on from there.
 
-    Every rule about continuing a pause is here, and how each of the message's calls continues
-    is beside the tool execution it shares. The message is the transcript's last, its calls
-    already announced, so there is no model call.
-    The root run's pause is claimed first, just before its decided calls run: a run that fails
-    before then leaves the pause in `runa.db`, resumable again. `None` once the message is
-    answered; the paused outcome if a call still waits on a human.
+    The message is the transcript's last, its calls already announced, so there is no model
+    call; each call continues from where the pause left it (see `RunRecord.settled`). The root
+    run's pause is claimed first, just before its decided calls run: a run that fails before
+    then leaves the pause in `runa.db`, resumable again. `None` once the message is answered;
+    the paused outcome if a call still waits on a human.
     """
-    pause = resumed.pause
+    pause = run.claims
     if pause is not None and not await pause.claim():
         raise RunAlreadyResumed(pause.run_id)
     message = run.record.paused_message
-    answered = await _continue_message_tool_calls(run, message, resumed.ready, resumed.delegates)
-    return await _record_answers(run, answered)
+    return await _record_answers(run, await _run_message_tool_calls(run, message))
 
 
 async def _traced(run: Awaitable[Run], trace: Trace) -> Run:
@@ -576,12 +545,12 @@ async def _guarded(turn: Awaitable[Run], run: _Run) -> Run:
     return _errored(failure, run)
 
 
-type _Given = str | list[ConversationItem] | _Resumed
-"""What a run is given: a fresh turn's input, or what a resumed run's pause set aside."""
+type _Given = str | list[ConversationItem] | None
+"""What a run is given: a fresh turn's input, or `None` to resume the pause its record holds."""
 
 
 async def _within(run: _Run, given: _Given) -> Run:
-    """Run the record's agent on `given`, a fresh turn's input or its pause to resume, guarded.
+    """Run the record's agent on `given`, a fresh turn's input or `None` to resume, guarded.
 
     Every entry point ends here once its run is built. Listing the MCP tools (which may start a
     subprocess), reading the session, claiming a resumed run's pause and keeping a pause in
@@ -676,11 +645,10 @@ async def _finish(run: _Run, outcome: _TurnOutcome) -> Run:
     `usage` is the `RunContext`'s, every turn and delegate included. Closes the agent span;
     exporting the trace is `_traced`'s.
     """
-    record, transcript = run.record, run.transcript
+    transcript = run.transcript
     close_span(run.agent_span, output=outcome.final_output)
 
-    if outcome.interruptions:
-        record.pending, record.ready_results = outcome.interruptions, outcome.ready_results
+    if outcome.paused:
         return run.reported(status="paused")
 
     # The next call's history starts from the same cut compaction made mid-run.
@@ -709,9 +677,9 @@ async def _drive(run: _Run, given: _Given) -> Run:
     charged under it.
     """
     with charging(run.spans):
-        if isinstance(given, _Resumed):
+        if given is None:
             await run.hooks.on_agent_start(run.run_context, run.current_agent)
-            paused = await _continue_paused(run, given)
+            paused = await _continue_paused(run)
         else:
             session = run.session
             prior = await session.get_items() if session is not None else []
@@ -793,8 +761,9 @@ async def _resume(
         session=session,
         hooks=dispatch,
         emit=emit,
+        claims=pause,
     )
-    return await _traced(_within(run, _Resumed.take(pause.record, pause)), pause.tree.trace)
+    return await _traced(_within(run, None), pause.tree.trace)
 
 
 __all__ = ["_resume", "_run_async", "_run_turns"]

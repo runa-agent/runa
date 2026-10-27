@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from runa.agent import Agent
     from runa.run_state import RunState
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 """The version a pause is written at; a row from `READABLE_SINCE` up to it is read as is.
 
 A field added with a default is no new version: an older row reads with the default, so its pause
@@ -53,7 +53,7 @@ still resumes. Bump this, and `READABLE_SINCE` to match, only when a stored fiel
 changes, which strands every pause kept before it.
 """
 
-READABLE_SINCE = 8
+READABLE_SINCE = 10
 """The oldest `schema_version` this Runa still resumes."""
 
 
@@ -132,7 +132,7 @@ class RunRecord(BaseModel):
     """One run, as it would be resumed: everything it is that outlives the call running it.
 
     The turn loop works on one directly; a `Pause` holds it, and so does a paused delegate's
-    entry in its caller's `delegates`. Every field is data or written as data (an agent by its
+    entry in its caller's `settled`. Every field is data or written as data (an agent by its
     name), so all of it is serialized. What only the call running it holds -- its hooks, its
     `Session` object, its stream, its open span -- isn't here, and isn't resumed.
 
@@ -148,12 +148,12 @@ class RunRecord(BaseModel):
       measured against.
     * `elapsed`: the seconds the run has spent running, across its resumes: what its `timeout`
       is measured against. Time spent paused doesn't count.
-    * `pending`: the calls a paused run waits on, all in its `paused_message`. Empty while the
-      run is going.
-    * `ready_results`: results already computed for that message's calls that needed no
-      approval, carried forward rather than run again.
-    * `delegates`: each paused `.delegate` call's own record, by call id, set aside until
-      resuming this run reaches the same call again.
+    * `pending`: the calls a paused run waits on, a paused delegate's included, all in its
+      `paused_message`. Empty while the run is going.
+    * `settled`: where the rest of that message's calls stand, by call id: the result one was
+      already answered with, reused rather than run again, or a paused `.delegate` call's own
+      record, continued where it stopped. A handoff is in neither: a run pauses before
+      making one, so resuming makes it. Empty while the run is going.
     """
 
     start: _AgentRef
@@ -165,8 +165,9 @@ class RunRecord(BaseModel):
     turns: int = 0
     elapsed: float = 0.0
     pending: list[Interruption] = Field(default_factory=list)
-    ready_results: list[ConversationItem] = Field(default_factory=list)
-    delegates: dict[str, RunRecord] = Field(default_factory=dict)
+    settled: dict[
+        str, Annotated[RunRecord | ConversationItem, Field(union_mode="left_to_right")]
+    ] = Field(default_factory=dict)
 
     @property
     def paused_message(self) -> ConversationItem:
@@ -183,7 +184,7 @@ class RunRecord(BaseModel):
                 "run_context": RunContext(
                     self.run_context.context, self.run_context.user_id, usage
                 ),
-                "delegates": dict(self.delegates),
+                "settled": dict(self.settled),
             }
         )
 

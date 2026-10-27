@@ -1,18 +1,21 @@
-"""tool_execution.py: one message's tool calls, delegates and handoffs.
+"""tool_execution.py: one message's tool calls, delegates and handoffs, and where they stand.
 
-Part of the turn loop, kept in its own file for length. These steps are passed the loop's run,
-imported for its type only, and use what it can do (claim a call, decide its approval, guard it,
-fire a hook, run a delegate), not how it is laid out.
+What happens to each call of a model message lives here, a pause included: which calls were
+answered, which wait on a human and which delegate paused, written to the run's record when it
+pauses on the message and taken back from it when resuming answers that message again. These
+steps are passed the loop's run, imported for its type only, and use what it can do (claim a
+call, decide its approval, guard it, fire a hook, run a delegate), not how it is laid out.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from runa._items import (
     ConversationItem,
+    answered_call_id,
     call_arguments,
     call_name,
     parsed_arguments,
@@ -23,7 +26,7 @@ from runa._items import call_id as id_of  # `call_id` here is the id of the call
 from runa._log import logger
 from runa.exceptions import ToolError
 from runa.guardrail import Phase
-from runa.handoff import Delegate
+from runa.handoff import Delegate, Handoff
 from runa.run_internal.record import Interruption, RunRecord
 from runa.tool import FunctionTool, ToolCall
 from runa.tracing.spans import Span
@@ -39,14 +42,14 @@ async def _run_call(
     call: dict[str, Any],
     args: dict[str, Any],
     paused: RunRecord | None = None,
-) -> ConversationItem | list[Interruption]:
+) -> ConversationItem | RunRecord:
     """Run one approved call end to end. Every tool call and delegate call goes through this.
 
     In order, the steps are: claim the call, fire `on_tool_start`, guard its input, invoke it,
     guard its output, record it, then fire `on_tool_end`. Only the invoke step differs: a tool
     runs its function, and a `Delegate` runs a nested run of this one. A delegate that pauses for
-    approval comes back as its interruptions, because the call hasn't finished. Its call is run
-    again with the delegate's `paused` record and continues where it stopped, so its start is not
+    approval comes back as its paused record, because the call hasn't finished. Its call is run
+    again with that record as `paused` and continues where it stopped, so its start is not
     repeated and it ends once.
 
     `args` are the call's arguments as the gate already parsed them; the raw JSON is kept only
@@ -67,7 +70,7 @@ async def _run_call(
             outcome = await _delegated(run, callee, call_id, args, args_json, span, paused)
         else:
             outcome = await _invoked(run, tool, call_id, args, args_json, span)
-        if isinstance(outcome, list):
+        if isinstance(outcome, RunRecord):
             span.output = "paused for approval"
             return outcome
         result, recorded = outcome
@@ -103,15 +106,15 @@ async def _delegated(
     args_json: str,
     span: Span,
     paused: RunRecord | None,
-) -> tuple[Any, ToolCall] | list[Interruption]:
+) -> tuple[Any, ToolCall] | RunRecord:
     """Invoke `delegate` as a nested run under `span`: its output and the record of the call.
 
     The record's `children` are the calls the nested run made. A delegate that errored fails the
-    call, and one that paused for approval comes back as its interruptions.
+    call, and one that paused for approval comes back as its paused record.
     """
     input = str(args.get("input", ""))
     nested = await run.delegate(delegate, input, call_id, under=span, paused=paused)
-    if isinstance(nested, list):
+    if isinstance(nested, RunRecord):
         return nested
     name = delegate.tool.name
     if nested.status == "completed":
@@ -162,24 +165,27 @@ def _answer(run: _Run, call_id: str, call: ToolCall) -> ConversationItem:
     return tool_result(call_id, call.output)
 
 
-type _Thunk = Callable[[], Awaitable[ConversationItem | list[Interruption]]]
+type _Thunk = Callable[[], Awaitable[ConversationItem | RunRecord]]
 
 
 @dataclass
 class _Slot:
     """One tool call's place in the message's answers, in the message's call order.
 
-    A call that was handed off, rejected, unknown, malformed or reused from a pause has its
-    `item` from the start; an approved one is given one once it has run. A call waiting on a
-    human never gets a slot, and a delegate that paused leaves its own empty: neither has
-    finished, so neither has a result to send the model, and only the filled slots are answers.
+    A call that was rejected, unknown, malformed or reused from a pause has its `item` from the
+    start; an approved one is given one once it has run, and a handoff once the message settles
+    with nothing left waiting. A delegate that paused has its record as `paused` instead, and no
+    item: it hasn't finished, so it has no result to send the model. A call waiting on a human
+    never gets a slot.
     """
 
+    call_id: str
     item: ConversationItem | None = None
+    paused: RunRecord | None = None
 
 
-type _Answered = tuple[list[ConversationItem], list[Interruption], Agent | None]
-"""One message's answers so far, the calls still waiting on a human, and the agent handed off to."""
+type _Answered = tuple[list[ConversationItem], Agent | None]
+"""One message's answers, in its call order, and the agent handed off to."""
 
 
 @dataclass
@@ -189,41 +195,61 @@ class _Answers:
     Calls are admitted one by one, in order, then the approved ones run concurrently, unless the
     agent's `model_settings.parallel_tool_calls` is `False`. Answers keep the message's call
     order either way.
+
+    The only place that knows where a message's calls stand across a pause: built, it takes the
+    record's `settled` (and `pending`) off it, which only the message a resumed run paused on has;
+    pausing on a message writes them back.
     """
 
     run: _Run
+    earlier: dict[str, ConversationItem | RunRecord] = field(init=False)
     slots: list[_Slot] = field(default_factory=list)
     deferred: list[tuple[_Slot, _Thunk]] = field(default_factory=list)
     interruptions: list[Interruption] = field(default_factory=list)
-    switched: Agent | None = None
+    handoffs: list[tuple[_Slot, Handoff]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        record = self.run.record
+        self.earlier, record.settled, record.pending = record.settled, {}, []
 
     def answer(self, item: ConversationItem) -> None:
         """Answer the next call with `item` as it is."""
-        self.slots.append(_Slot(item))
+        self.slots.append(_Slot(answered_call_id(item), item))
 
-    def defer(self, thunk: _Thunk) -> None:
-        """Answer the next call by running `thunk` once every call is admitted."""
-        slot = _Slot()
+    def defer(self, call_id: str, thunk: _Thunk) -> None:
+        """Answer the next call, `call_id`, by running `thunk` once every call is admitted."""
+        slot = _Slot(call_id)
         self.slots.append(slot)
         self.deferred.append((slot, thunk))
 
     async def admit(self, call: dict[str, Any]) -> None:
         """Gate `call`, and answer it, defer it, or leave it waiting on a human.
 
-        A tool's call and a delegate's are gated alike: one no tool answers, or whose arguments
-        don't parse, fails; any other is decided by the run's approval ledger, then run by
-        `_run_call`, rejected, or left waiting. A handoff is the one call that isn't gated,
-        because it is a switch rather than a call. It fires `on_handoff`, not the tool hooks, and
-        is not one of `run.tool_calls`.
+        A call a pause settled isn't gated again: its result is reused, never run again, and a
+        delegate's that paused continues that delegate's run, admitted and started before the
+        pause. A tool's call and a delegate's are otherwise gated alike: one no tool answers, or
+        whose arguments don't parse, fails; any other is decided by the run's approval ledger
+        (where one that waited on a human finds its decision), then run by `_run_call`, rejected,
+        or left waiting. A handoff is the one call that isn't gated, because it is a switch rather
+        than a call: it is only made once the message settles (see `settled`).
         """
         run, shape = self.run, self.run.shape
         name, call_id = call_name(call), id_of(call)
+        earlier = self.earlier.get(call_id)
+        if isinstance(earlier, RunRecord):
+            args = parsed_arguments(call_arguments(call))
+            delegate = shape.delegates[name]
+            self.defer(call_id, partial(_run_call, run, delegate, call, args, earlier))
+            return
+        if earlier is not None:
+            self.answer(earlier)
+            return
+
         handoff = shape.handoffs.get(name)
         if handoff is not None:
-            self.switched = handoff.agent
-            with run.span(handoff.tool_name, "handoff"):
-                await run.hooks.on_handoff(run.run_context, run.current_agent, handoff.agent)
-            self.answer(tool_result(call_id, f"Transferred to {handoff.agent.name}."))
+            slot = _Slot(call_id)
+            self.slots.append(slot)
+            self.handoffs.append((slot, handoff))
             return
 
         args_json = call_arguments(call)
@@ -244,73 +270,69 @@ class _Answers:
         elif gate.action == "reject":
             self.answer(tool_result(call_id, gate.message))
         else:
-            self.defer(partial(_run_call, run, callee, call, args))
+            self.defer(call_id, partial(_run_call, run, callee, call, args))
 
-    def go_on(self, call: dict[str, Any], paused: RunRecord) -> None:
-        """Defer `call`, a delegate's that paused with `paused` as its record, to continue it."""
-        delegate = self.run.shape.delegates[call_name(call)]
-        args = parsed_arguments(call_arguments(call))
-        self.defer(partial(_run_call, self.run, delegate, call, args, paused))
+    async def settled(self) -> _Answered | None:
+        """Run the deferred calls, then the handoffs: the answers and the agent switched to.
 
-    async def settled(self) -> _Answered:
-        """Run the deferred calls, and return the message's answers."""
-        parallel = self.run.shape.model_settings.parallel_tool_calls is not False
+        `None` if a call still waits on a human, a paused delegate's included: the run pauses on
+        the message, and every call's standing is written to its record (see `RunRecord`). A
+        handoff is made only past that point, after the message's other calls ran, so a pause
+        leaves it unmade, and resuming makes it once. Making it fires `on_handoff`, not the tool
+        hooks, and it is not one of `run.tool_calls`.
+        """
+        run = self.run
+        parallel = run.shape.model_settings.parallel_tool_calls is not False
         outcomes = await _execute([thunk for _, thunk in self.deferred], parallel)
         for (slot, _), outcome in zip(self.deferred, outcomes, strict=True):
-            if isinstance(outcome, list):
-                self.interruptions.extend(outcome)  # a paused delegate: its slot stays empty
+            if isinstance(outcome, RunRecord):
+                slot.paused = outcome
+                self.interruptions.extend(outcome.pending)
             else:
                 slot.item = outcome
-        answered = [slot.item for slot in self.slots if slot.item is not None]
-        return answered, self.interruptions, self.switched
+        if self.interruptions:
+            self._pause()
+            return None
+        switched = None
+        for slot, handoff in self.handoffs:
+            with run.span(handoff.tool_name, "handoff"):
+                await run.hooks.on_handoff(run.run_context, run.current_agent, handoff.agent)
+            slot.item = tool_result(slot.call_id, f"Transferred to {handoff.agent.name}.")
+            switched = handoff.agent
+        return [slot.item for slot in self.slots if slot.item is not None], switched
+
+    def _pause(self) -> None:
+        """Write where the message's calls stand to the record, for resuming to take back."""
+        record = self.run.record
+        record.pending = self.interruptions
+        for slot in self.slots:
+            standing = slot.item if slot.paused is None else slot.paused
+            if standing is not None:
+                record.settled[slot.call_id] = standing
 
 
-async def _run_message_tool_calls(run: _Run, message: dict[str, Any]) -> _Answered:
-    """Execute (or defer for approval) every tool call in `message`, as `_Answers` admits them."""
+async def _run_message_tool_calls(run: _Run, message: dict[str, Any]) -> _Answered | None:
+    """Answer every tool call in `message` as `_Answers` admits them; `None` if the run pauses.
+
+    The message a resumed run paused on goes through here too, its calls continuing from where
+    the pause left them.
+    """
     answers = _Answers(run)
     for call in tool_calls(message):
         await answers.admit(call)
     return await answers.settled()
 
 
-async def _continue_message_tool_calls(
-    run: _Run,
-    message: dict[str, Any],
-    ready: Mapping[str, ConversationItem],
-    delegates: Mapping[str, RunRecord],
-) -> _Answered:
-    """Settle the calls of `message`, the one the run paused on, from where the pause left them.
-
-    A call answered before the pause (`ready`, by call id) is reused, never run again. A
-    delegate call whose delegate paused (`delegates`, its record by call id) continues that
-    delegate's run: it was admitted and started before the pause, so neither happens again.
-    Every other call is admitted again, and one that waited on a human finds its decision on the
-    ledger. So is a handoff, answered before the pause but never made, because the run paused
-    before switching.
-    """
-    answers = _Answers(run)
-    for call in tool_calls(message):
-        call_id = id_of(call)
-        if call_id in delegates:
-            answers.go_on(call, delegates[call_id])
-        elif call_id in ready and call_name(call) not in run.shape.handoffs:
-            answers.answer(ready[call_id])
-        else:
-            await answers.admit(call)
-    return await answers.settled()
-
-
 @dataclass
 class _TurnOutcome:
-    """How the turn loop came out: an answer, or interruptions waiting on a human.
+    """How the turn loop came out: an answer, or a pause on calls waiting on a human.
 
-    Only what the loop couldn't record on the run as it went; the generated items and which
-    agent ended up answering are read off the run itself.
+    Only what the loop couldn't record on the run as it went; the generated items, which agent
+    ended up answering and what a pause waits on are read off the run itself.
     """
 
     final_output: Any
-    interruptions: list[Interruption]
-    ready_results: list[ConversationItem]
+    paused: bool = False
     context_tokens: int = 0
 
 
@@ -330,7 +352,6 @@ async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -
 
 __all__ = [
     "_TurnOutcome",
-    "_continue_message_tool_calls",
     "_run_call",
     "_run_message_tool_calls",
 ]

@@ -276,8 +276,7 @@ _RUN = {
     "pending": [
         {"name": "dangerous", "arguments": "{}", "call_id": "call_1", "agent": "TestAgent"}
     ],
-    "ready_results": [],
-    "delegates": {},
+    "settled": {},
 }
 _TRANSCRIPT = {
     "_prior": [],
@@ -288,13 +287,8 @@ _TRANSCRIPT = {
 }
 
 _KEPT_AT = {
-    8: {
-        "schema_version": 8,
-        "tree": _TREE,
-        "run": {**_RUN, "transcript": {**_TRANSCRIPT, "_tool_calls": []}},
-    },
-    9: {
-        "schema_version": 9,
+    10: {
+        "schema_version": 10,
         "tree": _TREE,
         "run": {**_RUN, "transcript": _TRANSCRIPT, "tool_calls": []},
     },
@@ -405,6 +399,43 @@ def test_a_handed_off_run_that_pauses_again_is_kept_under_the_first_agent() -> N
 
     assert again.status == "paused"
     assert _load(main(), again.run_id).pending[0].call_id == "call_2"
+
+
+def test_a_handoff_beside_a_call_that_pauses_is_made_once_on_resume() -> None:
+    """The run pauses before switching, so the handoff's hook and span happen only on resume."""
+
+    @tool(needs_approval=True)
+    def dangerous() -> str:
+        """Do something that needs a human's OK."""
+        return "done"
+
+    class _Handoffs(Hooks):
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def on_handoff(self, context: Any, from_agent: Any, to_agent: Any) -> None:
+            self.seen.append(f"{from_agent.name}->{to_agent.name}")
+
+    both = tool_call_response("dangerous", "{}")
+    both.output[0]["tool_calls"].append(
+        tool_call_response("transfer_to_target", "{}", "call_2").output[0]["tool_calls"][0]
+    )
+    target = agent_class("Target", ScriptedModel([text_response("done")]))
+    main = agent_class("Main", ScriptedModel([both]), tools=[dangerous], subagents=[target.handoff])
+    hooks, agent = _Handoffs(), main()
+
+    first = agent.run_sync("go", hooks=hooks)
+    assert first.status == "paused"
+    assert hooks.seen == []
+    state = first.to_state()
+    state.approve(state.pending[0])
+    resumed = agent.run_sync(state, hooks=hooks)
+
+    assert resumed.output == "done"
+    assert hooks.seen == ["Main->Target"]
+    assert resumed.trace is first.trace
+    handoffs = [span.name for span in resumed.trace.spans if span.type == "handoff"]
+    assert handoffs == ["transfer_to_target"]
 
 
 def test_load_resolves_the_paused_interruptions_agent_from_its_name() -> None:
