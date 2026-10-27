@@ -18,7 +18,6 @@ start a subprocess) and the model client (`resolve_model`, which needs the provi
 """
 
 import inspect
-from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -168,19 +167,38 @@ def _checked_mcp(servers: tuple[Any, ...]) -> tuple[Any, ...]:
     return servers
 
 
-def _checked_unique(agent_name: str, names: Iterable[str]) -> None:
-    """Refuse two callables offered under one name: a call could only ever reach one of them.
+type Callee = FunctionTool | Delegate | Handoff
+"""What a name an agent offers the model refers to: a tool, a delegate or a handoff."""
+
+
+def _name_of(callee: Callee) -> str:
+    """The name the model calls `callee` by."""
+    match callee:
+        case Handoff():
+            return callee.tool_name
+        case Delegate():
+            return callee.tool.name
+        case _:
+            return callee.name
+
+
+def _callees(agent_name: str, entries: Iterable[Callee]) -> dict[str, Callee]:
+    """`entries` by the name the model calls each, refusing two under one name.
 
     The name is what the model calls, what a call is dispatched by and what a sticky approval is
     keyed by, so a duplicate would leave all but one of them unreachable, silently.
     """
-    duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
-    if duplicates:
-        raise UserError(
-            f"{agent_name} offers the model more than one tool named {duplicates[0]!r}, so only "
-            f"one of them could ever be called. Rename the @tool, pass tool_name= to the "
-            f"subagent's .handoff/.delegate, or give each MCP server its own name=."
-        )
+    callees: dict[str, Callee] = {}
+    for entry in entries:
+        name = _name_of(entry)
+        if name in callees:
+            raise UserError(
+                f"{agent_name} offers the model more than one tool named {name!r}, so only "
+                f"one of them could ever be called. Rename the @tool, pass tool_name= to the "
+                f"subagent's .handoff/.delegate, or give each MCP server its own name=."
+            )
+        callees[name] = entry
+    return callees
 
 
 @dataclass(frozen=True)
@@ -257,35 +275,22 @@ def resolve(settings: Mapping[str, Any]) -> Resolved:
 
 @dataclass(frozen=True)
 class AgentShape(Resolved):
-    """One agent's settings as the turn loop uses them, wired into its agent graph.
-
-    Every tool, delegate and handoff it offers has a name no other one has: a shape where two
-    would share one is a `UserError` instead.
-    """
+    """One agent's settings as the turn loop uses them, wired into its agent graph."""
 
     agent: Agent
-    handoffs: dict[str, Handoff]
-    """Its `subagents` wired up as handoffs, keyed by the tool name that triggers each."""
-    delegates: dict[str, Delegate]
-    """Its `subagents` wired up as delegates, keyed by the tool name that triggers each."""
+    callees: dict[str, Callee]
+    """Every tool, delegate and handoff it offers, by the name the model calls it: tools first,
+    then delegates, then handoffs. A name is offered once: a shape where two would share one is
+    a `UserError` instead."""
 
     @classmethod
     def of(cls, agent: Agent, resolved: Resolved) -> AgentShape:
         """`agent`'s shape: its settings as `resolved`, wired into a subagent graph built for it."""
         handoffs, delegates = _subagent_graph(agent)
-        _checked_unique(
-            agent.name,
-            (
-                *(tool.name for tool in resolved.tools),
-                *(delegate.tool.name for delegate in delegates),
-                *(handoff.tool_name for handoff in handoffs),
-            ),
-        )
         return cls(
             **{field.name: getattr(resolved, field.name) for field in fields(Resolved)},
             agent=agent,
-            handoffs={handoff.tool_name: handoff for handoff in handoffs},
-            delegates={delegate.tool.name: delegate for delegate in delegates},
+            callees=_callees(agent.name, (*resolved.tools, *delegates, *handoffs)),
         )
 
     async def with_mcp_tools(self) -> AgentShape:
@@ -293,33 +298,37 @@ class AgentShape(Resolved):
         if not self.mcp_servers:
             return self
         listed = [tool for server in self.mcp_servers for tool in await server.list_tools()]
-        shape = replace(self, tools=(*self.tools, *listed))
-        _checked_unique(self.name, (schema.name for schema in shape.offered))
-        return shape
+        tools = (*self.tools, *listed)
+        callees = _callees(self.name, (*tools, *self.delegates, *self.handoffs))
+        return replace(self, tools=tools, callees=callees)
 
     @cached_property
-    def tools_by_name(self) -> dict[str, FunctionTool]:
-        """Every tool, its MCP servers' included once listed, by the name the model calls it."""
-        return {tool.name: tool for tool in self.tools}
+    def handoffs(self) -> tuple[Handoff, ...]:
+        """Its `subagents` wired up as handoffs, in declaration order."""
+        return tuple(callee for callee in self.callees.values() if isinstance(callee, Handoff))
+
+    @cached_property
+    def delegates(self) -> tuple[Delegate, ...]:
+        """Its `subagents` wired up as delegates, in declaration order."""
+        return tuple(callee for callee in self.callees.values() if isinstance(callee, Delegate))
 
     @cached_property
     def offered(self) -> list[ToolSchema]:
-        """Every tool, delegate and handoff, in the order the model is offered them.
+        """Every callee, in the order the model is offered them.
 
         A handoff takes no structured input from the model: calling it is itself the signal to
         switch agents, so its schema's `parameters` is always an empty object.
         """
         no_input = {"type": "object", "properties": {}}
-        return [
-            *(
-                ToolSchema(tool.name, tool.description or "", tool.params_json_schema or no_input)
-                for tool in (*self.tools, *(delegate.tool for delegate in self.delegates.values()))
-            ),
-            *(
-                ToolSchema(handoff.tool_name, handoff.tool_description or "", no_input)
-                for handoff in self.handoffs.values()
-            ),
-        ]
+        offered: list[ToolSchema] = []
+        for name, callee in self.callees.items():
+            if isinstance(callee, Handoff):
+                offered.append(ToolSchema(name, callee.tool_description or "", no_input))
+                continue
+            tool = callee.tool if isinstance(callee, Delegate) else callee
+            schema = tool.params_json_schema or no_input
+            offered.append(ToolSchema(name, tool.description or "", schema))
+        return offered
 
     def resolve_model(self) -> Model:
         """This agent's `model`: a string names a provider's model, anything else is one.
@@ -344,9 +353,9 @@ def subagent_edges(agent: Agent) -> Iterator[tuple[Mode, Agent]]:
     picks between.
     """
     shape = shape_of(agent)
-    for handoff in shape.handoffs.values():
+    for handoff in shape.handoffs:
         yield "handoff", handoff.agent
-    for delegate in shape.delegates.values():
+    for delegate in shape.delegates:
         yield "delegate", delegate.agent
 
 
@@ -369,6 +378,7 @@ def reachable(agent: Agent) -> Iterator[Agent]:
 
 __all__ = [
     "AgentShape",
+    "Callee",
     "Resolved",
     "RunPolicy",
     "reachable",

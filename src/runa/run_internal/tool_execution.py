@@ -41,7 +41,6 @@ from runa.tracing.spans import Span
 if TYPE_CHECKING:
     from runa.agent import Agent
     from runa.run import Run
-    from runa.run_internal.agent_shape import AgentShape
     from runa.run_internal.run_loop import _Run
 
 
@@ -63,13 +62,11 @@ class _Callee:
     invoke: Callable[[_Run, dict[str, Any], dict[str, Any], Span], Awaitable[_Outcome]]
 
 
-def _callee(shape: AgentShape, name: str) -> _Callee | None:
-    """The tool or delegate the model calls `name`, or `None` when neither answers to it."""
-    delegate = shape.delegates.get(name)
-    if delegate is not None:
-        return _Callee(delegate.tool, "delegate", partial(_delegate_invoked, delegate))
-    tool = shape.tools_by_name.get(name)
-    return None if tool is None else _Callee(tool, "tool", partial(_invoked, tool))
+def _callee(target: FunctionTool | Delegate) -> _Callee:
+    """`target`, a tool or a delegate, as the gate runs it."""
+    if isinstance(target, Delegate):
+        return _Callee(target.tool, "delegate", partial(_delegate_invoked, target))
+    return _Callee(target, "tool", partial(_invoked, target))
 
 
 async def _run_call(
@@ -294,22 +291,20 @@ class _Answers:
         """
         run, shape = self.run, self.run.shape
         name, call_id = call_name(call), id_of(call)
+        target = shape.callees.get(name)
         suspended = run.record.suspended(call_id)
-        if suspended is not None:
-            delegate = shape.delegates[name]
-            self.deferred.append((call_id, partial(_resume_call, run, delegate, call, suspended)))
+        if suspended is not None and isinstance(target, Delegate):
+            self.deferred.append((call_id, partial(_resume_call, run, target, call, suspended)))
             return
         if run.record.answered(call_id) is not None:
             return
 
-        handoff = shape.handoffs.get(name)
-        if handoff is not None:
-            self.handoffs.append((call_id, handoff))
+        if isinstance(target, Handoff):
+            self.handoffs.append((call_id, target))
             return
 
         args_json = call_arguments(call)
-        callee = _callee(shape, name)
-        if callee is None:
+        if target is None:
             failed = _failed(name, args_json, f"unknown tool {name}")
             self.answer(call_id, _answer(run, call_id, failed))
             return
@@ -318,6 +313,7 @@ class _Answers:
             self.answer(call_id, _answer(run, call_id, _failed(name, args_json, args)))
             return
 
+        callee = _callee(target)
         gate = await _decide(run, callee.tool, call_id, args)
         if gate.action == "interrupt":
             run.record.wait(

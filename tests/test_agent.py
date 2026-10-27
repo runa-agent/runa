@@ -38,7 +38,7 @@ from runa.transcript import Transcript
 
 def _handoff_names(agent: Agent) -> list[str]:
     """Names of the agents an agent hands off to."""
-    return [handoff.agent.name for handoff in built_shape(agent).handoffs.values()]
+    return [handoff.agent.name for handoff in built_shape(agent).handoffs]
 
 
 def _tool_names(agent: Agent) -> list[str]:
@@ -48,7 +48,7 @@ def _tool_names(agent: Agent) -> list[str]:
 
 def _delegate_names(agent: Agent) -> list[str]:
     """The tool names an agent's delegates are called by."""
-    return [delegate.tool.name for delegate in built_shape(agent).delegates.values()]
+    return [delegate.tool.name for delegate in built_shape(agent).delegates]
 
 
 class Researcher(Agent):
@@ -216,7 +216,7 @@ def test_delegate_adds_only_to_tools() -> None:
 
     agent = Main()
 
-    assert built_shape(agent).handoffs == {}
+    assert built_shape(agent).handoffs == ()
     assert _delegate_names(agent) == [Delegate.from_agent(Researcher()).tool.name]
 
 
@@ -251,9 +251,9 @@ def test_two_agents_listing_each_other_build_into_one_cycle() -> None:
 
     triage = Triage()
 
-    (billing,) = [delegate.agent for delegate in built_shape(triage).delegates.values()]
+    (billing,) = [delegate.agent for delegate in built_shape(triage).delegates]
     assert billing is not None
-    assert [handoff.agent for handoff in built_shape(billing).handoffs.values()] == [triage]
+    assert [handoff.agent for handoff in built_shape(billing).handoffs] == [triage]
 
 
 def test_a_copy_has_a_subagent_graph_of_its_own() -> None:
@@ -274,10 +274,10 @@ def test_a_copy_has_a_subagent_graph_of_its_own() -> None:
     original = Triage()
     clone = copy.copy(original)
 
-    (billing,) = [delegate.agent for delegate in built_shape(clone).delegates.values()]
-    (original_billing,) = [delegate.agent for delegate in built_shape(original).delegates.values()]
+    (billing,) = [delegate.agent for delegate in built_shape(clone).delegates]
+    (original_billing,) = [delegate.agent for delegate in built_shape(original).delegates]
     assert billing is not original_billing
-    assert [handoff.agent for handoff in built_shape(billing).handoffs.values()] == [clone]
+    assert [handoff.agent for handoff in built_shape(billing).handoffs] == [clone]
 
 
 def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
@@ -298,12 +298,12 @@ def test_a_class_listed_twice_in_one_graph_is_built_once() -> None:
         instructions = "main"
         subagents = [Left.delegate, Right.delegate]
 
-    left, right = [delegate.agent for delegate in built_shape(Main()).delegates.values()]
+    left, right = [delegate.agent for delegate in built_shape(Main()).delegates]
 
     assert left is not None and right is not None
     assert (
-        next(iter(built_shape(left).delegates.values())).agent
-        is next(iter(built_shape(right).delegates.values())).agent
+        next(iter(built_shape(left).delegates)).agent
+        is next(iter(built_shape(right).delegates)).agent
     )
 
 
@@ -352,7 +352,7 @@ def test_delegate_tool_name_and_description_override() -> None:
 
     agent = Main()
 
-    (delegate,) = built_shape(agent).delegates.values()
+    (delegate,) = built_shape(agent).delegates
     assert delegate.tool.name == "do_research"
     assert delegate.tool.description == "Look into it."
     assert agent.tools == ()
@@ -395,7 +395,7 @@ def test_no_subagents_leaves_handoffs_and_tools_empty() -> None:
 
     agent = Main()
 
-    assert built_shape(agent).handoffs == {}
+    assert built_shape(agent).handoffs == ()
     assert agent.tools == ()
 
 
@@ -934,7 +934,7 @@ def test_the_shape_holds_every_setting_the_agent_stores() -> None:
 
     agent = _every_setting_agent()
     stored = {name for name in vars(agent) if not name.startswith("_")} - _PER_RUN_STATE
-    translated = {"agent", "policy", "compactor", "mcp_servers", "handoffs", "delegates"}
+    translated = {"agent", "policy", "compactor", "mcp_servers", "callees"}
     shape_fields = {field.name for field in (*fields(AgentShape), *fields(RunPolicy))}
     read = shape_fields - translated | {
         "compact",
@@ -954,7 +954,7 @@ def test_with_mcp_tools_adds_the_servers_tools_for_one_run() -> None:
     assert shape.agent is agent
     assert [t.name for t in shape.tools] == [*_tool_names(agent), "mcp_ping"]
     assert [t.name for t in built_shape(agent).tools] == _tool_names(agent)
-    assert set(shape.handoffs) == {"transfer_to_researcher"}
+    assert [h.tool_name for h in shape.handoffs] == ["transfer_to_researcher"]
 
 
 def test_an_mcp_tool_named_like_the_agents_own_is_a_user_error() -> None:
@@ -990,8 +990,8 @@ def test_instances_of_a_class_share_what_it_declares_but_not_their_graph() -> No
     assert built_shape(first).policy.knowledge is built_shape(second).policy.knowledge
     assert built_shape(first).agent is first
     assert built_shape(second).agent is second
-    (first_researcher,) = [handoff.agent for handoff in built_shape(first).handoffs.values()]
-    (second_researcher,) = [handoff.agent for handoff in built_shape(second).handoffs.values()]
+    (first_researcher,) = [handoff.agent for handoff in built_shape(first).handoffs]
+    (second_researcher,) = [handoff.agent for handoff in built_shape(second).handoffs]
     assert first_researcher is not second_researcher
 
 
@@ -2126,7 +2126,7 @@ def _parent_with_paused_delegate(calls: list[float]) -> Agent:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
     )
-    child = next(iter(built_shape(parent).delegates.values())).agent
+    child = next(iter(built_shape(parent).delegates)).agent
     child.tools = [_refund_tool(calls)]
     child.model = _ScriptedModel(
         [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
@@ -2190,14 +2190,14 @@ def _parent_with_a_paused_grandchild(calls: list[float]) -> Agent:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "refund $5"}', "outer_1"), _final_message("ok")]
     )
-    child = next(iter(built_shape(parent).delegates.values())).agent
+    child = next(iter(built_shape(parent).delegates)).agent
     child.model = _ScriptedModel(
         [
             _tool_call_message("grandchild", '{"input": "refund $5"}', "mid_1"),
             _final_message("passed on"),
         ]
     )
-    grandchild = next(iter(built_shape(child).delegates.values())).agent
+    grandchild = next(iter(built_shape(child).delegates)).agent
     grandchild.tools = [_refund_tool(calls)]
     grandchild.model = _ScriptedModel(
         [_tool_call_message("refund", '{"amount": 5}', "inner_1"), _final_message("refunded 5")]
@@ -2369,7 +2369,7 @@ def test_a_delegates_guardrails_show_up_on_its_callers_run() -> None:
     parent.model = _ScriptedModel(
         [_tool_call_message("child", '{"input": "find A1"}', "outer_1"), _final_message("ok")]
     )
-    child = next(iter(built_shape(parent).delegates.values())).agent
+    child = next(iter(built_shape(parent).delegates)).agent
     child.tools = [lookup]
     child.model = _ScriptedModel(
         [_tool_call_message("lookup", '{"order_id": "A1"}', "inner_1"), _final_message("shipped")]

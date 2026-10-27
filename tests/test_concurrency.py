@@ -316,7 +316,7 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
         )
 
     boss = Boss()
-    (delegate,) = built_shape(boss).delegates.values()
+    (delegate,) = built_shape(boss).delegates
     worker = delegate.agent
     run = boss.run_sync("go")
 
