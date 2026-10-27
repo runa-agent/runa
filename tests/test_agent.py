@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack, nullcontext
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import ModuleType
-from typing import Any, TypedDict, cast, get_args, get_origin, get_type_hints
+from typing import Any, TypedDict, cast
 
 import pytest
 from helpers import finished_run, scripted_agent, shape_of
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from runa import Agent, _loop, db, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContext, Usage
-from runa.agent import _AGENT_FIELDS, _LIST_SETTINGS, Subagent
+from runa.agent import _AGENT_FIELDS, Subagent
 from runa.db.sqlite import MemoryDatabase
 from runa.exceptions import OperatorError, UserError
 from runa.guardrail import Phase, guardrail
@@ -855,12 +855,11 @@ def test_a_misspelled_class_attribute_is_rejected_by_name() -> None:
         Typo()
 
 
-def test_a_misspelled_constructor_kwarg_is_rejected_by_the_signature() -> None:
-    """An override is a named parameter, so a typo is caught without any of Runa's own checking.
+def test_a_misspelled_constructor_kwarg_is_a_type_error() -> None:
+    """An override is a keyword-only parameter, so a typo is the `TypeError` a signature raises.
 
-    A type checker flags the call before it runs (which is most of why the signature is written
-    out rather than taken as `**kwargs`), and CPython itself suggests the name it meant -- so
-    `_reject_unknown_settings` is left to the class body, where no such check exists.
+    A type checker flags the call before it runs, from the signature it synthesizes from the
+    class body; at runtime the error names the setting it most likely meant.
     """
 
     class Fine(Agent):
@@ -1037,25 +1036,6 @@ def test_the_list_settings_change_by_reassignment_only() -> None:
 
     with pytest.raises(AttributeError):
         agent.tools.append(_refund_tool([]))  # type: ignore[attr-defined]
-
-
-def test_the_class_body_types_each_setting_as_the_signature_does() -> None:
-    """`__init__`'s signature is the settings; the class body annotates the same names alike.
-
-    Only the list settings differ, by what storing does to them: a list (or `None`) goes in,
-    a `Sequence` of the same entries is held.
-    """
-    declared = get_type_hints(Agent)
-    passed = get_type_hints(Agent.__init__)
-
-    assert set(declared) == set(_AGENT_FIELDS)
-    for name in _AGENT_FIELDS:
-        if name in _LIST_SETTINGS:
-            (accepted,) = [arg for arg in get_args(passed[name]) if arg is not type(None)]
-            assert get_origin(declared[name]) is Sequence, name
-            assert get_args(declared[name]) == get_args(accepted), name
-        else:
-            assert declared[name] == passed[name], name
 
 
 def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() -> None:

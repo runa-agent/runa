@@ -186,7 +186,7 @@ def iter_agent_classes(agents_dir: Path) -> list[type[Agent]]:
             if issubclass(obj, Agent) and obj is not Agent and obj.__module__ == module.__name__:
                 found.append(obj)
     for agent_cls in found:
-        if not hasattr(agent_cls, "name"):
+        if agent_cls.name is Agent.name:
             raise UserError(
                 f"{agent_cls.__name__} in {agents_dir} declares no 'name'; give it one, e.g. "
                 f"`name = {snake_case(agent_cls.__name__)!r}`, or move a shared base class "

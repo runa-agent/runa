@@ -13,7 +13,7 @@ import re
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, dataclass_transform, get_origin
 
 from runa import _app, _loop, content
 from runa._items import ConversationItem, user_message
@@ -44,10 +44,10 @@ if TYPE_CHECKING:
     from runa.eval.report import Report
 
 _UNSET: Any = object()
-"""`Agent.__init__`'s "this setting wasn't passed", which is not the same as being passed `None`.
+"""`name`'s and `instructions`' default: "never declared or passed", which is not `None`.
 
-`SupportAgent(memory=None)` turns off a declared `memory`, so `None` can't also mean "not passed".
-Typed `Any` so every parameter keeps its own annotation.
+`instructions = None` means no instructions, so `None` can't also mean "read the prompt file".
+Typed `Any` so each setting keeps its own annotation.
 """
 
 
@@ -143,9 +143,6 @@ def _load_prompt(cls: type, name: str) -> str | None:
     return prompt_file.read_text().strip()
 
 
-SubagentsList = list["type[Agent] | Subagent"]
-
-
 def _is_code(value: Any) -> bool:
     """Is this class-body entry code (a method, a property, a nested class) rather than config?
 
@@ -157,8 +154,7 @@ def _is_code(value: Any) -> bool:
 def _reject_unknown_settings(cls: type[Agent]) -> None:
     """Refuse a class attribute of `cls` that isn't one of `_AGENT_FIELDS`.
 
-    A misspelled `modell = ...` would otherwise run on the default model. The constructor needs no
-    such check: a misspelled keyword is a `TypeError` from its signature. Only data is checked: a
+    A misspelled `modell = ...` would otherwise run on the default model. Only data is checked: a
     `_`-prefixed name, a method, a property, a nested class and a mixin's attributes are skipped.
     """
     for klass in cls.__mro__:
@@ -184,24 +180,14 @@ def _did_you_mean(name: str) -> str:
     return f" Agent settings are: {', '.join(sorted(_AGENT_FIELDS))}."
 
 
-_SIGNALLED_WHEN_ABSENT = ("name", "instructions")
-"""The two settings whose caller tells "never given" apart from "given as `None`"."""
-
-
 def _settings(cls: type[Agent], passed: Mapping[str, Any]) -> dict[str, Any]:
     """Every setting as an agent of `cls` holds it: what was passed, else what `cls` declares.
 
-    `passed` holds one entry per setting, `_UNSET` where none was passed, so a setting added to
-    `__init__`'s signature is resolved with no edit here. A setting neither supplies is `None`;
     `name` is required, and `instructions` defaults to `cls`'s prompt file. A class attribute
     that isn't a setting, and a missing `name`, are each a `UserError`.
     """
     _reject_unknown_settings(cls)
-    setting: dict[str, Any] = {}
-    for name in _AGENT_FIELDS:
-        absent = _UNSET if name in _SIGNALLED_WHEN_ABSENT else None
-        value = passed[name]
-        setting[name] = _stored(name, value if value is not _UNSET else getattr(cls, name, absent))
+    setting = {name: _stored(name, passed.get(name, getattr(cls, name))) for name in _AGENT_FIELDS}
     if setting["name"] is _UNSET:
         raise UserError(f"{cls.__name__}(...) is missing the required 'name'")
     if setting["instructions"] is _UNSET:
@@ -222,12 +208,9 @@ def declaration(agent_cls: type[Agent]) -> Resolved:
     """
     declarations = _app.held(_DECLARATIONS, dict[type, Resolved])
     if agent_cls not in declarations:
-        declared = _settings(agent_cls, dict.fromkeys(_AGENT_FIELDS, _UNSET))
+        declared = _settings(agent_cls, {})
         declarations.setdefault(agent_cls, resolve(declared))
     return declarations[agent_cls]
-
-
-_LIST_SETTINGS = frozenset({"tools", "subagents", "guardrails", "mcp"})
 
 
 def _stored(name: str, value: Any) -> Any:
@@ -259,7 +242,16 @@ class _Mode:
         return Subagent(owner, self.mode)
 
 
-class Agent:
+@dataclass_transform(kw_only_default=True, eq_default=False)
+class _Settings:
+    """Has a type checker read a subclass's annotated class attributes as its constructor.
+
+    Each one becomes a keyword-only parameter, typed and defaulted as annotated, so an editor
+    completes the settings and a type checker flags a misspelled one or a value of the wrong type.
+    """
+
+
+class Agent(_Settings):
     """An agent, always subclassed: its settings declared on the class, or passed to `__init__`.
 
     `usage` accumulates token usage across every `run`/`run_sync`/`run_streamed` call made on
@@ -276,62 +268,50 @@ class Agent:
     delegate = _Mode("delegate")
     d = delegate
 
-    # Every setting, typed as an instance holds it once built. One without a value here is
-    # absent from the class, so `_settings` reads a subclass's declaration or falls back.
-    name: str
-    instructions: str | Callable[..., Any] | None
+    # The closed set of settings, each annotated as an instance holds it and defaulted as an agent
+    # declaring nothing runs with it; nothing else on this class is annotated. Each is also a
+    # keyword-only parameter of the constructor, and one typed as a `Sequence` is held as a tuple.
+    name: str = _UNSET
+    instructions: str | Callable[..., Any] | None = _UNSET
     model: str | Model = DEFAULT_MODEL
-    model_settings: ModelSettings | None
-    tools: Sequence[FunctionTool]
-    subagents: Sequence[type[Agent] | Subagent]
-    guardrails: GuardrailsList
-    mcp: Sequence[Any]
-    output_type: type | None
-    hooks: Hooks[Any] | None
-    memory: MemoryLike | Literal["auto", "llm"] | None
-    knowledge: KnowledgeLike | Literal["auto", "llm"] | None
-    compact: bool | Compactor | None
+    model_settings: ModelSettings | None = None
+    tools: Sequence[FunctionTool] = ()
+    subagents: Sequence[type[Agent] | Subagent] = ()
+    guardrails: GuardrailsList = ()
+    mcp: Sequence[Any] = ()
+    output_type: type | None = None
+    hooks: Hooks[Any] | None = None
+    memory: MemoryLike | Literal["auto", "llm"] | None = None
+    knowledge: KnowledgeLike | Literal["auto", "llm"] | None = None
+    compact: bool | Compactor | None = None
     max_turns: int = 10
     max_tokens: int | None = None
     timeout: float | None = None
 
-    def __init__(
-        self,
-        *,
-        name: str = _UNSET,
-        instructions: str | Callable[..., Any] | None = _UNSET,
-        model: str | Model = _UNSET,
-        model_settings: ModelSettings | None = _UNSET,
-        tools: list[FunctionTool] | None = _UNSET,
-        subagents: SubagentsList | None = _UNSET,
-        guardrails: GuardrailsList | None = _UNSET,
-        mcp: list[Any] | None = _UNSET,
-        output_type: type | None = _UNSET,
-        hooks: Hooks[Any] | None = _UNSET,
-        memory: MemoryLike | Literal["auto", "llm"] | None = _UNSET,
-        knowledge: KnowledgeLike | Literal["auto", "llm"] | None = _UNSET,
-        compact: bool | Compactor | None = _UNSET,
-        max_turns: int = _UNSET,
-        max_tokens: int | None = _UNSET,
-        timeout: float | None = _UNSET,
-    ) -> None:
-        """Build the agent from its settings, wiring up any subagents and guardrails.
+    if not TYPE_CHECKING:  # a type checker sees the signature `_Settings` has it synthesize
 
-        These parameters are the closed set of settings: each can be declared on the subclass or
-        passed here. Passing one beats declaring it, and passing `None` means `None`. An unknown
-        name is a `TypeError` here, and a `UserError` naming the likely setting when declared in
-        a class body. Each is held under its own name as given (`agent.memory` is `"auto"`, not
-        the `Memory` it resolves to). What each setting means is RUNA.md's to say (§1, §7, §8).
-        """
-        cls = type(self)
-        if cls is Agent:
-            raise UserError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
-        passed = locals()
-        declared = all(passed[name] is _UNSET for name in _AGENT_FIELDS)
-        setting = _settings(cls, passed)
-        vars(self).update(setting)
-        self._start_conversation()
-        self._shape = AgentShape.of(self, declaration(cls) if declared else resolve(setting))
+        def __init__(self, **settings: Any) -> None:
+            """Build the agent from its settings, wiring up any subagents and guardrails.
+
+            Each setting can be declared on the subclass or passed here. Passing one beats
+            declaring it, and passing `None` means `None`. An unknown name is a `TypeError` here,
+            and a `UserError` naming the likely setting when declared in a class body. Each is
+            held under its own name as given (`agent.memory` is `"auto"`, not the `Memory` it
+            resolves to). What each setting means is RUNA.md's to say (§1, §7, §8).
+            """
+            cls = type(self)
+            for name in settings:
+                if name not in _AGENT_FIELDS:
+                    raise TypeError(
+                        f"{cls.__name__}.__init__() got an unexpected keyword argument "
+                        f"{name!r}.{_did_you_mean(name)}"
+                    )
+            if cls is Agent:
+                raise UserError("Agent must be subclassed, e.g. `class MyAgent(Agent): name = ...`")
+            setting = _settings(cls, settings)
+            vars(self).update(setting)
+            self._start_conversation()
+            self._shape = AgentShape.of(self, resolve(setting) if settings else declaration(cls))
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Set an attribute, building the shape a run reads again when it is one of the settings.
@@ -563,7 +543,13 @@ class Agent:
         )
 
 
-_AGENT_FIELDS = tuple(inspect.signature(Agent.__init__).parameters)[1:]
-"""Every name that configures an Agent: `Agent.__init__`'s keyword-only parameters."""
+_SETTING_TYPES = inspect.get_annotations(Agent)
+
+_AGENT_FIELDS = tuple(_SETTING_TYPES)
+"""Every name that configures an Agent: the attributes `Agent` annotates."""
+
+_LIST_SETTINGS = frozenset(
+    name for name, annotation in _SETTING_TYPES.items() if get_origin(annotation) is Sequence
+)
 
 __all__ = ["Agent", "Run", "RunState", "Subagent"]

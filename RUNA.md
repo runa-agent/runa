@@ -37,8 +37,9 @@ process.
 error rather than an agent that quietly runs on the default `model`. Enforced in code for the
 declaration and the override alike, each the way its own call site allows: a class attribute is a
 `UserError` naming the setting it most likely meant, and a constructor keyword is a `TypeError`
-from the signature itself, every setting being a keyword-only, annotated parameter of
-`__init__` -- so a type checker and an editor see them too. Only data is checked in a class body:
+naming it the same way. Every setting is declared once, as an annotated attribute of `Agent`,
+and is also a keyword-only parameter of the `__init__` a type checker synthesizes from those
+annotations, so a type checker and an editor see them too. Only data is checked in a class body:
 methods, properties and `_`-prefixed attributes are the subclass's own business, as are a mixin's
 attributes. Passing a setting beats declaring it, and passing `None` means `None`
 (`SupportAgent(memory=None)` turns a declared `memory = "auto"` off for that instance).
