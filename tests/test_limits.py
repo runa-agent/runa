@@ -48,6 +48,10 @@ class _CostlyModel:
             ),
         )
 
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
+
 
 class _SlowModel:
     """Hangs for `delay` seconds before answering, to be cut short by a run `timeout`."""
@@ -58,6 +62,10 @@ class _SlowModel:
     async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
         await asyncio.sleep(self._delay)
         return ModelResponse(output=[_final_message("too late")], usage=Usage())
+
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
 
 
 def test_a_run_under_its_token_budget_completes() -> None:

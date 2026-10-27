@@ -25,6 +25,10 @@ class _TextModel:
             usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
         )
 
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
+
 
 class _Recording:
     """Keeps every trace handed over."""

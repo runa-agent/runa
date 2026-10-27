@@ -47,6 +47,10 @@ class _ScriptedModel:
             usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
         )
 
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
+
 
 def _lead(delegate: type[Agent] | Subagent, script: list[dict[str, Any]], **settings: Any) -> Agent:
     """A caller whose model follows `script`, with `delegate` among its tools.

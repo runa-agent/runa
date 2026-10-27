@@ -222,6 +222,11 @@ class AgentInfo:
     knowledge: str = "off"
 
 
+def _model_label(model: object) -> str:
+    """A declared model as shown: its name, or a constructed `Model`'s class name."""
+    return model if isinstance(model, str) else type(model).__name__
+
+
 def _tool_name(tool: object) -> str:
     return getattr(tool, "name", None) or getattr(tool, "__name__", None) or str(tool)
 
@@ -250,7 +255,7 @@ def _describe(agent_cls: type[Agent]) -> AgentInfo:
     return AgentInfo(
         name=agent_cls.name,
         class_name=agent_cls.__name__,
-        model=agent_cls.model,
+        model=_model_label(agent_cls.model),
         tools=[_tool_name(tool) for tool in getattr(agent_cls, "tools", [])],
         guardrails=declared_names(getattr(agent_cls, "guardrails", [])),
         subagents=[_subagent_label(sub) for sub in getattr(agent_cls, "subagents", [])],

@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack, nullcontext
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import ModuleType
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
 import pytest
 from helpers import finished_run, scripted_agent, shape_of
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from runa import Agent, _loop, db, tracing
 from runa._models import StreamDelta
 from runa._types import ModelResponse, ModelSettings, RunContext, Usage
-from runa.agent import _AGENT_FIELDS, Subagent
+from runa.agent import _AGENT_FIELDS, _LIST_SETTINGS, Subagent
 from runa.db.sqlite import MemoryDatabase
 from runa.exceptions import OperatorError, UserError
 from runa.guardrail import Phase, guardrail
@@ -794,7 +794,7 @@ def test_model_rejects_a_value_that_is_neither_a_name_nor_a_model() -> None:
     class BadModel(Agent):
         name = "BadModel"
         instructions = "bad model"
-        model = 3
+        model = cast(Any, 3)
 
     with pytest.raises(UserError, match="model"):
         BadModel()
@@ -1037,6 +1037,25 @@ def test_the_list_settings_change_by_reassignment_only() -> None:
 
     with pytest.raises(AttributeError):
         agent.tools.append(_refund_tool([]))  # type: ignore[attr-defined]
+
+
+def test_the_class_body_types_each_setting_as_the_signature_does() -> None:
+    """`__init__`'s signature is the settings; the class body annotates the same names alike.
+
+    Only the list settings differ, by what storing does to them: a list (or `None`) goes in,
+    a `Sequence` of the same entries is held.
+    """
+    declared = get_type_hints(Agent)
+    passed = get_type_hints(Agent.__init__)
+
+    assert set(declared) == set(_AGENT_FIELDS)
+    for name in _AGENT_FIELDS:
+        if name in _LIST_SETTINGS:
+            (accepted,) = [arg for arg in get_args(passed[name]) if arg is not type(None)]
+            assert get_origin(declared[name]) is Sequence, name
+            assert get_args(declared[name]) == get_args(accepted), name
+        else:
+            assert declared[name] == passed[name], name
 
 
 def test_every_setting_can_be_passed_to_the_constructor_instead_of_declared() -> None:
@@ -1609,6 +1628,10 @@ class _ScriptedModel:
             output=[self._messages.pop(0)],
             usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
         )
+
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
 
 
 class _ScriptedStreamModel:

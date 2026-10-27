@@ -47,6 +47,10 @@ class _YieldingModel:
         await asyncio.sleep(0.01)
         return ModelResponse(output=[self._messages.pop(0)], usage=Usage(total_tokens=1))
 
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
+
 
 class _YieldingStreamModel:
     """`_YieldingModel` for the streamed shape: suspends, then answers with one text delta."""
@@ -292,6 +296,10 @@ def test_a_delegate_does_not_accumulate_history_across_calls() -> None:
         async def get_response(self, request: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN003
             seen.append(len(request.input))  # how many items this nested run was handed
             return ModelResponse(output=[self._messages.pop(0)], usage=Usage(total_tokens=1))
+
+        def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+            """Answers unstreamed only."""
+            raise NotImplementedError
 
     Worker.model = _RecordingModel([_final_message("x"), _final_message("y")])
 

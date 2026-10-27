@@ -55,6 +55,10 @@ class _ScriptedModel:
             usage=Usage(input_tokens=3, output_tokens=4, total_tokens=7, requests=1),
         )
 
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
+
 
 def _agent(**overrides: Any) -> Agent:
     """A one-answer agent, on a scripted model, built fresh so nothing leaks between tests."""
@@ -264,6 +268,10 @@ def test_cancelling_a_run_escapes_the_broader_catch() -> None:
         async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:  # noqa: ANN002, ANN003
             await asyncio.sleep(5)
             return ModelResponse(output=[_final_message("too late")], usage=Usage())
+
+        def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+            """Answers unstreamed only."""
+            raise NotImplementedError
 
     exports = _Exports()
     agent = _agent(model=_SlowModel())

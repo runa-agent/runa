@@ -280,7 +280,7 @@ class Agent:
     # absent from the class, so `_settings` reads a subclass's declaration or falls back.
     name: str
     instructions: str | Callable[..., Any] | None
-    model: str | Any = DEFAULT_MODEL
+    model: str | Model = DEFAULT_MODEL
     model_settings: ModelSettings | None
     tools: Sequence[FunctionTool]
     subagents: Sequence[type[Agent] | Subagent]

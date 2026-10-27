@@ -61,7 +61,7 @@ class ScriptedModel:
         self.received_tools = request.tools
         return self._responses.pop(0)
 
-    async def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
         """Scripted models answer unstreamed only."""
         raise NotImplementedError
 

@@ -24,6 +24,10 @@ class _TextModel:
             usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2, requests=1),
         )
 
+    def stream_response(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN002, ANN003
+        """Answers unstreamed only."""
+        raise NotImplementedError
+
 
 def _agent() -> Any:
     return scripted_agent(_TextModel(), name="Researcher")
