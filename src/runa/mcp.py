@@ -33,10 +33,10 @@ from mcp_types import TextContent
 
 from runa._loop import LoopCache
 from runa._types import RunContext
-from runa.approval import predicate
+from runa.approval import NeedsApproval, predicate
 from runa.exceptions import ToolError
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
-from runa.tool import FunctionTool, _NeedsApproval
+from runa.tool import FunctionTool
 
 
 @dataclass
@@ -167,7 +167,7 @@ class MCPServer:
         self,
         *,
         name: str | None = None,
-        needs_approval: _NeedsApproval = False,
+        needs_approval: NeedsApproval = False,
         guardrails: GuardrailsList | None = None,
     ) -> None:
         """Hold the name and policy every transport's server shares.

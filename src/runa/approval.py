@@ -26,10 +26,14 @@ from runa._calling import by_name
 if TYPE_CHECKING:
     from runa._types import RunContext
 
-_NeedsApproval = Callable[["RunContext[Any]", dict[str, Any], str], Awaitable[bool]]
+ApprovalPredicate = Callable[["RunContext[Any]", dict[str, Any], str], Awaitable[bool]]
+"""The one async predicate over a call that a run asks, `(ctx, args, call_id) -> bool`."""
+
+NeedsApproval = bool | ApprovalPredicate
+"""What a `needs_approval` declaration accepts; `predicate` makes it an `ApprovalPredicate`."""
 
 
-def approval(func: Callable[..., bool | Awaitable[bool]]) -> _NeedsApproval:
+def approval(func: Callable[..., bool | Awaitable[bool]]) -> ApprovalPredicate:
     """Turn a predicate into a `@tool(needs_approval=...)` callable.
 
     Write the predicate like the tool it guards: it is bound and called exactly as `@tool` calls
@@ -51,7 +55,7 @@ async def _never(ctx: RunContext[Any], params: dict[str, Any], call_id: str) -> 
     return False
 
 
-def predicate(needs_approval: bool | _NeedsApproval) -> _NeedsApproval:
+def predicate(needs_approval: NeedsApproval) -> ApprovalPredicate:
     """`needs_approval` as `@tool`/`MCPServer` take it, as the predicate a run calls.
 
     A `bool` becomes a predicate answering it for every call; a predicate is already one.

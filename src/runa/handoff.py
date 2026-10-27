@@ -23,10 +23,10 @@ import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
-from runa.approval import predicate
+from runa.approval import NeedsApproval, predicate
 from runa.exceptions import UserError
 from runa.guardrail import GuardrailsList, flatten_guardrails
-from runa.tool import Tool, _NeedsApproval
+from runa.tool import Tool
 
 if TYPE_CHECKING:
     from runa.agent import Agent
@@ -47,7 +47,7 @@ class Subagent:
     mode: Mode
     tool_name: str | None = None
     tool_description: str | None = None
-    needs_approval: _NeedsApproval = False
+    needs_approval: NeedsApproval = False
     """For a delegate, whether a call to it waits on a human, as `@tool(needs_approval=...)`."""
     guardrails: tuple[Any, ...] = ()
     """For a delegate, the guardrails on a call to it, as `@tool(guardrails=[...])`."""
@@ -57,7 +57,7 @@ class Subagent:
         *,
         tool_name: str | None = None,
         tool_description: str | None = None,
-        needs_approval: _NeedsApproval = False,
+        needs_approval: NeedsApproval = False,
         guardrails: GuardrailsList | None = None,
     ) -> Subagent:
         """Return a copy with the tool's name, description and policy overridden.
@@ -139,7 +139,7 @@ class Delegate:
         tool_name: str | None = None,
         tool_description: str | None = None,
         *,
-        needs_approval: _NeedsApproval = False,
+        needs_approval: NeedsApproval = False,
         guardrails: GuardrailsList = (),
     ) -> Delegate:
         """Build a `Delegate` for `agent`, its name/description derived from it unless given."""

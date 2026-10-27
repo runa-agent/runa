@@ -13,11 +13,8 @@ from typing import Any, Literal, get_args, get_origin, get_type_hints, overload
 
 from runa._calling import RESERVED_PARAMS, by_name
 from runa._types import RunContext
-from runa.approval import _NeedsApproval as _ApprovalPredicate
-from runa.approval import predicate
+from runa.approval import ApprovalPredicate, NeedsApproval, predicate
 from runa.guardrail import BoundGuardrail, GuardrailsList, Phase, flatten_guardrails
-
-_NeedsApproval = bool | _ApprovalPredicate
 
 
 @dataclass(kw_only=True)
@@ -35,7 +32,7 @@ class Tool:
     guardrails: dict[Phase, list[BoundGuardrail]] = field(default_factory=dict)
     """This tool's guardrails by `Phase`, checked against the call's arguments
     (`Phase.TOOL_INPUT`) and its return value (`Phase.TOOL_OUTPUT`)."""
-    needs_approval: _ApprovalPredicate = field(default=predicate(False))
+    needs_approval: ApprovalPredicate = field(default=predicate(False))
     """Called with `(ctx, args, call_id)`: whether this call waits on a human before it runs."""
 
 
@@ -130,7 +127,7 @@ def _split_docstring(doc: str, param_names: list[str]) -> tuple[str, dict[str, s
 def _schema_from_signature(func: Callable[..., Any]) -> tuple[dict[str, Any], list[str]]:
     """Build a `{"type": "object", "properties": {...}}` schema from `func`'s parameters.
 
-    `ctx`/`call_id` are Runa's reserved parameter names (see `runa.approval`) for the run context
+    `ctx`/`call_id` are Runa's reserved parameter names (see `runa._calling`) for the run context
     and the tool call's id; they're never part of the model-facing schema. Returns the schema
     alongside the ordered list of the remaining (model-facing) parameter names. A parameter
     described in the docstring (see `tool`) carries that text as its `description`.
@@ -167,7 +164,7 @@ def tool(
     name_override: str | None = None,
     description_override: str | None = None,
     guardrails: GuardrailsList | None = None,
-    needs_approval: _NeedsApproval = False,
+    needs_approval: NeedsApproval = False,
 ) -> Callable[[Callable[..., Any]], FunctionTool]: ...
 
 
@@ -177,7 +174,7 @@ def tool(
     name_override: str | None = None,
     description_override: str | None = None,
     guardrails: GuardrailsList | None = None,
-    needs_approval: _NeedsApproval = False,
+    needs_approval: NeedsApproval = False,
 ) -> FunctionTool | Callable[[Callable[..., Any]], FunctionTool]:
     """Wrap a plain function as a `FunctionTool`, deriving its schema from its signature.
 
