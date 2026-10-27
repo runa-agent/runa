@@ -3,8 +3,9 @@
 What happens to each call of a model message lives here, a pause included: which calls were
 answered and which wait on a human, written to the run's record as each one settles, so a pause
 on the message finds it recorded and resuming answers that message again from there. These
-steps are passed the loop's run, imported for its type only, and use what it can do (claim a
-call, decide its approval, guard it, fire a hook, run a delegate), not how it is laid out.
+steps are passed the loop's run, imported for its type only, and use what it and its record can
+do (claim a call, decide its approval, guard it, fire a hook, run a delegate; record a call, an
+answer or a wait), never assigning a field of either.
 """
 
 import asyncio
@@ -163,7 +164,7 @@ def _failed(
 
 def _answer(run: _Run, call_id: str, call: ToolCall) -> ConversationItem:
     """Record `call` on the run, and answer the model's call `call_id` with its output."""
-    run.record.tool_calls.append(call)
+    run.record.record_call(call)
     return tool_result(call_id, call.output)
 
 

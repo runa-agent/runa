@@ -166,7 +166,8 @@ class RunRecord(BaseModel):
     * `agent`: the agent running now, the same as `start` until a handoff.
     * `run_context`: what user code is told, its `context`, `user_id` and usage so far.
     * `tool_calls`: every tool call the run answered, across its resumes, in the order they
-      finished. A fact about the run, not its conversation: a run that fails still reports it.
+      finished, each added through `record_call`. A fact about the run, not its conversation: a
+      run that fails still reports it.
     * `session_id`: the id of the session the run started in, which its turn is saved to once it
       completes. `None` for a session-less run, and for every delegate's.
     * `turns`: the model calls the turn loop has made, across its resumes: what `max_turns` is
@@ -207,6 +208,10 @@ class RunRecord(BaseModel):
             elif isinstance(standing, Suspended):
                 waiting.extend(standing.record.pending)
         return waiting
+
+    def record_call(self, call: ToolCall) -> None:
+        """Record `call` as the latest of the run's answered `tool_calls`."""
+        self.tool_calls.append(call)
 
     def answer(self, call_id: str, item: ConversationItem) -> None:
         """Record call `call_id` as answered with `item`."""
