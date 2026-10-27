@@ -48,7 +48,7 @@ from runa.run_internal.spans import _Spans
 from runa.run_internal.streaming import Emit, _Assembly, _emitting_text
 from runa.run_internal.tool_execution import _answer_message
 from runa.session import Session
-from runa.stream_events import StreamEvent, ToolCalled
+from runa.stream_events import AgentChanged, StreamEvent, ToolCalled
 from runa.tool import Tool
 from runa.tracing.export import export_trace_later
 from runa.tracing.manual import current_trace
@@ -385,8 +385,25 @@ async def _run_turns(run: _Run) -> _TurnOutcome:
             return _TurnOutcome(_parse_output(run.shape, text), context_tokens=context_tokens)
         for call in calls:
             run.notify(ToolCalled(call))
-        if not await _answer_message(run, message):
+        if not await _advanced(run, message):
             return _TurnOutcome(None, paused=True)
+
+
+async def _advanced(run: _Run, message: ConversationItem) -> bool:
+    """Answer `message`'s tool calls, then switch to the agent it handed off to, if any.
+
+    `False` if the run pauses on it. The switch is the loop's: the record runs the new agent,
+    whose MCP tools are listed, and it gets `on_agent_start`.
+    """
+    answered = await _answer_message(run, message)
+    if answered is None:
+        return False
+    if answered.handoff is not None:
+        run.record.agent = answered.handoff
+        await run.list_tools()
+        run.notify(AgentChanged(answered.handoff))
+        await run.hooks.on_agent_start(run.run_context, run.current_agent)
+    return True
 
 
 async def _continue_paused(run: _Run) -> _TurnOutcome | None:
@@ -401,11 +418,9 @@ async def _continue_paused(run: _Run) -> _TurnOutcome | None:
     pause = run.claims
     if pause is not None and not await pause.claim():
         raise RunAlreadyResumed(pause.run_id)
-    return (
-        None
-        if await _answer_message(run, run.record.paused_message)
-        else _TurnOutcome(None, paused=True)
-    )
+    if await _advanced(run, run.record.paused_message):
+        return None
+    return _TurnOutcome(None, paused=True)
 
 
 async def _traced(run: Awaitable[Run], trace: Trace) -> Run:

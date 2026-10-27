@@ -4,12 +4,12 @@ What happens to each call of a model message lives here, a pause included: which
 answered, which wait on a human and which delegates paused, written to the run's record as each
 one settles, so a pause on the message finds it recorded and resuming answers that message again
 from there. This is the only module that writes a call's standing. Once the message is
-answered, its answers enter the run's transcript and its handoff, if any, is made, so which
-agent runs next is decided here too, as is each call's claim and approval, against the run
-tree's ledger, and the record a delegate's run starts from. These steps are passed the loop's
-run, imported for its type only, and use what it and its record can do (guard a call, fire a
-hook, run a record nested in it, list its tools; record a call, an answer, a wait or a
-suspension). The one field assigned is the record's `agent`, by a handoff.
+answered, its answers enter the run's transcript, and which agent it hands off to, if any, is
+returned for the loop to switch to; each call's claim and approval, against the run tree's
+ledger, and the record a delegate's run starts from are decided here too. These steps are
+passed the loop's run, imported for its type only, and use only what a call's gate needs from
+it and its record (guard a call, open a span, fire a hook, run a record nested in it; record a
+call, an answer, a wait or a suspension). They assign none of its fields.
 """
 
 import asyncio
@@ -34,7 +34,7 @@ from runa.exceptions import DuplicateToolCallError, ToolError
 from runa.guardrail import Phase
 from runa.handoff import Delegate, Handoff
 from runa.run_internal.record import Interruption, RunRecord
-from runa.stream_events import AgentChanged, ToolOutput
+from runa.stream_events import ToolOutput
 from runa.tool import FunctionTool, Tool, ToolCall
 from runa.tracing.spans import Span
 
@@ -46,6 +46,13 @@ if TYPE_CHECKING:
 
 type _Outcome = tuple[Any, ToolCall] | None
 """What invoking a call came to: its result and the record of it, or `None` while it's paused."""
+
+
+@dataclass(frozen=True)
+class Answered:
+    """A model message whose calls are all answered, and the agent it handed off to, if any."""
+
+    handoff: Agent | None = None
 
 
 @dataclass(frozen=True)
@@ -324,19 +331,19 @@ class _Answers:
         else:
             self.deferred.append((call_id, partial(_run_call, run, callee, call, args)))
 
-    async def settled(self) -> bool:
-        """Run the deferred calls, then make the handoff, and fold the answers into the run.
+    async def settled(self) -> Answered | None:
+        """Run the deferred calls, then pick the handoff, and fold the answers into the run.
 
-        `False` if a call still waits on a human, a paused delegate's included, after the calls
+        `None` if a call still waits on a human, a paused delegate's included, after the calls
         the message waits on directly: the run pauses on the message, its record already showing
         where every call stands, and its transcript without the message's answers. Otherwise the
-        answers go into the transcript in call order, each one emitted, and the run switches to
-        the agent handed off to.
+        answers go into the transcript in call order, each one emitted, and the agent handed off
+        to, if any, is returned for the run to switch to.
 
-        A handoff is made only past the pause, after the message's other calls ran, so a pause
-        leaves it unmade, and resuming makes it once. A message hands off once, to its first
-        handoff: a later one is answered with an error instead, and never made. Making it fires
-        `on_handoff`, not the tool hooks, and it is not one of `run.tool_calls`.
+        A handoff is picked only past the pause, after the message's other calls ran, so a pause
+        leaves it unpicked, and resuming picks it once. A message hands off once, to its first
+        handoff: a later one is answered with an error instead. Picking it fires `on_handoff`,
+        not the tool hooks, and it is not one of `run.tool_calls`.
         """
         run, record = self.run, self.run.record
         parallel = run.shape.model_settings.parallel_tool_calls is not False
@@ -345,7 +352,7 @@ class _Answers:
             if item is not None:
                 self.answer(call_id, item)
         if record.pending:
-            return False
+            return None
         switched: Agent | None = None
         handed: dict[str, ConversationItem] = {}
         for call_id, handoff in self.handoffs:
@@ -367,20 +374,15 @@ class _Answers:
         run.transcript.record(*results)
         for result in results:
             run.notify(ToolOutput(result))
-        if switched is not None:
-            record.agent = switched
-            await run.list_tools()
-            run.notify(AgentChanged(switched))
-            await run.hooks.on_agent_start(run.run_context, run.current_agent)
-        return True
+        return Answered(switched)
 
 
-async def _answer_message(run: _Run, message: dict[str, Any]) -> bool:
+async def _answer_message(run: _Run, message: dict[str, Any]) -> Answered | None:
     """Answer every tool call in `message` and fold the answers into the run (see `_Answers`).
 
     The one way tool results enter a run, resumed or fresh: the message a resumed run paused on
-    goes through here too, its calls continuing from where the pause left them. `True` once the
-    message is answered, `False` if the run pauses on it.
+    goes through here too, its calls continuing from where the pause left them. `Answered` once
+    the message is, `None` if the run pauses on it.
     """
     answers = _Answers(run, message)
     for call in tool_calls(message):
@@ -403,6 +405,7 @@ async def _execute[T](calls: list[Callable[[], Awaitable[T]]], parallel: bool) -
 
 
 __all__ = [
+    "Answered",
     "_answer_message",
     "_run_call",
 ]

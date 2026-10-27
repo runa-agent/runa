@@ -14,4 +14,11 @@ the top level: `Run`/ `RunStream`, `RunState`, `Interruption`, and the stream-ev
 `tool_execution` (its tool calls), `record` (a run as it would be resumed, and a pause kept in
 `runa.db`), `streaming`, `agent_shape` (an Agent's settings as the loop reads them), and `spans`
 (tracing span helpers).
+
+`run_loop` and `tool_execution` split at deciding versus advancing. `tool_execution` decides one
+model message: what each call came to, where it stands if the run pauses, and which agent the
+message hands off to; it returns that decision and changes nothing about which agent runs or
+whether the run goes on. `run_loop` advances the run on it: the next turn, the pause, the
+switch to another agent. A new rule about one call or one message belongs in `tool_execution`;
+a new rule about what the run does next belongs in `run_loop`.
 """
